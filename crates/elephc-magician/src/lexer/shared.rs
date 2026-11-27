@@ -267,6 +267,7 @@ fn operator_or_punctuation(text: &str) -> Option<TokenKind> {
         "%" => TokenKind::Percent,
         "!" => TokenKind::Bang,
         "~" => TokenKind::Tilde,
+        "@" => TokenKind::At,
         "." => TokenKind::Dot,
         "=" => TokenKind::Equal,
         "<" => TokenKind::Less,

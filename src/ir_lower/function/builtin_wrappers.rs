@@ -194,6 +194,7 @@ fn lower_callable_body(
         &Default::default(), // throw access sites
         &Default::default(), // builtin call types
         &Default::default(), // source generator closure spans
+        &Default::default(), // synthesized bodies record no scalar guard argument sites
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types are absent in synthesized bodies
         &Default::default(), // checked declared-array append elements

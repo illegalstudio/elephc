@@ -32,7 +32,8 @@ impl Signatures {
         walk_program(program, &mut FunctionCollector(&mut result.functions));
         let mut flattened_program = Vec::new();
         flatten_synthetic(program, &mut flattened_program);
-        let (classes, enums, errors) = crate::types::traits::flatten_classes(&flattened_program);
+        let (classes, enums, errors, _) =
+            crate::types::traits::flatten_classes(&flattened_program, &HashSet::new());
         if !errors.is_empty() { return result; }
         for class in classes.into_iter().chain(enums.into_values()) {
             let methods = class.methods.into_iter().map(|method| {

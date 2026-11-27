@@ -712,6 +712,23 @@ capacity. Included files have their own memo (`parse_script_cached`), with the
 same cap: a file starts in HTML mode and a fragment in PHP mode, so the same
 bytes parse to different programs and must never share a key.
 
+A few source forms have their own EvalIR nodes rather than a builtin call.
+`EvalExpr::ErrorSuppress` implements `@` the way php-src's `BEGIN_SILENCE` /
+`END_SILENCE` do: it masks `error_reporting` down to the fatal levels through the
+generated runtime's `__elephc_eval_error_reporting` hook (the eval context keeps the
+mask when no runtime is linked) and restores it on every exit, so the native warning
+dispatcher hides diagnostics raised by eval code and by compiled code it calls.
+Compiled `@` uses the runtime suppression depth instead; both leave a user error
+handler in place. `EvalExpr::Throw` raises through the pending-Throwable channel that
+calls already use. `EvalStmt::ConstDecl` registers a `const` statement's
+namespace-qualified name when it runs, with PHP's profile-dependent redefinition
+warning; lowering first checks that the initializer is a constant expression
+(`lower/constant_expressions.rs`), so an invalid one refuses the whole fragment, and
+wraps each property-fetch receiver in `EvalExpr::ConstantPropertyReceiver`, which raises
+PHP's `Error` unless the receiver is an enum case. A `throw` statement or expression whose
+operand is not a `Throwable` object raises PHP's catchable `Error` instead. `EvalFunction` and `EvalStmt::FunctionDecl` record `function &f()` for
+reflection; such a function is kept out of the bytecode slice.
+
 `EvalStmt::DimensionWrite` carries a complete receiver expression, an optional
 index, a compound operator, and the RHS. Magician prepares computed roots and
 keys before evaluating the RHS, then resolves live variable and property storage.

@@ -749,7 +749,7 @@ impl Checker {
                         && !self.interface_method_boxed_params.contains(&(
                             format!("{}::{}", impl_class_name, method_key), i,
                         ))
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("{}::{}", impl_class_name, method_key), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -1496,7 +1496,7 @@ impl Checker {
                     }
                     if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("static:{}::{}", class_name, method), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -1584,7 +1584,7 @@ impl Checker {
                     }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("{}::{}", direct_impl_class_name, method), i);
                         let seen = self.param_specialization_seen.contains(&key);

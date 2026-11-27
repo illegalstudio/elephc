@@ -129,6 +129,25 @@ fn parse_fragment_rejects_invalid_type_atom_forms() {
     }
 }
 
+/// Verifies eval reports the trait alias modifiers PHP refuses (`as static`, `as abstract`,
+/// `as readonly`) and a written `abstract final` method as unsupported constructs, like the
+/// other member modifier errors (#2352).
+#[test]
+fn parse_fragment_rejects_invalid_trait_alias_and_abstract_final_modifiers() {
+    for source in [
+        b"trait DynEvalAliasT { public function foo() {} } class DynEvalAliasStatic { use DynEvalAliasT { foo as static; } }" as &[u8],
+        b"trait DynEvalAliasT { public function foo() {} } class DynEvalAliasAbstract { use DynEvalAliasT { foo as abstract bar; } }",
+        b"trait DynEvalAliasT { public function foo() {} } class DynEvalAliasReadonly { use DynEvalAliasT { foo as readonly; } }",
+        b"abstract class DynEvalAbstractFinal { abstract final public function run(); }",
+        b"trait DynEvalFinalAbstract { final abstract public function run(); }",
+    ] {
+        assert_eq!(
+            parse_fragment(source),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+}
+
 /// Verifies eval rejects PHP's reserved `class` class-constant name.
 #[test]
 fn parse_fragment_rejects_reserved_class_constant_name() {

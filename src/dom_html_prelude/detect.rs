@@ -225,6 +225,7 @@ fn packed_field_refs_dom(field: &PackedField) -> bool {
 fn expr_refs_dom(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_dom),
+        ExprKind::Reference(inner) => expr_refs_dom(inner),
         // Leaves and identifier-only forms carry no DOM reference.
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)

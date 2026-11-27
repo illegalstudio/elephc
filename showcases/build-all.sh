@@ -19,7 +19,7 @@ for dir in "$SCRIPT_DIR"/*/; do
     name=$(basename "$dir")
     if [ -f "$dir/main.php" ]; then
         printf "  %-25s" "$name"
-        if $ELEPHC build "$dir/main.php" >/dev/null 2>&1; then
+        if $ELEPHC "$dir/main.php" >/dev/null 2>&1; then
             echo "ok"
             PASS=$((PASS + 1))
         else

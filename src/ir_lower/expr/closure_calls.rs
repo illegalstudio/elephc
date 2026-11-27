@@ -9,6 +9,45 @@
 
 use super::*;
 
+/// Returns the `Class::method` a bound method callable's scalar-parameter checks name, or
+/// `None` for any other target or a receiver whose class is unknown.
+pub(super) fn instance_callable_guard_description(
+    ctx: &LoweringContext<'_, '_>,
+    target: &StaticCallableBinding,
+) -> Option<String> {
+    let StaticCallableBinding::InstanceMethod { object, method, .. } = target else {
+        return None;
+    };
+    let class_name = instance_callable_object_class(ctx, object)?;
+    Some(super::scalar_param_guards::method_guard_description(ctx, &class_name, method, false))
+}
+
+/// Lowers the arguments a bound method callable binds with the method's signature.
+///
+/// They get the same scalar-parameter checks as the method call the callable stands for,
+/// named by `guard_description`. The checker recorded no argument sites for such a call, so
+/// the checks decide from the value types. Without a description nothing is checked.
+pub(super) fn lower_bound_method_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    signature: Option<&FunctionSig>,
+    args: &[Expr],
+    guard_description: Option<String>,
+    span: Span,
+) -> Vec<crate::ir::ValueId> {
+    let previous_description = ctx.call_description.take();
+    let previous_call_site = ctx.call_site_span;
+    if let Some(description) = guard_description {
+        ctx.call_description = Some(description);
+        ctx.call_site_span = Some(span);
+        ctx.scalar_guards_unrecorded = true;
+    }
+    let values = lower_args_with_signature(ctx, signature, args);
+    ctx.scalar_guards_unrecorded = false;
+    ctx.call_description = previous_description;
+    ctx.call_site_span = previous_call_site;
+    values
+}
+
 /// Lowers a closure variable call.
 pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr], expr: &Expr) -> LoweredValue {
     if let Some(value) = lower_invokable_object_variable_call(ctx, var, args, expr) {
@@ -17,12 +56,15 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     let mut result_type = None;
     let mut instance_signature = None;
     let mut instance_return_alias = ReturnArgAlias::Unknown;
+    // The `Class::method` the scalar-parameter checks name for a bound method callable.
+    let mut instance_guard_description = None;
     let mut tracked_instance_descriptor_spread = false;
     let descriptor_signature = ctx.callable_param_signature(var).cloned();
     if let Some(target) = ctx.static_callable_local(var) {
         result_type = Some(static_callable_return_type(ctx, &target));
         instance_signature = instance_callable_signature(&target).cloned();
         if let StaticCallableBinding::InstanceMethod { object, method, .. } = &target {
+            instance_guard_description = instance_callable_guard_description(ctx, &target);
             if let Some(class_name) = instance_callable_object_class(ctx, object) {
                 instance_return_alias = class_method_return_arg_alias(
                     ctx,
@@ -64,6 +106,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
             args,
             instance_signature.as_ref(),
             expr,
+            false,
         );
     }
     if instance_signature.is_none() {
@@ -83,7 +126,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         } else {
             lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut callable, args, expr.span)
         };
-        return emit_callable_descriptor_invoke(ctx, callable, arg_container, expr.span);
+        return emit_callable_descriptor_invoke(ctx, callable, arg_container, false, expr.span);
     }
     let result_staging = prepublish_user_call_result(
         ctx,
@@ -94,7 +137,9 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     );
     let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
-    let mut arg_values = lower_args_with_signature(ctx, instance_signature.as_ref(), args);
+    let mut arg_values = lower_bound_method_args(
+        ctx, instance_signature.as_ref(), args, instance_guard_description, expr.span,
+    );
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,
@@ -264,7 +309,7 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
     let mut lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut lowered_callee, args, expr.span);
-    emit_callable_descriptor_invoke(ctx, lowered_callee, arg_container, expr.span)
+    emit_callable_descriptor_invoke(ctx, lowered_callee, arg_container, false, expr.span)
 }
 
 /// Returns whether lowering `callee` itself can publish the static binding of its result: a

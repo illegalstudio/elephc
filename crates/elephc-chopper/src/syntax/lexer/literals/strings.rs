@@ -81,12 +81,21 @@ impl EscapeInput for StringInput<'_> {
 /// Decodes a double-quoted body after the shared scanner recognizes its opening quote.
 /// Returns one or more tokens: for `"Hello $name!"` it returns
 /// `("Hello " . Variable("name") . "!")` (parenthesized, with Dot tokens for concatenation).
-pub(in crate::syntax::lexer) fn decode_double_quoted_body(
+pub(crate) fn decode_double_quoted_body(
     cursor: &mut Cursor,
     span: Span,
 ) -> Result<Vec<SpannedToken>, CompileError> {
+    decode_quoted_interpolation(cursor, span, '"')
+}
+
+/// Shares the semantic profile of the enclosing lexer with quoted interpolation.
+fn decode_quoted_interpolation(
+    cursor: &mut Cursor,
+    span: Span,
+    delimiter: char,
+) -> Result<Vec<SpannedToken>, CompileError> {
     let profile = cursor.semantic_profile;
-    interpolate(cursor, span, Some('"'), MissingEscape::Error, profile)
+    interpolate(cursor, span, Some(delimiter), MissingEscape::Error, profile)
 }
 
 /// Appends one interpolated expression part (already a token list) to the running stream,
@@ -420,8 +429,16 @@ fn tokenize_fragment(
         .collect())
 }
 
+/// Decodes a backtick shell-string body after the opening backtick is consumed.
+pub(crate) fn decode_backtick_body(
+    cursor: &mut Cursor,
+    span: Span,
+) -> Result<Vec<SpannedToken>, CompileError> {
+    decode_quoted_interpolation(cursor, span, '`')
+}
+
 /// Decodes one single-quoted lexeme or diagnoses a missing closing quote.
-pub(in crate::syntax::lexer) fn single_quoted_token(
+pub(crate) fn single_quoted_token(
     text: &str,
     terminated: bool,
     span: Span,
@@ -444,7 +461,7 @@ pub(in crate::syntax::lexer) fn single_quoted_token(
 /// At this point, `<<<` has already been consumed.
 /// Heredoc: `<<<LABEL` or `<<<"LABEL"` — supports variable interpolation like double-quoted strings
 /// Nowdoc: `<<<'LABEL'` — no interpolation (like single-quoted strings)
-pub(in crate::syntax::lexer) fn scan_heredoc(
+pub(crate) fn scan_heredoc(
     cursor: &mut Cursor,
 ) -> Result<Vec<SpannedToken>, CompileError> {
     let span = cursor.span();

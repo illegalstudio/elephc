@@ -29,4 +29,4 @@ touches:
 - `proc_pid_rusage` times (`ri_user_time`, `ri_system_time`, `ri_child_*`) are mach ticks, not nanoseconds: 125/3 ns per tick on Apple silicon. Convert with mach_timebase_info.
 - Charting bytes with `niceMax` gives axes like 19 MB / 9.5 MB: chart memory in MiB.
 - A navigate that only changes the hash does not reload the page: an "unchanged" page after a rebuild may just be the old document, not a cache.
-- A disk at 100 % makes `elephc --web` fail in tests and looks like a regression: check `df -h /System/Volumes/Data` first.
+- A disk at 100 % makes `elephc build --web` fail in tests and looks like a regression. Check `df -h /System/Volumes/Data` first.

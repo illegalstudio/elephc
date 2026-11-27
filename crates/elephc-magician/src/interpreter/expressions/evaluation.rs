@@ -467,7 +467,7 @@ fn eval_instanceof_resolved_target_name(target: &str, context: &ElephcEvalContex
 }
 
 /// Tests one object cell against a resolved `instanceof` target class/interface name.
-fn eval_instanceof_object_result(
+pub(super) fn eval_instanceof_object_result(
     value: RuntimeCellHandle,
     target_class: &str,
     context: &ElephcEvalContext,

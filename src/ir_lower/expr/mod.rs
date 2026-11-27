@@ -111,6 +111,9 @@ mod preg_match_args;
 mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
+mod scalar_param_guards;
+pub(crate) use scalar_param_guards::{emit_scalar_guard, variant_public_name, ScalarGuardEmit};
+pub(crate) use unary_logic::lower_truthy_bool;
 mod positional_spreads;
 mod dynamic_spreads;
 mod dynamic_constructors;
@@ -138,6 +141,8 @@ mod ternary_cast;
 mod missing_string;
 pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
+pub(crate) use self::closures::expr_writes_local;
+
 mod closure_calls;
 mod descriptor_calls;
 mod descriptor_argument_contexts;
@@ -284,8 +289,10 @@ pub(crate) use call_operand_owners::{
 };
 pub(crate) use property_access::singular_object_class;
 pub(crate) use enum_argument_guards::{
-    guard_declared_callable_return, guard_declared_callable_variadic_entry,
-    guard_reference_parameter_entry, reference_parameter_needs_entry_guard,
+    guard_declared_callable_return, guard_declared_callable_value,
+    guard_declared_callable_variadic_entry,
+    guard_reference_argument_value, guard_reference_parameter_entry,
+    reference_parameter_needs_entry_guard,
 };
 pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
@@ -299,7 +306,7 @@ pub(crate) use callable_tracking::{
 #[allow(unused_imports)]
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{
-    body_contains_eval_call, body_writes_local, call_mutated_local_arguments, expr_writes_local,
+    body_contains_eval_call, body_writes_local, call_mutated_local_arguments,
     lower_closure_for_assignment, stmt_writes_local,
 };
 pub(crate) use indexed_array_literals::{
@@ -351,6 +358,7 @@ pub(super) use assoc_array_literals::{
     property_access_expr_type_for_ir,
 };
 pub(super) use call_return_types::call_return_type;
+pub(super) use scalar_param_guards::install_param_decl_lines;
 pub(super) use call_return_types::eir_user_function_return_type;
 pub(super) use method_metadata::closure_return_method_call_type;
 pub(super) use nullsafe_chain::result_storage_type as nullsafe_chain_result_storage_type;
@@ -415,6 +423,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
 
     match &expr.kind {
         ExprKind::Runtime(_) => unreachable!("runtime fragment syntax must be lowered by Magician"),
+        ExprKind::Reference(inner) => lower_expr(ctx, inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

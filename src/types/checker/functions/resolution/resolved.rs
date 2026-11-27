@@ -147,10 +147,27 @@ impl Checker {
             if call_declares_callable {
                 self.record_static_callable_literals(arg);
             }
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            let supplied_reference_for_inference = param_idx < regular_param_count
+                && effective_sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                && !default_args.get(param_idx).copied().unwrap_or(false);
+            // PHP creates an undefined variable when it is passed to a by-reference parameter.
+            // The reference writes a fresh value, so there is no undefined read to diagnose.
+            let actual_ty = match self.infer_type(arg, caller_env) {
+                Ok(ty) => ty,
+                Err(error)
+                    if supplied_reference_for_inference
+                        && error.message.starts_with("Undefined variable: $") =>
+                {
+                    PhpType::Mixed
+                }
+                Err(error) => return Err(error),
+            };
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {
+                self.record_spread_scalar_guard_arg_site(
+                    effective_sig, param_idx, regular_param_count, arg.span,
+                );
                 continue;
             }
             if param_idx < regular_param_count {

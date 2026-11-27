@@ -66,7 +66,7 @@ pub(super) fn specialize_dynamic_assoc_variadic_user_callback(
 /// Validates call user func array dynamic arg array and returns a compile error when it is unsupported.
 fn validate_call_user_func_array_dynamic_arg_array(
     checker: &mut Checker,
-    sig: &crate::types::FunctionSig,
+    _sig: &crate::types::FunctionSig,
     arg_array: &Expr,
     _span: crate::span::Span,
     env: &TypeEnv,
@@ -76,14 +76,6 @@ fn validate_call_user_func_array_dynamic_arg_array(
         return Err(CompileError::new(
             arg_array.span,
             "call_user_func_array() second argument must be an array",
-        ));
-    }
-    if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
-        && sig.ref_params.iter().any(|is_ref| *is_ref)
-    {
-        return Err(CompileError::new(
-            arg_array.span,
-            "call_user_func_array() does not support associative argument literals for callbacks with by-reference parameters",
         ));
     }
     Ok(())
@@ -599,7 +591,7 @@ fn check_descriptor_callable_target_call(
     env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
     let sig = checker.resolve_first_class_callable_sig(target, callback.span, env)?;
-    checker.check_known_callable_call_allowing_by_ref_spread(
+    checker.check_known_callable_call_by_value(
         &sig,
         callback_args,
         callback.span,
@@ -1508,7 +1500,7 @@ pub(crate) fn check_call_user_func_array(
         )?;
         if let Some(elems) = static_args.as_deref() {
             let strict_sig = checker.first_class_prelude_strict_adapter_signature(target, &sig);
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 strict_sig.as_ref().unwrap_or(&sig),
                 elems,
                 span,
@@ -1567,7 +1559,7 @@ pub(crate) fn check_call_user_func_array(
             if let Some(elems) = static_args.as_deref() {
                 let strict_sig =
                     checker.first_class_prelude_strict_adapter_signature(&target, &sig);
-                let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+                let ret_ty = checker.check_known_callable_call_by_value(
                     strict_sig.as_ref().unwrap_or(&sig),
                     elems,
                     span,
@@ -1656,7 +1648,7 @@ pub(crate) fn check_call_user_func_array(
             if let Some(elems) = static_args.as_deref() {
                 let strict_sig =
                     checker.prelude_strict_adapter_signature(Some(&cb_name), None, None, &sig);
-                let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+                let ret_ty = checker.check_known_callable_call_by_value(
                     strict_sig.as_ref().unwrap_or(&sig),
                     elems,
                     span,
@@ -1737,7 +1729,7 @@ pub(crate) fn check_call_user_func_array(
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
         validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
         if let Some(elems) = static_args.as_deref() {
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 &sig,
                 elems,
                 span,
@@ -1814,7 +1806,7 @@ pub(crate) fn check_call_user_func(
             )?
         };
         let strict_sig = checker.first_class_prelude_strict_adapter_signature(target, &sig);
-        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+        let ret_ty = checker.check_known_callable_call_by_value(
             strict_sig.as_ref().unwrap_or(&sig),
             &args[1..],
             span,
@@ -1857,7 +1849,7 @@ pub(crate) fn check_call_user_func(
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
             let strict_sig = checker.first_class_prelude_strict_adapter_signature(&target, &sig);
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 strict_sig.as_ref().unwrap_or(&sig),
                 &args[1..],
                 span,
@@ -1868,7 +1860,7 @@ pub(crate) fn check_call_user_func(
         }
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
             let sig = checker.resolve_first_class_callable_sig(&target, args[0].span, env)?;
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 &sig,
                 &args[1..],
                 span,
@@ -1915,7 +1907,7 @@ pub(crate) fn check_call_user_func(
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             let strict_sig =
                 checker.prelude_strict_adapter_signature(Some(&cb_name), None, None, &sig);
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 strict_sig.as_ref().unwrap_or(&sig),
                 &args[1..],
                 span,
@@ -1943,7 +1935,7 @@ pub(crate) fn check_call_user_func(
         }
         let target = CallableTarget::Function(Name::from(cb_name.clone()));
         let sig = checker.resolve_first_class_callable_sig(&target, span, env)?;
-        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+        let ret_ty = checker.check_known_callable_call_by_value(
             &sig,
             &args[1..],
             span,
@@ -1967,7 +1959,7 @@ pub(crate) fn check_call_user_func(
         return Ok(ret_ty);
     }
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
-        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+        let ret_ty = checker.check_known_callable_call_by_value(
             &sig,
             &args[1..],
             span,

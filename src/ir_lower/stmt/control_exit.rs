@@ -106,7 +106,7 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     } else {
         emit_null_value(ctx, Some(span))
     };
-    let value = coerce_to_return_type(ctx, value, Some(span));
+    let value = coerce_to_return_type(ctx, value, Some(span), value_expr.map(|expr| expr.span));
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
@@ -333,7 +333,7 @@ fn promote_local_to_reference_return_payload(
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
             retained
         } else { value };
-        let value = coerce_to_return_type(ctx, value, Some(span));
+        let value = coerce_to_return_type(ctx, value, Some(span), None);
         let result_type = ctx.return_php_type.clone();
         let staged = ctx.declare_synthetic_php_local(result_type.clone());
         ctx.store_local(&staged, value, result_type, Some(span));
@@ -815,6 +815,13 @@ pub(crate) fn lower_throw_access_error_message(
     }, span);
     let value = crate::ir_lower::expr::lower_expr(ctx, &error);
     terminate_throw(ctx, value.value);
+}
+
+/// Throws an already-lowered exception object, running the finally bodies an uncaught throw
+/// applies to. Callers that rooted message operands retire them before calling this.
+pub(crate) fn throw_lowered_exception(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
+    if ctx.builder.insertion_block_is_terminated() { return; }
+    terminate_throw(ctx, value);
 }
 
 /// Lowers a statically-decided access violation as a named catchable exception.

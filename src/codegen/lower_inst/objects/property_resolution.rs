@@ -204,6 +204,15 @@ pub(super) enum PropertyRuntimeAction {
         /// The per-instance hash that must be probed before the accessors, when the class has one.
         hash_offset: Option<usize>,
     },
+    /// A literal `??` probe on a class that declares `__get`.
+    ///
+    /// php's coalesce fetch answers a stored hash entry first. A miss asks `__isset` only when
+    /// the class declares it, and reads `__get` unless `__isset` said no: the same accessor order
+    /// the boxed receiver path follows.
+    MagicProbe {
+        /// The per-instance hash that must be probed before the accessors, when the class has one.
+        hash_offset: Option<usize>,
+    },
     /// php answers an accessor this dispatch does not call.
     ///
     /// For a DIRECT name that never happens here: `crate::ir_lower::stmt::instance_property_writes`
@@ -384,12 +393,24 @@ pub(super) fn resolve_property_runtime_action(
         resolution,
         PropertyNameResolution::Visible | PropertyNameResolution::ScopePrivate { .. }
     ) {
-        // `$o->p` and `$o->p ?? d` probe a stored dynamic entry before `__get`, just like
-        // `isset()`; only a miss reaches the accessor.
+        // `$o->p ?? d` keeps php's accessor order: hash entry, then `__isset` when declared,
+        // then `__get`. A get-only class still reads the getter on a miss.
+        if matches!(kind, PropertyAccessKind::DirectRead(PropertyFetchMode::Probe))
+            && class_declares_method(ctx, class_name, "__get")
+        {
+            return Ok(PropertyRuntimeAction::MagicProbe {
+                hash_offset: dynamic_property_hash_offset_for_class(
+                    ctx,
+                    class_name,
+                    property,
+                )?,
+            });
+        }
+        // `$o->p` probes a stored dynamic entry before `__get`, just like `isset()`; only a miss
+        // reaches the accessor.
         let get_read = matches!(
             kind,
-            PropertyAccessKind::DirectRead(mode)
-                if mode.uses_magic_get() || mode == PropertyFetchMode::Probe
+            PropertyAccessKind::DirectRead(mode) if mode.uses_magic_get()
         );
         if get_read && class_declares_method(ctx, class_name, "__get") {
             return Ok(PropertyRuntimeAction::MagicRead {
@@ -465,12 +486,12 @@ pub(super) fn resolve_property_runtime_action(
                     warns_on_miss: false,
                 });
             }
-            // A `readonly` class carries php's no-dynamic-properties flag, so CREATING the name
-            // is an `Error`, never a store. Answering here keeps the write arms' invariant intact:
-            // a write may never see `DynamicMissing`, and a readonly class deliberately reserves
-            // no hash. A read or an `unset()` needs no arm of its own, because nothing can ever
+            // A `readonly` class or an enum carries php's no-dynamic-properties flag, so CREATING
+            // the name is an `Error`, never a store. Answering here keeps the write arms'
+            // invariant intact: a write may never see `DynamicMissing`, and neither class
+            // reserves a hash. A read or an `unset()` needs no arm of its own, because nothing can ever
             // have been created, which is exactly what `DynamicMissing` already means.
-            if kind.creates_dynamic_property() && class_is_readonly(ctx, class_name) {
+            if kind.creates_dynamic_property() && class_forbids_dynamic_properties(ctx, class_name) {
                 let class_name = class_name.trim_start_matches('\\');
                 if matches!(kind, PropertyAccessKind::RuntimeWrite) {
                     return Ok(PropertyRuntimeAction::RefuseRuntimeName {
@@ -517,6 +538,17 @@ pub(super) fn resolve_property_runtime_action(
             })
         }
     }
+}
+
+/// Returns whether php refuses to create any dynamic property on this class.
+///
+/// A `readonly` class and an enum both carry the engine's no-dynamic-properties flag, so a write
+/// of an undeclared name raises `Cannot create dynamic property C::$p` and neither reserves a
+/// hash. Mixed-receiver ladders need an arm for such a class: without one the write fell into the
+/// miss path and was dropped.
+pub(super) fn class_forbids_dynamic_properties(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    class_is_readonly(ctx, class_name)
+        || ctx.module.enum_infos.contains_key(class_name.trim_start_matches('\\'))
 }
 
 /// Returns whether the class is declared `readonly`, which php makes no-dynamic-properties.
@@ -824,6 +856,10 @@ pub(super) fn dynamic_property_runtime_plan_for_class(
         // raises `Cannot create dynamic property …` and a read warns `Undefined property`.
         || class_is_readonly(ctx, normalized)
         || subtree_answers_from_its_own_hash(ctx, normalized, property)?
+        // `??` on a class with `__get` but no `__isset` still reads through the getter on a miss
+        // (php's BP_VAR_IS fetch), so it needs the runtime plan's `MagicRead` arm.
+        || (matches!(kind, PropertyAccessKind::DirectRead(PropertyFetchMode::Probe))
+            && subtree_declares_magic_method(ctx, normalized, "__get"))
         || kind
             .magic_method()
             .is_some_and(|method| subtree_declares_magic_method(ctx, normalized, method));

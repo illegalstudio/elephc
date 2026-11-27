@@ -9,6 +9,8 @@
 //! - Boxed strings bypass the allocating cast so persistence happens exactly once.
 //! - Other scalar casts are persisted before later arguments can overwrite shared scratch.
 //! - Callable conversions return an owned descriptor and root temporary boxing across TypeError.
+//! - A boxed argument bound to a declared scalar parameter of a user callable is checked first
+//!   (`scalar_param_args`).
 
 use super::{abi, DataSection, Emitter, InvokerEmitContext, PhpType};
 
@@ -40,6 +42,17 @@ pub(super) fn coerce(
             }
             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
             return (target.codegen_repr(), false);
+        }
+    }
+    if let (Some(parameter), Some(guards)) = (ctx.scalar_parameter.clone(), ctx.scalar_guards.clone()) {
+        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            && target_ty.is_some_and(|ty| ty.codegen_repr() == parameter.declared)
+        {
+            // A boxed argument bound to a declared scalar is checked (and, for int/float,
+            // converted) before the lenient cast below could accept null, arrays or objects.
+            if let Some(converted) = super::scalar_param_args::emit_guard(emitter, ctx, data, &guards, &parameter) {
+                return (converted, false);
+            }
         }
     }
     if source_ty.codegen_repr() == PhpType::Mixed

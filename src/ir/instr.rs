@@ -280,6 +280,8 @@ pub enum Immediate {
     /// limited exactly like `DeclaredCallableNames`, so the conversion and `$callable()` agree.
     DeclaredCallableFactory(bool),
     Data(DataId),
+    /// Names an exit/die call that must validate its status using PHP strict_types.
+    StrictExit(DataId),
     /// Data-pool reference carrying the complete source policy of its physical call site.
     ProfiledData {
         /// Referenced string or name data.
@@ -1118,6 +1120,12 @@ pub enum Op {
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
+    /// Loads the raw managed-cell pointer stored in a hidden ref-cell owner slot.
+    ///
+    /// Operand: none. Immediate: the owner `LocalSlot`. The result is a one-word `Pointer`;
+    /// unlike `LoadRefCell` it neither dereferences the cell nor interprets the slot with the
+    /// cell payload's type, which would box a `string` owner as a Mixed cell.
+    LoadLocalRefCellPtr,
     /// Copies the current value of a reference into an independent owning Mixed snapshot.
     /// The local's physical payload ABI stays unchanged, including for raw native parameters.
     LoadRefCellValue,
@@ -1322,6 +1330,13 @@ pub enum Op {
     ArrayElemAddr,
     ArraySet,
     HashSet,
+    /// Writes an associative entry with binding-replacing semantics.
+    ///
+    /// Unlike `HashSet`, an existing tag-11 reference entry is detached and replaced instead
+    /// of writing through its cell. Array literals use this so a duplicate key replaces an
+    /// earlier `&$name` entry exactly like PHP, including when the replacement is itself a
+    /// reference.
+    HashSetValue,
     /// Writes one signature-unknown callable-descriptor argument WITHOUT PHP's numeric-string
     /// key normalization.
     ///
@@ -1535,6 +1550,15 @@ pub enum Op {
     /// (`"f(): Return value must be of type int, "`), to which codegen appends the runtime
     /// type word and `" returned"`. Result: `I64`.
     ReturnBoundaryMixedToInt,
+    /// Checks a boxed Mixed argument bound to a declared non-nullable scalar parameter and
+    /// throws PHP's catchable `TypeError` when the parameter refuses it; produces no result.
+    /// The hot path is one tag compare and a branch to an out-of-line cold path, so the
+    /// check adds no basic block. Operand: the Mixed value. Immediate: data id of
+    /// `"<mode>\u{1f}<prefix>\u{1f}<suffix>"`, where `<mode>` is `s`/`i`/`f`/`b` for the
+    /// coercive `string`/`int`/`float`/`bool` rule (any scalar, plus a `Stringable` object for
+    /// `string`) and the upper-case letter for `strict_types=1` (the exact scalar, plus `int`
+    /// for `float`). The message is `<prefix>` + PHP's value-type name + `<suffix>`.
+    ScalarParamGuard,
     /// Narrows a checked integer add/sub/mul result stored into a DECLARED `int` property.
     /// The operand can only hold an int or the float promoted by overflow (boxed Mixed, or a
     /// raw I64/F64 after constant folding): an int forwards, a float inside `[-2^63, 2^63)`
@@ -1751,6 +1775,7 @@ impl Op {
             LoadGlobalRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
+            LoadLocalRefCellPtr => E::READS_LOCAL,
             LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             StoreLocal | SetLocalBindingState | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
@@ -1925,7 +1950,7 @@ impl Op {
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             // Marker writes can refuse an incompatible reference payload with a catchable Error.
             // Retiring the rejected or replaced value can also invoke arbitrary PHP destructors.
-            ArraySet | HashSet | DescriptorArgSet | ArraySetMixedKey => E::all(),
+            ArraySet | HashSet | HashSetValue | DescriptorArgSet | ArraySetMixedKey => E::all(),
             ArrayPush | HashAppend
             | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -1993,7 +2018,7 @@ impl Op {
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
             | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt
-            | PropertyBoundaryCheckedToInt => {
+            | ScalarParamGuard | PropertyBoundaryCheckedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -2113,6 +2138,7 @@ impl Op {
                 | Op::Call
                 | Op::ArraySet
                 | Op::HashSet
+                | Op::HashSetValue
                 | Op::DescriptorArgSet
                 | Op::ArraySetMixedKey
                 | Op::ClosureBind
@@ -2155,6 +2181,7 @@ impl Op {
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
+            LoadLocalRefCellPtr => "load_local_ref_cell_ptr",
             LoadRefCellValue => "load_ref_cell_value",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
@@ -2279,6 +2306,7 @@ impl Op {
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
+            HashSetValue => "hash_set_value",
             DescriptorArgSet => "descriptor_arg_set",
             DescriptorArgKeyExists => "descriptor_arg_key_exists",
             ThrowNamedParameterOverwrite => "throw_named_parameter_overwrite",
@@ -2357,6 +2385,7 @@ impl Op {
             PackedFieldMixedToFloat => "packed_field_mixed_to_float",
             PackedFieldMixedToBool => "packed_field_mixed_to_bool",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
+            ScalarParamGuard => "scalar_param_guard",
             PropertyBoundaryCheckedToInt => "property_boundary_checked_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",

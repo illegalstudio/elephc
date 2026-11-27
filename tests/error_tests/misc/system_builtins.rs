@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of misc system builtin diagnostics, including undefined constant, define wrong args, and define non string name.
+//! Integration or regression tests for diagnostic coverage of misc system builtin diagnostics, including undefined constant, define wrong args, define non string name, and PCNTL/POSIX arity and operand types.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -19,6 +19,12 @@ expect_builtin_arity_error!(
     test_error_die_wrong_args,
     "<?php die(1, 2);",
     "exit() takes 0 or 1 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_setlocale_wrong_args,
+    "<?php setlocale(LC_ALL);",
+    "expects at least 2 arguments"
 );
 
 expect_builtin_arity_error!(
@@ -55,6 +61,48 @@ expect_builtin_arity_error!(
     test_error_posix_setsid_wrong_args,
     "<?php posix_setsid(1);",
     "posix_setsid() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_kill_wrong_args,
+    "<?php posix_kill(1);",
+    "posix_kill() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_isatty_wrong_args,
+    "<?php posix_isatty();",
+    "posix_isatty() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_geteuid_wrong_args,
+    "<?php posix_geteuid(1);",
+    "posix_geteuid() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_getpgrp_wrong_args,
+    "<?php posix_getpgrp(1);",
+    "posix_getpgrp() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_get_last_error_wrong_args,
+    "<?php posix_get_last_error(1);",
+    "posix_get_last_error() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_errno_wrong_args,
+    "<?php posix_errno(1);",
+    "posix_errno() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_strerror_wrong_args,
+    "<?php posix_strerror();",
+    "posix_strerror() takes exactly 1 argument"
 );
 
 expect_builtin_arity_error!(
@@ -99,6 +147,24 @@ fn test_error_pcntl_status_requires_int() {
     expect_error(
         "<?php pcntl_wifexited([]);",
         "pcntl_wifexited() argument 1 must be int-compatible",
+    );
+}
+
+/// Verifies `posix_kill()` rejects non-integer operands through the shared PCNTL validator.
+#[test]
+fn test_error_posix_kill_requires_int() {
+    expect_error(
+        "<?php posix_kill([], 0);",
+        "posix_kill() argument 1 must be int-compatible",
+    );
+}
+
+/// Verifies `posix_isatty()` admits only `int|resource`-compatible operands.
+#[test]
+fn test_error_posix_isatty_rejects_array() {
+    expect_error(
+        "<?php posix_isatty([]);",
+        "posix_isatty() expects parameter 1 to be of type int|resource",
     );
 }
 

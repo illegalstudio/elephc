@@ -69,8 +69,11 @@ at their request/call boundaries. See [PHP extensions](../beyond-php/phpext.md).
 │                              │  _fiber_current, _fiber_main_saved_*,
 │                              │  _generator_class_id,
 │                              │  _print_r_mode/_print_r_off,
+│                              │  _vd_ref_prefix,
 │                              │  _ob_level/_ob_in_handler/_ob_flushing,
 │                              │  elephc_web_capture,
+│                              │  elephc_probe_trace_fn, elephc_trace_active,
+│                              │  elephc_instr_live_ptr,
 │                              │  _include_once_*, _fn_variant_active_*,
 │                              │  _elephc_crypto_*_fn, _elephc_bcmath_*_fn,
 │                              │  _elephc_tls_*_fn,
@@ -1860,6 +1863,8 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
+- `_vd_ref_prefix` is a one-value flag for `var_dump()`. The hash walker sets it before printing a shared reference, and the padding helper consumes it to print `_vd_amp` after the indentation.
+- `elephc_probe_trace_fn`, `elephc_trace_active`, and `elephc_instr_live_ptr` hold the profiling trace handoff, the active trace flag, and the address of the live-heap byte counter.
 - `_debuginfo_guard`, `_debuginfo_pad` — set around a run-time `__debugInfo()` call made by `var_dump()`/`print_r()`. `_debuginfo_guard` holds the exception-handler top at the call (tagged with bit 0): a throw that reaches it without a newer handler is reported as PHP's uncaught warning, then `__debuginfo() must return an array`, exit 255, as in PHP. `_debuginfo_pad` says whether `var_dump()` had already written the value's indent before that report. `__rt_obj_debuginfo_fetch` saves both, with `_debuginfo_call_line`, in its frame and restores them after the call, so a dump nested inside `__debugInfo()` does not leak its values into the enclosing one.
 - `_callable_strict_profile` - selects the strict-PHP callable builtin table when `--php-only` is active
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
@@ -2088,6 +2093,7 @@ read the same uniform heap header, including on the iOS targets.
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
 | Reference validation roots | `_rt_reference_validation_pins_top` = 8 bytes | Active caller-owned root records excluded from PHP-visible reference-sharing counts |
+| Monitoring and reference rendering | `elephc_probe_trace_fn`, `elephc_trace_active`, `elephc_instr_live_ptr`, `_vd_ref_prefix` = 8 bytes each | Trace handoff and propagation, the live-heap counter address, and a pending `var_dump()` reference marker |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_source_len`, `_json_error_candidate_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column`, `_json_error_scan_count`, `_json_error_scan_bytes` = 136 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations. The candidate pointer is recorded in constant time; line and column are scanned from the original source only when an error is recorded. |
 | Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_ser_legacy_active`, `_unser_count`, `_unser_legacy_active` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context while legacy Serializable callbacks share references |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_strtotime_iso_buf` = 64 bytes; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override, the scratch copy a one-digit-month/day ISO date is zero-padded into, plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |

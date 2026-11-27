@@ -500,7 +500,9 @@ fn emit_runtime_name_plan_read(
                 }
             }
         }
-        PropertyRuntimeAction::MagicIsset { .. } | PropertyRuntimeAction::MagicEmpty { .. } => {
+        PropertyRuntimeAction::MagicIsset { .. }
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => {
             let _ = static_class;
             emit_boxed_null(ctx);
             Ok(())

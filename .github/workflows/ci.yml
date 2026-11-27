@@ -52,6 +52,7 @@ env:
     -p elephc-tidy
     -p elephc-fileinfo
     -p elephc-tokenizer
+    -p elephc-filter
     -p elephc-magician
     -p elephc-reference
     -p elephc-web
@@ -1964,6 +1965,13 @@ jobs:
       - name: Check the shared tokenizer against PHP
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
+
+      - name: Check the forced text view against PHP
+        env:
+          ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
+          ELEPHC_TOKEN_VIEW: text
         shell: elephc-ci-shell {0}
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
 

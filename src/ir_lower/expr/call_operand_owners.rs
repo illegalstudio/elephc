@@ -148,6 +148,31 @@ pub(super) fn root_evaluated_call_argument(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    root_call_argument(ctx, value, span, false)
+}
+
+/// Roots an evaluated argument like `root_evaluated_call_argument`, and also pins a borrowed
+/// `mixed` local load that rule leaves unpinned.
+///
+/// A deferred class-like parameter check reads its source after every later argument ran, so
+/// a later write to the same local must not free the boxed value that check inspects.
+pub(super) fn pin_evaluated_call_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let pinnable = Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(value.value))
+        && matches!(ctx.builder.value_defining_op(value.value), Some(Op::LoadLocal | Op::LoadStaticLocal));
+    root_call_argument(ctx, value, span, pinnable)
+}
+
+/// Shared body of the call-argument rooting helpers; `pin_borrowed` roots a borrowed load too.
+fn root_call_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+    pin_borrowed: bool,
+) -> LoweredValue {
     let php_type = ctx.builder.value_php_type(value.value);
     let borrowed_ref_cell_value = ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell)
         && Ownership::php_type_needs_lifetime_tracking(&php_type);
@@ -155,7 +180,7 @@ pub(super) fn root_evaluated_call_argument(
         .call_argument_evaluation_scopes
         .last()
         .is_some_and(|scope| scope.expression_depth == ctx.expression_depth)
-        || (!ctx.value_needs_release_after_use(value) && !borrowed_ref_cell_value)
+        || (!pin_borrowed && !ctx.value_needs_release_after_use(value) && !borrowed_ref_cell_value)
     {
         return value;
     }
@@ -206,6 +231,70 @@ pub(super) fn root_evaluated_call_argument(
     LoweredValue {
         value: borrowed,
         ir_type: rooted.ir_type,
+    }
+}
+
+/// Moves an owned boxed temporary into an unwind-visible slot that retires after the call.
+///
+/// `root_evaluated_call_argument` retains the value and releases the SSA owner, because its
+/// stored lease may become the call's own operand. A box that a deferred scalar parameter check
+/// reads is never passed to the callee (the check, or the conversion after it, passes a scalar),
+/// so the slot itself can own it: the store moves the reference without an `Acquire`/`Release`
+/// pair, and the slot is released with the call's other intermediates once the call returns,
+/// or by the unwinder when a check throws. Any other value takes the ordinary root.
+pub(super) fn move_evaluated_call_argument_into_root(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(value.value);
+    let movable = ctx
+        .call_argument_evaluation_scopes
+        .last()
+        .is_some_and(|scope| scope.expression_depth == ctx.expression_depth)
+        && ty.codegen_repr() == PhpType::Mixed
+        && ctx.value_is_owning_temporary(value)
+        && ctx.builder.value_defining_op(value.value) != Some(Op::LoadRefCell);
+    if !movable {
+        return root_evaluated_call_argument(ctx, value, span);
+    }
+    let temp_name = ctx.declare_owned_hidden_temp(ty.clone());
+    // An owned temporary's store moves its reference into the slot (see `pin_in_flight_owners`).
+    ctx.store_local(&temp_name, value, ty, None);
+    let slot = ctx.local_slots[&temp_name];
+    register_owned_call_operand(ctx, slot, span);
+    let borrowed_ty = ctx.builder.value_php_type(value.value);
+    let borrowed = ctx
+        .builder
+        .emit_with_effects(
+            Op::Borrow,
+            vec![value.value],
+            None,
+            value.ir_type,
+            borrowed_ty,
+            Ownership::Borrowed,
+            Op::Borrow.default_effects(),
+            Some(span),
+        )
+        .expect("call argument evaluation borrow produces a value");
+    // A slot-only owner: `finish_call_argument_evaluation` keeps it as an intermediate.
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument evaluation scope")
+        .owners
+        .push(crate::ir_lower::context::CallArgumentEvaluationOwner {
+            value: None,
+            borrow: None,
+            temp_name,
+            slot,
+            span,
+            ref_cell_payload: None,
+            scoped_receiver_alias: false,
+            pins_borrowed_source: false,
+        });
+    LoweredValue {
+        value: borrowed,
+        ir_type: value.ir_type,
     }
 }
 

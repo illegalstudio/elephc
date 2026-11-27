@@ -28,6 +28,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::strict_comparators::emit(emitter);
     super::strict_numeric::emit(emitter);
     diagnostics::emit_diagnostics(emitter, features);
+    // The filter bridge is linked by any program that injects its prelude, and by the
+    // eval bridge's dynamic catalog. Emit the stubs in both cases; `filter_regex` only
+    // tail-calls PCRE2 when the regex feature is selected.
+    if features.filter || features.eval_bridge {
+        super::filter_regex::emit_filter_regex(emitter, features);
+    }
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
@@ -106,6 +112,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_split(emitter);
     strings::emit_str_split_count(emitter);
     strings::emit_addslashes(emitter);
+    if features.addcslashes || features.descriptor_invoker || features.eval_bridge {
+        strings::emit_addcslashes(emitter);
+    }
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);
@@ -181,6 +190,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     callables::emit_throw_unknown_named_parameter(emitter);
     callables::emit_throw_positional_after_named(emitter);
     callables::emit_closure_bind(emitter);
+    callables::emit_callable_closure_copy(emitter);
+    callables::emit_callable_closure_from_owned(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);

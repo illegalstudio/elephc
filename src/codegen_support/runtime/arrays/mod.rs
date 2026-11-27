@@ -180,6 +180,7 @@ mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
 mod hash_insert_owned;
+mod hash_reindex_dense;
 mod hash_map;
 mod hash_iter;
 mod hash_new;
@@ -534,6 +535,7 @@ pub use hash_new::emit_hash_new;
 pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
 pub use hash_sort::emit_hash_sort;
+pub use hash_reindex_dense::emit_hash_reindex_dense;
 /// Emit the hash key/value insertion-order sort helpers.
 pub use hash_spread::emit_hash_spread;
 /// Emit hash spread (array-literal flatten) helper.
@@ -633,7 +635,7 @@ pub use range::emit_range;
 /// Emit range helper.
 pub use refcount::emit_refcount;
 /// Emit reference count helper.
-pub use shuffle::emit_shuffle;
+pub use shuffle::{emit_hash_shuffle_links, emit_shuffle};
 /// Emit array shuffle helper.
 pub use sort_int::emit_sort_int;
 /// Emit string sort helper.
@@ -646,7 +648,7 @@ pub use float_compare_slots::emit_float_compare_slots;
 /// Emit PHP-compatible sorting for raw float arrays.
 pub use float_sort::emit_float_sort;
 /// Emit user-defined sort helper.
-pub use php_compare_slots::emit_php_compare_slots;
+pub use php_compare_slots::{emit_hash_sort_require_scalars, emit_php_compare_slots};
 pub use usort::emit_usort;
 /// Emit user-defined string-array sort helper.
 pub use usort_str::emit_usort_str;

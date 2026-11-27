@@ -105,14 +105,20 @@ pub(super) fn finalize_zip(out: &mut Vec<u8>, central: &[u8], count: usize, meta
 /// php-src `phar_zip_applysignature` hashes the local file entries, the central
 /// directory, and the archive comment — but not the EOCD — and then appends the
 /// signature as the archive's last local entry and last central record.
-pub(super) fn sign_zip_archive(archive: &Archive, flag: u32, key: Option<&[u8]>) -> Option<Vec<u8>> {
+pub(super) fn sign_zip_archive(
+    entries: &[ArchiveEntry],
+    metadata: &[u8],
+    stub: &[u8],
+    flag: u32,
+    key: Option<&[u8]>,
+) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut central = Vec::new();
-    let mut count = write_zip_body(&mut out, &mut central, &archive.entries, &archive.stub)?;
+    let mut count = write_zip_body(&mut out, &mut central, entries, stub)?;
     // Signed range: local entries ++ central records ++ comment, signature excluded.
     let mut signed = out.clone();
     signed.extend_from_slice(&central);
-    signed.extend_from_slice(&archive.metadata);
+    signed.extend_from_slice(metadata);
     let sig = compute_signature(flag, key, &signed)?;
     // The signature entry stays in the clear — a verifier must read it without the
     // password (and the signature already covers the encrypted local-entry bytes).
@@ -126,7 +132,7 @@ pub(super) fn sign_zip_archive(archive: &Archive, flag: u32, key: Option<&[u8]>)
         false,
     )?;
     count += 1;
-    finalize_zip(&mut out, &central, count, &archive.metadata)?;
+    finalize_zip(&mut out, &central, count, metadata)?;
     Some(out)
 }
 

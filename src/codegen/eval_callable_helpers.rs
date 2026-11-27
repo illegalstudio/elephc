@@ -422,6 +422,15 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     emitter.instruction("ret");                                                 // return to the descriptor invoker caller
 }
 
+/// Returns the byte offsets of the eval context and the wrapped boxed callback in an eval
+/// callback adapter.
+pub(crate) fn eval_callback_adapter_capture_offsets() -> (usize, usize) {
+    (
+        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
+        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
+    )
+}
+
 /// Returns the byte offset for one dynamic eval callable descriptor capture.
 fn dynamic_capture_offset(index: usize) -> usize {
     callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + index * 16
@@ -818,6 +827,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         owns_string_return,
         php_return_status: true,
         defaults: &defaults,
+        scalar_guards: None,
     };
     // Owner callbacks outlive this placeholder body, including when an identical body is dropped.
     // Allocate their real label before detaching so body renaming cannot invalidate the cache.

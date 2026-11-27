@@ -219,6 +219,16 @@ pub enum EvalExpr {
         left: Box<EvalExpr>,
         right: Box<EvalExpr>,
     },
+    /// PHP's `@` operator: the operand runs with only fatal error levels reported.
+    ErrorSuppress(Box<EvalExpr>),
+    /// `throw` in expression position. It raises its operand and never yields a value.
+    Throw(Box<EvalExpr>),
+    /// The receiver of a property fetch inside a `const` initializer. PHP evaluates the fetch
+    /// only on an enum case, or on `null` behind `?->` when `nullsafe` is set.
+    ConstantPropertyReceiver {
+        object: Box<EvalExpr>,
+        nullsafe: bool,
+    },
 }
 
 /// The right-hand side accepted by PHP's `instanceof` operator.

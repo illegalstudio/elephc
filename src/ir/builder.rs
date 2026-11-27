@@ -797,6 +797,12 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
         }
         (PhpType::Array(_), PhpType::Array(_)) => incoming,
         (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => incoming,
+        // Both PHP array layouts share one container word, and a null/void binding stores the
+        // zero word. Keeping the incoming container type instead of boxing Mixed lets a loop's
+        // next iteration read the container it published as a plain pointer.
+        (PhpType::Void | PhpType::Never, PhpType::Array(_) | PhpType::AssocArray { .. }) => {
+            incoming
+        }
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,

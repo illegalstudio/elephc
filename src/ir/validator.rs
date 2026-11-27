@@ -828,6 +828,7 @@ fn validate_instruction_immediate(
         | PackedFieldMixedToFloat
         | PackedFieldMixedToBool
         | ReturnBoundaryMixedToInt
+        | ScalarParamGuard
         | PropertyBoundaryCheckedToInt
         | PropInitialized
         | StaticPropInitialized
@@ -840,6 +841,9 @@ fn validate_instruction_immediate(
         },
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
+        }),
+        LanguageConstructCall => require_immediate(inst_id, inst, "language construct name", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. } | Imm::StrictExit(_))
         }),
         PropGet | NullsafePropGet => require_immediate(inst_id, inst, "profiled property name or reflected physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. } | Imm::ReflectionPropertyRef { .. })
@@ -855,7 +859,7 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LocalPlace | LoadLocal | StoreLocal | StoreLocalRetiringBox | SetLocalBindingState | GetNativeBindingState | GetEvalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        StrAppend | LocalPlace | LoadLocal | StoreLocal | StoreLocalRetiringBox | SetLocalBindingState | GetNativeBindingState | GetEvalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadLocalRefCellPtr | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | LoadStaticLocalRefCell | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -1046,7 +1050,7 @@ fn validate_opcode_rules(
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
         ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew
-        | CallableArrayNew | GeneratorNew | InvokerRefArg
+        | GeneratorNew | InvokerRefArg
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | IncludeOnceTest | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
@@ -1127,7 +1131,7 @@ fn validate_opcode_rules(
                 _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
             }
         }
-        FirstClassCallableNew | CallableValueNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
+        FirstClassCallableNew | CallableValueNew | CallableArrayNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
@@ -1215,6 +1219,7 @@ fn validate_opcode_rules(
             Ok(())
         }
         LoadLocal
+        | LoadLocalRefCellPtr
         | LoadRefCell
         | LoadGlobal
         | LoadStaticLocal

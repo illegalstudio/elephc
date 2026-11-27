@@ -152,12 +152,13 @@ impl Checker {
                             .and_then(|c| c.methods.get(&method_key))
                             .map(|s| s.params.clone())
                     };
-                    for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+                    for (i, (pname, type_ann, _, is_ref)) in method.params.iter().enumerate() {
                         let ty = if let Some(type_ann) = type_ann {
-                            let declared = self.resolve_declared_param_type_hint(
+                            let declared = self.resolve_declared_param_storage_hint(
                                 type_ann,
                                 method.span,
                                 &format!("Method parameter ${}", pname),
+                                *is_ref,
                             )?;
                             // A generic `array` hint is sharpened to the call-site array shape
                             // recorded on the stored signature, mirroring how free-function

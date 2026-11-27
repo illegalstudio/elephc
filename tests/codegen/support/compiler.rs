@@ -8,7 +8,7 @@
 //! - Centralizes compile options, define handling, runtime harness injection, and diagnostic capture.
 
 use super::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 // One-shot override that forces the GMP prelude for a PHPT corpus compile.
 //
@@ -17,6 +17,8 @@ use std::cell::Cell;
 // its own flag and the compile consumes it, so a failing case cannot leak into the next.
 thread_local! {
     static FORCE_GMP_PRELUDE: Cell<bool> = const { Cell::new(false) };
+    /// Compiler INI overrides for the fixture currently compiling on this thread.
+    static TEST_INI_OVERRIDES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Resets the one-shot GMP override even when the compile panics.
@@ -416,6 +418,35 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Mirror `pipeline::compile`: inject the filter surface FIRST, before PDO/mysqli. Their
+    // preludes contain `is_callable()`/`get_class()` introspection; scanning those as user
+    // filter usage would retain the filter bridge and every dynamically dispatched class on a
+    // PDO-only program. Filter usage is decided from the user AST and its includes.
+    let overrides = TEST_INI_OVERRIDES.with(|slot| slot.borrow().clone());
+    // Opaque eval can reach every builtin, so the production pipeline injects the whole
+    // filter surface for it. That makes unrelated eval fixtures millions of assembly lines
+    // and dominates their compile time. The fixture suite only needs the surface when the
+    // source or resolved program actually names it; the filter/eval visibility tests do.
+    // The eval budgets in `.config/nextest.toml` are calibrated against this fixture-only
+    // skip: removing it expands those compiles, so adjust both together.
+    let source_lower = source.to_ascii_lowercase();
+    // `parse_str()` applies `filter.default` through the filter prelude, so a configured
+    // filter setting requires the declarations even when the PHP source never names one.
+    let filter_configured = overrides.iter().any(|(name, _)| name.starts_with("filter."));
+    let filter_mentioned = filter_configured
+        || source_lower.contains("filter_")
+        || source_lower.contains("filter\\")
+        || elephc::filter_prelude::program_uses_explicit_surface(&resolved);
+    let resolved = if filter_mentioned {
+        elephc::filter_prelude::inject_if_used_with_ini_and_initializer(
+            resolved,
+            &overrides,
+            false,
+            &mut prelude_inventory,
+        )
+    } else {
+        resolved
+    };
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
     // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
@@ -452,12 +483,38 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::uri_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
-    let resolved = elephc::core_prelude::inject_if_used(
+    let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, &mut prelude_inventory);
+    let resolved = elephc::parse_str_prelude::inject_if_used(
         resolved,
-        false,
-        false,
+        &overrides,
         &mut prelude_inventory,
     );
+    let resolved = if source.contains("ini_get") || source.contains("ini_set") {
+        // Mirror `pipeline::compile`: the probe lets an autoloaded class file select the
+        // OPcache/INI prelude even when the entry program does not name it.
+        let autoloaded_preludes = elephc::autoload::prelude_probe::autoloaded_preludes(
+            &resolved,
+            dir,
+            &autoload_registry,
+            defines,
+        );
+        let (resolved, _) = elephc::opcache_prelude::inject_if_used(
+            resolved,
+            php_version,
+            false,
+            None,
+            &[],
+            &overrides,
+            None,
+            false,
+            false,
+            &autoloaded_preludes.functions,
+            &mut prelude_inventory,
+        );
+        resolved
+    } else {
+        resolved
+    };
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
@@ -523,6 +580,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // `?Uri\...` types.
     elephc::uri_prelude::apply_reflection_signatures(&mut check_result);
     set_fixture_linked_extensions(&check_result.required_libraries);
+    // Mirrors `pipeline::compile`: runtime scalar-parameter guard sites stay observable to
+    // every post-typecheck phase.
+    let scalar_guard_sites =
+        elephc::optimize::install_scalar_guard_arg_sites(check_result.scalar_guard_arg_sites.clone());
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
@@ -537,6 +598,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         optimized,
         check_result.local_binding_decision_spans(),
     );
+    drop(scalar_guard_sites);
     let empty_roots = HashSet::new();
     // Mirrors `pipeline::compile`: a generic instantiation is reachable by construction but no
     // call site NAMES it in the AST — lowering resolves that from the checker's answer — so the
@@ -571,6 +633,32 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::ir_lower::enable_native_reference_validation(&mut ir_module)
             .expect("native reference declaration validators must be valid EIR");
     }
+    // Mirror `pipeline::backend`: the eval catalog exposes the PHP 8.5 URI classes, so the
+    // interpreter's compiled method bodies need the URI bridge even when no AOT source names it.
+    if check_result
+        .required_libraries
+        .iter()
+        .any(|library| library == "elephc_magician")
+        && php_version >= elephc::php_version::PhpVersion::Php85
+        && !check_result
+            .required_libraries
+            .iter()
+            .any(|library| library == "elephc_uri")
+    {
+        check_result.required_libraries.push("elephc_uri".to_string());
+    }
+    // Mirror `pipeline::backend`: Core/mbstring INI overrides reach the shared request
+    // configuration only when the program uses the shared runtime. This is what makes
+    // `ini_get('filter.default_flags')` report the fixture `--INI--` value.
+    let configures_mbstring = ir_module.required_runtime_features.mbstring
+        || ir_module.required_runtime_features.mbregex
+        || ir_module.required_runtime_features.eval_bridge;
+    if configures_mbstring {
+        ir_module.required_runtime_features.mbstring_mime |= overrides.iter().any(|(name, _)| {
+            name == "mbstring.http_output_conv_mimetypes"
+        });
+        ir_module.mbstring_startup = Some(elephc::mbstring_startup::arguments(&overrides));
+    }
     // Mirror `pipeline::backend`: report the bridges this fixture actually links to
     // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
     // instruction lowering, so the seed has to land before `generate_user_asm_*`.
@@ -601,6 +689,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     if let Ok(output) = &generated_user_asm {
         runtime_features.handler_state |= output.handler_state;
         runtime_features.object_clone |= output.object_clone;
+        runtime_features.addcslashes |= output.addcslashes;
     }
     let user_asm = generated_user_asm.map(|output| output.asm);
     let runtime_phase = fixture_phase_timing("runtime-asm");
@@ -623,6 +712,8 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
             "elephc_tls" => Some("openssl"),
             "elephc_pdo" => Some("PDO"),
             "elephc_crypto" => Some("hash"),
+            "elephc_filter" => Some("filter"),
+            "elephc_uri" => Some("uri"),
             "elephc_bcmath" => Some("bcmath"),
             "elephc_gmp" => Some("gmp"),
             "elephc_random" => Some("random"),
@@ -913,6 +1004,39 @@ pub(crate) fn compile_and_run_capture_with_heap_size(
     heap_size: usize,
 ) -> ProgramOutput {
     compile_and_run_capture_with_optional_regex(source, heap_size, false)
+}
+
+/// Compiles and runs a fixture with extra environment variables for the program.
+///
+/// The compiler process keeps its own environment: only the produced binary sees
+/// these overrides, so runtime policy switches do not leak between parallel tests.
+pub(crate) fn compile_and_run_capture_with_env(
+    source: &str,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, 8_388_608, false, false, false, false,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture_with_env(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+        env,
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
 }
 
 /// Compiles and runs a fixture with stderr merged onto stdout, preserving write order.
@@ -1259,6 +1383,28 @@ fn compile_and_run_with_heap_size_and_optional_regex(
 /// Provides the Compile and run helper used by the compiler module.
 pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
+}
+
+/// Clears compiler INI overrides on every exit path, including a panicking compile.
+struct IniOverrideGuard;
+
+impl Drop for IniOverrideGuard {
+    /// Restores the thread-local and process-wide override slots after one fixture.
+    fn drop(&mut self) {
+        elephc::codegen::set_ini_overrides(Vec::new());
+        TEST_INI_OVERRIDES.with(|slot| slot.borrow_mut().clear());
+    }
+}
+
+/// Compiles and runs a fixture with compiler-level INI overrides, resetting them afterwards.
+pub(crate) fn compile_and_run_capture_with_ini(
+    source: &str,
+    ini: &[(String, String)],
+) -> ProgramOutput {
+    TEST_INI_OVERRIDES.with(|slot| *slot.borrow_mut() = ini.to_vec());
+    elephc::codegen::set_ini_overrides(ini.to_vec());
+    let _guard = IniOverrideGuard;
+    compile_and_run_capture(source)
 }
 
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.

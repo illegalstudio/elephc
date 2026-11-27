@@ -37,7 +37,7 @@ use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
 mod machine_layout;
-mod operand_owners;
+pub(super) mod operand_owners;
 mod ref_cell_state;
 mod eval_reference_snapshots;
 
@@ -170,8 +170,18 @@ impl<'a> FunctionContext<'a> {
             .map_or(-1, |class| class.class_id as i64)
     }
 
-    /// Packs source strictness into the existing framed invocation-scope word.
-    /// Weak calls keep legacy class ids and global -1; strict calls use -scope-3.
+    /// Returns the lexical class id encoded for the shared descriptor-invoker ABI.
+    ///
+    /// Every callback scope word carries the private warning bits below the weak/strict profile;
+    /// array/regex callback helpers pass this encoded form and the invoker shifts it back before
+    /// forwarding the class id to the callee.
+    pub(super) fn callable_callback_scope(&self) -> i64 {
+        self.lexical_class_id() << 2
+    }
+
+    /// Packs source strictness and the by-reference warning request into the invocation-scope
+    /// word. Weak calls keep legacy class ids and global -1; strict calls use -scope-3. Both
+    /// values are shifted above the two private profile bits.
     pub(super) fn callable_invocation_profile(&self) -> i64 {
         let strict = self.current_inst.and_then(|id| self.function.instruction(id))
             .filter(|inst| inst.op == Op::CallableDescriptorInvoke)
@@ -182,8 +192,23 @@ impl<'a> FunctionContext<'a> {
                 _ => None,
             })
             .is_some_and(|inst| inst.immediate == Some(Immediate::Bool(true)));
+        let warn_by_ref = self.current_inst
+            .and_then(|id| self.function.instruction(id))
+            .filter(|inst| inst.op == Op::CallableDescriptorInvoke)
+            .is_some_and(|inst| {
+                matches!(inst.immediate, Some(Immediate::I64(profile)) if profile & 2 != 0)
+            });
         let scope = self.lexical_class_id();
-        if strict { -scope - 3 } else { scope }
+        let profile = if strict { -scope - 3 } else { scope };
+        // The descriptor-invoker ABI carries one word, so the private warning request lives in
+        // the low two bits and the scope is shifted above them. A plain bit OR would collide with
+        // the negative weak/strict scope ids, whose sign extension sets every high bit.
+        let encoded = profile << 2;
+        if warn_by_ref {
+            encoded | super::runtime_callable_invoker::CALLABLE_PROFILE_WARN_BY_REF
+        } else {
+            encoded
+        }
     }
 
     /// Creates a lowering context with finalized frame and value-placement metadata.
@@ -199,8 +224,7 @@ impl<'a> FunctionContext<'a> {
         heap_debug: bool,
         epilogue_label: Option<String>,
     ) -> Self {
-        let pcntl_async_signals = module_uses_pcntl_async_signals(module);
-        let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
+        let module_runtime = shared.module_runtime_facts(module);
         let function_fragment = label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
         // The platform-local prefix keeps every intra-function label out of the object's
@@ -259,15 +283,15 @@ impl<'a> FunctionContext<'a> {
             exception_cleanup_activation: layout.exception_cleanup_activation,
             unwinding_cleanup: false,
             backtrace_activation: layout.backtrace_activation,
-            backtrace_enabled: super::frame::module_uses_backtrace(module),
+            backtrace_enabled: module_runtime.backtrace,
             epilogue_emitted: false,
             instr_id: None,
             is_main,
             web: false,
             gc_stats,
             heap_debug,
-            pcntl_async_signals,
-            pcntl_signal_handlers,
+            pcntl_async_signals: module_runtime.pcntl_async_signals,
+            pcntl_signal_handlers: module_runtime.pcntl_signal_handlers,
             epilogue_label,
             return_epilogues: HashMap::new(),
             block_labels,
@@ -401,39 +425,24 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))
     }
 
-    /// Returns a module function by PHP name using PHP's case-insensitive lookup.
+    /// Returns a module function by PHP name using the shared declaration index.
     pub(super) fn function_by_name(&self, name: &str) -> Option<&'a Function> {
-        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        self.module
-            .functions
-            .iter()
-            .chain(self.module.closures.iter())
-            .find(|function| {
-                crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
-            })
+        self.shared.module_callable_index(self.module).function(self.module, name)
     }
 
     /// Returns true when an extern declaration exists for a PHP function name.
     pub(super) fn has_extern_function(&self, name: &str) -> bool {
-        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        self.module.extern_decls.iter().any(|function| {
-            crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
-        })
+        self.shared.module_callable_index(self.module).has_extern(name)
     }
 
     /// Returns the public include-variant group name matching a PHP function name.
     pub(super) fn function_variant_group_name(&self, name: &str) -> Option<String> {
-        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        super::function_variants::collect_dispatch_groups(self.module)
-            .into_iter()
-            .find(|group| crate::names::php_symbol_key(group.name.trim_start_matches('\\')) == key)
-            .map(|group| group.name)
+        self.shared.module_callable_index(self.module).group_name(name)
     }
 
     /// Returns the concrete function whose signature should be used for a PHP call target.
     pub(super) fn callable_function_by_name(&self, name: &str) -> Option<&'a Function> {
-        self.function_by_name(name)
-            .or_else(|| super::function_variants::variant_callee_for_group(self.module, name))
+        self.shared.module_callable_index(self.module).callable(self.module, name)
     }
 
     /// Returns the finite runtime callable names proven for one EIR value.
@@ -1810,6 +1819,11 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
+    /// Returns the instruction currently being lowered, if lowering has started one.
+    pub(super) fn current_inst(&self) -> Option<InstId> {
+        self.current_inst
+    }
+
     /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
         if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
@@ -2039,11 +2053,6 @@ impl<'a> FunctionContext<'a> {
             .copied()
             .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
     }
-}
-
-/// Scans every emitted function-like body for `pcntl_async_signals()` state changes.
-fn module_uses_pcntl_async_signals(module: &Module) -> bool {
-    module_uses_pcntl_operation(module, crate::ir::PcntlRuntime::AsyncSignals)
 }
 
 /// Scans every emitted function-like body for `pcntl_signal()` registrations.

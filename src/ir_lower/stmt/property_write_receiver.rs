@@ -7,6 +7,8 @@
 //! Key details:
 //! - Static loads borrow either a concrete object or a boxed nullable value.
 //! - Nullable receivers are guarded before extracting an owned object payload.
+//! - A boxed receiver that holds a non-object or a Closure raises PHP's receiver Error, so the
+//!   backend's Mixed ladders only ever see objects that can take a property.
 //! - Direct writes guard only after RHS evaluation, with its owner visible to unwind.
 
 use super::*;
@@ -212,7 +214,8 @@ impl PropertyWriteReceiver {
     }
 }
 
-/// Supplies a literal or already evaluated runtime property name to the null Error branch.
+/// Supplies a literal or already evaluated runtime property name to the receiver Error branches.
+#[derive(Clone, Copy)]
 enum WritePropertyName<'a> {
     Literal(&'a str),
     Runtime(LoweredValue),
@@ -254,13 +257,12 @@ fn narrow_nullable_write_receiver(
         else_target: present, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(null);
-    match property {
-        WritePropertyName::Literal(property) =>
-            lower_throw_access_error(ctx, &format!("Attempt to {verb} property \"{property}\" on null"), span),
-        WritePropertyName::Runtime(property) => lower_dynamic_null_error(ctx, property, verb, span),
-    }
+    lower_receiver_type_error(ctx, property, verb, "null", span);
     ctx.builder.position_at_end(present);
-    let Some(class) = class else { return value; };
+    let Some(class) = class else {
+        reject_unwritable_receiver(ctx, value, property, verb, span);
+        return value;
+    };
     if ctx.interfaces.contains_key(class.trim_start_matches('\\')) {
         let boxed = ctx.emit_value(Op::Borrow, vec![value.value], None, PhpType::Mixed,
             Op::Borrow.default_effects(), Some(span));
@@ -332,9 +334,107 @@ fn guard_mixed_write_hop_name(
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
+/// Raises PHP's Error for a boxed receiver that holds no object able to take a property.
+///
+/// The caller has already answered `null`. Any other scalar, an array or a resource raises
+/// `Attempt to <verb> property "p" on <type>`, and a Closure, an object PHP gives no dynamic
+/// properties, raises `Cannot create dynamic property Closure::$p`. The backend's Mixed ladders
+/// only know how to store into objects, so without this guard such a write was dropped in
+/// silence. Internal `__elephc_` names are compiler-owned and keep the backend's own handling.
+fn reject_unwritable_receiver(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: WritePropertyName<'_>,
+    verb: &str, span: Span,
+) {
+    if matches!(property, WritePropertyName::Literal(name) if name.starts_with("__elephc_")) {
+        return;
+    }
+    let is_object = ctx.emit_value(Op::TypePredicate, vec![value.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let object = ctx.builder.create_named_block("property.write.object", Vec::new());
+    let scalar = ctx.builder.create_named_block("property.write.non_object", Vec::new());
+    let accepted = ctx.builder.create_named_block("property.write.receiver", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_object.value, then_target: object, then_args: Vec::new(),
+        else_target: scalar, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(scalar);
+    for (predicate, name) in [
+        (crate::ir::PhpTypePredicate::Bool, "bool"), (crate::ir::PhpTypePredicate::Int, "int"),
+        (crate::ir::PhpTypePredicate::Float, "float"), (crate::ir::PhpTypePredicate::String, "string"),
+        (crate::ir::PhpTypePredicate::Array, "array"), (crate::ir::PhpTypePredicate::Resource, "resource"),
+    ] {
+        let test = ctx.emit_value(Op::TypePredicate, vec![value.value],
+            Some(Immediate::TypePredicate(predicate)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), Some(span));
+        let matched = ctx.builder.create_named_block("property.write.non_object.type", Vec::new());
+        let next = ctx.builder.create_named_block("property.write.non_object.next", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: test.value, then_target: matched, then_args: Vec::new(),
+            else_target: next, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(matched);
+        if name == "bool" {
+            // PHP names the boolean by its value: `on true`, `on false`.
+            let truthy = ctx.emit_value(Op::IsTruthy, vec![value.value], None, PhpType::Bool,
+                Op::IsTruthy.default_effects(), Some(span));
+            let true_arm = ctx.builder.create_named_block("property.write.non_object.true", Vec::new());
+            let false_arm = ctx.builder.create_named_block("property.write.non_object.false", Vec::new());
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: truthy.value, then_target: true_arm, then_args: Vec::new(),
+                else_target: false_arm, else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(true_arm);
+            lower_receiver_type_error(ctx, property, verb, "true", span);
+            ctx.builder.position_at_end(false_arm);
+            lower_receiver_type_error(ctx, property, verb, "false", span);
+        } else {
+            lower_receiver_type_error(ctx, property, verb, name, span);
+        }
+        ctx.builder.position_at_end(next);
+    }
+    // A runtime tag no predicate names keeps whatever the backend answers for it.
+    ctx.builder.terminate(Terminator::Br { target: accepted, args: Vec::new() });
+    ctx.builder.position_at_end(object);
+    let data = ctx.intern_class_name("Closure");
+    let closure = ctx.emit_value(Op::InstanceOf, vec![value.value], Some(Immediate::Data(data)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let rejected_closure = ctx.builder.create_named_block("property.write.closure", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: closure.value, then_target: rejected_closure, then_args: Vec::new(),
+        else_target: accepted, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(rejected_closure);
+    lower_property_name_error(ctx, property, "Cannot create dynamic property Closure::$", "", span);
+    ctx.builder.position_at_end(accepted);
+}
+
+/// Raises `Attempt to <verb> property "p" on <receiver type>` for a literal or runtime name.
+fn lower_receiver_type_error(
+    ctx: &mut LoweringContext<'_, '_>, property: WritePropertyName<'_>, verb: &str,
+    receiver_type: &str, span: Span,
+) {
+    lower_property_name_error(ctx, property, &format!("Attempt to {verb} property \""),
+        &format!("\" on {receiver_type}"), span);
+}
+
+/// Raises an Error whose message is `prefix`, the property name, then `suffix`.
+fn lower_property_name_error(
+    ctx: &mut LoweringContext<'_, '_>, property: WritePropertyName<'_>, prefix: &str,
+    suffix: &str, span: Span,
+) {
+    match property {
+        WritePropertyName::Literal(property) =>
+            lower_throw_access_error(ctx, &format!("{prefix}{property}{suffix}"), span),
+        WritePropertyName::Runtime(property) =>
+            lower_dynamic_name_error(ctx, property, prefix, suffix, span),
+    }
+}
+
 /// Builds the runtime-name Error through ordinary constructor lowering without replaying the name.
-fn lower_dynamic_null_error(
-    ctx: &mut LoweringContext<'_, '_>, property: LoweredValue, verb: &str, span: Span,
+fn lower_dynamic_name_error(
+    ctx: &mut LoweringContext<'_, '_>, property: LoweredValue, prefix: &str, suffix: &str,
+    span: Span,
 ) {
     // The surrounding in-flight pin owns the name. This scratch alias must not create a
     // second consuming read when ordinary concat lowering uses it in the Error message.
@@ -347,9 +447,9 @@ fn lower_dynamic_null_error(
         left: Box::new(left), op: crate::parser::ast::BinOp::Concat, right: Box::new(right),
     }, span);
     let message = concat(concat(
-        Expr::new(ExprKind::StringLiteral(format!("Attempt to {verb} property \"")), span),
+        Expr::new(ExprKind::StringLiteral(prefix.to_string()), span),
         Expr::new(ExprKind::Variable(temp.clone()), span),
-    ), Expr::new(ExprKind::StringLiteral("\" on null".to_string()), span));
+    ), Expr::new(ExprKind::StringLiteral(suffix.to_string()), span));
     let error = lower_expr(ctx, &Expr::new(ExprKind::NewObject {
         class_name: crate::names::Name::unqualified("Error"), args: vec![message],
     }, span));

@@ -505,9 +505,9 @@ echo call_user_func($callbacks[0], "Ada");
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Verifies descriptor invokers preserve runtime by-reference arguments for callable params.
+/// Verifies descriptor invokers pass runtime by-reference arguments by value for callable params.
 #[test]
-fn test_call_user_func_callable_param_descriptor_preserves_by_ref_argument() {
+fn test_call_user_func_callable_param_descriptor_passes_by_value() {
     let source = r#"<?php
 function run(callable $cb): void {
     $value = 4;
@@ -519,8 +519,13 @@ $cb = function(int &$n): void {
 };
 run($cb);
 "#;
-    let out = compile_and_run(source);
-    assert_eq!(out, "7");
+    let output = compile_and_run_capture(source);
+    assert_eq!(output.stdout, "4");
+    assert!(
+        output.stderr.contains("must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
 
     let dir = make_cli_test_dir("elephc_call_user_func_descriptor_invoker_by_ref_arg");
     let (user_asm, _runtime_asm, _required_libraries) =
@@ -1712,9 +1717,9 @@ echo call_user_func_array($use_left ? $left->add(...) : $right->add(...), []);
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Verifies descriptor invokers preserve by-reference literal args for branch-selected callbacks.
+/// Verifies descriptor invokers pass by-reference literal args by value for branch callbacks.
 #[test]
-fn test_call_user_func_array_complex_captured_callable_expr_preserves_by_ref_literal_arg() {
+fn test_call_user_func_array_complex_captured_callable_expr_passes_by_value() {
     let source = r#"<?php
 class Counter {
     public int $step = 0;
@@ -1733,8 +1738,15 @@ $value = 5;
 call_user_func_array($use_left ? $left->bump(...) : $right->bump(...), [$value]);
 echo $value;
 "#;
-    let out = compile_and_run(source);
-    assert_eq!(out, "12");
+    let output = compile_and_run_capture(source);
+    assert_eq!(output.stdout, "5");
+    assert!(
+        output
+            .stderr
+            .contains("Counter::bump(): Argument #1 ($n) must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
 }
 
 /// Verifies returned method FCC descriptors use their runtime receiver in `call_user_func_array()`.
@@ -2109,12 +2121,12 @@ fn test_call_user_func_array_variadic_float_tail_count() {
     assert_eq!(out, "2");
 }
 
-// Tests that a first-class callable (`$f = bump(...)`) preserves by-ref parameter
-// semantics when invoked via `call_user_func_array($f, [$value])`: `$value` is mutated to 6.
-/// Verifies that call user func array first class callable preserves by ref params.
+// A first-class callable invoked through `call_user_func_array($f, [$value])` receives a
+// by-value temporary: PHP warns and the caller's `$value` stays 5.
+/// Verifies that call user func array first class callable passes values by value.
 #[test]
-fn test_call_user_func_array_first_class_callable_preserves_by_ref_params() {
-    let out = compile_and_run(
+fn test_call_user_func_array_first_class_callable_passes_by_value() {
+    let output = compile_and_run_capture(
         r#"<?php
 function bump(&$n) {
     $n = $n + 1;
@@ -2126,15 +2138,21 @@ call_user_func_array($f, [$value]);
 echo $value;
 "#,
     );
-    assert_eq!(out, "6");
+    assert_eq!(output.stdout, "5");
+    assert_eq!(
+        output.stderr.matches("must be passed by reference, value given").count(),
+        1,
+        "stderr: {:?}",
+        output.stderr
+    );
 }
 
-// Tests that a string callback `"bump"` preserves by-ref parameter semantics when invoked
-// via `call_user_func_array("bump", [$value])`: `$value` is mutated to 6.
-/// Verifies that call user func array string callback preserves by ref params.
+// A string callback invoked through `call_user_func_array("bump", [$value])` receives a
+// by-value temporary: PHP warns and the caller's `$value` stays 5.
+/// Verifies that call user func array string callback passes values by value.
 #[test]
-fn test_call_user_func_array_string_callback_preserves_by_ref_params() {
-    let out = compile_and_run(
+fn test_call_user_func_array_string_callback_passes_by_value() {
+    let output = compile_and_run_capture(
         r#"<?php
 function bump(&$n) {
     $n = $n + 1;
@@ -2145,19 +2163,26 @@ call_user_func_array("bump", [$value]);
 echo $value;
 "#,
     );
-    assert_eq!(out, "6");
+    assert_eq!(output.stdout, "5");
+    assert_eq!(
+        output.stderr.matches("must be passed by reference, value given").count(),
+        1,
+        "stderr: {:?}",
+        output.stderr
+    );
 }
 
-// Tests that a method callable (`$f = $counter->bump(...)`) preserves by-ref parameter
-// semantics and captures `$counter` correctly when invoked via
-// `call_user_func_array($f, [$value])`: `$value` is mutated to 7.
-/// Verifies that call user func array method callable preserves by ref params and capture.
+// A method callable invoked through `call_user_func_array($f, [$value])` receives a by-value
+// temporary: PHP warns, `$value` stays 5, and the captured `$counter` is still used.
+/// Verifies that call user func array method callable passes values by value.
 #[test]
-fn test_call_user_func_array_method_callable_preserves_by_ref_params_and_capture() {
-    let out = compile_and_run(
+fn test_call_user_func_array_method_callable_passes_by_value_and_capture() {
+    let output = compile_and_run_capture(
         r#"<?php
 class Counter {
+    public int $calls = 0;
     public function bump(&$n) {
+        $this->calls++;
         $n = $n + 2;
     }
 }
@@ -2166,10 +2191,59 @@ $counter = new Counter();
 $f = $counter->bump(...);
 $value = 5;
 call_user_func_array($f, [$value]);
-echo $value;
+echo $value, "|", $counter->calls;
 "#,
     );
-    assert_eq!(out, "7");
+    assert_eq!(output.stdout, "5|1");
+    assert_eq!(
+        output.stderr.matches("must be passed by reference, value given").count(),
+        1,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// An explicit `&$value` entry still binds the caller's cell, so the callback mutates it.
+#[test]
+fn test_call_user_func_array_explicit_references_mutate_callers() {
+    let out = compile_and_run(
+        r#"<?php
+function addOne(int &$x): void { $x = $x + 1; }
+$y = 5;
+call_user_func_array('addOne', [&$y]);
+$set = function (&$v) { $v = 2; };
+$z = 5;
+call_user_func_array($set, [&$z]);
+echo $y, "|", $z;
+"#,
+    );
+    assert_eq!(out, "6|2");
+}
+
+/// A plain literal array entry is a value copy for a by-reference callback: PHP warns and
+/// leaves the caller's variable unchanged.
+#[test]
+fn test_call_user_func_array_literal_values_pass_by_value_with_warning() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function addOne(int &$x): void { $x = $x + 1; }
+$a = 5;
+call_user_func_array('addOne', [$a]);
+$set = function (&$v) { $v = 2; };
+$e = 5;
+call_user_func_array($set, [$e]);
+$arr = [$a];
+call_user_func_array('addOne', $arr);
+echo $a, "|", $e, "|", $arr[0];
+"#,
+    );
+    assert_eq!(output.stdout, "5|5|5");
+    assert_eq!(
+        output.stderr.matches("must be passed by reference, value given").count(),
+        3,
+        "stderr: {:?}",
+        output.stderr
+    );
 }
 
 /// Verifies that call user func array dynamic args for by ref callback use temp cells.
@@ -2493,9 +2567,9 @@ foreach ([null, "ELEPHC_NULLABLE_ENV", "ELEPHC_NULLABLE_ENV_MISSING"] as $name) 
 // that a later `putenv` does NOT reach them.
 /// Verifies a CLI program finds its environment in both superglobals.
 ///
-/// Measured against `php -n` on a script file: `$_ENV` equals `getenv()`, and
-/// `$_SERVER` holds the same environment plus nine keys of its own. They were
-/// seeded EMPTY before, which read as "not set" to any program that looked.
+/// Measured against `php -d variables_order=GPCSE` on a script file: `$_ENV` equals
+/// `getenv()`, and `$_SERVER` holds the same environment plus nine keys of its own.
+/// They were seeded EMPTY before, which read as "not set" to any program that looked.
 ///
 /// The `putenv` half is the asymmetry PHP actually has, and it is easy to get
 /// wrong in either direction: `getenv()` reads the live environment and reports
@@ -2508,7 +2582,7 @@ foreach ([null, "ELEPHC_NULLABLE_ENV", "ELEPHC_NULLABLE_ENV_MISSING"] as $name) 
 /// those are different answers to `array_key_exists`.
 #[test]
 fn test_cli_superglobals_carry_the_environment() {
-    let out = compile_and_run(
+    let output = compile_and_run_capture_with_ini(
         r#"<?php
 echo count($_ENV) > 0 ? "env-filled" : "env-empty";
 echo ":", count($_SERVER) > count($_ENV) ? "server-has-more" : "server-not-more";
@@ -2524,9 +2598,10 @@ echo ":", is_int($_SERVER["REQUEST_TIME"]) ? "int-time" : "not-int";
 // The request superglobals stay empty in CLI, as they are in PHP.
 echo ":", count($_GET) + count($_POST) + count($_COOKIE) + count($_FILES);
 "#,
+        &[("variables_order".to_string(), "GPCSE".to_string())],
     );
     assert_eq!(
-        out,
+        output.stdout,
         "env-filled:server-has-more:not-in-env:not-in-server:seen:argv:argc:root::int-time:0"
     );
 }

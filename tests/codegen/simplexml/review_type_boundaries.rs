@@ -295,3 +295,19 @@ fn boundary_property_checkpoint_outputs(expected: &str) -> impl Iterator<Item = 
         expected.lines().take(lines).collect::<Vec<_>>().join("\n") + "\n")
         .chain(extra.into_iter().map(move |suffix| format!("{prefix}{suffix}")))
 }
+
+/// A checked `mixed` attribute read reaches the builtin `ReflectionObject` constructor still
+/// boxed: a missing attribute throws PHP's `TypeError`, a present one builds the reflector.
+#[test]
+fn test_simplexml_attribute_reaches_reflection_object_checked_and_boxed() {
+    if skip_without_xml_native("test_simplexml_attribute_reaches_reflection_object_checked_and_boxed") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$simplexml = simplexml_load_string('<form name="test"></form>');
+try { $r = new ReflectionObject($simplexml['missing']); echo "made\n"; }
+catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+$r = new ReflectionObject($simplexml['name']); echo "ok\n";
+"#);
+    assert!(out.success, "status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ReflectionObject::__construct(): Argument #1 ($object) must be of type object, null given\nok\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

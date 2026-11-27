@@ -213,6 +213,25 @@ pub unsafe extern "C" fn elephc_phar_get_stub(
     }
 }
 
+/// C ABI wrapper around [`archive_is_valid`].
+///
+/// Returns `1` when the path is missing or readable under the current
+/// `phar.require_hash` policy, and `0` when an existing archive fails validation.
+/// A nonzero `is_data` relaxes require-hash for `PharData`, which PHP keeps unsigned.
+///
+/// # Safety
+/// `path_ptr` must be valid for `path_len` bytes unless `path_len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_archive_valid(
+    path_ptr: *const u8,
+    path_len: usize,
+    is_data: usize,
+) -> usize {
+    let result =
+        std::panic::catch_unwind(|| archive_is_valid(slice(path_ptr, path_len), is_data != 0));
+    usize::from(matches!(result, Ok(true)))
+}
+
 /// C ABI wrapper around [`set_metadata_bytes`].
 ///
 /// Returns `1` when the archive was rewritten with the new global metadata, or `0`
@@ -397,6 +416,35 @@ pub unsafe extern "C" fn elephc_phar_sign_openssl(
 ) -> usize {
     let result = std::panic::catch_unwind(|| {
         sign_archive_openssl(slice(path_ptr, path_len), slice(key_ptr, key_len))
+    });
+    usize::from(matches!(result, Ok(Some(_))))
+}
+
+/// C ABI wrapper around [`sign_archive_openssl_with_algorithm`] — RSA-SHA1,
+/// RSA-SHA256, or RSA-SHA512 (`algo` 16, 17, 18) PHAR signing.
+///
+/// Returns `1` when the archive was re-signed, `0` on any failure (bad key,
+/// unreadable archive, unknown algorithm).
+///
+/// # Safety
+/// Each pointer must be valid for its paired byte length unless that length is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_sign_openssl_algo(
+    path_ptr: *const u8,
+    path_len: usize,
+    key_ptr: *const u8,
+    key_len: usize,
+    algo: usize,
+) -> usize {
+    let Ok(algo) = u32::try_from(algo) else {
+        return 0;
+    };
+    let result = std::panic::catch_unwind(|| {
+        sign_archive_openssl_with_algorithm(
+            slice(path_ptr, path_len),
+            slice(key_ptr, key_len),
+            algo,
+        )
     });
     usize::from(matches!(result, Ok(Some(_))))
 }

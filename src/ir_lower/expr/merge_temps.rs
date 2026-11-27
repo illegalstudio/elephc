@@ -794,6 +794,34 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
         {
             Op::HashToMixed
         }
+        (
+            PhpType::Mixed | PhpType::Union(_),
+            PhpType::AssocArray { value: target_value, .. },
+        ) if value.ir_type == IrType::Heap(IrHeapKind::Mixed) => {
+            // A boxed PHP array can contain either indexed-array or hash storage. Request
+            // superglobals have a fixed hash ABI, so unbox through a layout-neutral indexed
+            // view and let ArrayToHash inspect the runtime heap kind before the store. Calling
+            // the hash unbox helper directly would interpret an empty indexed array as a hash.
+            let list_view_ty = PhpType::Array(Box::new(target_value.codegen_repr()));
+            let effects = Op::mixed_unbox_effects(&list_view_ty);
+            let list_view = ctx.emit_owned_value(
+                Op::MixedUnbox,
+                vec![value.value],
+                None,
+                list_view_ty,
+                effects,
+                Some(span),
+            );
+            release_coerced_source_if_owned(ctx, value, Some(span));
+            return ctx.emit_value(
+                Op::ArrayToHash,
+                vec![list_view.value],
+                None,
+                target_ty.clone(),
+                Op::ArrayToHash.default_effects(),
+                Some(span),
+            );
+        }
         (PhpType::Mixed | PhpType::Union(_), _)
             if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
         {

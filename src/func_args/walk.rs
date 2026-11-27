@@ -408,6 +408,7 @@ impl Rewriter {
                     self.walk_expr(value);
                 }
             },
+            ExprKind::Reference(inner) => self.walk_expr(inner),
             // A string literal is the only leaf that can name a callable, and every
             // dynamic backtrace form (literal `call_user_func*`, a callable held in a
             // variable, a callable array entry) spells the name through one.

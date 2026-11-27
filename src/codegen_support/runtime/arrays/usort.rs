@@ -129,7 +129,10 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve the indexed-array pointer across nested comparator calls
     emitter.instruction("push r14");                                            // preserve the indexed-array length across nested comparator calls
     emitter.instruction("push r15");                                            // preserve the swapped flag across nested comparator calls
-    emitter.instruction("sub rsp, 16");                                         // reserve a local slot for the optional callback environment pointer
+    // Five pushes after `push rbp` leave rsp 8 bytes off a 16-byte boundary: 24 bytes of locals
+    // realign it, so `call r12` enters the comparator (compiled PHP that can reach libc, as a
+    // precision deprecation's error handler does) on the System V boundary.
+    emitter.instruction("sub rsp, 24");                                         // reserve the callback environment and pass-budget slots and realign rsp to 16 bytes
     emitter.instruction("mov r12, rdi");                                        // preserve the comparator callback address in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov r13, rsi");                                        // preserve the indexed-array pointer in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save optional callback environment pointer for captured comparator wrappers
@@ -178,7 +181,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_usort_outer_linux_x86_64");                    // repeat while the budget lasts; an inconsistent comparator stops here
 
     emitter.label("__rt_usort_done_linux_x86_64");
-    emitter.instruction("add rsp, 16");                                         // release the comparator environment slot before restoring callee-saved registers
+    emitter.instruction("add rsp, 24");                                         // release the comparator environment slots before restoring callee-saved registers
     emitter.instruction("pop r15");                                             // restore the saved swapped-flag register after the x86_64 usort() helper finishes
     emitter.instruction("pop r14");                                             // restore the saved indexed-array length register after the x86_64 usort() helper finishes
     emitter.instruction("pop r13");                                             // restore the saved indexed-array pointer register after the x86_64 usort() helper finishes

@@ -132,7 +132,7 @@ impl Projection<'_> {
 }
 
 /// Converts a lexical operator into the corresponding compiler token.
-fn operator_token(operator: Operator) -> Token {
+pub(crate) fn operator_token(operator: Operator) -> Token {
     match operator {
         Operator::StarStarAssign => Token::StarStarAssign,
         Operator::Ellipsis => Token::Ellipsis,
@@ -173,7 +173,7 @@ fn operator_token(operator: Operator) -> Token {
 }
 
 /// Converts punctuation or reports an unexpected source byte at its original position.
-fn byte_token(byte: u8, span: Span) -> Result<Token, CompileError> {
+pub(crate) fn byte_token(byte: u8, span: Span) -> Result<Token, CompileError> {
     let token = match byte {
         b';' => Token::Semicolon,
         b',' => Token::Comma,

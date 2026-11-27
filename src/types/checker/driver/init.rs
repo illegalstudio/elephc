@@ -102,6 +102,7 @@ impl Checker {
             trait_imported_properties: HashMap::new(),
             trait_imported_constructors: HashSet::new(),
             trait_method_requirements: HashMap::new(),
+            final_abstract_binding_failures: HashMap::new(),
             trait_property_origins: Default::default(),
             current_class: None,
             current_method: None,
@@ -222,6 +223,9 @@ impl Checker {
             pending_ref_capture_invalidations: HashSet::new(),
             mixed_storage_store_sites: HashMap::new(),
             buffer_read_observations: HashMap::new(),
+            scalar_guard_arg_sites: HashSet::new(),
+            summary_scalar_guard_arg_sites: HashSet::new(),
+            entered_exception_region: false,
             binding_decision_warnings: HashMap::new(),
             retired_mixed_storage_store_sites: HashSet::new(),
         }

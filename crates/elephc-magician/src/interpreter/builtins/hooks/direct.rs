@@ -193,6 +193,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Locale,
     /// Forwards the tidy surface to the compiled host prelude.
     Tidy,
+    /// Forwards the filter surface to the compiled host prelude.
+    Filter,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -281,6 +283,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PtrWriteF64,
     /// Dispatches `ptr_write_string(...)`.
     PtrWriteString,
+    /// Dispatches `addcslashes(...)`.
+    Addcslashes,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
     /// Dispatches `strip_tags(...)`.
@@ -469,6 +473,7 @@ impl EvalDirectHook {
             Self::Fileinfo => eval_builtin_fileinfo_expr_call(name, args, context, scope, values),
             Self::Locale => eval_builtin_locale_expr_call(name, args, context, scope, values),
             Self::Tidy => eval_builtin_tidy_expr_call(name, args, context, scope, values),
+            Self::Filter => eval_builtin_filter_expr_call(name, args, context, scope, values),
             Self::Xml => eval_builtin_xml_expr_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Openssl => {
@@ -521,6 +526,7 @@ impl EvalDirectHook {
             Self::PtrWriteString => eval_builtin_ptr_write_string(args, context, scope, values),
             Self::Sin => eval_builtin_sin(args, context, scope, values),
             Self::Sinh => eval_builtin_sinh(args, context, scope, values),
+            Self::Addcslashes => eval_builtin_addcslashes(args, context, scope, values),
             Self::Slashes => match name {
                 "addslashes" => eval_builtin_addslashes(args, context, scope, values),
                 "stripslashes" => eval_builtin_stripslashes(args, context, scope, values),

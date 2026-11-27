@@ -1509,3 +1509,44 @@ echo count($hashLeft), count($arrayLeft);
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
 }
+
+/// Rebinding an element that already holds a reference writes the hash entry in place.
+///
+/// PHP replaces the element binding instead of writing through its old cell, so lowering must
+/// promote the source local and emit the entry-set runtime call, never a remove-and-reinsert.
+#[test]
+fn array_element_reference_rebinding_binds_the_entry_in_place() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget};
+    let source = r#"<?php
+$x = 1;
+$y = 2;
+$a = [&$y];
+$a[0] = &$x;
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let main = module.functions.iter().find(|function| function.flags.is_main).expect("main");
+        assert!(
+            main.instructions.iter().any(|inst| inst.op == Op::LoadLocalRefCellPtr),
+            "{target}: missing managed source cell load\n{}",
+            print_module(&module)
+        );
+        assert!(
+            main.instructions.iter().any(|inst| inst.op == Op::RuntimeCall
+                && inst.immediate
+                    == Some(Immediate::RuntimeCall(RuntimeCallTarget::HashEntrySetReference))),
+            "{target}: missing in-place entry bind\n{}",
+            print_module(&module)
+        );
+        assert!(
+            !main.instructions.iter().any(|inst| inst.op == Op::HashUnset),
+            "{target}: rebinding must not remove the key\n{}",
+            print_module(&module)
+        );
+    }
+}

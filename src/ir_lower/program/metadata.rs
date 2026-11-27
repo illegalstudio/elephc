@@ -100,6 +100,13 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         .collect();
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+    // The injected filter prelude is the only producer of the `elephc_filter` bridge
+    // requirement; its extern declarations are prescanned even when reachability later
+    // prunes unused helpers.
+    module.required_runtime_features.filter = check_result
+        .required_libraries
+        .iter()
+        .any(|library| library == "elephc_filter");
     // Callable descriptors can introduce bridge calls only during assembly emission.
     // Retain their checker requirements alongside calls already present in EIR. Calls that
     // require the bridge only for extension identity are left to EIR discovery, which

@@ -52,6 +52,10 @@ mod implicit_int_cast;
 mod enums;
 pub(super) mod exceptions;
 mod mixed_narrowing;
+mod scalar_param_guard;
+pub(in crate::codegen) use scalar_param_guard::{
+    invoker_numeric_status_reg, INVOKER_FLOAT_PARAM_HELPER, INVOKER_INT_PARAM_HELPER,
+};
 mod numeric_payloads;
 mod numeric_comparisons;
 mod numeric_cast;
@@ -74,7 +78,11 @@ mod spl_storage_write_fetch;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
-pub(in crate::codegen) use literal_parameter_guards::emit_boxed_literal_parameter_guard;
+pub(in crate::codegen) use literal_parameter_guards::{
+    emit_boxed_literal_parameter_guard, emit_invoker_class_name_lookup,
+    refuse_invoker_argument_loaded, refuse_invoker_argument_static,
+};
+pub(in crate::codegen) use objects::RUNTIME_TAGS;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;
@@ -238,6 +246,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
+        Op::LoadLocalRefCellPtr => local_loads::lower_load_local_ref_cell_ptr(ctx, &inst),
         Op::LoadRefCellValue => local_loads::lower_load_ref_cell_value(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
@@ -360,6 +369,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::HashSetValue => hashes::lower_hash_set_value(ctx, &inst),
         Op::DescriptorArgSet => hashes::lower_descriptor_arg_set(ctx, &inst),
         Op::DescriptorArgKeyExists => hashes::lower_descriptor_arg_key_exists(ctx, &inst),
         Op::ThrowNamedParameterOverwrite => {
@@ -482,6 +492,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }
+        Op::ScalarParamGuard => scalar_param_guard::lower_scalar_param_guard(ctx, &inst),
         Op::PropertyBoundaryCheckedToInt => {
             mixed_narrowing::lower_property_boundary_checked_to_int(ctx, &inst)
         }
@@ -505,7 +516,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalConstantFetchOrGlobal => builtins::lower_eval_constant_fetch_or_global(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
-        Op::FirstClassCallableNew | Op::CallableValueNew => lower_first_class_callable_new(ctx, &inst),
+        Op::FirstClassCallableNew | Op::CallableValueNew | Op::CallableArrayNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),

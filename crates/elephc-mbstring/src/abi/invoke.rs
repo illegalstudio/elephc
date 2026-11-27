@@ -99,7 +99,10 @@ unsafe fn invoke(
     if strict > 1 { return Err(Status::Fatal); }
     let operation = RuntimeBuiltinId::from_u32(op).filter(|id| id.is_mbstring()).ok_or(Status::Fatal)?;
     if operation == RuntimeBuiltinId::MbParseStr {
-        return unsafe { query::invoke(args, count, strict, host, session) }.map(Into::into);
+        return unsafe { query::invoke(operation, args, count, strict, host, session, false) }.map(Into::into);
+    }
+    if operation == RuntimeBuiltinId::ParseStr {
+        return unsafe { query::invoke(operation, args, count, strict, host, session, true) }.map(Into::into);
     }
     if operation == RuntimeBuiltinId::MbConvertVariables {
         return unsafe { variables::invoke(args, count, strict, host, session) }.map(Into::into);

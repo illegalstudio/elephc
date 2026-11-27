@@ -19,7 +19,7 @@ fn test_parse_asymmetric_property_repeated_set_modifier_rejected() {
     ] {
         let tokens = tokenize(source).unwrap();
         let error = parse(&tokens).unwrap_err();
-        assert!(error.message.contains("Multiple set visibility modifiers"), "{}", error.message);
+        assert!(error.message.contains("Multiple access type modifiers are not allowed"), "{}", error.message);
     }
 }
 

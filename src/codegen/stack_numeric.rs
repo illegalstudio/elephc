@@ -407,7 +407,7 @@ impl Proof<'_> {
                     Op::Acquire | Op::Borrow if transparent_owner(user) => user
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
-                    Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
+                    Op::Cast | Op::ReturnBoundaryMixedToInt | Op::ScalarParamGuard => scalar_observation(user),
                     Op::EchoValue | Op::PrintValue => output_observation(user),
                     // The assignment copy of a selection (`$m = max($a, $b)`) only reads the
                     // cell's tag and payload into its own cell or box.
@@ -720,7 +720,8 @@ fn tag_or_payload_copy(inst: &crate::ir::Instruction) -> bool {
         }
 }
 
-/// Copies a scalar payload without exposing its address; declared returns retain their checks.
+/// Copies a scalar payload without exposing its address; declared returns and scalar
+/// parameter/return guards retain their checks.
 ///
 /// A string cast is an observation, not an escape: `__rt_mixed_cast_string` reads the tag and
 /// payload and formats numeric tags into concat scratch, so it never retains or frees the cell.
@@ -730,6 +731,9 @@ fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
     (inst.op == Op::ReturnBoundaryMixedToInt
         && inst.operands.len() == 1
         && inst.result_type == IrType::I64 && inst.result_php_type == PhpType::Int)
+        // A scalar parameter/return guard reads the tag and payload (converting an int or
+        // float, naming the type when refusing) and never retains or frees the cell.
+        || (inst.op == Op::ScalarParamGuard && inst.operands.len() == 1)
         || (inst.op == Op::Cast
         && matches!(
             (&inst.immediate, &inst.result_php_type),
@@ -768,7 +772,7 @@ fn int_property_observation(inst: &crate::ir::Instruction) -> bool {
 fn key_observation(inst: &crate::ir::Instruction, value: ValueId) -> bool {
     matches!(
         inst.op,
-        Op::ArrayGet | Op::ArrayGetSilent | Op::ArraySet | Op::HashGet | Op::HashGetSilent | Op::HashSet
+        Op::ArrayGet | Op::ArrayGetSilent | Op::ArraySet | Op::HashGet | Op::HashGetSilent | Op::HashSet | Op::HashSetValue
             | Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent | Op::ArraySetMixedKey
     ) && inst.operands.get(1) == Some(&value)
         && inst.operands.iter().enumerate().all(|(position, &operand)| position == 1 || operand != value)

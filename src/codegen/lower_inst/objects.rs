@@ -203,6 +203,7 @@ mod property_hook_writes;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
+pub(in crate::codegen::lower_inst) use instanceof_helpers::{classify_named_target, emit_match_call};
 mod mixed_property_type_guard;
 pub(super) use mixed_property_type_guard::lower_reference_property_coercion;
 mod extern_fields;
@@ -275,7 +276,11 @@ pub(super) use fiber_dynamic_entry::{
 };
 pub(super) use fixed_new::lower_object_new;
 pub(in crate::codegen) use reflection::emit_pending_reflection_class_builders;
-pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic, lower_mixed_is_a_literal_target};
+pub(in crate::codegen) use reflection::reflection_declared_method_name;
+pub(super) use instanceof_entry::{
+    is_closure_class_name, lower_closure_class_check, lower_instanceof, lower_instanceof_dynamic,
+    lower_mixed_is_a_literal_target,
+};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
     lower_prop_initialized,
@@ -283,7 +288,8 @@ pub(super) use known_property_reads::{
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
 pub(super) use property_element_writes::{in_place_property_container, InPlacePropertyContainer};
 pub(super) use property_hash_fetch_for_write::{lower_property_hash_contains, lower_property_hash_fetch_for_write, lower_property_hash_read};
-pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
+pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG};
+pub(in crate::codegen) use mixed_property_type_guard::RUNTIME_TAGS;
 pub(super) use property_store_values::{
     emit_mixed_iterable_for_property_store, lower_packed_field_mixed_to_int,
     release_adopted_mixed_source,

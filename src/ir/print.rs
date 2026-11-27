@@ -252,6 +252,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::RuntimeRef(id) => {
             let _ = write!(out, " runtime#{}", id.0);
         }
+        Immediate::StrictExit(id) => {
+            let _ = write!(out, " data#{} strict_types", id.as_raw());
+        }
         Immediate::ProfiledData { data: id, profile } => {
             let _ = write!(
                 out,

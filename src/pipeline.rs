@@ -36,7 +36,6 @@ pub(crate) use artifact_io::write_artifact;
 mod backend;
 mod eir_output;
 mod frontend;
-mod mbstring_configuration;
 mod output;
 
 use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
@@ -358,6 +357,23 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     let tidy_clean_output = ini_bool(ini_override(&ini_overrides, "tidy.clean_output"));
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
+    // Inject the filter surface FIRST, while the AST is still the user program. Later prelude
+    // declarations contain their own introspection (`PDO` calls `is_callable()`/`get_class()`),
+    // and scanning those would mistake an injected extension for user filter reachability and
+    // retain this bridge (plus every method it dynamically dispatches) in unrelated binaries.
+    // The filter initializer is a top-level statement, so prepending it before the other
+    // declaration-only preludes does not change startup order for the user program.
+    crate::progress::phase("filter-prelude");
+    let phase_started = Instant::now();
+    let filter_force = with_crates.contains("filter");
+    let ast = crate::filter_prelude::inject_if_used_with_ini_for_sapi_forced(
+        ast,
+        &ini_overrides,
+        web,
+        filter_force,
+        &mut prelude_inventory,
+    );
+    timings.record_since("filter-prelude", phase_started);
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
     // a program that reaches curl only dynamically, and declaration-reachability would then
@@ -376,6 +392,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
         (with_crates.contains("uri"), "uri"),
+        (with_crates.contains("filter"), "filter"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -620,6 +637,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         autoloaded("weak_reference"),
         &mut prelude_inventory,
     );
+    let ast = crate::parse_str_prelude::inject_if_used(ast, &ini_overrides, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(
         ast,
         with_crates.contains("bcmath") || autoloaded("bcmath"),
@@ -1146,6 +1164,10 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         &check_result.functions,
         &check_result.classes,
         &check_result.interfaces,
+        // A call that binds a `mixed`/union argument to a declared scalar parameter can throw
+        // `TypeError` at run time even when its callee is pure; the optimizer installs these
+        // around its analyses and every phase.
+        &check_result.scalar_guard_arg_sites,
     );
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which

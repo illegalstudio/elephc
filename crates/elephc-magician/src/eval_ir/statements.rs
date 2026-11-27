@@ -67,7 +67,14 @@ pub enum EvalStmt {
         parameter_is_by_ref: Vec<bool>,
         parameter_is_variadic: Vec<bool>,
         return_type: Option<EvalParameterType>,
+        /// Whether the declaration is spelled `function &name()`.
+        returns_by_ref: bool,
         body: Vec<EvalStmt>,
+    },
+    /// A top-level `const NAME = value;` declaration with its namespace-qualified name.
+    ConstDecl {
+        name: String,
+        value: EvalExpr,
     },
     Global {
         vars: Vec<String>,

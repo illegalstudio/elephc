@@ -53,6 +53,9 @@ fn dispatch(
         then_target: yes, then_args: vec![], else_target: no, else_args: vec![] });
     ctx.builder.position_at_end(yes);
     let receiver = borrow_receiver(ctx, object, expr.span);
+    // The successful guard proves this class view. Keep the common boxed owner alive,
+    // and give the call its ordinary owned object lease instead of redispatching Mixed.
+    let receiver = coerce_value_for_temp(ctx, receiver, &PhpType::Object(class.clone()), expr.span);
     let value = lower_method_call_with_receiver(ctx, receiver, method, &[], Op::MethodCall, expr);
     store_value_into_temp(ctx, &temp, PhpType::Mixed, value, expr.span);
     branch_to(ctx, done);

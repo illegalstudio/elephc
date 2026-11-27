@@ -49,6 +49,7 @@ pub(super) fn extracts_zip_entries() {
 /// Verifies entry-name listing across supported archive families.
 #[test]
 pub(super) fn lists_entry_names_for_supported_archive_families() {
+    let _policy = RequireHashGuard::relaxed();
     let base = std::env::temp_dir().join(format!(
         "elephc_phar_list_{}_{}",
         std::process::id(),

@@ -97,6 +97,26 @@ fn query_nesting_overflow_removes_previous_root() {
     assert_eq!(array(&output.into_graph(), 0), json!({"array": [[string(b"b"), string(b"kept")], [string(b"a"), {"array": [[0, string(b"new")]]}]]}));
 }
 
+/// `parse_str()` keeps the allowed prefix under `max_input_vars`, while `mb_parse_str()`
+/// rejects the whole query; a negative limit is unlimited for both.
+#[test]
+fn query_limit_paths_match_php() {
+    let (query, limit) = Query::decode_partial(b"a=1&b=2&c=3", b"&", 2);
+    assert_eq!(query.into_pairs().count(), 2);
+    assert_eq!(limit.expect("truncated query limit").maximum, 2);
+    assert!(Query::decode(b"a=1&b=2&c=3", b"&", 2).is_err());
+
+    let (query, limit) = Query::decode_partial(b"a=1&b=2&c=3", b"&", -1);
+    assert_eq!(query.into_pairs().count(), 3);
+    assert!(limit.is_none());
+    assert_eq!(Query::decode(b"a=1&b=2&c=3", b"&", -1).expect("negative limit is unlimited")
+        .into_pairs().count(), 3);
+
+    let (query, limit) = Query::decode_partial(b"a=1", b"&", 0);
+    assert_eq!(query.into_pairs().count(), 0);
+    assert_eq!(limit.expect("zero limit truncates").maximum, 0);
+}
+
 /// Handles host-provided empty candidates and separators without conflating an empty raw query.
 #[test]
 fn query_empty_input_and_pass_configuration() {

@@ -51,22 +51,16 @@ pub(super) fn apply_methods(
     Ok(())
 }
 
-/// Validates shape constraints on a single method: abstract+final conflict,
-/// abstract method with a body, non-abstract method without a body, and
-/// private abstract methods are all rejected.
+/// Validates shape constraints on a single method: abstract method with a body,
+/// non-abstract method without a body, and private abstract methods are all rejected.
+///
+/// A method written `abstract final` is a parse error (`MemberModifiers::validate_for`), so an
+/// abstract final method here was imported from a trait `as final`, which PHP accepts in an
+/// abstract class.
 pub(in crate::types::checker::schema) fn validate_method_shape(
     class_name: &str,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
-    if method.is_abstract && method.is_final {
-        return Err(CompileError::new(
-            method.span,
-            &format!(
-                "Cannot use the final modifier on an abstract method: {}::{}",
-                class_name, method.name
-            ),
-        ));
-    }
     if method.is_abstract && method.has_body {
         return Err(CompileError::new(
             method.span,
@@ -120,6 +114,9 @@ fn apply_static_method(
     if class.name == "WeakReference" && method_key == "create" && method.span == crate::span::Span::dummy() {
         // Box the generic object boundary so native Closure descriptors keep their runtime tag.
         sig.params[0].1 = crate::types::PhpType::Mixed;
+    }
+    if has_same_class_kind_conflict(class, method) {
+        return Err(method_kind_error(class, method));
     }
     if state.final_methods.contains(&method_key) {
         return Err(final_method_error(
@@ -268,6 +265,9 @@ fn apply_instance_method(
         && method.params.first().is_some_and(|(_, ty, _, _)| ty.is_none())
     {
         if let Some((_, ty)) = sig.params.first_mut() { *ty = crate::types::PhpType::Mixed; }
+    }
+    if has_same_class_kind_conflict(class, method) {
+        return Err(method_kind_error(class, method));
     }
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
@@ -437,6 +437,20 @@ fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileE
             declaring_class, method.name
         ),
     )
+}
+
+/// Returns whether `method` is abstract and `class` itself holds another abstract method of
+/// that name of the other kind (static or instance). Two trait requirements can do that, and PHP
+/// reports their kind conflict before a final one (`use A, B { A::foo as final; }` with a static
+/// `B::foo`). A concrete method beside one of the other kind still meets a final parent method
+/// first, as in PHP.
+fn has_same_class_kind_conflict(class: &FlattenedClass, method: &ClassMethod) -> bool {
+    method.is_abstract
+        && class.methods.iter().any(|other| {
+            other.is_abstract
+                && other.is_static != method.is_static
+                && other.name.eq_ignore_ascii_case(&method.name)
+        })
 }
 
 /// Constructs a `CompileError` for attempting to change a static method to

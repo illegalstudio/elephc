@@ -103,6 +103,103 @@ pub(in crate::interpreter) fn eval_resource_type_name(
         .unwrap_or("stream"))
 }
 
+/// Applies PHP's coercive-mode `int` parameter rules to one internal-function argument.
+///
+/// Ints and bools pass, integral-range floats and numeric strings (surrounding whitespace
+/// allowed) truncate with PHP's precision deprecations, and null becomes 0 with the
+/// internal-function null deprecation. Returns `None` for every value PHP refuses (arrays,
+/// objects, resources, closures, non-numeric or leading-numeric strings, NaN and out-of-range
+/// floats) so the caller can throw its `TypeError` or emit its warning before any side effect.
+pub(in crate::interpreter) fn eval_weak_int_param(
+    value: RuntimeCellHandle,
+    name: &str,
+    number: usize,
+    parameter: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<i64>, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if tag == EVAL_TAG_STRING {
+        let bytes = values.string_bytes(value)?;
+        if let Ok(source) = std::str::from_utf8(&bytes) {
+            // PHP numeric strings also accept vertical tab, unlike Rust's ASCII whitespace set.
+            let numeric = source.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'));
+            if let Ok(integer) = numeric.parse::<i64>() {
+                return Ok(Some(integer));
+            }
+            if let Ok(float) = numeric.parse::<f64>() {
+                if eval_float_fits_php_int(float) {
+                    if float.trunc() != float {
+                        values.warning(&format!(
+                            "Deprecated: Implicit conversion from float-string \"{source}\" to int loses precision\n"
+                        ))?;
+                    }
+                    return Ok(Some(float.trunc() as i64));
+                }
+            }
+        }
+    } else if tag == EVAL_TAG_FLOAT {
+        let float = f64::from_bits(values.raw_value_word(value)?);
+        if eval_float_fits_php_int(float) {
+            return eval_int_value(value, values).map(Some);
+        }
+    } else if tag == EVAL_TAG_INT || tag == EVAL_TAG_BOOL {
+        return eval_int_value(value, values).map(Some);
+    } else if tag == EVAL_TAG_NULL {
+        values.warning(&format!(
+            "Deprecated: {name}(): Passing null to parameter #{number} (${parameter}) of type int is deprecated\n"
+        ))?;
+        return Ok(Some(0));
+    }
+    Ok(None)
+}
+
+/// Applies PHP's `int` parameter rules for the calling code's mode.
+///
+/// Under `declare(strict_types=1)` only an int passes, so strings, floats, bools and null are
+/// all refused; otherwise `eval_weak_int_param()` applies the coercive rules. Returns `None`
+/// for a refused value so the caller can throw or warn before any side effect.
+pub(in crate::interpreter) fn eval_mode_int_param(
+    value: RuntimeCellHandle,
+    name: &str,
+    number: usize,
+    parameter: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<i64>, EvalStatus> {
+    if context.strict_types() {
+        if values.type_tag(value)? == EVAL_TAG_INT {
+            return eval_int_value(value, values).map(Some);
+        }
+        return Ok(None);
+    }
+    eval_weak_int_param(value, name, number, parameter, values)
+}
+
+/// Applies `eval_mode_int_param()` and throws PHP's `TypeError` for a refused value.
+pub(in crate::interpreter) fn eval_int_param(
+    value: RuntimeCellHandle,
+    name: &str,
+    number: usize,
+    parameter: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    if let Some(integer) = eval_mode_int_param(value, name, number, parameter, context, values)? {
+        return Ok(integer);
+    }
+    let given = eval_given_type_name(value, context, values)?;
+    eval_throw_type_error(
+        &format!("{name}(): Argument #{number} (${parameter}) must be of type int, {given} given"),
+        context,
+        values,
+    )
+}
+
+/// Mirrors Zend's inclusive lower bound and exclusive rounded upper bound for doubles.
+fn eval_float_fits_php_int(value: f64) -> bool {
+    value.is_finite() && value >= i64::MIN as f64 && value < -(i64::MIN as f64)
+}
+
 /// Casts one eval value to PHP int and returns the scalar payload.
 pub(in crate::interpreter) fn eval_int_value(
     value: RuntimeCellHandle,

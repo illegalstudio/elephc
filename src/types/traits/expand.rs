@@ -17,11 +17,13 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod};
+use super::{
+    reject_overridden_final_imports, ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod,
+};
 use super::merge::{
-    check_abstract_redeclaration, is_same_trait_method, merge_constants, merge_imported_constant_set,
-    merge_imported_method_set, merge_methods, merge_properties, merge_property_into,
-    trait_method_collision,
+    check_abstract_redeclaration, is_same_trait_method, merge_constants,
+    merge_imported_constant_set, merge_imported_method_set, merge_methods, merge_properties,
+    merge_property_into, trait_method_collision,
 };
 use super::validation::validate_direct_members;
 
@@ -61,7 +63,7 @@ fn expand_trait(
     )?;
 
     stack.push(trait_name.to_string());
-    let (imported_props, imported_methods, imported_constants) = resolve_trait_uses(
+    let (imported_props, imported_methods, imported_constants, bound_methods) = resolve_trait_uses(
         &trait_info.trait_uses,
         trait_map,
         cache,
@@ -77,6 +79,12 @@ fn expand_trait(
         trait_info.span,
         &format!("trait {}", trait_name),
         true,
+    )?;
+    reject_overridden_final_imports(
+        &bound_methods,
+        &trait_info.methods,
+        trait_name,
+        trait_info.span,
     )?;
     let mut methods = merge_methods(
         imported_methods,
@@ -113,7 +121,10 @@ fn expand_trait(
 ///
 /// `owner_label` is a human-readable context string (e.g., `"class Foo"` or
 /// `"trait Bar"`) used only in error messages. `owner_span` is the source span
-/// used for error location. Returns imported properties, methods, and constants.
+/// used for error location. Returns imported properties, methods, and constants, and every
+/// method the uses bind, before deduplication, in PHP's binding order (`ImportedMethod::binding`)
+/// for the abstract `as final` checks of `reject_overridden_final_imports`.
+#[allow(clippy::type_complexity)]
 pub(super) fn resolve_trait_uses(
     trait_uses: &[TraitUse],
     trait_map: &HashMap<String, TraitDeclInfo>,
@@ -121,10 +132,18 @@ pub(super) fn resolve_trait_uses(
     stack: &mut Vec<String>,
     owner_label: &str,
     owner_span: Span,
-) -> Result<(Vec<ClassProperty>, Vec<TraitMethod>, Vec<ClassConst>), CompileError> {
+) -> Result<
+    (Vec<ClassProperty>, Vec<TraitMethod>, Vec<ClassConst>, Vec<ImportedMethod>),
+    CompileError,
+> {
     let mut all_properties = Vec::new();
     let mut all_methods: Vec<ImportedMethod> = Vec::new();
     let mut all_constants = Vec::new();
+    let mut bound_methods: Vec<ImportedMethod> = Vec::new();
+    // PHP lists every used trait of a class-like in `use` order and binds their aliases in
+    // declaration order (`ce->traits`, `ce->trait_aliases`).
+    let mut trait_position = 0usize;
+    let mut alias_position = 0usize;
 
     for trait_use in trait_uses {
         let mut imported_properties = Vec::new();
@@ -162,7 +181,9 @@ pub(super) fn resolve_trait_uses(
                     false,
                 )?;
             }
-            for TraitMethod { origin, decl: method } in methods {
+            for (method_position, TraitMethod { origin, decl: method }) in
+                methods.into_iter().enumerate()
+            {
                 let method_key = php_symbol_key(&method.name);
                 if !candidates.contains_key(&method_key) {
                     method_order.push(method_key.clone());
@@ -173,9 +194,12 @@ pub(super) fn resolve_trait_uses(
                     .push(ImportedMethod {
                         source_trait: trait_name.to_string(),
                         origin,
+                        method_name: method.name.clone(),
                         decl: method,
+                        binding: (trait_position, method_position, usize::MAX),
                     });
             }
+            trait_position += 1;
             merge_imported_constant_set(
                 &mut imported_constants,
                 constants,
@@ -186,6 +210,7 @@ pub(super) fn resolve_trait_uses(
 
         let mut suppressed: HashMap<String, HashSet<String>> = HashMap::new();
         let mut visibility_overrides: HashMap<(String, String), Visibility> = HashMap::new();
+        let mut final_overrides: HashSet<(String, String)> = HashSet::new();
         let mut alias_methods: Vec<ImportedMethod> = Vec::new();
 
         for adaptation in &trait_use.adaptations {
@@ -231,6 +256,7 @@ pub(super) fn resolve_trait_uses(
                     method,
                     alias,
                     visibility,
+                    is_final,
                 } => {
                     let selected_trait = resolve_adaptation_source(
                         trait_name.as_ref().map(|name| name.as_str()),
@@ -257,30 +283,47 @@ pub(super) fn resolve_trait_uses(
                             )
                         })?;
 
-                    if let Some(alias_name) = alias {
+                    // `foo as final foo` names the method itself: PHP makes it final, as
+                    // `foo as final` does, instead of adding a second copy.
+                    let same_name_final = *is_final
+                        && visibility.is_none()
+                        && alias.as_ref().is_some_and(|alias| alias.eq_ignore_ascii_case(method));
+                    if let Some(alias_name) = alias.as_ref().filter(|_| !same_name_final) {
                         let mut alias_decl = imported.decl.clone();
                         alias_decl.name = alias_name.clone();
                         if let Some(visibility) = visibility {
                             alias_decl.visibility = visibility.clone();
                         }
+                        // `foo as final bar` makes only the alias final (PHP 8.3+).
+                        alias_decl.is_final |= *is_final;
+                        // An alias binds just before the method it copies.
                         alias_methods.push(ImportedMethod {
                             source_trait: selected_trait,
                             origin: imported.origin.clone(),
+                            method_name: imported.method_name.clone(),
                             decl: alias_decl,
+                            binding: (imported.binding.0, imported.binding.1, alias_position),
                         });
-                    } else if let Some(visibility) = visibility {
-                        visibility_overrides
-                            .insert((selected_trait, php_symbol_key(method)), visibility.clone());
+                        alias_position += 1;
+                    } else {
+                        let key = (selected_trait, php_symbol_key(method));
+                        if *is_final {
+                            final_overrides.insert(key.clone());
+                        }
+                        if let Some(visibility) = visibility {
+                            visibility_overrides.insert(key, visibility.clone());
+                        }
                     }
                 }
             }
         }
 
-        let selected_methods = select_methods(
+        let (selected_methods, bound) = select_methods(
             candidates,
             method_order,
             suppressed,
             visibility_overrides,
+            final_overrides,
             alias_methods,
             trait_use.span,
             owner_label,
@@ -293,6 +336,7 @@ pub(super) fn resolve_trait_uses(
             owner_label,
             false,
         )?;
+        bound_methods.extend(bound);
         merge_imported_method_set(&mut all_methods, selected_methods, owner_span, owner_label)?;
         merge_imported_constant_set(
             &mut all_constants,
@@ -306,34 +350,48 @@ pub(super) fn resolve_trait_uses(
         .into_iter()
         .map(|imported| TraitMethod { origin: imported.origin, decl: imported.decl })
         .collect();
-    Ok((all_properties, all_methods, all_constants))
+    bound_methods.sort_by_key(|method| method.binding);
+    Ok((all_properties, all_methods, all_constants, bound_methods))
 }
 
 /// Filters `candidates` using `suppressed` trait-of-origin, applies visibility
-/// overrides from `visibility_overrides`, appends aliased methods from
-/// `alias_methods`, and returns the final selected method list.
+/// overrides from `visibility_overrides` and the `as final` adaptations in
+/// `final_overrides`, appends aliased methods from `alias_methods`, and returns the
+/// final selected method list, with every method bound before deduplication (the kept
+/// candidates and the aliases) for the abstract `as final` checks.
 ///
 /// Two concrete candidates for the same method key are a fatal collision (the caller must use
 /// insteadof to choose), unless they are the same trait method reached along two `use` paths
 /// (`is_same_trait_method`): PHP keeps that one silently.
+#[allow(clippy::type_complexity)]
 fn select_methods(
     mut candidates: HashMap<String, Vec<ImportedMethod>>,
     method_order: Vec<String>,
     suppressed: HashMap<String, HashSet<String>>,
     visibility_overrides: HashMap<(String, String), Visibility>,
+    final_overrides: HashSet<(String, String)>,
     alias_methods: Vec<ImportedMethod>,
     span: Span,
     owner_label: &str,
-) -> Result<Vec<ImportedMethod>, CompileError> {
+) -> Result<(Vec<ImportedMethod>, Vec<ImportedMethod>), CompileError> {
     let mut selected_methods = Vec::new();
+    let mut bound = Vec::new();
     for method_name in method_order {
         let imports = candidates.remove(&method_name).unwrap_or_default();
-        let (requirements, remaining): (Vec<ImportedMethod>, Vec<ImportedMethod>) = imports
+        let imports: Vec<ImportedMethod> = imports
             .into_iter()
+            // An abstract method made `as final`, here or inside the used trait, stays a
+            // requirement after `insteadof`, so the method kept in its place overrides it.
             .filter(|candidate| {
                 !suppressed
                     .get(&method_name)
                     .is_some_and(|set| set.contains(&candidate.source_trait))
+                    || (candidate.decl.is_abstract
+                        && (candidate.decl.is_final
+                            || final_overrides.contains(&(
+                                candidate.source_trait.clone(),
+                                method_name.clone(),
+                            ))))
             })
             .map(|mut candidate| {
                 // Zend applies `as <visibility>` to the trait's copy before it compares two
@@ -344,9 +402,17 @@ fn select_methods(
                 {
                     candidate.decl.visibility = visibility.clone();
                 }
+                if final_overrides
+                    .contains(&(candidate.source_trait.clone(), method_name.clone()))
+                {
+                    candidate.decl.is_final = true;
+                }
                 candidate
             })
-            .partition(|candidate| candidate.decl.is_abstract);
+            .collect();
+        bound.extend(imports.iter().cloned());
+        let (requirements, remaining): (Vec<ImportedMethod>, Vec<ImportedMethod>) =
+            imports.into_iter().partition(|candidate| candidate.decl.is_abstract);
         let mut concrete: Vec<ImportedMethod> = Vec::new();
         for candidate in remaining {
             if !concrete
@@ -359,16 +425,18 @@ fn select_methods(
                 concrete.push(candidate);
             }
         }
-        let requirements = unsatisfied_requirements(requirements, &concrete, span, owner_label)?;
+        // Two concrete methods collide before any requirement is compared with them.
         if let [applied, rejected, ..] = concrete.as_slice() {
             return Err(trait_method_collision(span, owner_label, applied, rejected));
         }
+        let requirements = unsatisfied_requirements(requirements, &concrete, span, owner_label)?;
         selected_methods.extend(concrete.into_iter().chain(requirements));
     }
 
+    bound.extend(alias_methods.iter().cloned());
     selected_methods.extend(alias_methods);
 
-    Ok(selected_methods)
+    Ok((selected_methods, bound))
 }
 
 /// Keeps the abstract candidates that are still requirements once `concrete` is selected.
@@ -378,6 +446,8 @@ fn select_methods(
 /// instance) satisfies it, and several abstract ones of one kind are one requirement once
 /// `check_abstract_redeclaration` accepts them. A requirement of the other kind is kept, so the
 /// class schema reports the static/instance mismatch as it does for separate `use` statements.
+/// A requirement made `as final` that something else overrides is reported separately, from
+/// the bound methods (`reject_overridden_final_imports`).
 fn unsatisfied_requirements(
     requirements: Vec<ImportedMethod>,
     concrete: &[ImportedMethod],

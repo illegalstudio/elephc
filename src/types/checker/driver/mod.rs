@@ -14,7 +14,10 @@ use crate::codegen::platform::Target;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
-use crate::types::{traits::flatten_classes, TypeEnv};
+use crate::types::{
+    traits::{final_abstract_import_overrides, flatten_classes, FlattenedClass},
+    TypeEnv,
+};
 
 use super::builtin_class_gate::{
     program_may_reference_fiber, program_may_reference_generator, program_may_reference_user_filter,
@@ -40,12 +43,11 @@ use super::builtin_stdclass::inject_builtin_stdclass;
 use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
-    collect_global_constants,
-    drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
-    validate_class_trait_requirements, validate_deferred_declaration_defaults,
-    validate_enum_trait_requirements,
+    collect_global_constants, declaration_positions, declaration_statement_positions,
+    drop_unresolvable_attribute_arg_refs, position_of, validate_deferred_class_constants,
+    validate_deferred_declaration_defaults, validate_trait_requirements,
     expand_enum_interfaces, validate_enum_interface_contracts,
-    validate_trait_property_defaults,
+    validate_trait_property_defaults, EnumBuildError, LinkOrder,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
@@ -55,6 +57,7 @@ mod declaration_metadata;
 mod externs;
 mod functions;
 mod init;
+mod redeclarations;
 mod top_level;
 
 use declaration_metadata::{
@@ -84,13 +87,46 @@ use declaration_metadata::{
 /// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
 /// `options` is copied onto the constructed `Checker` (e.g. `strict_locals`) before any phase runs.
+///
+/// The callee exception summaries the checker routes `try`/`catch` flow with are built before
+/// any body is checked, but which arguments get a runtime scalar-parameter check (and so can
+/// throw `TypeError`) is only known once bodies are typed. When a pass that entered a `try`
+/// recorded, inside a callable body, guarded arguments its summaries did not include, the
+/// whole check runs again with those arguments installed, until no new one appears. The
+/// recorded set only grows, so this terminates. A program without such arguments, or without
+/// any `try`, is checked once: a top-level guarded call is in no callee summary, and a `try`
+/// sees its own guarded calls through the sites recorded so far in the same pass.
 pub(super) fn check_types_impl(
     program: &Program,
     target: Target,
     options: CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
-    let mut checker = Checker::new(target);
+    let mut seed: HashSet<crate::span::Span> = HashSet::new();
+    loop {
+        // Held across the pass: the summaries are built under it, and the checker also
+        // evaluates directly invoked closure bodies through it while it walks a `try`.
+        let _installed = crate::optimize::install_scalar_guard_arg_sites(seed.clone());
+        let mut checker = Checker::new(target);
+        let result = check_types_pass(&mut checker, program, options, generics);
+        if checker.entered_exception_region
+            && !checker.summary_scalar_guard_arg_sites.is_subset(&seed)
+        {
+            seed.extend(checker.summary_scalar_guard_arg_sites.iter().copied());
+            continue;
+        }
+        return result.map(|global_env| (checker, global_env));
+    }
+}
+
+/// One checker pass of [`check_types_impl`] over a fresh `checker`.
+fn check_types_pass(
+    checker: &mut Checker,
+    program: &Program,
+    options: CheckOptions,
+    generics: &crate::generics::GenericContext,
+) -> Result<TypeEnv, CompileError> {
+    let mut checker = checker;
     checker.semantic_profile = options.semantic_profile.with(
         elephc_semantics::StrictFeature::Locals,
         options.strict_locals || options.semantic_profile.contains(elephc_semantics::StrictFeature::Locals),
@@ -115,7 +151,18 @@ pub(super) fn check_types_impl(
     constants::prescan(&mut checker, program);
     checker.collect_function_decls(program, &mut errors);
 
-    let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
+    // The errors PHP raises while it compiles (an early-bound class, a parentless interface) or
+    // declares (every other class, interface, trait and enum) a declaration, each with when PHP
+    // reports it, sorted once every declaration is linked so the first is PHP's. It starts with
+    // the declarations that reuse a name PHP binds to another one, which every pass below skips.
+    let redeclarations::Redeclarations { rejected, errors: redeclaration_errors } =
+        redeclarations::redeclarations(program);
+    let order = declaration_order(program, &rejected);
+    let positions = declaration_positions(program, &rejected);
+    let statement_positions = declaration_statement_positions(program);
+    let mut linked: Vec<(LinkOrder, CompileError)> = redeclaration_errors;
+    let (mut flattened_classes, mut flattened_enums, flatten_errors, final_abstract_imports) =
+        flatten_classes(program, &rejected);
     errors.extend(flatten_errors);
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
@@ -141,22 +188,13 @@ pub(super) fn check_types_impl(
     let declared_traits = collect_declared_trait_names(program);
     let declared_trait_methods = collect_declared_trait_methods(program);
     let declared_trait_constants = collect_declared_trait_constants(program);
-    let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
-    for class in &flattened_classes {
-        let key = php_symbol_key(&class.name);
-        if !seen_classes.insert(key) {
-            errors.push(CompileError::new(
-                class.span,
-                &format!("Duplicate class declaration: {}", class.name),
-            ));
-            continue;
-        }
+    for class in flattened_classes.iter().filter(|class| !rejected.contains(&class.span)) {
         class_map.insert(class.name.clone(), class.clone());
     }
     let mut interface_map: HashMap<String, InterfaceDeclInfo> = HashMap::new();
     checker.declared_classes = class_map.keys().cloned().collect();
-    for stmt in program {
+    for stmt in program.iter().filter(|stmt| !rejected.contains(&stmt.span)) {
         if let StmtKind::InterfaceDecl {
             generics: _,
             name,
@@ -166,6 +204,8 @@ pub(super) fn check_types_impl(
             constants,
         } = &stmt.kind
         {
+            // A clash among the program's own declarations is already decided; this catches a
+            // class the program declares elsewhere (not at the top level).
             let interface_key = php_symbol_key(name);
             if interface_map
                 .keys()
@@ -174,9 +214,12 @@ pub(super) fn check_types_impl(
                     .keys()
                     .any(|existing| php_symbol_key(existing) == interface_key)
             {
-                errors.push(CompileError::new(
-                    stmt.span,
-                    &format!("Duplicate interface declaration: {}", name),
+                linked.push((
+                    (true, statement_positions.get(&stmt.span).copied().unwrap_or(usize::MAX)),
+                    CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate interface declaration: {}", name),
+                    ),
                 ));
                 continue;
             }
@@ -298,6 +341,9 @@ pub(super) fn check_types_impl(
     ) {
         errors.extend(error.flatten());
     }
+    // Abstract `as final` trait imports meet their ancestors once builtin parents are known too.
+    checker.final_abstract_binding_failures =
+        final_abstract_import_overrides(&final_abstract_imports, &mut class_map);
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
@@ -329,6 +375,9 @@ pub(super) fn check_types_impl(
     // parents, so the walk decides numbering and nothing else.
     let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
     interface_names.sort();
+    // An interface without parents is linked while PHP compiles the file, any other when PHP
+    // declares it.
+    let interfaces_start = linked.len();
     for interface_name in interface_names {
         if let Err(error) = build_interface_info_recursive(
             &interface_name,
@@ -338,7 +387,11 @@ pub(super) fn check_types_impl(
             &mut next_interface_id,
             &mut building_interfaces,
         ) {
-            errors.extend(error.flatten());
+            let link_order = (
+                interface_map.get(&interface_name).is_some_and(|interface| !interface.extends.is_empty()),
+                position_of(&positions, &interface_name),
+            );
+            link_errors(&mut linked, interfaces_start, &errors, error.flatten(), link_order);
         }
     }
 
@@ -357,7 +410,7 @@ pub(super) fn check_types_impl(
     // Enums are built after every class, so a class method may return an enum that only its
     // declaration can relate to the interface the parent method returns. Every enum also
     // implements `UnitEnum`, and a backed one `BackedEnum`, as `build_enum_info` publishes.
-    for stmt in program {
+    for stmt in program.iter().filter(|stmt| !rejected.contains(&stmt.span)) {
         if let StmtKind::EnumDecl { name, implements, backing_type, .. } = &stmt.kind {
             let implements = implements
                 .iter()
@@ -368,6 +421,24 @@ pub(super) fn check_types_impl(
             checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
         }
     }
+    // PHP compiles the class declarations in source order before it links any class, and while
+    // compiling one it rejects its early-bound parent (a final class, an interface, a readonly
+    // mismatch) and its private final constants. Those errors precede every diagnostic raised
+    // when PHP declares a class, and the class builds below do not report them again.
+    linked.extend(class_compile_errors(
+        &order,
+        &flattened_classes,
+        &class_map,
+        &checker,
+        &positions,
+        &statement_positions,
+    ));
+    // Where each class's own build error starts in `linked`, so a used trait's own requirement
+    // incompatibility can take its place (`validate_trait_requirements`). A class whose build
+    // only repeats an error reported before the class builds (its own compile error, or its
+    // parent's) has none.
+    let builds_start = linked.len();
+    let mut class_build_errors: HashMap<String, usize> = HashMap::new();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,
@@ -376,7 +447,19 @@ pub(super) fn check_types_impl(
             &mut next_class_id,
             &mut building,
         ) {
-            errors.extend(error.flatten());
+            let link_order = (
+                !class_map
+                    .get(&class_name)
+                    .is_some_and(|class| is_early_bound(class, &order, &class_map, &checker)),
+                position_of(&positions, &class_name),
+            );
+            // A parent's error repeated by the child keeps one copy, which is also where the
+            // child's own build error starts, so a used trait's incompatibility replaces it.
+            if let Some(index) =
+                link_errors(&mut linked, builds_start, &errors, error.flatten(), link_order)
+            {
+                class_build_errors.insert(php_symbol_key(&class_name), index);
+            }
         }
     }
     checker.declared_class_ancestry.clear();
@@ -386,7 +469,10 @@ pub(super) fn check_types_impl(
     // Backed enum case values may name source `const` declarations (PHP 8.2 constant expressions).
     let mut global_constants = HashMap::new();
     collect_global_constants(program, &mut global_constants);
-    for stmt in program {
+    // Backed case value errors, which PHP raises when an enum's cases are first used, after
+    // every declaration it links.
+    let mut case_value_errors = Vec::new();
+    for stmt in program.iter().filter(|stmt| !rejected.contains(&stmt.span)) {
         if let StmtKind::EnumDecl {
             name,
             backing_type,
@@ -397,6 +483,14 @@ pub(super) fn check_types_impl(
             ..
         } = &stmt.kind
         {
+            // At this enum's own statement, which a redeclared enum does not share.
+            let link_order = (
+                true,
+                statement_positions
+                    .get(&stmt.span)
+                    .copied()
+                    .unwrap_or_else(|| position_of(&positions, name)),
+            );
             let enum_methods = flattened_enums
                 .get(name)
                 .map(|flattened| flattened.methods.as_slice())
@@ -413,7 +507,7 @@ pub(super) fn check_types_impl(
                 .get(name)
                 .map(|flattened| flattened.trait_aliases.as_slice())
                 .unwrap_or(&[]);
-            if let Err(error) = build_enum_info(
+            match build_enum_info(
                 name,
                 backing_type.as_ref(),
                 cases,
@@ -431,7 +525,11 @@ pub(super) fn check_types_impl(
                 &mut checker,
                 &mut next_class_id,
             ) {
-                errors.extend(error.flatten());
+                Ok(()) => {}
+                Err(EnumBuildError::Declaration(error)) => {
+                    linked.extend(error.flatten().into_iter().map(|error| (link_order, error)));
+                }
+                Err(EnumBuildError::CaseValue(error)) => case_value_errors.extend(error.flatten()),
             }
         }
     }
@@ -439,26 +537,37 @@ pub(super) fn check_types_impl(
     let mut enum_units: Vec<_> = flattened_enums.values()
         .filter(|unit| checker.enums.contains_key(&unit.name)).collect();
     enum_units.sort_by(|left, right| left.name.cmp(&right.name));
-    let mut expanded = HashSet::new();
-    for enum_unit in &enum_units {
+    let enum_link_order = |name: &str| -> LinkOrder { (true, position_of(&positions, name)) };
+    let mut expanded = Vec::new();
+    for enum_unit in enum_units {
         match expand_enum_interfaces(&mut checker, enum_unit) {
-            Ok(()) => { expanded.insert(enum_unit.name.clone()); }
-            Err(error) => errors.extend(error.flatten()),
+            Ok(()) => expanded.push(enum_unit),
+            Err(error) => {
+                let link_order = enum_link_order(&enum_unit.name);
+                linked.extend(error.flatten().into_iter().map(|error| (link_order, error)));
+            }
         }
     }
-    for enum_unit in enum_units {
-        if expanded.contains(&enum_unit.name) {
-            if let Err(error) = validate_enum_interface_contracts(&mut checker, enum_unit) {
-                errors.extend(error.flatten());
-            }
-            if let Err(error) = validate_enum_trait_requirements(&checker, program, enum_unit) {
-                errors.extend(error.flatten());
-            }
+    for enum_unit in &expanded {
+        if let Err(error) = validate_enum_interface_contracts(&mut checker, enum_unit) {
+            let link_order = enum_link_order(&enum_unit.name);
+            linked.extend(error.flatten().into_iter().map(|error| (link_order, error)));
         }
     }
     // A trait requirement that another trait's method or the class's own method satisfied is
     // gone from the flattened class, but that method must still be compatible with it.
-    errors.extend(validate_class_trait_requirements(&checker, program, &flattened_classes));
+    validate_trait_requirements(
+        &checker,
+        program,
+        &rejected,
+        &flattened_classes,
+        &expanded,
+        &mut linked,
+        &class_build_errors,
+    );
+    linked.sort_by_key(|(link_order, _)| *link_order);
+    errors.extend(linked.into_iter().map(|(_, error)| error));
+    errors.extend(case_value_errors);
     checker.box_untyped_interface_method_params();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
@@ -560,7 +669,7 @@ pub(super) fn check_types_impl(
         return Err(CompileError::from_many(errors));
     }
 
-    Ok((checker, final_global_env))
+    Ok(final_global_env)
 }
 
 /// Prints every class the checker registered, with its id, when `ELEPHC_CLASS_INVENTORY=1`.
@@ -781,3 +890,181 @@ var_dump((new Mw())->check(new Req()));
 
 #[cfg(test)]
 mod strict_abs_tests;
+/// The errors PHP raises while compiling the class declarations, in source order and each with its
+/// `LinkOrder`: for each class, its private final constants (PHP compiles the class body first),
+/// then, when PHP
+/// early-binds the class (see [`is_compile_bound`]), a parent that is a trait, an interface or a
+/// final class, or that differs in `readonly`. The messages are those of the class schema build
+/// (`validate_parent_constraints`, `resolve_parent_info`), which reports them again at the class
+/// span. A class that uses traits or implements interfaces, or whose parent is declared later,
+/// is linked later, so its parent errors stay with the class schema build.
+fn class_compile_errors(
+    order: &HashMap<String, usize>,
+    classes: &[FlattenedClass],
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+    positions: &HashMap<String, usize>,
+    statement_positions: &HashMap<crate::span::Span, usize>,
+) -> Vec<(LinkOrder, CompileError)> {
+    let mut errors = Vec::new();
+    for class in classes {
+        // At this declaration's own statement, which a redeclared class does not share.
+        let position = statement_positions.get(&class.span).copied();
+        let link_order = (false, position.unwrap_or_else(|| position_of(positions, &class.name)));
+        for constant in &class.constants {
+            if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
+                errors.push((link_order, CompileError::new(
+                    constant.span,
+                    &format!(
+                        "Private constant {}::{} cannot be final",
+                        class.name, constant.name
+                    ),
+                )));
+            }
+        }
+        // A redeclaration is never early-bound: the name is taken (`redeclarations`).
+        let kept = class_map.get(&class.name).is_some_and(|kept| kept.span == class.span);
+        if !kept || !is_early_bound(class, order, class_map, checker) {
+            continue;
+        }
+        let Some(parent_name) = class.extends.as_deref() else {
+            continue;
+        };
+        if let Some(message) = super::schema::parent_kind_error(&class.name, parent_name, class_map, checker) {
+            errors.push((link_order, CompileError::new(class.span, &message)));
+        } else if let Some(parent) = class_map.get(parent_name) {
+            if parent.is_final {
+                errors.push((link_order, CompileError::new(
+                    class.span,
+                    &format!("Class {} cannot extend final class {}", class.name, parent_name),
+                )));
+            } else if class.is_readonly_class != parent.is_readonly_class {
+                let relation = if class.is_readonly_class {
+                    "readonly class cannot extend non-readonly parent"
+                } else {
+                    "non-readonly class cannot extend readonly parent"
+                };
+                errors.push((link_order, CompileError::new(
+                    class.span,
+                    &format!("{}: {} extends {}", relation, class.name, parent_name),
+                )));
+            }
+        }
+    }
+    errors
+}
+
+/// Adds the errors one declaration's build reported to `linked` at `link_order`, each once. An
+/// error reported before (in `reported`, or in `linked` before `start`) is skipped, and one
+/// already linked from `start` on (a parent's, repeated by its child) keeps the earlier order.
+/// Returns the index of the declaration's first error linked from `start` on.
+fn link_errors(
+    linked: &mut Vec<(LinkOrder, CompileError)>,
+    start: usize,
+    reported: &[CompileError],
+    errors: Vec<CompileError>,
+    link_order: LinkOrder,
+) -> Option<usize> {
+    let mut first = None;
+    for error in errors {
+        let same = |other: &CompileError| other.span == error.span && other.message == error.message;
+        if reported.iter().any(same) || linked[..start].iter().any(|(_, other)| same(other)) {
+            continue;
+        }
+        let index = match linked[start..].iter().position(|(_, other)| same(other)) {
+            Some(offset) => {
+                let index = start + offset;
+                linked[index].0 = linked[index].0.min(link_order);
+                index
+            }
+            None => {
+                linked.push((link_order, error));
+                linked.len() - 1
+            }
+        };
+        first.get_or_insert(index);
+    }
+    first
+}
+
+/// Whether PHP links `class` while it compiles the file (early binding): a top-level class that
+/// uses no trait, implements no interface, and extends nothing or a parent bound before it
+/// (see [`is_compile_bound`]). Every other class is linked when PHP runs the file.
+fn is_early_bound(
+    class: &FlattenedClass,
+    order: &HashMap<String, usize>,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> bool {
+    let Some(position) = order.get(&php_symbol_key(&class.name)).copied() else {
+        return false;
+    };
+    class.used_traits.is_empty()
+        && class.implements.is_empty()
+        && class.extends.as_deref().is_none_or(|parent| {
+            is_compile_bound(parent, position, order, class_map, checker, 0)
+        })
+}
+
+/// The source position of each top-level class, interface, trait and enum declaration of
+/// `program`, keyed by `php_symbol_key`: for a redeclared name, the declaration PHP keeps (the
+/// first one not in `rejected`).
+fn declaration_order(program: &Program, rejected: &HashSet<crate::span::Span>) -> HashMap<String, usize> {
+    let mut order = HashMap::new();
+    for (position, stmt) in program.iter().enumerate() {
+        if let StmtKind::ClassDecl { name, .. }
+        | StmtKind::InterfaceDecl { name, .. }
+        | StmtKind::TraitDecl { name, .. }
+        | StmtKind::EnumDecl { name, .. } = &stmt.kind
+        {
+            if !rejected.contains(&stmt.span) {
+                order.entry(php_symbol_key(name)).or_insert(position);
+            }
+        }
+    }
+    order
+}
+
+/// Whether PHP has bound the class-like `name` when it compiles the declaration at `before`, so
+/// a child there can early-bind to it. A built-in is always bound. A source declaration must
+/// come earlier, and is bound when it is a trait, an interface without parent interfaces, or a
+/// class that uses no traits, implements no interface, and has either no parent or a parent
+/// bound the same way (`zend_compile_class_decl` only early-binds classes without interfaces
+/// and traits). `depth` stops parent cycles.
+fn is_compile_bound(
+    name: &str,
+    before: usize,
+    order: &HashMap<String, usize>,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+    depth: usize,
+) -> bool {
+    let dummy = crate::span::Span::dummy();
+    let interface = checker.interfaces.get(name);
+    let class = class_map.get(name);
+    if interface.is_some_and(|interface| interface.declaration_span == dummy)
+        || class.is_some_and(|class| class.span == dummy || checker.internal_class_decls.contains(&class.name))
+        || (class.is_none() && super::schema::final_internal_class(name).is_some())
+    {
+        return true;
+    }
+    let Some(position) = order.get(&php_symbol_key(name)).copied() else {
+        return false;
+    };
+    if position >= before || depth > order.len() {
+        return false;
+    }
+    if let Some(interface) = interface {
+        return interface.parents.is_empty();
+    }
+    let Some(class) = class else {
+        return checker.declared_traits.iter().any(|declared| php_symbol_key(declared) == php_symbol_key(name));
+    };
+    if !class.used_traits.is_empty() || !class.implements.is_empty() {
+        return false;
+    }
+    match class.extends.as_deref() {
+        None => true,
+        Some(parent) => is_compile_bound(parent, position, order, class_map, checker, depth + 1),
+    }
+}

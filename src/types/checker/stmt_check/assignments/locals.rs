@@ -485,6 +485,26 @@ pub(super) fn check_ref_assign(
             if let Some(class) =
                 crate::types::checker::single_object_class_name(&object_ty)
             {
+                // Native property handlers (SimpleXML's selection path) own undeclared names
+                // through their runtime accessor, so only a plain dynamic property is refused.
+                let native_reference = crate::types::builtin_classes::native_property_method(
+                    &class,
+                    property,
+                    elephc_builtin_contract::ObjectProperty::ReferenceSelect,
+                    &checker.classes,
+                )
+                .is_some();
+                if !native_reference
+                    && checker
+                        .classes
+                        .get(&class)
+                        .is_some_and(|info| info.visible_property_index(property).is_none())
+                {
+                    return Err(CompileError::new(
+                        source.span,
+                        "Reference assignment to a dynamic property is not supported; declare the property on the class",
+                    ));
+                }
                 checker
                     .reference_property_promotions
                     .insert((class, property.clone()));
@@ -554,7 +574,45 @@ pub(super) fn check_ref_assign(
                     "Reference assignment to an array element requires an integer or string array key",
                 ));
             }
+            // The alias reads the element's PHP value type, not the container's promoted
+            // storage: boxing an object element into a Mixed cell does not make the reference
+            // itself Mixed, so resolve it before the container promotion below.
             let target_ty = checker.infer_type(source, env)?;
+            // A reference element forces hash storage with boxed Mixed values. Mirror that
+            // promotion in the flow-sensitive type environment so later array builtins see the
+            // same layout the EIR writer installs instead of a stale packed-array type.
+            //
+            // A WeakMap/object receiver stores the reference in its own entry table; promoting
+            // the root array (`$maps[0][$key]`) would turn the array<WeakMap> into a mixed hash
+            // and lose the specialized reference path.
+            let promotes_root_array = !matches!(array_ty.codegen_repr(), PhpType::Object(_));
+            let mut promoted_root = false;
+            let mut root = array;
+            while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+                root = array;
+            }
+            if promotes_root_array {
+                if let ExprKind::Variable(root_name) = &root.kind {
+                    let storage = match env.get(root_name).map(PhpType::codegen_repr) {
+                        Some(PhpType::Array(_)) => Some(PhpType::AssocArray {
+                            key: Box::new(PhpType::Int),
+                            value: Box::new(PhpType::Mixed),
+                        }),
+                        Some(PhpType::AssocArray { key, .. }) => Some(PhpType::AssocArray {
+                            key,
+                            value: Box::new(PhpType::Mixed),
+                        }),
+                        _ => None,
+                    };
+                    if let Some(storage) = storage {
+                        env.insert(root_name.clone(), storage);
+                        promoted_root = true;
+                    }
+                }
+            }
+            // The writer installs a boxed Mixed cell for the promoted element, so the alias
+            // storage is boxed even when the element's PHP value type stays concrete.
+            target_has_boxed_ref_provenance |= promoted_root;
             checker.record_operation_exception_flow(source, env);
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());

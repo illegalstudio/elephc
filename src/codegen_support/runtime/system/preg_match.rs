@@ -28,8 +28,9 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     let subject_ptr_off = pattern_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
     let flags_off = subject_len_off + 8;
-    let pattern_cstr_off = flags_off + 8;
-    let subject_cstr_off = pattern_cstr_off + 8;
+    let pattern_body_ptr_off = flags_off + 8;
+    let pattern_body_len_off = pattern_body_ptr_off + 8;
+    let subject_cstr_off = pattern_body_len_off + 8;
     let regexec_result_off = subject_cstr_off + 8;
     let stack_size = (regexec_result_off + 40 + 15) & !15;
     let save_off = stack_size - 16;
@@ -51,22 +52,23 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
 
     // -- strip delimiters from pattern --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1=stripped, x2=len, x3=flags
-    emitter.instruction("tbnz x3, #30, __rt_preg_match_fail");                  // the removed /e modifier is invalid in PHP 8
+    emitter.instruction("tbnz x3, #30, __rt_preg_match_fail");                  // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save flags
 
-    // -- materialize the PCRE pattern as a C string --
-    emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
-    emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save pattern C string
+    // -- keep the stripped pattern body and its explicit length --
+    emitter.instruction(&format!("str x1, [sp, #{}]", pattern_body_ptr_off));   // save the stripped pattern pointer
+    emitter.instruction(&format!("str x2, [sp, #{}]", pattern_body_len_off));   // save the stripped pattern length
 
     // -- prepare locale state for regex helpers --
     super::emit_prepare_regex_locale(emitter);
 
-    // -- compile regex through the opaque Elephc shim --
+    // -- compile regex through the opaque Elephc shim with an explicit length --
     emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated pattern
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.instruction(&format!("add x3, sp, #{}", match_slot_count_off));     // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_body_ptr_off));   // pass the pattern body pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", pattern_body_len_off));   // pass the authoritative pattern length
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
+    emitter.instruction(&format!("add x4, sp, #{}", match_slot_count_off));     // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile_len");                                // compile by length so embedded NULs are preserved
     emitter.instruction("cbnz x0, __rt_preg_match_fail");                       // compile failed → PHP false
 
     // -- null-terminate subject --
@@ -80,7 +82,10 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass null-terminated subject
     emitter.instruction("mov x2, #1");                                          // request only the full-match pair
     emitter.instruction(&format!("add x3, sp, #{}", match_pair_off));           // receive one fixed signed-64-bit offset pair
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.instruction(&format!("str xzr, [sp, #{}]", match_pair_off));        // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the explicit subject length
+    emitter.instruction(&format!("str x9, [sp, #{}]", match_pair_off + 8));     // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov x4, #128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec result
 
@@ -120,8 +125,9 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let subject_ptr_off = pattern_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
     let flags_off = subject_len_off + 8;
-    let pattern_cstr_off = flags_off + 8;
-    let subject_cstr_off = pattern_cstr_off + 8;
+    let pattern_body_ptr_off = flags_off + 8;
+    let pattern_body_len_off = pattern_body_ptr_off + 8;
+    let subject_cstr_off = pattern_body_len_off + 8;
     let regexec_result_off = subject_cstr_off + 8;
     let matches_array_off = regexec_result_off + 8;
     let group_idx_off = matches_array_off + 8;
@@ -147,16 +153,17 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip delimiters and expose regex flags
-    emitter.instruction("tbnz x3, #30, __rt_preg_match_capture_compile_fail");  // the removed /e modifier is invalid in PHP 8
+    emitter.instruction("tbnz x3, #30, __rt_preg_match_capture_compile_fail");  // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save stripped regex flags
-    emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
-    emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save null-terminated PCRE pattern
+    emitter.instruction(&format!("str x1, [sp, #{}]", pattern_body_ptr_off));   // save the stripped pattern pointer
+    emitter.instruction(&format!("str x2, [sp, #{}]", pattern_body_len_off));   // save the stripped pattern length
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated PCRE pattern
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.instruction(&format!("add x3, sp, #{}", nmatch_off));               // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_body_ptr_off));   // pass the pattern body pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", pattern_body_len_off));   // pass the authoritative pattern length
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
+    emitter.instruction(&format!("add x4, sp, #{}", nmatch_off));               // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile_len");                                // compile by length so embedded NULs are preserved
     emitter.instruction("cbnz x0, __rt_preg_match_capture_compile_fail");       // compile failure returns PHP false plus an empty matches array
 
     // -- allocate fixed Elephc offset pairs for every compiled capture --
@@ -177,7 +184,11 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass subject C string to regexec
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", regmatches_ptr_off));     // load the capture pair vector
+    emitter.instruction("str xzr, [x9]");                                       // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load the explicit subject length
+    emitter.instruction("str x10, [x9, #8]");                                   // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov x4, #128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across cleanup
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
@@ -283,8 +294,9 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     let subject_ptr_off = match_pair_off + 16;
     let subject_len_off = subject_ptr_off + 8;
     let flags_off = subject_len_off + 8;
-    let pattern_cstr_off = flags_off + 8;
-    let subject_cstr_off = pattern_cstr_off + 8;
+    let pattern_body_ptr_off = flags_off + 8;
+    let pattern_body_len_off = pattern_body_ptr_off + 8;
+    let subject_cstr_off = pattern_body_len_off + 8;
     let regexec_result_off = subject_cstr_off + 8;
     let stack_size = (regexec_result_off + 16 + 15) & !15;
 
@@ -299,18 +311,19 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across delimiter stripping and regex compilation helper calls
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the preg-strip helper input register
-    emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags from the elephc pattern payload
-    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
-    emitter.instruction("jc __rt_preg_match_fail_linux_x86_64");                // PHP 8 rejects /e as an unknown modifier
+    emitter.instruction("call __rt_preg_strip");                                // strip delimiters and collect supported regex flags from the elephc pattern payload
+    emitter.instruction("bt rcx, 30");                                          // did delimiter parsing reject the pattern?
+    emitter.instruction("jc __rt_preg_match_fail_linux_x86_64");                // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve the regex flag word returned by the delimiter-strip helper for the later regcomp() call
-    emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the null-terminated PCRE pattern pointer for the upcoming regcomp() call
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_body_ptr_off)); // preserve the stripped pattern pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", pattern_body_len_off)); // preserve the stripped pattern length
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the null-terminated PCRE pattern C string as the second regcomp() argument
-    emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.instruction(&format!("lea rcx, [rsp + {}]", match_slot_count_off)); // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_body_ptr_off)); // pass the pattern body pointer as the second compile argument
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", pattern_body_len_off)); // pass the authoritative pattern length as the third compile argument
+    emitter.instruction(&format!("mov ecx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
+    emitter.instruction(&format!("lea r8, [rsp + {}]", match_slot_count_off));  // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile_len");                                // compile by length so embedded NULs are preserved
     emitter.instruction("test eax, eax");                                       // did regcomp() succeed and produce a compiled regex object?
     emitter.instruction("jnz __rt_preg_match_fail_linux_x86_64");               // failed regex compilation maps to PHP false
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
@@ -321,7 +334,10 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the null-terminated subject C string as the second regexec() argument
     emitter.instruction("mov edx, 1");                                          // request only the full-match pair
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", match_pair_off)); // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", subject_len_off)); // load the explicit subject length
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", match_pair_off + 8)); // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov r8d, 128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // preserve the regexec() result code across the mandatory regfree() cleanup call
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
@@ -354,8 +370,9 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     let subject_ptr_off = nmatch_off + 8;
     let subject_len_off = subject_ptr_off + 8;
     let flags_off = subject_len_off + 8;
-    let pattern_cstr_off = flags_off + 8;
-    let subject_cstr_off = pattern_cstr_off + 8;
+    let pattern_body_ptr_off = flags_off + 8;
+    let pattern_body_len_off = pattern_body_ptr_off + 8;
+    let subject_cstr_off = pattern_body_len_off + 8;
     let regexec_result_off = subject_cstr_off + 8;
     let matches_array_off = regexec_result_off + 8;
     let group_idx_off = matches_array_off + 8;
@@ -373,18 +390,19 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across pattern helper calls
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip helper input register
-    emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags
-    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
-    emitter.instruction("jc __rt_preg_match_capture_compile_fail_linux_x86_64"); // PHP 8 rejects /e as an unknown modifier
+    emitter.instruction("call __rt_preg_strip");                                // strip delimiters and collect supported regex flags
+    emitter.instruction("bt rcx, 30");                                          // did delimiter parsing reject the pattern?
+    emitter.instruction("jc __rt_preg_match_capture_compile_fail_linux_x86_64"); // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // save stripped regex flags for regcomp
-    emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // save null-terminated PCRE pattern for regcomp
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_body_ptr_off)); // save the stripped pattern pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", pattern_body_len_off)); // save the stripped pattern length
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to regcomp
-    emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.instruction(&format!("lea rcx, [rsp + {}]", nmatch_off));           // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_body_ptr_off)); // pass the pattern body pointer to regcomp
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", pattern_body_len_off)); // pass the authoritative pattern length to regcomp
+    emitter.instruction(&format!("mov ecx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
+    emitter.instruction(&format!("lea r8, [rsp + {}]", nmatch_off));            // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile_len");                                // compile by length so embedded NULs are preserved
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_match_capture_compile_fail_linux_x86_64"); // compile failure returns PHP false plus an empty matches array
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // load match-slot count returned by the shim
@@ -404,7 +422,11 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass subject C string to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the capture pair vector
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", subject_len_off)); // load the explicit subject length
+    emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov r8d, 128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across regfree
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
@@ -499,4 +521,51 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release capture helper local storage
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return match flag in rax and matches array in rdx
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+    use crate::codegen_support::RuntimeFeatures;
+
+    /// Every supported `preg_match` ABI compiles patterns through the length-aware shim.
+    ///
+    /// The runtime is emitted separately from user assembly, so this pins the ARM64 and x86_64
+    /// helpers that consume the stripped pattern length instead of a NUL-terminated copy.
+    #[test]
+    fn preg_match_compiles_patterns_by_explicit_length_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = crate::codegen::generate_runtime_with_features(
+                8_388_608,
+                target,
+                RuntimeFeatures {
+                    regex: true,
+                    ..RuntimeFeatures::none()
+                },
+            );
+            let start = asm
+                .find("\n__rt_preg_match:")
+                .unwrap_or_else(|| panic!("{target:?}: preg_match helper is emitted"));
+            let rest = &asm[start + 1..];
+            let end = rest
+                .find("\n__rt_preg_match_capture:")
+                .map_or(asm.len(), |offset| start + 1 + offset);
+            let helper = &asm[start..end];
+            assert!(
+                helper.contains("elephc_pcre2_v1_compile_len"),
+                "{target:?}: the helper must use the length-aware PCRE2 compile entry point"
+            );
+            let legacy_calls = helper
+                .match_indices("elephc_pcre2_v1_compile")
+                .filter(|(index, _)| !helper[*index..].starts_with("elephc_pcre2_v1_compile_len"))
+                .count();
+            assert_eq!(
+                legacy_calls, 0,
+                "{target:?}: the helper must not fall back to the NUL-terminated compile"
+            );
+        }
+    }
 }

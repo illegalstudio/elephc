@@ -243,6 +243,11 @@ impl Checker {
                         None => vt,
                     });
                 }
+                // A reference value is stored as a managed cell, so the hash's value layout is
+                // boxed `mixed` even when every alias currently holds the same scalar type.
+                if pairs.iter().any(|(_, value)| literal_value_is_reference(value)) {
+                    val_ty = Some(PhpType::Mixed);
+                }
                 Ok(PhpType::AssocArray {
                     key: Box::new(key_ty.unwrap_or(PhpType::Mixed)),
                     value: Box::new(val_ty.unwrap_or(PhpType::Mixed)),
@@ -269,7 +274,7 @@ impl Checker {
                         }
                         ArrayEntry::Value(value) => self.infer_type(value, env)?,
                         ArrayEntry::Reference(value) | ArrayEntry::KeyReference(_, value) => {
-                            return Err(CompileError::new(value.span, "Reference elements in array literals are not supported in native compilation"));
+                            self.infer_type(value, env)?
                         }
                     };
                     val_ty = Some(match val_ty {
@@ -279,6 +284,16 @@ impl Checker {
                             .unwrap_or(PhpType::Mixed),
                         None => next,
                     });
+                }
+                // Explicit reference entries force boxed cell storage for the whole hash.
+                if entries.iter().any(|entry| match entry {
+                    ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+                        literal_value_is_reference(value)
+                    }
+                    ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => true,
+                    ArrayEntry::Spread(_) => false,
+                }) {
+                    val_ty = Some(PhpType::Mixed);
                 }
                 Ok(PhpType::AssocArray {
                     key: Box::new(PhpType::Mixed),
@@ -375,6 +390,15 @@ impl Checker {
                         Some(current) => self
                             .merge_array_element_type(&current, &ty)
                             .unwrap_or(PhpType::Mixed),
+                    });
+                }
+                // A reference element is stored as a managed cell in hash-of-Mixed storage,
+                // not as the scalar its alias currently holds, so the literal's own type must
+                // describe that layout for every downstream builtin.
+                if elems.iter().any(literal_value_is_reference) {
+                    return Ok(PhpType::AssocArray {
+                        key: Box::new(PhpType::Int),
+                        value: Box::new(PhpType::Mixed),
                     });
                 }
                 Ok(PhpType::Array(Box::new(elem_ty.unwrap_or(PhpType::Never))))
@@ -502,6 +526,14 @@ fn checked_numeric_cast_possible(ty: &PhpType, classes: &std::collections::HashM
         }
         _ => false,
     }
+}
+
+/// Returns whether an array-literal value is a direct `&$value` reference element.
+///
+/// The expression alone infers as the aliased scalar type, but the literal stores a managed
+/// reference cell, so callers widen the container to hash-of-`mixed` storage when this is true.
+fn literal_value_is_reference(value: &Expr) -> bool {
+    matches!(value.kind, ExprKind::Reference(_))
 }
 
 /// Formats the diagnostic for `++`/`--` applied to a local elephc cannot update in place.

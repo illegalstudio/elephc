@@ -141,10 +141,93 @@ pub fn seed_cli_populated_superglobals(
     if compiling_for_web() {
         return program;
     }
-    let spelled = crate::prelude_prune::usage::collect(&program).variables;
+    let usage = crate::prelude_prune::usage::collect(&program);
+    let filter_input_used = usage.references("filter_input")
+        || usage.references("filter_input_array")
+        || usage.references("filter_has_var");
+    let explicit_filter_seed = program.iter().any(|stmt| match &stmt.kind {
+        StmtKind::ExprStmt(expr) => matches!(
+            &expr.kind,
+            crate::parser::ast::ExprKind::FunctionCall { name, .. }
+                if name.as_str() == "__elephc_filter_seed_request"
+        ),
+        _ => false,
+    });
+    let has_filter_seed = program.iter().any(|stmt| {
+        matches!(
+            &stmt.kind,
+            StmtKind::FunctionDecl { name, .. } if name == "__elephc_filter_seed_request"
+        )
+    });
+    let auto_filter_seed = filter_input_used && has_filter_seed && !explicit_filter_seed;
+    let mut spelled = usage.variables;
+    if auto_filter_seed {
+        // The filter prelude reads SAPI-owned CLI input from these two superglobals.
+        spelled.insert("_SERVER".to_string());
+        spelled.insert("_ENV".to_string());
+    }
+    // PHP's compiled-in CLI default is EGPCS (`php -n` reports it), so `$_ENV` is
+    // populated unless the program overrides `variables_order` without `E`.
+    let variables_order = crate::codegen_support::ini_overrides()
+        .into_iter()
+        .find_map(|(name, value)| (name == "variables_order").then_some(value))
+        .unwrap_or_else(|| "EGPCS".to_string());
+    let server_enabled = variables_order.contains('S');
+    let env_enabled = variables_order.contains('E');
     let mut seeds: Vec<Stmt> = Vec::new();
     for name in CLI_POPULATED_SUPERGLOBALS.iter().filter(|name| spelled.contains(**name)) {
-        seeds.extend(seed_for(name));
+        seeds.extend(seed_for(name, server_enabled, env_enabled));
+    }
+    if auto_filter_seed {
+        if server_enabled {
+            // Seed the filter prelude's raw snapshot after the CLI superglobals exist. PHP's CLI
+            // SAPI exposes exactly five server keys to filter_input(); the remaining process
+            // environment is not part of INPUT_SERVER.
+            let server_values = crate::synthetic_class::e_array_assoc(
+                ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED", "DOCUMENT_ROOT"]
+                    .into_iter()
+                    .map(|key| {
+                        (
+                            crate::synthetic_class::e_str(key),
+                            crate::synthetic_class::e_index(
+                                crate::synthetic_class::e_var("_SERVER"),
+                                crate::synthetic_class::e_str(key),
+                            ),
+                        )
+                    })
+                    .collect(),
+            );
+            seeds.push(crate::synthetic_class::s_expr(
+                crate::synthetic_class::e_call(
+                    "__elephc_filter_seed_request",
+                    vec![
+                        crate::synthetic_class::e_const("INPUT_SERVER"),
+                        server_values,
+                        crate::synthetic_class::e_str("unsafe_raw"),
+                        crate::synthetic_class::e_int(0),
+                        crate::synthetic_class::e_bool(false),
+                        crate::synthetic_class::e_bool(true),
+                        crate::synthetic_class::e_bool(false),
+                    ],
+                ),
+            ));
+        }
+        if env_enabled {
+            seeds.push(crate::synthetic_class::s_expr(
+                crate::synthetic_class::e_call(
+                    "__elephc_filter_seed_request",
+                    vec![
+                        crate::synthetic_class::e_const("INPUT_ENV"),
+                        crate::synthetic_class::e_var("_ENV"),
+                        crate::synthetic_class::e_str("unsafe_raw"),
+                        crate::synthetic_class::e_int(0),
+                        crate::synthetic_class::e_bool(false),
+                        crate::synthetic_class::e_bool(true),
+                        crate::synthetic_class::e_bool(false),
+                    ],
+                ),
+            ));
+        }
     }
     if seeds.is_empty() {
         return program;
@@ -164,7 +247,7 @@ pub fn seed_cli_populated_superglobals(
 /// is what PHP's CLI SAPI leaves them as. Emitted as ordinary PHP statements
 /// rather than a runtime call, so the same optimizer, checker and ownership
 /// passes see them as they would see the program's own code.
-fn seed_for(name: &str) -> Vec<crate::parser::ast::Stmt> {
+fn seed_for(name: &str, server_enabled: bool, env_enabled: bool) -> Vec<crate::parser::ast::Stmt> {
     use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
     use crate::synthetic_class::{
         e_bool, e_call, e_index, e_int, e_str, e_var, s_array_assign, s_assign,
@@ -176,7 +259,9 @@ fn seed_for(name: &str) -> Vec<crate::parser::ast::Stmt> {
     match name {
         // `$_ENV` is `getenv()`: PHP populates it from the same environment, and
         // the two compare equal entry for entry.
+        "_ENV" if !env_enabled => vec![s_assign("_ENV", empty())],
         "_ENV" => vec![s_assign("_ENV", e_call("getenv", Vec::new()))],
+        "_SERVER" if !server_enabled => vec![s_assign("_SERVER", empty())],
         "_SERVER" => {
             // The environment first, then PHP's own keys on top — the order
             // matters only if a variable is literally named `argv`, in which case

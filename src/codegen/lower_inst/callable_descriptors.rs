@@ -137,10 +137,20 @@ pub(super) fn declared_callable_name_cases(
 
 /// Keeps descriptor storage and captures while removing object identity for implicit callables.
 fn store_callable_descriptor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.op == Op::CallableValueNew {
+    let origin = match inst.op {
+        Op::CallableValueNew => Some(callable_descriptor::CALLABLE_DESC_ORIGIN_STRING),
+        Op::CallableArrayNew => Some(callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY),
+        _ => None,
+    };
+    if let Some(origin) = origin {
         // The shared constructor leaves its descriptor in the result register. Releasing only
         // its handle preserves the descriptor's owner, captures, and fresh physical identity.
         abi::emit_call_label(ctx.emitter, "__rt_object_handle_release");
+        // The runtime copy is private to this value, so it can record the PHP string or array
+        // the callable came from, which gettype(), get_class() and `::class` report.
+        callable_descriptor::emit_mark_runtime_descriptor_origin(
+            ctx.emitter, abi::int_result_reg(ctx.emitter), origin,
+        );
     }
     store_if_result(ctx, inst)
 }
@@ -296,7 +306,11 @@ pub(super) fn emit_instance_method_first_class_callable(
     let invoker_label = emit_runtime_callable_invoker_in_class(
         ctx, &sig, &captures, owns_string_return, true, Some(&impl_class),
     );
-    let declared_name = format!("{}::{}", impl_class, method_name);
+    let declared_name = format!(
+        "{}::{}",
+        impl_class,
+        super::callables::declared_method_name(ctx, &impl_class, &normalized_class, &method_key, method_name),
+    );
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,

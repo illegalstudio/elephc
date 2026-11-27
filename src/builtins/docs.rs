@@ -69,6 +69,7 @@ fn area_str(area: Area) -> &'static str {
         Area::Opcache => "opcache",
         Area::Xml => "xml",
         Area::Tidy => "tidy",
+        Area::Filter => "filter",
         Area::Random => "random",
     }
 }
@@ -472,8 +473,15 @@ mod tests {
             "pcntl_wifstopped",
             "pcntl_wstopsig",
             "pcntl_wtermsig",
+            "posix_errno",
+            "posix_get_last_error",
+            "posix_geteuid",
+            "posix_getpgrp",
+            "posix_isatty",
+            "posix_kill",
             "posix_setpgid",
             "posix_setsid",
+            "posix_strerror",
         ]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();

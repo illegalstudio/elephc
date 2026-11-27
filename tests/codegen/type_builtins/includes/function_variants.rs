@@ -842,3 +842,166 @@ function bad_base(int $x): string {
         "unexpected diagnostic: {error}"
     );
 }
+
+/// Included functions keep their public PHP names when invoked through declared callable values.
+#[test]
+fn test_included_string_callable_public_names() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", r#"<?php
+require 'library.php';
+function invoke_included(callable $callback, string $value): string {
+    return $callback($value);
+}
+echo invoke_included('wordpress_probe_value', 'wordpress'), "|";
+echo invoke_included('\\WORDPRESS_PROBE_VALUE', 'native');
+"#),
+            ("library.php", "<?php function wordpress_probe_value(string $value): string { return strtoupper($value); }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "WORDPRESS|NATIVE");
+}
+
+/// Declared callable validation observes include activation before resolving a public variant name.
+#[test]
+fn test_included_string_callable_load_order() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", r#"<?php
+function invoke_after_include(callable $callback): string {
+    return $callback('loaded');
+}
+try {
+    echo invoke_after_include('include_order_value');
+} catch (TypeError $error) {
+    echo 'missing|';
+}
+require_once 'library.php';
+echo invoke_after_include('include_order_value');
+"#),
+            ("library.php", "<?php function include_order_value(string $value): string { return strtoupper($value); }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "missing|LOADED");
+}
+
+/// Public include-loaded callable descriptors preserve by-reference arguments and return values.
+#[test]
+fn test_included_string_callable_reference_argument() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", r#"<?php
+require 'library.php';
+function invoke_include_mutation(callable $callback, string &$value): string {
+    return $callback($value);
+}
+$value = 'before';
+echo invoke_include_mutation('mutate_included_value', $value), '|', $value;
+"#),
+            ("library.php", "<?php function mutate_included_value(string &$value): string { $value = 'after'; return strtoupper($value); }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "AFTER|after");
+}
+
+/// Included public names work through variable calls and call_user_func_array as used by WordPress hooks.
+#[test]
+fn test_included_string_callable_runtime_callback_forms() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", r#"<?php
+require 'library.php';
+function invoke_variable_name($callback, string $value): string {
+    return $callback($value);
+}
+function invoke_array_callback($callback, string $value): string {
+    return call_user_func_array($callback, array($value));
+}
+echo invoke_variable_name('included_runtime_value', 'native'), '|';
+echo invoke_array_callback('included_runtime_value', 'wordpress');
+"#),
+            ("library.php", "<?php function included_runtime_value(string $value): string { return strtoupper($value); }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "NATIVE|WORDPRESS");
+}
+
+
+/// Nested once declarations are shared after a runtime-possible earlier load.
+#[test]
+fn test_nested_once_after_possible_branch_declares_once() {
+    for condition in ["time() < 0", "time() > 0"] {
+        let main = format!(r#"<?php
+$nestedLoads = 0;
+if ({condition}) {{ require_once 'middle.php'; }}
+require_once 'middle.php';
+echo nested_once_result(), ':', get_class(new NestedOnceType()), ':', $nestedLoads;
+"#);
+        let out = compile_and_run_files(&[
+            ("main.php", main.as_str()),
+            ("middle.php", "<?php require_once 'leaf.php';"),
+            ("leaf.php", "<?php ++$nestedLoads; function nested_once_result(): string { return 'ok'; } class NestedOnceType {}"),
+        ], "main.php");
+        assert_eq!(out, "ok:NestedOnceType:1");
+    }
+}
+
+/// Distinct once parents share a nested once library while retaining both parent bodies.
+#[test]
+fn test_nested_once_shared_across_distinct_parents() {
+    let out = compile_and_run_files(&[
+        ("main.php", "<?php $nestedLoads = 0; if (time() < 0) { require_once 'left.php'; } require_once 'right.php'; require_once 'left.php'; echo nested_shared_result(), ':', $nestedLoads;"),
+        ("left.php", "<?php require_once 'leaf.php'; echo 'L';"),
+        ("right.php", "<?php require_once 'leaf.php'; echo 'R';"),
+        ("leaf.php", "<?php ++$nestedLoads; function nested_shared_result(): string { return 'ok'; }"),
+    ], "main.php");
+    assert_eq!(out, "RLok:1");
+}
+
+/// A once parent does not make its ordinary child include globally once-guarded.
+#[test]
+fn test_nested_once_parent_retains_plain_child_redeclaration() {
+    let error = compile_files_error_message(&[
+        ("main.php", "<?php require_once 'leaf.php'; require_once 'middle.php';"),
+        ("middle.php", "<?php require 'leaf.php';"),
+        ("leaf.php", "<?php function nested_plain_duplicate(): int { return 1; }"),
+    ], "main.php").expect("ordinary child redeclaration must fail");
+    assert!(error.contains("Duplicate function declaration"), "{error}");
+}
+
+/// A guarded declaration has one body even when the same once library has two source sites.
+#[test]
+fn test_conditional_once_function_body_is_emitted_once() {
+    assert_conditional_once_function_body();
+}
+
+/// The source-identity rule is independent of EIR optimizer normalization.
+#[test]
+fn test_conditional_once_function_body_is_emitted_once_no_ir_opt() {
+    without_ir_opt(assert_conditional_once_function_body);
+}
+
+/// Runtime callbacks keep the original library effects and values on both load paths.
+fn assert_conditional_once_function_body() {
+    let outputs = compile_and_run_files_per_argv(&[
+        ("main.php", r#"<?php
+$loads = 0;
+if ($argc > 1) { require_once 'parent.php'; }
+require_once 'library.php';
+$callback = $argc > 3 ? (string) $argv[3] : 'guarded_once_value';
+echo call_user_func($callback, 'ok'), ':', $loads;
+"#),
+        ("parent.php", "<?php require_once 'library.php';"),
+        ("library.php", r#"<?php
+++ $loads;
+if (!function_exists('guarded_once_value')) {
+    function guarded_once_value(mixed $value): mixed { return $value; }
+}
+"#),
+    ], "main.php", &[&[], &["nested"]]);
+    assert_eq!(outputs, ["ok:1", "ok:1"]);
+}

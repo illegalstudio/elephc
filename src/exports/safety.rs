@@ -113,7 +113,7 @@ fn validate_call_graph(
                             &instruction.operands[..instruction.operands.len().min(1)],
                         Op::Cast if !contains_native_handle(&instruction.result_php_type) =>
                             &instruction.operands[..instruction.operands.len().min(1)],
-                        Op::ArraySet | Op::ArraySetMixedKey | Op::ArrayPush | Op::HashSet | Op::HashAppend | Op::PropSet =>
+                        Op::ArraySet | Op::ArraySetMixedKey | Op::ArrayPush | Op::HashSet | Op::HashSetValue | Op::HashAppend | Op::PropSet =>
                             instruction.operands.get(1..).unwrap_or(&[]),
                         Op::RuntimeCall => instruction.operands.as_slice(),
                         _ => &[],

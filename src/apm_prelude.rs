@@ -240,7 +240,7 @@ impl Search<'_> {
         }
         // An alias: `T::run as again`, or `run as again` naming no trait.
         for adaptation in &owner.adaptations {
-            if let TraitAdaptation::Alias { trait_name, method: original, alias: Some(alias), visibility } = adaptation {
+            if let TraitAdaptation::Alias { trait_name, method: original, alias: Some(alias), visibility, .. } = adaptation {
                 if !same_name(alias, method) {
                     continue;
                 }
@@ -271,7 +271,7 @@ impl Search<'_> {
                 // method's visibility on this class without renaming it. The last one
                 // written wins, as in trait flattening.
                 if let Some(visibility) = owner.adaptations.iter().rev().find_map(|adaptation| match adaptation {
-                    TraitAdaptation::Alias { trait_name, method: changed, alias: None, visibility: Some(visibility) }
+                    TraitAdaptation::Alias { trait_name, method: changed, alias: None, visibility: Some(visibility), .. }
                         if same_name(changed, method)
                             && trait_name.as_ref().is_none_or(|name| owner_key(name.as_str()) == *used) =>
                     {

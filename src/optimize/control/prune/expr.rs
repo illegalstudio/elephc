@@ -22,6 +22,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
     let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         kind @ ExprKind::Runtime(_) => kind,
+        ExprKind::Reference(inner) => ExprKind::Reference(Box::new(prune_expr(*inner))),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

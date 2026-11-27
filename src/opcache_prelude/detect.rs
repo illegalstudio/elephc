@@ -667,6 +667,7 @@ fn instanceof_target_refs(target_ref: &InstanceOfTarget, target: Symbol<'_>) -> 
 fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().find_map(|value| expr_refs(value, target)),
+        ExprKind::Reference(inner) => expr_refs(inner, target),
         // `require`/`include` in expression position: recurse into the path expression.
         ExprKind::IncludeValue { path, .. } => expr_refs(path, target),
         // A matching string literal counts (function_exists/callable) — for FUNCTION targets

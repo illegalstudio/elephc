@@ -156,10 +156,17 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                                 .then_some(regular_param_count)
                         })
                 });
-                let value = if let Some(index) = param_index {
-                    lower_signature_invoker_ref_arg_marker(ctx, sig, index, value, native_references)
-                } else if sig.is_none() {
-                    lower_signature_invoker_ref_arg_marker(ctx, None, 0, value, native_references)
+                // `call_user_func*` binds named values by value: a plain named argument must
+                // become a container value, not a reference marker, so the invoker can warn and
+                // hand the callee a temporary. Direct dynamic calls keep their native references.
+                let value = if native_references {
+                    if let Some(index) = param_index {
+                        lower_signature_invoker_ref_arg_marker(ctx, sig, index, value, native_references)
+                    } else if sig.is_none() {
+                        lower_signature_invoker_ref_arg_marker(ctx, None, 0, value, native_references)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -261,34 +268,6 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
         }
     }
     Some(lower_invoker_ref_arg_marker(ctx, var_name, item.span))
-}
-
-/// Returns true when a local slot can be passed directly to a descriptor ref param.
-pub(super) fn invoker_ref_arg_storage_compatible(
-    ctx: &LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    index: usize,
-    var_name: &str,
-    span: Span,
-) -> bool {
-    let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
-    let param = if variadic_reference {
-        crate::types::signatures::variadic_param_index(sig)
-            .and_then(|variadic_index| sig.params.get(variadic_index))
-    } else {
-        sig.params.get(index)
-    };
-    let Some((_, param_ty)) = param else {
-        return true;
-    };
-    if variadic_reference || crate::types::uses_boxed_reference_payload(param_ty) {
-        return ctx.local_type(var_name).codegen_repr() == PhpType::Mixed
-            || (!ctx.is_ref_bound_local(var_name)
-                && ctx.local_is_promotable_to_ref_cell(var_name)
-                && ctx.boxed_reference_promotion_is_authorized(var_name, span));
-    }
-    value_ir_type(&param_ty.codegen_repr()) == value_ir_type(&ctx.local_type(var_name).codegen_repr())
 }
 
 /// Emits an invoker reference-cell marker for a local variable argument.

@@ -69,6 +69,7 @@ mod str_split;
 mod str_split_count;
 mod str_word_count;
 mod addslashes;
+mod addcslashes;
 mod stripslashes;
 mod nl2br;
 mod base_convert;
@@ -236,6 +237,13 @@ pub use str_split::emit_str_split;
 pub use str_split_count::emit_str_split_count;
 /// Emit string to array split helper.
 pub use addslashes::emit_addslashes;
+/// Emit addcslashes escaping helper.
+pub use addcslashes::emit_addcslashes;
+/// Character-list diagnostics shared with the fixed data section.
+pub(crate) use addcslashes::{
+    ADDCSLASHES_INCREMENT_WARNING, ADDCSLASHES_LEFT_WARNING, ADDCSLASHES_PLAIN_WARNING,
+    ADDCSLASHES_RIGHT_WARNING,
+};
 /// Emit addslashes escaping helper.
 pub use stripslashes::emit_stripslashes;
 /// Emit stripslashes unescaping helper.

@@ -168,7 +168,8 @@ fn emit_dynamic_plan_write(
             "property write resolved to a value read",
         )),
         PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => Err(CodegenIrError::invalid_module(
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => Err(CodegenIrError::invalid_module(
             "property write resolved to a read probe",
         )),
         // php refuses the creation from this scope (a `readonly` class, including php-src's
@@ -474,6 +475,19 @@ pub(super) fn emit_stacked_named_dynamic_property_creation_deprecation(
     Ok(())
 }
 
+/// Returns whether `materialize_dynamic_property_mixed_value` hands over the source's own box.
+///
+/// An owned Mixed or union box that EIR leaves for this store to adopt becomes the cell itself,
+/// without a retain. Every other value gets a cell that holds its own reference.
+pub(super) fn dynamic_property_mixed_value_adopts_source(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<bool> {
+    Ok(matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
+        && ctx.value_can_own_mixed_box_source(value)?)
+}
+
 /// Materializes a property value as an owned boxed `Mixed` cell in the result register.
 pub(super) fn materialize_dynamic_property_mixed_value(
     ctx: &mut FunctionContext<'_>,
@@ -482,7 +496,7 @@ pub(super) fn materialize_dynamic_property_mixed_value(
 ) -> Result<()> {
     ctx.load_value_to_result(value)?;
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
-        if !ctx.value_can_own_mixed_box_source(value)? {
+        if !dynamic_property_mixed_value_adopts_source(ctx, value, value_ty)? {
             abi::emit_incref_if_refcounted(ctx.emitter, &value_ty.codegen_repr());
         }
     } else {

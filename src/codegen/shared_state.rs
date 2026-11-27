@@ -22,18 +22,30 @@ use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethod
 use crate::ir::{CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeFnId};
 use crate::types::{FunctionSig, PhpType};
 
+mod module_runtime;
+mod module_callables;
+
 /// Optional runtime families discovered while codegen lowers synthetic EIR functions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GeneratedRuntimeFeatures {
     pub(crate) handler_state: bool,
     pub(crate) object_clone: bool,
+    pub(crate) addcslashes: bool,
 }
 
 /// Module-wide artifacts emitted once and reused by every function lowering context.
 #[derive(Default)]
 pub(crate) struct SharedCodegenState {
+    /// Immutable source-body facts shared with literal-only wrapper snapshots.
+    module_runtime_facts: std::cell::OnceCell<module_runtime::ModuleRuntimeFacts>,
+    /// Immutable function, extern and public include-group names shared by all contexts.
+    module_callable_index: std::cell::OnceCell<module_callables::ModuleCallableIndex>,
+    /// Global symbols whose local aliases can expose a persistent boxed reference wrapper.
+    global_reference_names: std::cell::OnceCell<std::collections::HashSet<String>>,
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
+    /// Descriptor invokers' coercive `int`/`float` parameter helpers have been emitted.
+    pub(super) invoker_numeric_param_helpers: bool,
     generated_runtime_features: GeneratedRuntimeFeatures,
     /// Declared parameter contracts cached independently of emitted method bodies.
     pub(super) literal_methods: super::literal_method_index::LiteralMethodIndex,
@@ -62,6 +74,10 @@ pub(crate) struct SharedCodegenState {
     count_guard_sharing: Option<bool>,
     /// Runtime-name Mixed property ladders shared by lexical scope and fetch mode.
     pub(super) property_read_helpers: Option<Vec<super::shared_property_read::ReadHelper>>,
+    /// Repeated literal-name Mixed reads, keyed by lexical scope, name and fetch mode.
+    pub(super) literal_property_read_helpers: Option<super::shared_literal_property_read::ReadPlan>,
+    /// Repeated literal writes preserve their opcode, visibility and exact value contract.
+    pub(super) literal_property_write_helpers: Option<super::shared_literal_property_write::WritePlan>,
     /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
     pub(super) counters: bool,
     /// `--instrument`: every non-synthetic PHP function calls
@@ -128,6 +144,11 @@ struct RuntimeCallableInvokerCacheEntry {
     captures: Vec<(String, PhpType, bool)>,
     owns_string_return: bool,
     php_return_status: bool,
+    /// How the invoker checks boxed arguments bound to declared scalar parameters: 0 not at
+    /// all, 1 always, 2 only for `strict_types=1` callers (an internal `ext/uri` method).
+    scalar_guarded: u8,
+    /// The static callee name a closure invoker's scalar-parameter `TypeError` uses, if any.
+    guard_callee: Option<String>,
     /// The RESOLVED defaults the body materializes. Two signatures can be identical as ABI and
     /// still fold `self::`/`parent::` defaults differently in different class scopes, so the
     /// resolved values are part of the key rather than the declaring class name.
@@ -188,6 +209,9 @@ impl SharedCodegenState {
         &mut self,
         key: &crate::codegen::lower_inst::callables::SharedCallableSelectorKey,
     ) -> String {
+        // A selector expands the module's runtime-callable inventory, which can include the
+        // `addcslashes()` builtin wrapper even when no direct EIR call names it.
+        self.generated_runtime_features.addcslashes = true;
         if let Some((_, label)) = self.callable_selectors.iter().find(|(existing, _)| existing == key) {
             return label.clone();
         }
@@ -214,6 +238,8 @@ impl SharedCodegenState {
                     let target = inst.runtime_function();
                     self.generated_runtime_features.object_clone |=
                         target == Some(RuntimeFnId::CloneWith);
+                    self.generated_runtime_features.addcslashes |=
+                        target == Some(RuntimeFnId::Addcslashes);
                 }
                 Op::CoreBuiltin => {
                     let operation = match inst.immediate {
@@ -441,6 +467,8 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
+        scalar_guarded: u8,
+        guard_callee: Option<&str>,
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
@@ -450,6 +478,8 @@ impl SharedCodegenState {
                     && entry.owns_string_return == owns_string_return
                     && entry.php_return_status == php_return_status
                     && entry.defaults == defaults
+                    && entry.scalar_guarded == scalar_guarded
+                    && entry.guard_callee.as_deref() == guard_callee
             })
             .map(|entry| entry.label.clone())
     }
@@ -462,6 +492,8 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
+        scalar_guarded: u8,
+        guard_callee: Option<&str>,
         label: &str,
     ) {
         self.runtime_callable_invokers
@@ -470,6 +502,8 @@ impl SharedCodegenState {
                 captures: captures.to_vec(),
                 owns_string_return,
                 php_return_status,
+                scalar_guarded,
+                guard_callee: guard_callee.map(str::to_string),
                 defaults: defaults.to_vec(),
                 label: label.to_string(),
             });

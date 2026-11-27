@@ -18,6 +18,8 @@ use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 use super::context::LoweringContext;
 
+mod cycles;
+
 /// Returns private numeric names with cyclic reads or unmodeled exceptional continuation.
 fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>> {
     let function = ctx.builder.function();
@@ -25,8 +27,16 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
     // with handlers, including a loop whose body always reaches its backedge via catch.
     let exceptional = function.instructions.iter().any(|inst| matches!(inst.op,
         Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
-    let cyclic_blocks: HashSet<_> = function.blocks.iter()
-        .filter(|block| exceptional || cyclic(function, block.id)).map(|block| block.id).collect();
+    let cyclic_blocks: HashSet<_> = if exceptional {
+        function.blocks.iter().map(|block| block.id).collect()
+    } else {
+        let edges: Vec<Vec<usize>> = function.blocks.iter().map(|block| {
+            block.terminator.as_ref().map(crate::ir_passes::successors)
+                .unwrap_or_default().into_iter().map(|id| id.as_raw() as usize).collect()
+        }).collect();
+        cycles::cyclic_blocks(&edges).into_iter()
+            .map(|index| BlockId::from_raw(index as u32)).collect()
+    };
     let mut local_writers: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::new();
     for inst in &function.instructions {
         if inst.op == Op::StoreLocal {
@@ -100,27 +110,6 @@ fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueI
         }
     }
     false
-}
-
-/// Requires an explicit nonempty path back to a block, including nested loop backedges.
-fn cyclic(function: &Function, start: BlockId) -> bool {
-    let mut pending = successors(function, start);
-    let mut seen = HashSet::new();
-    while let Some(block) = pending.pop() {
-        if block == start {
-            return true;
-        }
-        if seen.insert(block) {
-            pending.extend(successors(function, block));
-        }
-    }
-    false
-}
-
-/// Reads explicit edges only; exceptional edges cannot invalidate a conservative storage widening.
-fn successors(function: &Function, block: BlockId) -> Vec<BlockId> {
-    function.blocks[block.as_raw() as usize].terminator.as_ref()
-        .map(crate::ir_passes::successors).unwrap_or_default()
 }
 
 /// Replays numeric loop reads and admitted closure calls against their final Mixed storage.

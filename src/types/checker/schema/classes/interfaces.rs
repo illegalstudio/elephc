@@ -559,7 +559,11 @@ fn validate_interface_method(
         actual_sig.return_type.codegen_repr(),
         PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
     );
-    let tentative_return = php_symbol_key(required_owner) == "serializable"
+    // Legacy SPL implementations keep their tentative returns under the PHP compatibility attribute.
+    let tentative_iterator_return = matches!(
+        php_symbol_key(required_owner).as_str(), "iterator" | "arrayaccess"
+    ) && !declaration_is_source(checker, required_owner) && has_return_type_will_change;
+    let tentative_return = tentative_iterator_return || php_symbol_key(required_owner) == "serializable"
         || (method_name == "__tostring" && !actual_sig.declared_return)
         || (php_symbol_key(required_owner) == "countable"
             && !declaration_is_source(checker, required_owner)

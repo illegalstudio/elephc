@@ -226,6 +226,8 @@ pub(super) fn emit_module(
         regalloc_linear,
     )?;
     super::shared_property_read::emit_helpers(module, emitter, data, &mut shared)?;
+    super::shared_literal_property_read::emit_helpers(module, emitter, data, &mut shared)?;
+    super::shared_literal_property_write::emit_helpers(module, emitter, data, &mut shared)?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
@@ -416,7 +418,7 @@ fn emit_user_function(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && function.has_source_identity(),
+        shared.module_runtime_facts(module).backtrace && function.has_source_identity(),
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -583,7 +585,7 @@ fn emit_class_method(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && function.has_source_identity(),
+        shared.module_runtime_facts(module).backtrace && function.has_source_identity(),
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -903,7 +905,7 @@ fn emit_generator_body(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && function.has_source_identity(),
+        shared.module_runtime_facts(module).backtrace && function.has_source_identity(),
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
@@ -1135,7 +1137,7 @@ fn emit_main_function(
         emitter.target,
         regalloc_linear,
         false,
-        frame::module_uses_backtrace(module),
+        shared.module_runtime_facts(module).backtrace,
     );
     if web {
         frame::preserve_host_callee_saved(&mut layout, emitter.target);

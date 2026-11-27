@@ -86,6 +86,8 @@ pub(crate) enum TokenKind {
     Caret,
     CaretEqual,
     Tilde,
+    /// The `@` error-control operator.
+    At,
     Dot,
     DotEqual,
     Ellipsis,

@@ -1393,6 +1393,100 @@ fn web_superglobal_visible_in_function() {
     assert!(resp.ends_with("DELETE"), "body: {:?}", resp);
 }
 
+/// Boxed replacements retain native request-global storage and independent previous aliases.
+#[test]
+fn web_boxed_array_reassignment_keeps_request_superglobals_native() {
+    let source = r#"<?php
+function request_value(mixed $value): mixed { return $value; }
+function install_request_values(mixed $value): void { $_REQUEST = $value; }
+function empty_request_array(): array { return array(); }
+function request_array_input(mixed $value): array {
+    if (!is_array($value)) return array();
+    return (array) $value;
+}
+function merge_request_arrays(array $arrays): array {
+    $result = empty_request_array();
+    foreach ($arrays as $value) {
+        $source = request_array_input($value);
+        foreach ($source as $key => $item) {
+            if (is_int($key)) $result[] = $item;
+            else $result[(string) $key] = $item;
+        }
+    }
+    return $result;
+}
+function normalize_request_values(mixed $value): mixed {
+    foreach ((array) $value as $key => $item) {
+        if (is_array($item)) $value[$key] = normalize_request_values($item);
+        elseif (is_string($item)) $value[$key] = addslashes($item);
+    }
+    return $value;
+}
+function replace_request_values(): void {
+    $previous = $_GET;
+    install_request_values(merge_request_arrays(array($_GET, $_POST)));
+    $merged_count = count($_REQUEST);
+    $merged_before = $_REQUEST['before'] ?? 'missing';
+    $_GET = request_value(json_decode('{"changed":"cafés","0":"zero","nested":{"ok":true}}', true));
+    $_GET = normalize_request_values($_GET);
+    $_SERVER = normalize_request_values($_SERVER);
+    echo $_SERVER['REQUEST_URI'], "\n", $merged_count, "\n", $merged_before, "\n",
+        json_encode($_GET, JSON_UNESCAPED_UNICODE), "\n", ($previous['before'] ?? 'missing');
+}
+replace_request_values();
+"#;
+    for optimization in ["on", "off"] {
+        let dir = make_test_dir("web_boxed_request_globals");
+        let option = format!("--ir-opt={optimization}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&option, "--web-isolation=request"]);
+        let addr = format!("127.0.0.1:{}", free_port());
+        let mut server = spawn_server(&bin, &addr, "1");
+        for (path, count, merged, previous) in [
+            ("/probe", 0, "missing", "missing"),
+            ("/probe?before=one", 1, "one", "one"),
+            ("/probe?before=two", 1, "two", "two"),
+            ("/probe?before=one", 1, "one", "one"),
+        ] {
+            let response = http_get(&addr, path);
+            let json = r#"{"changed":"cafés","0":"zero","nested":{"ok":true}}"#;
+            assert_eq!(
+                raw_response_body(&response),
+                format!("{path}\n{count}\n{merged}\n{json}\n{previous}"),
+                "IR {optimization}",
+            );
+        }
+        let _ = server.kill();
+        let _ = server.wait();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// Top-level `define()` constants keep their values inside functions under the `--web` catch-all.
+#[test]
+fn web_top_level_define_constants_keep_their_type_in_functions() {
+    let source = r#"<?php
+define('WEB_BASE_DIR', __DIR__ . '/site/');
+define('WEB_PLUGIN_DIR', WEB_BASE_DIR . 'plugins');
+define('WEB_PLUGIN_LABEL', 'plugins');
+function plugin_folder(string $folder): string {
+    return ltrim(substr($folder, strlen(WEB_PLUGIN_DIR)), '/');
+}
+function plugin_label(): string { return gettype(WEB_PLUGIN_LABEL) . ':' . WEB_PLUGIN_LABEL; }
+echo plugin_folder(WEB_PLUGIN_DIR . '/akismet/akismet.php'), "\n", plugin_label();
+"#;
+    let dir = make_test_dir("web_define_constants");
+    let bin = compile_web_with_flags(&dir, source, "app", &["--web-isolation=request"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut server = spawn_server(&bin, &addr, "1");
+    for _ in 0..2 {
+        let response = http_get(&addr, "/");
+        assert_eq!(raw_response_body(&response), "akismet/akismet.php\nstring:plugins");
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Verifies a router storing an interface-typed handler survives repeated web requests.
 #[test]
 fn web_router_interface_handler_survives_repeated_requests() {
@@ -3475,6 +3569,116 @@ fn web_array_push_onto_a_request_superglobal_keeps_the_worker_alive() {
     let _ = child.wait();
     for (index, response) in responses.iter().enumerate() {
         assert!(response.ends_with("82/2"), "response {index}: {response:?}");
+    }
+}
+
+
+/// `filter.default` filters `$_GET` while `filter_input()` still returns the raw request value,
+/// and `ini_get()` reports the baked directive.
+#[test]
+fn web_filter_default_filters_superglobals_and_keeps_raw_input() {
+    let dir = make_test_dir("web_filter_default");
+    let src = r#"<?php echo $_GET["a"], "|", filter_input(INPUT_GET, "a"), "|", filter_input(INPUT_GET, "a", FILTER_SANITIZE_SPECIAL_CHARS), "|", ini_get("filter.default");"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=special_chars"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=%3Cb%3Ex%3C%2Fb%3E");
+    assert!(
+        response.ends_with("&#60;b&#62;x&#60;/b&#62;|<b>x</b>|&#60;b&#62;x&#60;/b&#62;|special_chars"),
+        "response: {response:?}"
+    );
+}
+
+
+/// A configured `filter.default` applies even when the program never names a filter function.
+#[test]
+fn web_filter_default_applies_without_a_filter_call() {
+    let dir = make_test_dir("web_filter_default_auto");
+    let src = r#"<?php echo $_GET["a"];"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=special_chars"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=%3Cb%3Ex%3C%2Fb%3E");
+    assert!(response.ends_with("&#60;b&#62;x&#60;/b&#62;"), "response: {response:?}");
+}
+
+/// `filter.default` stores the filter's native result type, not a coerced string.
+#[test]
+fn web_filter_default_preserves_boolean_result_types() {
+    let dir = make_test_dir("web_filter_default_bool");
+    let src = r#"<?php var_dump($_GET["yes"], $_GET["no"]);"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=boolean"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?yes=yes&no=nope");
+    assert!(response.contains("bool(true)"), "response: {response:?}");
+    assert!(response.contains("bool(false)"), "response: {response:?}");
+    assert!(!response.contains("string(1) \"1\""), "response: {response:?}");
+}
+
+/// `filter.default` resolves filter names case-insensitively like php-src.
+#[test]
+fn web_filter_default_name_is_case_insensitive() {
+    let dir = make_test_dir("web_filter_default_case");
+    let src = r#"<?php var_dump($_GET["a"], $_GET["b"]);"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=INT"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=42&b=x");
+    assert!(response.contains("int(42)"), "response: {response:?}");
+    assert!(response.contains("bool(false)"), "response: {response:?}");
+}
+
+/// `filter.default=string` uses PHP's internal NO_ENCODE_QUOTES default flags.
+#[test]
+fn web_filter_default_string_keeps_default_no_encode_quotes() {
+    let dir = make_test_dir("web_filter_default_string_flags");
+    let src = r#"<?php var_dump($_GET["a"]);"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=string"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=%22%3Cb%3E%22");
+    assert!(response.contains(r#"string(2) """#), "response: {response:?}");
+}
+
+/// `filter_input_array()` defaults `$options` to `FILTER_DEFAULT` like php-src.
+#[test]
+fn web_filter_input_array_defaults_options() {
+    let dir = make_test_dir("web_filter_input_array_default");
+    let src = r#"<?php echo json_encode(filter_input_array(INPUT_GET));"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=1&b=two");
+    assert!(
+        response.ends_with(r#"{"a":"1","b":"two"}"#),
+        "response: {response:?}"
+    );
+}
+
+/// `filter_input()` reads the original request snapshot, not a later superglobal mutation.
+#[test]
+fn web_filter_input_uses_raw_request_snapshot() {
+    let dir = make_test_dir("web_filter_input_raw");
+    let src = r#"<?php $_GET["a"] = "changed"; echo filter_input(INPUT_GET, "a"), "|", $_GET["a"];"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=original");
+    assert!(response.ends_with("original|changed"), "response: {response:?}");
+}
+
+/// A persistent worker snapshots fresh raw input for every request.
+#[test]
+fn web_filter_input_refreshes_raw_snapshot_per_request() {
+    let dir = make_test_dir("web_filter_input_refresh");
+    let src = r#"<?php echo filter_input(INPUT_GET, "a"), "|", $_GET["a"];"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    for (query, expected) in [("/?a=first", "first|first"), ("/?a=second", "second|second")] {
+        let response = http_get(&addr, query);
+        assert!(response.ends_with(expected), "response: {response:?}");
     }
 }
 

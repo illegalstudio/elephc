@@ -84,6 +84,15 @@ impl Invalidation {
 pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
     match &expr.kind {
         ExprKind::Runtime(_) => Invalidation::All,
+        // Building a reference element exposes the variable to writes made through the array
+        // entry for the rest of its life, so no constant fact may survive this point.
+        ExprKind::Reference(inner) => match &inner.kind {
+            ExprKind::Variable(name) => {
+                super::stmt::mark_reference_volatile(name);
+                Invalidation::Names(HashSet::from([name.clone()]))
+            }
+            _ => expr_invalidation(inner),
+        },
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(
@@ -272,6 +281,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             args_invalidation(args)
                 .union(callee_inv)
                 .union(top_level_globals_guard(function_call_effect(name.as_str(), args)))
+                .union(top_level_globals_guard(scalar_guard_effect(args)))
         }
         ExprKind::MethodCall {
             object,
@@ -291,6 +301,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 .union(top_level_globals_guard(instance_method_call_effect(
                     object, method,
                 )))
+                .union(top_level_globals_guard(scalar_guard_effect(args)))
         }
         ExprKind::NullsafeDynamicMethodCall {
             object,
@@ -318,14 +329,19 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 .union(top_level_globals_guard(static_method_call_effect(
                     receiver, method,
                 )))
+                .union(top_level_globals_guard(scalar_guard_effect(args)))
         }
         ExprKind::ClosureCall { var, args } => args_invalidation(args)
             .union(call_args_invalidation(None, args, true))
-            .union(top_level_globals_guard(callable_alias_effect(var))),
+            .union(top_level_globals_guard(callable_alias_effect(var)))
+            .union(top_level_globals_guard(scalar_guard_effect(args)))
+            .union(top_level_globals_guard(callable_value_binding_effect(&Expr::var(var), args))),
         ExprKind::ExprCall { callee, args } => expr_invalidation(callee)
             .union(args_invalidation(args))
             .union(call_args_invalidation(None, args, true))
-            .union(top_level_globals_guard(expr_call_effect(callee))),
+            .union(top_level_globals_guard(expr_call_effect(callee)))
+            .union(top_level_globals_guard(scalar_guard_effect(args)))
+            .union(top_level_globals_guard(callable_value_binding_effect(callee, args))),
         ExprKind::Pipe { value, callable } => {
             // `$v |> $f` invokes the callable with the piped value as its
             // single argument; resolve the signature when the callable names a
@@ -345,6 +361,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 .union(expr_invalidation(callable))
                 .union(callee_inv)
                 .union(top_level_globals_guard(expr_call_effect(callable)))
+                .union(top_level_globals_guard(callable_value_binding_effect(callable, piped)))
         }
         ExprKind::NewObject { args, .. }
         | ExprKind::NewGeneric { args, .. }

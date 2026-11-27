@@ -354,6 +354,7 @@ impl<'a> Compiler<'a> {
             EvalStmt::Goto(_) => Err(CompileGap::new("Goto")),
             EvalStmt::Label(_) => Err(CompileGap::new("Label")),
             EvalStmt::Global { .. } => Err(CompileGap::new("Global")),
+            EvalStmt::ConstDecl { .. } => Err(CompileGap::new("ConstDecl")),
             EvalStmt::ReferenceAssign { .. } => Err(CompileGap::new("ReferenceAssign")),
             EvalStmt::PropertyReferenceBind { .. } => Err(CompileGap::new("PropertyReferenceBind")),
             EvalStmt::DynamicPropertyReferenceBind { .. } => Err(CompileGap::new("DynamicPropertyReferenceBind")),
@@ -511,6 +512,9 @@ impl<'a> Compiler<'a> {
             EvalExpr::InstanceOf { .. } => Err(CompileGap::new("InstanceOf")),
             EvalExpr::PropertyCompoundAssign { .. } => Err(CompileGap::new("PropertyCompoundAssign")),
             EvalExpr::PropertyIncDec { .. } => Err(CompileGap::new("PropertyIncDec")),
+            EvalExpr::ErrorSuppress(_) => Err(CompileGap::new("ErrorSuppress")),
+            EvalExpr::Throw(_) => Err(CompileGap::new("ThrowExpression")),
+            EvalExpr::ConstantPropertyReceiver { .. } => Err(CompileGap::new("ConstantPropertyReceiver")),
             EvalExpr::Match { .. } => Err(CompileGap::new("Match")),
             EvalExpr::Clone(_) => Err(CompileGap::new("Clone")),
             EvalExpr::NamespacedCall { .. } => Err(CompileGap::new("NamespacedCall")),
@@ -637,6 +641,7 @@ fn admission_gap(
     parameter_is_by_ref: &[bool],
     parameter_is_variadic: &[bool],
     return_type: Option<&crate::eval_ir::EvalParameterType>,
+    returns_by_ref: bool,
     body: &[EvalStmt],
 ) -> Option<&'static str> {
     if !attributes.is_empty() {
@@ -659,6 +664,9 @@ fn admission_gap(
     }
     if return_type.is_some() {
         return Some("ReturnType");
+    }
+    if returns_by_ref {
+        return Some("ReferenceReturn");
     }
     if !static_var_names(body).is_empty() {
         return Some("StaticVar");
@@ -697,6 +705,7 @@ fn collect(
                 parameter_is_by_ref,
                 parameter_is_variadic,
                 return_type,
+                returns_by_ref,
                 body,
             } => {
                 if let Some(what) = admission_gap(
@@ -707,6 +716,7 @@ fn collect(
                     parameter_is_by_ref,
                     parameter_is_variadic,
                     return_type.as_ref(),
+                    *returns_by_ref,
                     body,
                 ) {
                     return Err(CompileGap::new(what));
@@ -811,6 +821,7 @@ fn compile_attached(function: &EvalFunction) -> Result<Arc<CompiledBody>, Compil
         function.parameter_is_by_ref(),
         function.parameter_is_variadic(),
         function.return_type(),
+        function.returns_by_ref(),
         function.body(),
     ) {
         return Err(CompileGap::new(what));

@@ -160,7 +160,7 @@ pub(super) fn lower_type(ty: elephc_chopper::syntax::parser::ast::TypeExpr) -> O
     super::templates::lower_structural_type(&scope, ty)
 }
 
-/// Lowers a file or namespace region, applying imports in written order.
+/// Lowers a file or namespace region, applying imports and `const` statements in written order.
 fn lower_namespace_items(ast: Vec<Stmt>, mut scope: Scope<'_>) -> Option<Vec<EvalStmt>> {
     let mut statements = Vec::new();
     for stmt in ast {
@@ -172,6 +172,16 @@ fn lower_namespace_items(ast: Vec<Stmt>, mut scope: Scope<'_>) -> Option<Vec<Eva
             StmtKind::UseDecl { imports } => {
                 for item in imports {
                     scope.register(item);
+                }
+            }
+            StmtKind::ConstDecl { name, value } => statements.push(super::lower_const_decl(&scope, name, value)?),
+            StmtKind::Synthetic(group)
+                if !group.is_empty() && group.iter().all(|stmt| matches!(stmt.kind, StmtKind::ConstDecl { .. })) =>
+            {
+                for stmt in group {
+                    if let StmtKind::ConstDecl { name, value } = stmt.kind {
+                        statements.push(super::lower_const_decl(&scope, name, value)?);
+                    }
                 }
             }
             _ => super::lower_statements(&scope, std::iter::once(stmt), &mut statements)?,

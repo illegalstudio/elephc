@@ -21,9 +21,11 @@ Physical source (.php or .lfc)
   -> magic-constants   lower __FILE__, __DIR__, __LINE__, __FUNCTION__, ...
   -> (strict-audit)    reject elephc-only constructs (with --php-only)
   -> (conditional)     apply compiler ifdef branches from --define
+  -> (goto lowering)   validate jumps and rewrite them into structured control flow
   -> autoload-build    discover autoload rules
   -> resolve           resolve include/require and declarations
   -> autoload-prelude-probe detect preludes needed by autoloaded files
+  -> filter-prelude     inject ext/filter declarations and request-input initialization
   -> pdo-prelude        inject the PDO prelude when used
   -> mysqli-prelude     inject the mysqli prelude when used (shares the elephc_pdo bridge)
   -> tz-prelude         inject the timezone-introspection prelude when used
@@ -93,6 +95,9 @@ Physical source (.php or .lfc)
 - **goto lowering**: each file's `goto` statements and labels are validated and
   rewritten into loops and `continue`, so the passes below only ever see
   structured control flow. Invalid jumps are reported here with PHP's wording.
+- **filter-prelude** runs before other PHP preludes are injected. It detects
+  [Filter](../php/filter.md) use in the user program, including opaque eval,
+  honors `--with-filter`, and installs request-input initialization where needed.
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
@@ -206,8 +211,10 @@ behind a flag.
   discovers and probes the selected PHP 8.5 SDK, compiles the Zend adapter, and
   links the loadable module. This producer path stops here instead of using the
   standalone runtime-cache, assemble, and link phases below.
-- **runtime-cache** — the hand-written runtime is assembled once and cached in
-  `~/.cache/elephc/`, then reused across compiles. See
+- **runtime-cache** reuses an assembled object for identical runtime assembly
+  on the same target. A request alias lets repeated builds skip assembly
+  generation too. A compiler rebuild may require regenerating the assembly to
+  find the existing object. See
   [The Runtime](../internals/the-runtime.md).
 
 ## Tail: assemble and link

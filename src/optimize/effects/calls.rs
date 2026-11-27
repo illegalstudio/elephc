@@ -33,7 +33,12 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
             if let Some((callback_index, intrinsic_effects)) = builtin_callback_effects(def) {
                 let callback_effect = args
                     .get(callback_index)
-                    .map(expr_call_effect)
+                    .map(|callback| {
+                        // The builtin binds each runtime value through the callable invoker's
+                        // scalar checks, exactly as a call through a callable value does.
+                        expr_call_effect(callback)
+                            .combine(super::callable_value_binding_effect(callback, args))
+                    })
                     .unwrap_or_else(conservative_call_effect);
                 let boundary = crate::builtins::semantics::comparison_boundary_effects(def, &input);
                 return Effect::from_eir(intrinsic_effects | boundary).combine(callback_effect);
@@ -50,6 +55,30 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
     } else {
         effect
     }
+}
+
+/// Returns whether binding a builtin's runtime values to the callback's parameters can throw.
+///
+/// The builtin passes container elements whose types are only known at run time, so a declared
+/// non-nullable `int`/`float`/`string`/`bool` parameter can reject one with `TypeError` even
+/// when the callback body is pure. Only a closure literal's parameters are visible here; a
+/// builtin's first-class callable is never checked, and any other callback (a user function's
+/// first-class callable, an alias) is assumed to declare one.
+pub(super) fn callback_binding_may_throw(callback: &Expr) -> bool {
+    let params = match &callback.kind {
+        ExprKind::Closure { params, .. } => params,
+        // A builtin bound as a callback keeps its own argument rules: the runtime check only
+        // covers user callables (a user function cannot reuse a builtin's name).
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            return crate::builtins::registry::lookup(name.as_str()).is_none();
+        }
+        _ => return true,
+    };
+    params.iter().any(|(_, hint, default, by_ref)| {
+        !*by_ref
+            && matches!(hint, Some(TypeExpr::Int | TypeExpr::Float | TypeExpr::Str | TypeExpr::Bool))
+            && !matches!(default, Some(Expr { kind: ExprKind::Null, .. }))
+    })
 }
 
 /// Returns the callback operand and callback-free intrinsic effects for a typed runtime builtin.

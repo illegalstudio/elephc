@@ -11,7 +11,7 @@
 //! - Request environment population follows source/autoload demand; bootstrap keeps its full copy.
 
 use crate::parser::ast::{CType, Program, Stmt, StmtKind};
-use crate::synthetic_class::{e_call, e_static_call, e_var, extern_fn, function, s_expr};
+use crate::synthetic_class::{e_bool, e_call, e_static_call, e_var, extern_fn, function, s_expr};
 use super::PhpVersion;
 
 /// Names of the three generated no-argument C-compatible lifecycle callbacks.
@@ -34,7 +34,11 @@ pub(crate) fn declarations() -> Program {
     let mut program = Vec::new();
     for source in [CONTRACT_SOURCE, ADAPTER_SOURCE] {
         let tokens = crate::lexer::tokenize(source).expect("valid application prelude tokens");
-        program.extend(crate::parser::parse(&tokens).expect("valid application prelude"));
+        // A repository-owned prelude: it must not record parameter lines over the entry's.
+        let parsed = crate::parser::stmt::params::without_recording_param_lines(|| {
+            crate::parser::parse(&tokens)
+        });
+        program.extend(parsed.expect("valid application prelude"));
     }
     program
 }
@@ -105,6 +109,23 @@ fn inject_on_compiler_stack(
     inventory.record_program("web", &declarations_only);
     declarations_only.push(function("__elephc_web_prepare_request").body(prepare).build());
     declarations_only.extend(declarations());
+    // Application workers prepare a fresh `$_GET`/`$_POST`/`$_COOKIE` for every request, so the
+    // filter prelude's raw snapshots and `filter.default` results must be refreshed too. The
+    // hook is always declared; its body calls the filter initializer only when that prelude was
+    // injected, keeping non-filter applications free of the dependency.
+    let filter_hook = if declares_filter_initializer(&program) {
+        vec![s_expr(e_call(
+            "__elephc_filter_initialize_request",
+            vec![e_bool(true)],
+        ))]
+    } else {
+        Vec::new()
+    };
+    declarations_only.push(
+        function("__elephc_web_filter_request_hook")
+            .body(filter_hook)
+            .build(),
+    );
     for name in [
         "elephc_web_application_cache_roots",
         "elephc_web_application_request_begin",
@@ -117,6 +138,19 @@ fn inject_on_compiler_stack(
     declarations_only.push(extern_fn("elephc_web_application_commit_bootstrap", "elephc_web").returns(CType::Void).build());
     declarations_only.extend(program);
     declarations_only
+}
+
+/// Returns whether the injected program declares the filter prelude's request initializer.
+///
+/// The web prelude is installed before name resolution and after the filter prelude, so the
+/// declaration is still a top-level `FunctionDecl` (possibly inside a synthetic or namespace
+/// wrapper). The hook must call it on every application request only when it exists.
+fn declares_filter_initializer(program: &[Stmt]) -> bool {
+    program.iter().any(|stmt| match &stmt.kind {
+        StmtKind::FunctionDecl { name, .. } => name == "__elephc_filter_initialize_request",
+        StmtKind::Synthetic(stmts) => declares_filter_initializer(stmts),
+        _ => false,
+    })
 }
 
 /// Adds a bootstrap commit and an exception boundary after namespace flattening.

@@ -87,6 +87,16 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["tokenizer"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_filter",
+        package: "elephc-filter",
+        php_extensions: &["filter"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_uri",
+        package: "elephc-uri",
+        php_extensions: &["uri"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
         php_extensions: &["openssl"],
@@ -2086,6 +2096,46 @@ pub(crate) fn assemble_and_run_capture(
     );
 
     let output = run_binary(&bin_path, dir);
+
+    if std::str::from_utf8(&output.stdout).is_err() || std::str::from_utf8(&output.stderr).is_err() {
+        super::diagnostics::preserve_invalid_utf8_output(user_asm, &output);
+    }
+    ProgramOutput {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        success: output.status.success(),
+        status: output.status,
+    }
+}
+
+/// Assembles and runs one fixture with extra environment variables.
+///
+/// Used by tests that exercise a runtime policy switch (for example
+/// `ELEPHC_PHAR_REQUIRE_HASH`) without changing the policy of the test process.
+pub(crate) fn assemble_and_run_capture_with_env(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+    env: &[(&str, &std::ffi::OsStr)],
+) -> ProgramOutput {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = run_binary_with_env(&bin_path, dir, env);
 
     if std::str::from_utf8(&output.stdout).is_err() || std::str::from_utf8(&output.stderr).is_err() {
         super::diagnostics::preserve_invalid_utf8_output(user_asm, &output);

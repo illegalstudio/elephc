@@ -93,8 +93,10 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         PhpType::Mixed
     };
+    let min_slot_size = if store_ty == PhpType::Mixed
+        && ctx.shared.global_has_reference(ctx.module, &name) { 16 } else { 8 };
     ctx.data
-        .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
+        .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(min_slot_size));
     if store_ty == PhpType::Mixed {
         let prefix = ctx.next_label("global_value_publication");
         let result = abi::int_result_reg(ctx.emitter);

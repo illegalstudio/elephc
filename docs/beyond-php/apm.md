@@ -34,7 +34,7 @@ elephc monitor bin/console --apm --store /var/lib/shop-apm -- app:import --force
 A program that pushes its counters to a collector:
 
 ```bash
-elephc --with-apm --apm-collector 10.0.0.5:9412 bin/console.php
+elephc build --with-apm --apm-collector 10.0.0.5:9412 bin/console.php
 elephc monitor --apm --listen 0.0.0.0:9412 --key console.key --store /var/lib/shop-apm
 ```
 

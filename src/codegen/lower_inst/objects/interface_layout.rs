@@ -97,15 +97,8 @@ pub(super) fn class_method_already_emitted(
     method_key: &str,
     is_static: bool,
 ) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        function.flags.is_static == is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(candidate_class, candidate_method)| {
-                    candidate_class == class_name && php_symbol_key(candidate_method) == method_key
-                })
-    })
+    ctx.shared.module_callable_index(ctx.module)
+        .has_emitted_method(class_name, method_key, is_static)
 }
 
 /// Collects property high-word offsets that should start with the typed-property sentinel.

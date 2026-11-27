@@ -82,6 +82,28 @@ try { mb_http_output("pass\0tail"); } catch (ValueError) { echo mb_http_output()
     assert_eq!(out, "string(5) \"UTF-8\"\nstring(7) \"neutral\"\nstring(5) \"UTF-8\"\nbool(true)\nbool(true)\nbool(true)\nISO-8859-1:Japanese:pass:2:UTF-8:neutral:UTF-16LE:1:neutral:UTF-8:UTF-16LE");
 }
 
+/// Verifies PHP 8.5.13 rejects truncated encoding names (GH-23958) instead of
+/// resolving them to `auto` or `pass`, while the exact names keep working.
+#[test]
+fn test_mbstring_rejects_truncated_encoding_names() {
+    let out = compile_and_run(
+        r#"<?php
+try { mb_detect_order("aut"); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { mb_detect_order("UTF-8,,"); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { mb_http_output("pa"); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+mb_detect_order("auto");
+var_dump(mb_http_output("pass"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "mb_detect_order(): Argument #1 ($encoding) contains invalid encoding \"aut\"\n\
+         mb_detect_order(): Argument #1 ($encoding) contains invalid encoding \"\"\n\
+         mb_http_output(): Argument #1 ($encoding) must be a valid encoding, \"pa\" given\n\
+         bool(true)\n"
+    );
+}
+
 /// Verifies named/spread and first-class calls preserve null, boolean, and integer arguments.
 #[test]
 fn test_mbstring_scalar_callable_contracts() {

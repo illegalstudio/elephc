@@ -32,6 +32,7 @@
 //!   remembering positions in a bitset, so no signature length silently escapes the check.
 
 mod argument_owners;
+mod by_reference;
 mod defaults;
 mod mbstring;
 mod owned_value_args;
@@ -41,7 +42,10 @@ mod public_args;
 mod reference_args;
 pub(super) mod reference_return;
 mod string_return;
+mod scalar_param_args;
 mod tagged_args;
+
+pub(in crate::codegen) use scalar_param_args::InvokerScalarGuards;
 
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
@@ -68,6 +72,16 @@ use crate::codegen_support::try_handlers::{
     EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::types::{FunctionSig, PhpType};
+
+/// Marks a call_user_func-family invocation whose by-reference parameters receive temporaries.
+///
+/// PHP's `call_user_func*` helpers pass their arguments by value. When the resolved callable
+/// declares a by-reference parameter, the engine emits
+/// `Argument #N ($name) must be passed by reference, value given` for each one. The private
+/// marker occupies bit 1 of the invocation-profile word; the weak/strict scope is shifted above
+/// the low two bits so a cached invoker shared with ordinary dynamic calls can decide at runtime
+/// without colliding with the negative scope ids.
+pub(super) const CALLABLE_PROFILE_WARN_BY_REF: i64 = 2;
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
@@ -132,6 +146,9 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     /// A declared default that could not be folded into a materializable value stays `None`, and
     /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
     pub(super) defaults: &'a [Option<InvokerDefaultValue>],
+    /// Set for a user callable: boxed arguments bound to its declared non-nullable scalar
+    /// parameters are checked like a direct call's (`scalar_param_args`).
+    pub(super) scalar_guards: Option<InvokerScalarGuards>,
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -158,6 +175,10 @@ struct InvokerEmitContext {
     semantic_profile: elephc_semantics::SemanticProfile,
     parameter_contract: Option<PhpType>,
     materializing_default: bool,
+    /// Module facts for the scalar-parameter checks, when this invoker performs them.
+    scalar_guards: Option<InvokerScalarGuards>,
+    /// The declared scalar parameter currently being decoded, when it is checked.
+    scalar_parameter: Option<scalar_param_args::ScalarParameter>,
 }
 
 impl InvokerEmitContext {
@@ -183,6 +204,8 @@ impl InvokerEmitContext {
             semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
             parameter_contract: None,
             materializing_default: false,
+            scalar_guards: None,
+            scalar_parameter: None,
         }
     }
 
@@ -208,6 +231,11 @@ impl InvokerEmitContext {
             .filter(|(_, ty)| sig.declared_params.get(index).copied().unwrap_or(false)
                 && matches!(ty, PhpType::False | PhpType::Void))
             .map(|(name, _)| (index, name.clone()));
+        self.scalar_parameter = self
+            .scalar_guards
+            .is_some()
+            .then(|| scalar_param_args::select(sig, index))
+            .flatten();
     }
 
     /// Allocates a deterministic local label for generated branches.
@@ -291,6 +319,7 @@ fn emit_runtime_callable_invoker_impl(
     );
     ctx.semantic_profile = invoker.semantic_profile;
     ctx.mbstring_operation = invoker.mbstring_operation;
+    ctx.scalar_guards = invoker.scalar_guards.clone();
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
 
     emitter.blank();
@@ -706,10 +735,18 @@ fn emit_loaded_indexed_array_callback_call(
                 push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
+                // `warn_indexed_nonreference_roots` already reported every mbstring variable
+                // root, including this named one; a second generic warning would duplicate it.
+                if !ctx.mbstring_variable_ref_warnings {
+                    by_reference::warn_indexed_ref_temporary(emitter, ctx, data, sig, index);
+                }
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 emitter.label(&done_label);
             } else {
+                if !ctx.mbstring_variable_ref_warnings {
+                    by_reference::warn_indexed_ref_temporary(emitter, ctx, data, sig, index);
+                }
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
             }
@@ -740,6 +777,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     ctx.literal_parameter = None;
     ctx.parameter_contract = None;
+    ctx.scalar_parameter = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -912,7 +950,7 @@ fn emit_loaded_assoc_array_callback_call(
                 let use_default = ctx.next_label("invoker_assoc_ref_default");
                 let done = ctx.next_label("invoker_assoc_ref_done");
                 abi::emit_branch_if_int_result_zero(emitter, &use_default);
-                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
+                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, sig, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&use_default);
                 push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
@@ -921,7 +959,7 @@ fn emit_loaded_assoc_array_callback_call(
                 let missing = ctx.next_label("invoker_assoc_ref_missing");
                 let done = ctx.next_label("invoker_assoc_ref_done");
                 abi::emit_branch_if_int_result_zero(emitter, &missing);
-                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
+                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, sig, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&missing);
                 emit_call_user_func_array_missing_arg_error(emitter, data);
@@ -958,6 +996,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     ctx.literal_parameter = None;
     ctx.parameter_contract = None;
+    ctx.scalar_parameter = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);
@@ -1312,10 +1351,38 @@ fn push_loaded_indexed_array_ref_arg(
     let php_reference_label = ctx.next_label("invoker_php_reference");
     let temp_label = ctx.next_label("invoker_ref_temp");
     let done_label = ctx.next_label("invoker_ref_done");
+    let reference_path_label = ctx.next_label("invoker_ref_reference_path");
+    let by_value_owned_label = ctx.next_label("invoker_ref_by_value_owned");
+    let by_value_marker_label = ctx.next_label("invoker_ref_by_value_marker");
     let result_reg = abi::int_result_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
     abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    // -- call_user_func-family invocations pass every argument by value --
+    let profile = abi::symbol_scratch_reg(emitter);
+    let profile_mask = abi::tertiary_scratch_reg(emitter);
+    abi::load_at_offset(emitter, profile, INVOKER_SCOPE_OFFSET);
+    abi::emit_load_int_immediate(emitter, profile_mask, CALLABLE_PROFILE_WARN_BY_REF);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tst {profile}, {profile_mask}"));     // is this a call_user_func-family invocation?
+            emitter.instruction(&format!("b.eq {reference_path_label}"));       // ordinary dynamic calls keep writable storage
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {profile}, {profile_mask}"));    // is this a call_user_func-family invocation?
+            emitter.instruction(&format!("jz {reference_path_label}"));         // ordinary dynamic calls keep writable storage
+        }
+    }
+    emit_branch_if_invoker_ref_cell_tag(tag_reg, &by_value_marker_label, emitter);
+    abi::emit_call_label(emitter, "__rt_mixed_deref_reference");                // read a PHP reference cell for the by-value copy
+    abi::emit_call_label(emitter, "__rt_mixed_clone");                          // detach the copy from the caller's shared cell
+    abi::emit_jump(emitter, &by_value_owned_label);                             // wrap the independent copy in a temporary cell
+    emitter.label(&by_value_marker_label);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter, ctx);              // materialize the marker's referenced value
+    emitter.label(&by_value_owned_label);
+    reference_args::push_owned_boxed_value(emitter, ctx, data, owner_index, target_ty);
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&reference_path_label);
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -2444,6 +2511,7 @@ fn push_loaded_hash_value_ref_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
     owner_index: usize,
+    sig: &FunctionSig,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -2452,8 +2520,9 @@ fn push_loaded_hash_value_ref_arg(
         source_elem_ty.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return push_loaded_mixed_hash_value_ref_arg(target_ty, owner_index, emitter, ctx, data);
+        return push_loaded_mixed_hash_value_ref_arg(target_ty, owner_index, sig, emitter, ctx, data);
     }
+    warn_hash_ref_temporary_preserving_value(emitter, ctx, data, sig, owner_index);
     materialize_hash_value_to_result(emitter, source_elem_ty);
     push_current_result_ref_arg_address(source_elem_ty, target_ty, owner_index, emitter, ctx, data)
 }
@@ -2518,6 +2587,7 @@ fn push_loaded_mixed_hash_value_arg(
 fn push_loaded_mixed_hash_value_ref_arg(
     target_ty: Option<&PhpType>,
     owner_index: usize,
+    sig: &FunctionSig,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -2577,6 +2647,7 @@ fn push_loaded_mixed_hash_value_ref_arg(
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&ordinary_label);
+    warn_hash_ref_temporary_preserving_value(emitter, ctx, data, sig, owner_index);
     emit_branch_if_hash_value_tag(raw_tag_reg, 7, &ordinary_boxed_label, emitter);
     abi::emit_jump(emitter, &ordinary_raw_label);
 
@@ -2654,6 +2725,33 @@ fn emit_box_raw_invoker_ref_cell_value_as_mixed(
         emitter,
         ctx,
     );
+}
+
+/// Warns for a by-value hash entry while preserving the raw `__rt_hash_get` result.
+///
+/// The warning runs a user error handler, so it may clobber every caller-saved register.
+/// `__rt_hash_get` leaves the payload in those registers; save them around the diagnostic or
+/// the following materialization reads the warning's fragment pointers as the argument value.
+fn warn_hash_ref_temporary_preserving_value(
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+    data: &mut DataSection,
+    sig: &FunctionSig,
+    index: usize,
+) {
+    if ctx.mbstring_variable_ref_warnings {
+        return;
+    }
+    let (raw_lo_reg, raw_hi_reg, raw_tag_reg) = raw_hash_value_regs(emitter);
+    abi::emit_reserve_temporary_stack(emitter, 32);
+    abi::emit_store_to_sp(emitter, raw_lo_reg, 0);
+    abi::emit_store_to_sp(emitter, raw_hi_reg, 8);
+    abi::emit_store_to_sp(emitter, raw_tag_reg, 16);
+    by_reference::warn_indexed_ref_temporary(emitter, ctx, data, sig, index);
+    abi::emit_load_temporary_stack_slot(emitter, raw_lo_reg, 0);
+    abi::emit_load_temporary_stack_slot(emitter, raw_hi_reg, 8);
+    abi::emit_load_temporary_stack_slot(emitter, raw_tag_reg, 16);
+    abi::emit_release_temporary_stack(emitter, 32);
 }
 
 /// Returns raw registers produced by `__rt_hash_get`.
@@ -3182,6 +3280,19 @@ fn call_target_with_pushed_args(
         abi::int_result_reg(emitter),
         INVOKER_SCOPE_OFFSET,
     );
+    // The low two bits are invoker-private (bit 1 is the warning request); a callee must see
+    // the original weak/strict invocation scope only.
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!(
+            "asr {}, {}, #2",
+            abi::int_result_reg(emitter),
+            abi::int_result_reg(emitter)
+        )),                                                                     // recover the weak/strict scope from its shifted profile word
+        Arch::X86_64 => emitter.instruction(&format!(
+            "sar {}, 2",
+            abi::int_result_reg(emitter)
+        )),                                                                     // recover the weak/strict scope from its shifted profile word
+    }
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     let mut abi_arg_types = arg_types.to_vec();
     abi_arg_types.push(PhpType::Int);
@@ -3820,6 +3931,7 @@ mod tests {
                     label, sig: &signature, captures: &[], mbstring_operation: None,
                     mbstring_variable_ref_warnings: false, owns_string_return: false,
                     php_return_status: false, defaults: &defaults,
+                    scalar_guards: None,
                 };
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut data, &invoker, true);
             }
@@ -3839,20 +3951,20 @@ mod tests {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
         let defaults: InvokerDefaults = vec![None; sig.params.len()];
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, "borrowed_result");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, 0, None, "borrowed_result");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], true, false, &defaults)
+            .runtime_callable_invoker(&sig, &[], true, false, &defaults, 0, None)
             .is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, "owned_result");
+        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, 0, None, "owned_result");
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, false, &defaults)
+                .runtime_callable_invoker(&sig, &[], false, false, &defaults, 0, None)
                 .as_deref(),
             Some("borrowed_result")
         );
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], true, false, &defaults)
+                .runtime_callable_invoker(&sig, &[], true, false, &defaults, 0, None)
                 .as_deref(),
             Some("owned_result")
         );
@@ -3870,13 +3982,13 @@ mod tests {
         left[0] = Some(InvokerDefaultValue::String("left".to_string()));
         right[0] = Some(InvokerDefaultValue::String("right".to_string()));
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, "left_body");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, 0, None, "left_body");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], false, false, &right)
+            .runtime_callable_invoker(&sig, &[], false, false, &right, 0, None)
             .is_none());
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, false, &left)
+                .runtime_callable_invoker(&sig, &[], false, false, &left, 0, None)
                 .as_deref(),
             Some("left_body")
         );
@@ -3976,6 +4088,7 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &[None],
+            scalar_guards: None,
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -4036,9 +4149,11 @@ mod tests {
             let mut ctx =
                 InvokerEmitContext::new("hash_ref", owners, false, false, Vec::new(), target);
             let mut data = DataSection::new();
+            let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
             push_loaded_mixed_hash_value_ref_arg(
                 Some(&PhpType::Object("Payload".to_string())),
                 0,
+                &sig,
                 &mut emitter,
                 &mut ctx,
                 &mut data,
@@ -4334,9 +4449,38 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,
+            scalar_guards: None,
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()
+    }
+
+    /// A by-reference parameter emits the scope-gated warning on every supported target, and the
+    /// invoker decodes the private profile word before forwarding the original scope.
+    #[test]
+    fn by_reference_temporary_warning_is_emitted_on_all_targets() {
+        let mut sig = crate::types::first_class_callable_builtin_sig("clone").unwrap();
+        sig.ref_params[0] = true;
+        sig.params[0].0 = "value".to_string();
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_invoker_asm(name, &sig, "by_reference_warning_invoker");
+            assert!(
+                asm.contains("by_reference_warning_invoker_invoker_byref_warning"),
+                "{name}: missing by-reference warning: {asm}"
+            );
+            let decode = match target.arch {
+                Arch::AArch64 => "asr x0, x0, #2",
+                Arch::X86_64 => "sar rax, 2",
+            };
+            assert!(asm.contains(decode), "{name}: missing scope decode: {asm}");
+        }
     }
 
     /// Every target forwards the framed invocation scope after the complete PHP ABI shape.

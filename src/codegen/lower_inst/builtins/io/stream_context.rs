@@ -174,7 +174,12 @@ pub(super) fn notification_callback_value(
     }
     let mut found = None;
     for instruction in &ctx.function.instructions {
-        if instruction.op != Op::HashSet || instruction.operands.len() != 3 {
+        // Associative literals use `HashSetValue`, which detaches a replaced reference binding;
+        // a runtime `HashSet` still appears for other static hash construction paths. Both carry
+        // the same `[hash, key, value]` operands.
+        if !matches!(instruction.op, Op::HashSet | Op::HashSetValue)
+            || instruction.operands.len() != 3
+        {
             continue;
         }
         if transparent_callback_source(ctx.function, instruction.operands[0])? != params_source {
@@ -247,7 +252,7 @@ pub(super) fn is_capturable_notification_callable(
     let Some(inst) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    Ok(matches!(inst.op, Op::ClosureNew | Op::FirstClassCallableNew | Op::CallableValueNew))
+    Ok(matches!(inst.op, Op::ClosureNew | Op::FirstClassCallableNew | Op::CallableValueNew | Op::CallableArrayNew))
 }
 
 #[cfg(test)]

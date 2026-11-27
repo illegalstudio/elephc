@@ -20,3 +20,4 @@ mod default_prefix_catches;
 mod reference_constraint_catches;
 mod comparator_catches;
 mod numeric_local_catches;
+mod scalar_guard_catches;

@@ -204,7 +204,25 @@ static TOKEN_IDS: OnceLock<HashMap<&'static str, i64>> = OnceLock::new();
 
 /// Counts logical PHP newlines, treating a CRLF pair as one line break.
 pub fn newline_count(bytes: &[u8]) -> usize {
-    bytes.iter().enumerate().filter(|&(i, b)| *b == b'\n' || *b == b'\r' && bytes.get(i + 1) != Some(&b'\n')).count()
+    if bytes.len() <= 1 {
+        return usize::from(bytes.first().is_some_and(|byte| matches!(byte, b'\n' | b'\r')));
+    }
+    let mut count = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\n' => count += 1,
+            b'\r' => {
+                count += 1;
+                if bytes.get(index + 1) == Some(&b'\n') {
+                    index += 1;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    count
 }
 
 /// Raw scanning keeps malformed source bytes and records the error for the validator.
@@ -223,4 +241,15 @@ fn malformed_php_remains_tokenizable_without_a_parser() {
         .flat_map(|token| source[token.pos..token.pos + token.len].iter().copied())
         .collect();
     assert_eq!(bytes, source);
+}
+
+/// Verifies the single-byte fast path and CRLF pairing in `newline_count`.
+#[cfg(test)]
+#[test]
+fn newline_count_counts_lf_and_crlf_like_zend() {
+    assert_eq!(newline_count(b""), 0);
+    assert_eq!(newline_count(b"\n"), 1);
+    assert_eq!(newline_count(b"\r"), 1);
+    assert_eq!(newline_count(b"\r\n"), 1);
+    assert_eq!(newline_count(b"a\r\nb\nc\r"), 3);
 }

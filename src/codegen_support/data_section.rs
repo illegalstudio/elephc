@@ -106,6 +106,7 @@ pub struct DataSection {
     dedup: HashMap<Vec<u8>, String>,
     float_dedup: HashMap<u64, String>,
     word_dedup: HashMap<Vec<DataWord>, String>,
+    word_index: HashMap<String, usize>,
     comm_dedup: HashMap<String, String>,
     static_locals: Vec<StaticLocalRecord>,
     static_local_dedup: HashMap<String, usize>,
@@ -127,6 +128,7 @@ impl DataSection {
             dedup: HashMap::new(),
             float_dedup: HashMap::new(),
             word_dedup: HashMap::new(),
+            word_index: HashMap::new(),
             comm_dedup: HashMap::new(),
             static_locals: Vec::new(),
             static_local_dedup: HashMap::new(),
@@ -263,8 +265,21 @@ impl DataSection {
         let label = format!("_data_{}", self.counter);
         self.counter += 1;
         self.word_dedup.insert(words.clone(), label.clone());
+        self.word_index.insert(label.clone(), self.word_entries.len());
         self.word_entries.push((label.clone(), words));
         label
+    }
+
+    /// Adds a copy of the word record at `label` whose first word, an integer, has `flags` set,
+    /// and returns the copy's label. `None` when `label` is no word record or its first word is a
+    /// symbol.
+    pub fn add_words_with_first_word_flags(&mut self, label: &str, flags: u64) -> Option<String> {
+        let mut words = self.word_entries.get(*self.word_index.get(label)?)?.1.clone();
+        match words.first_mut()? {
+            DataWord::U64(value) => *value |= flags,
+            DataWord::Symbol(_) => return None,
+        }
+        Some(self.add_words(words))
     }
 
     /// Serializes all entries into a GNU assembly `.data` section string.

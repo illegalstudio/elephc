@@ -403,6 +403,7 @@ fn collect_expr(
                 collect_expr(value, carried, ctx, found);
             }
         },
+        ExprKind::Reference(inner) => collect_expr(inner, carried, ctx, found),
         ExprKind::Assignment {
             target,
             value,

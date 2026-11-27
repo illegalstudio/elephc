@@ -138,6 +138,68 @@ Worker::register(new Application());
     assert_eq!(log.lines().collect::<Vec<_>>(), [format!("boot:{}", fields[0]), format!("stop:{}", fields[0])]);
 }
 
+/// Each application request refreshes the filter prelude's raw snapshots after the
+/// superglobals are repopulated, so `filter_input()` sees the current query.
+#[test]
+fn web_application_filter_input_refreshes_per_request() {
+    let fixture = Fixture(make_test_dir("web_application_filter_input"));
+    let source = r#"<?php
+namespace Demo;
+use Elephc\Web\Request;
+use Elephc\Web\Worker;
+use Elephc\Web\WorkerApplication;
+class FilterApplication implements WorkerApplication {
+    public function handle(Request $request): void {
+        echo filter_input(INPUT_GET, "a"), "|", $_GET["a"];
+    }
+    public function shutdown(): void {}
+}
+Worker::register(new FilterApplication());
+"#;
+    let bin = application(&fixture, source);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    assert_eq!(body(&addr, "/?a=first"), "first|first");
+    assert_eq!(body(&addr, "/?a=second"), "second|second");
+}
+
+/// A configured `filter.default` refreshes each application request while `filter_input()`
+/// keeps the raw request snapshot.
+#[test]
+fn web_application_filter_default_refreshes_per_request() {
+    let fixture = Fixture(make_test_dir("web_application_filter_default"));
+    let source = r#"<?php
+namespace Demo;
+use Elephc\Web\Request;
+use Elephc\Web\Worker;
+use Elephc\Web\WorkerApplication;
+class FilterApplication implements WorkerApplication {
+    public function handle(Request $request): void {
+        echo filter_input(INPUT_GET, "a"), "|", $_GET["a"], "|", filter_input(INPUT_GET, "a", FILTER_SANITIZE_SPECIAL_CHARS);
+    }
+    public function shutdown(): void {}
+}
+Worker::register(new FilterApplication());
+"#;
+    let bin = compile_web_with_flags(
+        &fixture.0, source, "app",
+        &[
+            "--web-lifecycle=application",
+            "--php-only",
+            "--ini",
+            "filter.default=special_chars",
+        ],
+    );
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    for (query, expected) in [
+        ("/?a=%3Cfirst%3E", "<first>|&#60;first&#62;|&#60;first&#62;"),
+        ("/?a=%3Csecond%3E", "<second>|&#60;second&#62;|&#60;second&#62;"),
+    ] {
+        assert_eq!(body(&addr, query), expected);
+    }
+}
+
 /// Replacing bounded application state and discarding large temporaries reaches a steady heap.
 #[test]
 fn web_application_memory_is_bounded_with_retained_replacements() {

@@ -53,6 +53,8 @@ pub struct EvalFunction {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
+    /// Whether the declaration is spelled `function &name()`.
+    returns_by_ref: bool,
     body: Vec<EvalStmt>,
     /// `declare(strict_types=...)` mode of the fragment that declared this function.
     strict_types: bool,
@@ -73,6 +75,7 @@ impl PartialEq for EvalFunction {
             && self.parameter_is_by_ref == other.parameter_is_by_ref
             && self.parameter_is_variadic == other.parameter_is_variadic
             && self.return_type == other.return_type
+            && self.returns_by_ref == other.returns_by_ref
             && self.body == other.body
             && self.strict_types == other.strict_types
     }
@@ -97,6 +100,7 @@ impl EvalFunction {
             parameter_is_by_ref,
             parameter_is_variadic,
             return_type: None,
+            returns_by_ref: false,
             body,
             strict_types: false,
             bytecode: None,
@@ -165,6 +169,17 @@ impl EvalFunction {
     pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
         self.return_type = return_type;
         self
+    }
+
+    /// Returns this function marked as declared with a by-reference return (`function &f()`).
+    pub fn with_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.returns_by_ref = returns_by_ref;
+        self
+    }
+
+    /// Returns whether the declaration is spelled `function &name()`.
+    pub const fn returns_by_ref(&self) -> bool {
+        self.returns_by_ref
     }
 
     /// Returns the original source spelling of this eval-declared function name.

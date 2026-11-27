@@ -98,11 +98,12 @@ pub(super) fn lower_trait_uses(
         names.extend(super::templates::lower_class_arguments_list(scope, item.trait_names, item.type_args)?);
         for adaptation in item.adaptations {
             adaptations.push(match adaptation {
-                TraitAdaptation::Alias { trait_name, method, alias, visibility } => EvalTraitAdaptation::Alias {
+                TraitAdaptation::Alias { trait_name, method, alias, visibility, is_final } => EvalTraitAdaptation::Alias {
                     trait_name: trait_name.map(|name| scope.class_name(&name)),
                     method,
                     alias,
                     visibility: visibility.map(lower_visibility),
+                    is_final,
                 },
                 TraitAdaptation::InsteadOf { trait_name, method, instead_of } => EvalTraitAdaptation::InsteadOf {
                     trait_name: trait_name.map(|name| scope.class_name(&name)),
@@ -250,6 +251,7 @@ pub(super) fn lower_method(scope: &Scope<'_>, mut method: ClassMethod) -> Option
         parameter_is_by_ref: lowered.parameter_is_by_ref().to_vec(),
         parameter_is_variadic: lowered.parameter_is_variadic().to_vec(),
         return_type: lowered.return_type().cloned(),
+        returns_by_ref: lowered.returns_by_ref(),
         body: lowered.body().to_vec(),
     };
     let template = super::templates::retain_template(

@@ -1103,6 +1103,7 @@ fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
 fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
     match &expr.kind {
         ExprKind::Runtime(_) => invalidate_all_aliases(state),
+        ExprKind::Reference(inner) => apply_expr_effects(inner, state),
         // A plain property write (`$o->p = v;`, `$o->{$n} = v;`) has exactly the effects of the
         // statement form `StmtKind::PropertyAssign`: it stores a reference into the object and
         // cannot rebind a local, so it keeps the same precision instead of the blanket

@@ -14,14 +14,16 @@
 //!   string literals, so a concatenation with an int operand is joined here, bottom-up, and the
 //!   enclosing operators and array reads are folded again (`('n' . C::ONE) === 'n1' ? 'yes' :
 //!   'no'`, `['n' . C::ONE][0]`).
-//! - A value that does not fold to an int or string literal is left to the caller, which reports
-//!   the existing diagnostic. The enum's own constants (`self::X`) are not built yet at this point.
+//! - A value that folds to a literal of another type is reported by the caller with PHP's case
+//!   type mismatch message. A value that does not fold is left to the caller too, which reports
+//!   that it cannot evaluate it. The enum's own constants (`self::X`) are not built yet at this
+//!   point.
 
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::optimize::fold_constant_expression;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{ArrayEntry, BinOp, Expr, ExprKind};
 
 use super::super::Checker;
 use super::property_default_selectors::{bind_constant_reads, bind_constants};
@@ -31,10 +33,13 @@ use super::property_default_selectors::{bind_constant_reads, bind_constants};
 pub(super) enum FoldedBacking {
     Int(i64),
     Str(String),
+    /// A literal of a type no enum can be backed by, named as PHP's `zend_zval_type_name`
+    /// prints it (`float`, `bool`, `null`, `array`), for the case type mismatch error.
+    OtherType(&'static str),
 }
 
-/// Folds `expr`, declared in enum `owner`, to an integer or string literal, or returns `None`
-/// when it is not a constant expression this pass can evaluate.
+/// Folds `expr`, declared in enum `owner`, to a literal, or returns `None` when it is not a
+/// constant expression this pass can evaluate.
 pub(super) fn fold_backing_value(
     checker: &Checker,
     global_constants: &HashMap<String, Expr>,
@@ -58,9 +63,22 @@ pub(super) fn fold_backing_value(
     // A joined concatenation can decide a ternary whose skipped branch is not a literal
     // (`('n' . 1) ? 6 : $v`); the forms check already let PHP's compile-time pruning skip it.
     crate::types::deferred_defaults::prune_literal_branches(&mut value);
+    // An array literal is an array value once it builds cleanly (empty, keyed and nested ones
+    // too). A key PHP refuses or reports before the type check (an array, `null`, a fractional
+    // float, an append past `PHP_INT_MAX`) leaves it undecided, as for a ternary condition.
+    if matches!(
+        value.kind,
+        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_)
+    ) {
+        return Ok(crate::types::deferred_defaults::literal_truthiness(&value)
+            .map(|_| FoldedBacking::OtherType("array")));
+    }
     Ok(match value.kind {
         ExprKind::IntLiteral(value) => Some(FoldedBacking::Int(value)),
         ExprKind::StringLiteral(value) => Some(FoldedBacking::Str(value)),
+        ExprKind::FloatLiteral(_) => Some(FoldedBacking::OtherType("float")),
+        ExprKind::BoolLiteral(_) => Some(FoldedBacking::OtherType("bool")),
+        ExprKind::Null => Some(FoldedBacking::OtherType("null")),
         _ => None,
     })
 }
@@ -94,6 +112,14 @@ pub(super) fn join_int_concats(expr: &mut Expr) {
         ExprKind::ArrayLiteralAssoc(items) => items.iter_mut().for_each(|(key, value)| {
             join_int_concats(key);
             join_int_concats(value);
+        }),
+        ExprKind::ArrayLiteralMixed(items) => items.iter_mut().for_each(|item| match item {
+            ArrayEntry::Value(value) | ArrayEntry::Spread(value) => join_int_concats(value),
+            ArrayEntry::Keyed(key, value) => {
+                join_int_concats(key);
+                join_int_concats(value);
+            }
+            ArrayEntry::Reference(_) | ArrayEntry::KeyReference(..) => {}
         }),
         _ => return,
     }

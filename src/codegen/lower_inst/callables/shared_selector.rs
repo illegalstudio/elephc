@@ -267,7 +267,10 @@ pub(super) fn emit_scope_extras(
         abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
         let matched_label = ctx.next_label("scope_callable_string_matched");
         let string_miss = ctx.next_label("scope_callable_string_miss");
-        selector_tables::emit_string_case_table_lookup(ctx, &string_cases, &matched_label, &string_miss);
+        // An owned result records the PHP string, exactly as the public selector does.
+        let origin = (policy.retain_existing_descriptor && !policy.fresh_closure)
+            .then_some(callable_descriptor::CALLABLE_DESC_ORIGIN_STRING);
+        selector_tables::emit_string_case_table_lookup(ctx, &string_cases, origin, &matched_label, &string_miss);
         ctx.emitter.label(&string_miss);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, &public_label);
@@ -287,22 +290,35 @@ pub(super) fn emit_scope_extras(
         let selected_label = ctx.next_label("scope_callable_array_done");
         let static_selected_label = ctx.next_label("scope_callable_array_static_done");
         let static_label = ctx.next_label("scope_callable_array_static");
+        let instance_bound_label = if policy.fresh_closure {
+            selected_label.clone()
+        } else {
+            ctx.next_label("scope_callable_array_instance_bound")
+        };
         selector_tables::emit_instance_target_table_lookup(
             ctx,
             &instance_targets,
             selector_tables::ReceiverSelector::CallableArray,
-            &selected_label,
+            policy.fresh_closure,
+            &instance_bound_label,
             &static_label,
         )?;
+        if !policy.fresh_closure {
+            ctx.emitter.label(&instance_bound_label);
+            // The receiver-bound copy is private to this value: PHP still sees an array here.
+            callable_descriptor::emit_mark_runtime_descriptor_origin(
+                ctx.emitter, abi::int_result_reg(ctx.emitter), callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY,
+            );
+            abi::emit_jump(ctx.emitter, &selected_label);
+        }
         ctx.emitter.label(&static_label);
+        let static_origin = (policy.retain_existing_descriptor && !policy.fresh_closure)
+            .then_some(callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY);
         for case in &static_cases {
             let next_label = ctx.next_label("scope_callable_array_static_next");
             emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                &case.case.descriptor_label,
-            );
+            // An owned result selects the static descriptor variant that records the array.
+            emit_descriptor_address_with_origin(ctx, &case.case.descriptor_label, static_origin);
             abi::emit_jump(ctx.emitter, &static_selected_label);
             ctx.emitter.label(&next_label);
         }
@@ -322,13 +338,29 @@ pub(super) fn emit_scope_extras(
         emit_push_mixed_unbox_payload(ctx);
         let selected_label = ctx.next_label("scope_callable_object_done");
         let object_miss = ctx.next_label("scope_callable_object_miss");
+        let object_bound_label = if policy.fresh_closure {
+            selected_label.clone()
+        } else {
+            ctx.next_label("scope_callable_object_bound")
+        };
         selector_tables::emit_instance_target_table_lookup(
             ctx,
             &invokable_targets,
             selector_tables::ReceiverSelector::InvokableObject,
-            &selected_label,
+            policy.fresh_closure,
+            &object_bound_label,
             &object_miss,
         )?;
+        if !policy.fresh_closure {
+            ctx.emitter.label(&object_bound_label);
+            // Only this copy stands for the object itself, which is_object() and get_class() see.
+            callable_descriptor::emit_store_kind_to_runtime_descriptor(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
+            );
+            abi::emit_jump(ctx.emitter, &selected_label);
+        }
         ctx.emitter.label(&object_miss);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
         abi::emit_jump(ctx.emitter, &public_label);

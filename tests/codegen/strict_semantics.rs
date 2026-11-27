@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// A reference appended after a numeric string key still aliases the selected integer entry.
+#[test]
+fn test_strict_array_literal_reference_uses_profiled_append_key() {
+    let source = r#"<?php
+$value = 3;
+$other = 5;
+$items = ['2' => 9, &$value, &$other];
+$value = 7;
+$other = 8;
+echo implode(',', array_keys($items)), ':', implode(',', $items);
+"#;
+    let fixture = StrictFixture::new(source);
+    assert_eq!(fixture.run(&[]), "2,3,4:9,7,8");
+    assert_eq!(fixture.run(&["--strict-array-keys"]), "2,0,1:9,7,8");
+}
+
 /// Keeps the process arguments visible before strict source validation folds the program.
 #[test]
 fn test_strict_array_keys_accepts_cli_argv_and_argc() {

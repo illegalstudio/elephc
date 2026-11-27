@@ -57,9 +57,7 @@ pub(super) fn eval_reflection_function_method_target(
                 is_static: closure.is_static(),
                 is_closure: true,
                 is_deprecated,
-                // Eval's grammar has no `function &()`, so an eval closure never returns by
-                // reference.
-                returns_reference: false,
+                returns_reference: function.returns_by_ref(),
                 return_type_metadata,
             }));
         }
@@ -99,8 +97,7 @@ pub(super) fn eval_reflection_function_method_target(
                 is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
                 is_closure: closure_target.is_some(),
                 is_deprecated,
-                // Eval's grammar has no `function &name()` either.
-                returns_reference: false,
+                returns_reference: function.returns_by_ref(),
                 return_type_metadata,
             }));
         }

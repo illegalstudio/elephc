@@ -49,12 +49,16 @@ mod codegen {
     mod pdo_pgsql;
     mod image;
     mod pcntl;
+    mod posix;
     mod xml;
     mod tokenizer;
     mod calendar;
     mod system;
     mod json;
     mod preg_errors_grep;
+    mod preg_runtime_parity;
+    mod filter;
+    mod filter_phpt;
     mod uri_php_src;
     mod uri;
     mod preg_match_window;

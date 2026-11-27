@@ -690,7 +690,12 @@ pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantic
     BuiltinSemantics {
         validation: BuiltinValidation::Shared(validate_pcntl_scalar_arguments),
         result_type: BuiltinResultType::Declared,
-        effects: BuiltinEffects::Static(target.effects()),
+        effects: match target {
+            crate::ir::PcntlRuntime::StrError | crate::ir::PcntlRuntime::PosixStrError => {
+                BuiltinEffects::Shared(pcntl_strerror_effects)
+            }
+            _ => BuiltinEffects::Static(target.effects()),
+        },
         result_ownership: target.result_ownership(),
         requirements: BuiltinRequirements::Static(&[BuiltinRequirement::Bridge("elephc_pcntl")]),
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
@@ -703,6 +708,21 @@ pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantic
         ),
         lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Pcntl(target)),
     }
+}
+
+/// Adds `MAY_THROW` to the strerror allocation when the operand can be a refused string.
+///
+/// The `int` parameter guard throws `TypeError` for non-numeric strings and for boxed arrays,
+/// objects, resources and closures before the bridge runs, so a store before the call must stay
+/// visible to a catch block. Only int-like operands keep the throw-free contract.
+fn pcntl_strerror_effects(input: &BuiltinSemanticInput<'_>) -> Effects {
+    let effects = crate::ir::PcntlRuntime::StrError.effects();
+    if input.arg_types.iter().any(|ty| {
+        matches!(ty.codegen_repr(), PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+    }) {
+        return effects | Effects::MAY_THROW;
+    }
+    effects
 }
 
 /// Rejects values that the PCNTL scalar ABI cannot coerce through PHP integer semantics.

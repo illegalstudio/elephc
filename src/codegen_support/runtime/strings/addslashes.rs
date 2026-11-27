@@ -16,8 +16,8 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_addslashes` runtime helper for PHP's `addslashes()`.
 ///
-/// Escapes single quotes (`'`), double quotes (`"`), and backslashes (`\`)
-/// by prefixing each with a backslash. Operates on raw byte strings using
+/// Escapes single quotes (`'`), double quotes (`"`), backslashes (`\`), and the NUL
+/// byte (as the two-character `\0`) by prefixing each with a backslash. Operates on raw byte strings using
 /// PHP's pointer/length ABI convention.
 ///
 /// ## ARM64 ABI (default)
@@ -67,6 +67,8 @@ pub fn emit_addslashes(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_addslashes_esc");                            // yes → escape it
     emitter.instruction("cmp w12, #92");                                        // backslash?
     emitter.instruction("b.eq __rt_addslashes_esc");                            // yes → escape it
+    emitter.instruction("cmp w12, #0");                                         // NUL byte?
+    emitter.instruction("b.eq __rt_addslashes_nul");                            // escape NUL as the two-character \0
     // -- store unescaped byte --
     emitter.instruction("strb w12, [x9], #1");                                  // store byte as-is
     emitter.instruction("b __rt_addslashes_loop");                              // next byte
@@ -75,6 +77,13 @@ pub fn emit_addslashes(emitter: &mut Emitter) {
     emitter.instruction("mov w13, #92");                                        // backslash character
     emitter.instruction("strb w13, [x9], #1");                                  // write escape backslash
     emitter.instruction("strb w12, [x9], #1");                                  // write the original char
+    emitter.instruction("b __rt_addslashes_loop");                              // next byte
+
+    emitter.label("__rt_addslashes_nul");
+    emitter.instruction("mov w13, #92");                                        // escape backslash
+    emitter.instruction("strb w13, [x9], #1");                                  // write the escape backslash
+    emitter.instruction("mov w13, #48");                                        // ASCII zero
+    emitter.instruction("strb w13, [x9], #1");                                  // write the 0 of \0
     emitter.instruction("b __rt_addslashes_loop");                              // next byte
 
     emitter.label("__rt_addslashes_done");
@@ -127,6 +136,8 @@ fn emit_addslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_addslashes_esc");                              // prefix double quotes with a backslash escape
     emitter.instruction("cmp r11b, 92");                                        // does the source byte equal a backslash?
     emitter.instruction("je __rt_addslashes_esc");                              // double existing backslashes in the escaped output
+    emitter.instruction("cmp r11b, 0");                                         // is the source byte NUL?
+    emitter.instruction("je __rt_addslashes_nul");                              // escape NUL as the two-character \0
     emitter.instruction("mov BYTE PTR [r9], r11b");                             // copy ordinary bytes directly into the concat buffer without adding an escape prefix
     emitter.instruction("add r9, 1");                                           // advance the concat-buffer write pointer past the copied ordinary byte
     emitter.instruction("jmp __rt_addslashes_loop");                            // continue escaping the remaining source bytes
@@ -136,6 +147,12 @@ fn emit_addslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r9 + 1], r11b");                         // write the original source byte after the escape backslash prefix
     emitter.instruction("add r9, 2");                                           // advance the concat-buffer write pointer past the two-byte escape sequence
     emitter.instruction("jmp __rt_addslashes_loop");                            // continue escaping the remaining source bytes
+
+    emitter.label("__rt_addslashes_nul");
+    emitter.instruction("mov BYTE PTR [r9], 92");                               // write the escape backslash
+    emitter.instruction("mov BYTE PTR [r9 + 1], 48");                           // write the ASCII 0 of \0
+    emitter.instruction("add r9, 2");                                           // advance past the two-byte escape
+    emitter.instruction("jmp __rt_addslashes_loop");                            // continue with the remaining bytes
 
     emitter.label("__rt_addslashes_done");
     emitter.instruction("mov rax, r10");                                        // return the escaped-string start pointer in the x86_64 string result pointer register

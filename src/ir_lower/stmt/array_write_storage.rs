@@ -55,6 +55,127 @@ fn publish_detached_array_cell(
     ctx.store_local_representation(name, detached, ty, Some(span));
 }
 
+/// Returns the container type an undefined local must be auto-vivified as, if this write is its
+/// first binding. PHP creates an indexed array for `$undefined[$k] = $v`, with no undefined-read
+/// diagnostic.
+pub(super) fn auto_vivified_array_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+) -> Option<PhpType> {
+    if ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    // `unset($a)` (or `$a = null`) leaves a Void binding. PHP re-creates the variable on the
+    // next array write; the fresh container is hash-backed because a reference element needs
+    // tag-11 storage regardless of the key shape. Inside a loop the body is lowered once, so
+    // the write must keep reading the slot the previous iteration published; the established
+    // boxed path does that in place, while this first-binding branch would allocate a fresh
+    // hash on every iteration and drop the earlier entries.
+    if ctx.local_type(name).codegen_repr() == PhpType::Void {
+        return Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        });
+    }
+    if let Some(slot) = ctx.local_slots.get(name).copied() {
+        if ctx.slot_is_initialized(slot) {
+            return None;
+        }
+    }
+    match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some(ctx.local_type(name)),
+        _ => None,
+    }
+}
+
+/// Builds the empty container an undefined array local starts from. It is stored only after the
+/// offset and value expressions have run, matching PHP's evaluation order when they throw.
+pub(super) fn empty_auto_vivified_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    ty: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    // The raw load is zero (or the in-band null sentinel after `unset()`) while the variable
+    // is unbound; the runtime helper allocates only in that case, so a loop body does not
+    // reset a container created by an earlier iteration.
+    // only in that case, so a loop body does not reset a container created by an earlier
+    // iteration.
+    let target = if ctx.local_type(name).codegen_repr() == PhpType::Void {
+        crate::ir::RuntimeCallTarget::AutoVivifyHash
+    } else if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
+        crate::ir::RuntimeCallTarget::AutoVivifyHash
+    } else {
+        crate::ir::RuntimeCallTarget::AutoVivifyArray
+    };
+    if ctx.local_type(name).codegen_repr() == PhpType::Void {
+        // A killed binding has no container slot yet (an abandoned `unset()` removes it).
+        // Create one at the container's own type so this load and the loop's back-edge read
+        // the word a previous iteration published, then read that word as the container.
+        if !ctx.local_slots.contains_key(name) {
+            ctx.declare_local(name, ty.clone());
+        }
+        let loaded = ctx.load_local_mutation_as(name, ty.clone(), Some(span));
+        return ctx.emit_value(
+            Op::RuntimeCall,
+            vec![loaded.value],
+            Some(Immediate::RuntimeCall(target)),
+            ty.clone(),
+            crate::ir_lower::effects_lookup::runtime_effects(),
+            Some(span),
+        );
+    }
+    let loaded = ctx.load_local(name, Some(span));
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![loaded.value],
+        Some(Immediate::RuntimeCall(target)),
+        ty.clone(),
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        Some(span),
+    )
+}
+
+/// Stores the auto-vivified container into its local and returns the reloaded write receiver.
+pub(super) fn publish_auto_vivified_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    value: LoweredValue,
+    ty: PhpType,
+    span: Span,
+) -> LoweredValue {
+    // A loop iteration may publish the same hash pointer the slot already holds. The store's
+    // retain/release pair cancels for that case (and releases the previous container when a
+    // fresh one was allocated), so the writer below still owns one balanced reference.
+    ctx.store_call_argument_local(name, value, ty, Some(span));
+    ctx.load_local_for_mutation(name, Some(span))
+}
+
+/// Publishes an auto-vivified container after the write operands ran.
+///
+/// The container captured before operand evaluation is stale when a value or key expression
+/// binds the destination (`$a[0] = count($a = [10, 20])`). Re-read the slot instead: the
+/// auto-vivify helper returns the assigned container while it is bound and allocates a fresh
+/// empty one only while it is still unbound.
+pub(super) fn publish_current_auto_vivified_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    stale: LoweredValue,
+    ty: PhpType,
+    span: Span,
+) -> LoweredValue {
+    crate::ir_lower::ownership::release_if_owned(ctx, stale, Some(span));
+    // The operands may have changed the kind of container bound to the local
+    // (`$a = null; $a[0] = count($a = [10, 20])` binds a packed array over a killed slot).
+    // Auto-vivify against the CURRENT storage type so the helper and the writer agree.
+    let current_ty = match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => ctx.local_type(name),
+        _ => ty,
+    };
+    let current = empty_auto_vivified_container(ctx, name, &current_ty, span);
+    publish_auto_vivified_container(ctx, name, current, current_ty, span)
+}
+
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     if super::native_reference_mutations::lower(ctx, array, span,
@@ -70,23 +191,12 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     let value = lower_expr(ctx, value);
     // PHP selects the current append target after RHS effects, including reference writes.
     // Loading here also gives the ordinary parent guards the RHS-updated storage type.
-    // Append's final-storage normalization mutates a bound box directly, like indexed writers.
-    // PHP 8 auto-vivifies a missing variable on `$a[] = ...`. The checker admitted the
-    // write, so declare a generic boxed array local before loading it for the append.
-    if !ctx.has_local_slot(array) && !ctx.is_ref_bound_local(array) {
-        let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
-        ctx.declare_local(array, array_ty.clone());
-        let empty = ctx.emit_value(
-            Op::ArrayNew,
-            Vec::new(),
-            Some(crate::ir::Immediate::Capacity(0)),
-            array_ty.clone(),
-            Op::ArrayNew.default_effects(),
-            Some(span),
-        );
-        ctx.store_local(array, empty, array_ty, Some(span));
-    }
-    let array_value = if ctx.is_ref_bound_local(array) {
+    // Append's final-storage normalization mutates a bound box directly. Other indexed
+    // writers still require the detached cell published by load_array_local_for_write.
+    let array_value = if let Some(ty) = auto_vivified_array_type(ctx, array) {
+        let empty = empty_auto_vivified_container(ctx, array, &ty, span);
+        publish_auto_vivified_container(ctx, array, empty, ty, span)
+    } else if ctx.is_ref_bound_local(array) {
         ctx.load_local_for_mutation(array, Some(span))
     } else {
         load_array_local_for_write(ctx, array, span)
@@ -165,20 +275,17 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
         return;
     }
     if super::native_dimension_append::lower(ctx, array_value, value, span, |ctx, array, value| {
-        if op == Op::MixedArrayAppend { super::boxed_write_owners::lower_append(ctx, array, value, span); }
-        else { ctx.emit_void(op, vec![array.value, value.value], None, op.default_effects(), Some(span)); }
+        emit_array_append_operation(ctx, op, array, value, span);
     }) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         // A concrete object read from final Mixed storage owns its unboxed lease.
-        // Finalization removes this release when the local still lends a concrete value.
-        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+        // A boxed receiver still borrows its local/global cell after the append.
+        if matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(), PhpType::Object(_)) {
+            crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+        }
         return;
     }
-    if op == Op::MixedArrayAppend {
-        super::boxed_write_owners::lower_append(ctx, array_value, value, span);
-    } else {
-        ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
-    }
+    emit_array_append_operation(ctx, op, array_value, value, span);
     finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
     if op == Op::MixedArrayAppend {
         // The boxed writer lends the RHS and makes the container retain its own owner. Retire
@@ -188,6 +295,28 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     } else {
         release_persisted_string_operand(ctx, value, span);
     }
+}
+
+/// Passes a null offset to user ArrayAccess while preserving internal dimension handlers.
+fn emit_array_append_operation(
+    ctx: &mut LoweringContext<'_, '_>, op: Op, array: LoweredValue,
+    value: LoweredValue, span: Span,
+) {
+    if op == Op::MixedArrayAppend {
+        super::boxed_write_owners::lower_append(ctx, array, value, span);
+        return;
+    }
+    let user_array_access = op == Op::RuntimeCall
+        && matches!(ctx.builder.value_php_type(array.value).codegen_repr(), PhpType::Object(name)
+            if ctx.interfaces.contains_key(&name)
+                || ctx.classes.get(&name).is_some_and(|info| !info.is_internal));
+    let operands = if user_array_access {
+        let null = ctx.builder.emit_const_null();
+        vec![array.value, null, value.value]
+    } else {
+        vec![array.value, value.value]
+    };
+    ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
 }
 
 /// Extracts an admitted value into a declared builder's scalar or callable element storage.

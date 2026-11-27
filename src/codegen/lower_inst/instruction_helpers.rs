@@ -145,6 +145,9 @@ pub(in crate::codegen) fn instruction_php_only_profile(inst: &Instruction) -> bo
         Some(Immediate::Bool(php_only)) | Some(Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::ProfiledFunction { php_only, .. },
         )) => php_only,
+        Some(Immediate::I64(profile)) if inst.op == crate::ir::Op::CallableDescriptorInvoke => {
+            profile & 1 != 0
+        }
         _ => false,
     }
 }
@@ -160,7 +163,7 @@ pub(in crate::codegen) fn instruction_eval_source_profile(inst: &Instruction, se
 /// Returns the data-pool immediate attached to a data-backed instruction.
 pub(super) fn expect_data(inst: &Instruction) -> Result<crate::ir::DataId> {
     match inst.immediate {
-        Some(Immediate::Data(value)) => Ok(value),
+        Some(Immediate::Data(value) | Immediate::StrictExit(value)) => Ok(value),
         Some(Immediate::ProfiledData { data, .. }) => Ok(data),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing data immediate",

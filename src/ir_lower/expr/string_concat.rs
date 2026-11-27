@@ -140,6 +140,7 @@ pub(crate) fn persist_pending_string(ctx: &mut LoweringContext<'_, '_>, value: L
 pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(_) => true,
+        ExprKind::Reference(inner) => expr_can_reset_concat_storage(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

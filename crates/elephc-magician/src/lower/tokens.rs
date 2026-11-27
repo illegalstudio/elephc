@@ -153,6 +153,7 @@ fn shared_token(kind: &TokenKind, previous: Option<&TokenKind>, next: Option<&To
         TokenKind::Minus => Token::Minus,
         TokenKind::Bang => Token::Bang,
         TokenKind::Tilde => Token::Tilde,
+        TokenKind::At => Token::At,
         TokenKind::Dot => Token::Dot,
         TokenKind::Star => Token::Star,
         TokenKind::StarStar => Token::StarStar,

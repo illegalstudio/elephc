@@ -836,24 +836,47 @@ fn parse_array_literal_with_terminator(
             first = false;
             continue;
         }
-        reject_reference_array_element(tokens, pos, closing)?;
+        let reference_span = take_reference_marker(tokens, pos);
         let expr = parse_expr(tokens, pos)?;
+        let expr = wrap_reference_element(reference_span, expr)?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
             if !is_assoc {
                 promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
             }
             is_assoc = true;
             *pos += 1;
-            reject_reference_array_element(tokens, pos, closing)?;
+            let reference_span = take_reference_marker(tokens, pos);
             let value = parse_expr(tokens, pos)?;
+            let value = wrap_reference_element(reference_span, value)?;
             if mixed_elems.is_empty() {
                 assoc_elems.push((expr, value));
             } else {
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
             }
-        } else if is_assoc {
-            // A string-looking integer key has different append history in exact mode. Keep
-            // every trailing bare value implicit instead of stamping a PHP-normalized key.
+        } else if is_assoc || matches!(expr.kind, ExprKind::Reference(_)) {
+            if !is_assoc {
+                if elems.iter().any(|elem| matches!(elem.kind, ExprKind::Spread(_))) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Reference array elements after a spread are not supported; give the element an explicit key",
+                    ));
+                }
+                let key = Expr::new(ExprKind::IntLiteral(elems.len() as i64), expr.span);
+                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
+                assoc_elems.push((key, expr));
+                is_assoc = true;
+                first = false;
+                continue;
+            }
+            if matches!(expr.kind, ExprKind::Reference(_))
+                && mixed_elems.iter().any(|entry| matches!(entry, ArrayEntry::Spread(_)))
+            {
+                return Err(CompileError::new(
+                    expr.span,
+                    "Reference array elements after a spread are not supported; give the element an explicit key",
+                ));
+            }
+            // Preserve trailing implicit keys for the selected source profile.
             if mixed_elems.is_empty() {
                 migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
             }
@@ -899,54 +922,45 @@ fn parse_runtime_array_entry(tokens: &[SpannedToken], pos: &mut usize) -> Result
 
 /// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a
 /// diagnostic that names the construct instead of a bare "Unexpected token: Ampersand".
+/// Consumes the `&` that marks a by-reference array-literal element, returning its span.
 ///
-/// PHP stores such an element as a reference cell that aliases the source variable's storage,
-/// so `$r = [&$a]; $r[0] = 9;` writes through to `$a`. elephc arrays hold plain values and its
-/// only reference form points *into* array storage (`$b =& $a[0]`), never out of it, so the
-/// construct cannot be honoured without either silently copying or leaving the array holding a
-/// pointer to a stack slot it can outlive. Returns `Ok(())` when the element is not a reference.
-///
-/// On rejection `pos` is advanced past the rest of the literal so statement recovery resumes
-/// after it and does not report cascading errors for the remaining elements.
-fn reject_reference_array_element(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    closing: &Token,
-) -> Result<(), CompileError> {
-    let Some((Token::Ampersand, metadata)) = tokens.get(*pos) else {
-        return Ok(());
-    };
-    let span = metadata.span;
-    skip_to_array_literal_end(tokens, pos, closing);
-    Err(CompileError::new(
-        span,
-        "Reference elements in array literals (`[&$x]`) are not supported: an array element \
-         cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` \
-         to alias an existing array element",
-    ))
+/// PHP stores `[&$x]` as an array entry that aliases the variable's storage. elephc builds such
+/// a literal as a hash whose entry is promoted to a managed reference cell, so the marker has to
+/// survive until lowering instead of being rejected at parse time.
+fn take_reference_marker(tokens: &[SpannedToken], pos: &mut usize) -> Option<Span> {
+    let (token, metadata) = tokens.get(*pos)?;
+    if *token != Token::Ampersand {
+        return None;
+    }
+    *pos += 1;
+    Some(metadata.span)
 }
 
-/// Advances `pos` past the remainder of the current array literal, including its `closing`
-/// token, tracking nested `[`/`(` pairs so inner literals and calls are skipped whole.
+/// Wraps a parsed element in `ExprKind::Reference` when the `&` marker preceded it.
 ///
-/// Stops at end-of-input if the literal is unterminated, leaving `pos` at `Eof`.
-fn skip_to_array_literal_end(tokens: &[SpannedToken], pos: &mut usize, closing: &Token) {
-    let mut depth = 0usize;
-    while let Some((token, _)) = tokens.get(*pos) {
-        match token {
-            Token::Eof => return,
-            Token::LBracket | Token::LParen => depth += 1,
-            Token::RBracket | Token::RParen => {
-                if depth == 0 && token == closing {
-                    *pos += 1;
-                    return;
-                }
-                depth = depth.saturating_sub(1);
-            }
-            _ => {}
-        }
-        *pos += 1;
+/// Only a variable is materialized today: lowering makes the new hash entry a managed reference
+/// cell and rebinds that local to it, which cannot express an arbitrary lvalue without a
+/// dedicated storage-replacement primitive.
+fn wrap_reference_element(span: Option<Span>, expr: Expr) -> Result<Expr, CompileError> {
+    let Some(marker) = span else {
+        return Ok(expr);
+    };
+    let ExprKind::Variable(name) = &expr.kind else {
+        return Err(CompileError::new(
+            expr.span,
+            "Reference array elements must reference a variable",
+        ));
+    };
+    if name == "GLOBALS" {
+        return Err(CompileError::new(
+            expr.span,
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+        ));
     }
+    Ok(Expr::new(
+        ExprKind::Reference(Box::new(expr.clone())),
+        marker.merge(expr.span),
+    ))
 }
 
 /// Converts positional items parsed before a keyed array entry into integer-keyed pairs.

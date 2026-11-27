@@ -798,7 +798,8 @@ echo coercionCaller($argc);
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let caller = module.functions.iter().find(|function| function.name == "coercionCaller").unwrap();
-        let insertion = caller.instructions.iter().position(|inst| inst.op == Op::HashSet).unwrap();
+        let insertion = caller.instructions.iter()
+            .position(|inst| matches!(inst.op, Op::HashSet | Op::HashSetValue)).unwrap();
         let construction_end = caller.instructions.iter().enumerate().skip(insertion + 1)
             .find(|(_, inst)| inst.op == Op::PopCallOperandOwner).unwrap().0;
         let construction = &caller.instructions[..=construction_end];

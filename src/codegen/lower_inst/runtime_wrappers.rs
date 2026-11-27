@@ -58,6 +58,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,
+            scalar_guards: None,
         };
         // Out of line, not spliced into the function that first needed it: see
         // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
@@ -82,6 +83,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         owns_string_return: sig.return_type.codegen_repr() == PhpType::Str,
         php_return_status: false,
         defaults: &defaults,
+        scalar_guards: None,
     };
     // Out of line, not spliced into the function that first needed it: see
     // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
@@ -116,6 +118,22 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     php_return_status: bool,
     current_class: Option<&str>,
 ) -> String {
+    emit_runtime_callable_invoker_named(
+        ctx, sig, captures, owns_string_return, php_return_status, current_class, None,
+    )
+}
+
+/// Shared body of the user-callable invoker emitters; `guard_callee` overrides the descriptor
+/// name in scalar-parameter errors.
+fn emit_runtime_callable_invoker_named(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+    php_return_status: bool,
+    current_class: Option<&str>,
+    guard_callee: Option<&str>,
+) -> String {
     ctx.shared.callable_argument_normalizer |=
         crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
@@ -123,10 +141,19 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         current_class,
         sig,
     );
-    if let Some(label) =
-        ctx.shared
-            .runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults)
-    {
+    // A user callable (the descriptors that report a PHP return status) checks boxed arguments
+    // bound to its declared scalar parameters like a direct call does. The methods of the
+    // internal `ext/uri` prelude classes are exempt, as their direct calls are: PHP coerces a
+    // `null` there with a deprecation. Whether the invoker checks keys its cache entry.
+    let internal_callee = current_class.is_some_and(crate::uri_prelude::is_internal_uri_class);
+    let scalar_guards = invoker_scalar_guards(ctx, sig, php_return_status, guard_callee, internal_callee);
+    // 0: no checks, 1: checks, 2: strict-mode checks only (an internal URI method).
+    let scalar_guarded = scalar_guards.as_ref().map_or(0, |guards| if guards.strict_only { 2 } else { 1 });
+    let guard_callee = scalar_guards.as_ref().and_then(|guards| guards.callee.clone());
+    if let Some(label) = ctx.shared.runtime_callable_invoker(
+        sig, captures, owns_string_return, php_return_status, &defaults, scalar_guarded,
+        guard_callee.as_deref(),
+    ) {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
@@ -140,6 +167,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         owns_string_return,
         php_return_status,
         defaults: &defaults,
+        scalar_guards,
     };
     // Out of line, not spliced into the function that first needed it: see
     // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
@@ -147,8 +175,43 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
     ctx.emitter.end_out_of_line(scope);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
+        .cache_runtime_callable_invoker(
+            sig, captures, owns_string_return, php_return_status, &defaults, scalar_guarded,
+            guard_callee.as_deref(), &label,
+        );
     label
+}
+
+/// Returns the scalar-parameter checks a user callable's invoker performs, emitting the shared
+/// numeric helpers the first time an `int`/`float` parameter needs them.
+///
+/// Builtin and extern descriptors (`php_return_status == false`) never check: PHP only
+/// deprecates `null` for builtins, and externs bind through the C ABI.
+fn invoker_scalar_guards(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    php_return_status: bool,
+    callee: Option<&str>,
+    strict_only: bool,
+) -> Option<crate::codegen::runtime_callable_invoker::InvokerScalarGuards> {
+    if !php_return_status {
+        return None;
+    }
+    let guarded = (0..sig.params.len())
+        .filter_map(|index| crate::types::param_binding::runtime_scalar_guard_param(sig, index))
+        .collect::<Vec<_>>();
+    if guarded.is_empty() {
+        return None;
+    }
+    if !strict_only && guarded.iter().any(|ty| matches!(ty, PhpType::Int | PhpType::Float)) {
+        super::scalar_param_guard::emit_invoker_numeric_param_helpers(ctx);
+    }
+    Some(crate::codegen::runtime_callable_invoker::InvokerScalarGuards {
+        stringable: super::objects::classify_named_target(ctx, "Stringable"),
+        eval_bridge: ctx.module.required_runtime_features.eval_bridge,
+        callee: callee.map(str::to_string),
+        strict_only,
+    })
 }
 
 /// Emits a synthetic EIR builtin wrapper so callable descriptors can use the PHP ABI.

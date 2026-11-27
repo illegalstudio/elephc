@@ -46,6 +46,7 @@ mod class_traits;
 mod class_members;
 mod member_resolution;
 mod method_members;
+pub(in crate::codegen) use method_members::reflection_declared_method_name;
 mod property_members;
 mod property_defaults_fold;
 mod default_members;

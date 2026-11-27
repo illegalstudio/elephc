@@ -104,6 +104,25 @@ pub enum RuntimeCallTarget {
     /// Marks a native exception consumed by a user catch while it replaces a pending host escape.
     /// The hosted adapter keeps that host exception only when the caught native chain is rethrown.
     ExceptionCatchHostReplacement,
+    /// Returns an existing indexed array or allocates an empty one for an undefined local.
+    ///
+    /// The operand is the raw slot load: a zero pointer means the variable has not been bound
+    /// yet. PHP auto-vivifies such a variable on its first offset write, and publishing the
+    /// result after the key/value expressions preserves the unbound state when they throw.
+    AutoVivifyArray,
+    /// Returns an existing hash or allocates an empty one for an undefined local.
+    AutoVivifyHash,
+    /// Returns the next integer append key or raises an error for an occupied maximum key.
+    HashNextIndex,
+    /// Rebinds an existing hash entry to an already-live managed reference cell.
+    ///
+    /// The entry must already exist (the caller inserts the source value first); the
+    /// runtime promotes it to a reference cell and then replaces that cell with the
+    /// caller's cell, so repeated `[&$x]` elements share one storage.
+    HashEntryBindReference,
+    /// Binds one associative-array entry to a managed reference cell, inserting the entry
+    /// (at the end) when the key is absent and detaching any previous binding in place.
+    HashEntrySetReference,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -284,6 +303,23 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
+            RuntimeCallTarget::AutoVivifyArray => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Array)],
+                result: IrType::Heap(IrHeapKind::Array),
+            }),
+            RuntimeCallTarget::AutoVivifyHash => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Hash)],
+                result: IrType::Heap(IrHeapKind::Hash),
+            }),
+            RuntimeCallTarget::HashNextIndex => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Hash)],
+                result: IrType::I64,
+            }),
+            RuntimeCallTarget::HashEntryBindReference
+            | RuntimeCallTarget::HashEntrySetReference => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 3,
+                max_operands: Some(3),
+            }),
             RuntimeCallTarget::ArrayFetchForWrite
             | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
             | RuntimeCallTarget::PendingAppendFetchForWrite
@@ -413,6 +449,11 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
                 "array.pending_append_fetch_for_write_already_diagnosed"
             }
+            RuntimeCallTarget::AutoVivifyArray => "array.auto_vivify",
+            RuntimeCallTarget::AutoVivifyHash => "hash.auto_vivify",
+            RuntimeCallTarget::HashNextIndex => "hash.next_index",
+            RuntimeCallTarget::HashEntryBindReference => "array.hash_entry_bind_reference",
+            RuntimeCallTarget::HashEntrySetReference => "array.hash_entry_set_reference",
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
             RuntimeCallTarget::MixedCellCopyForWrite => "array.mixed_cell_copy_for_write",

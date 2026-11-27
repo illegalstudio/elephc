@@ -60,6 +60,7 @@ fn test_parse_trait_decl_and_use_adaptations() {
                     method,
                     alias,
                     visibility,
+                    ..
                 } => {
                     assert_eq!(trait_name.as_deref(), Some("A"));
                     assert_eq!(method, "foo");
@@ -90,6 +91,7 @@ fn test_parse_trait_use_as_protected() {
                     method,
                     alias,
                     visibility,
+                    ..
                 } => {
                     assert_eq!(trait_name.as_deref(), Some("A"));
                     assert_eq!(method, "foo");
@@ -123,13 +125,44 @@ fn test_parse_trait_adaptation_keyword_method_names() {
         (None, "list", Some("static"), Some(Visibility::Private)),
     ];
     for (adaptation, (want_trait, want_method, want_alias, want_visibility)) in adaptations.iter().zip(expected) {
-        let TraitAdaptation::Alias { trait_name, method, alias, visibility } = adaptation else {
+        let TraitAdaptation::Alias { trait_name, method, alias, visibility, .. } = adaptation else {
             panic!("Expected trait alias adaptation, got {adaptation:?}");
         };
         assert_eq!(trait_name.as_deref(), want_trait);
         assert_eq!(method, want_method);
         assert_eq!(alias.as_deref(), want_alias);
         assert_eq!(*visibility, want_visibility);
+    }
+}
+
+/// `as final` (PHP 8.3+) is the alias modifier, not an alias name: `foo as final;` marks the
+/// imported method final and `foo as final bar;` the alias. After any modifier the next word is
+/// the alias, so `foo as public final;` and `foo as final final;` alias the method as `final`
+/// (#2352).
+#[test]
+fn test_parse_trait_alias_final_modifier() {
+    let stmts = parse_source(
+        "<?php trait A { public function foo() {} } class Box { use A { foo as final; foo as final bar; foo as public final; foo as final final; } }",
+    );
+    let StmtKind::ClassDecl { trait_uses, .. } = &stmts[1].kind else {
+        panic!("Expected ClassDecl");
+    };
+    let adaptations = &trait_uses[0].adaptations;
+    assert_eq!(adaptations.len(), 4);
+    let expected = [
+        (None, None, true),
+        (Some("bar"), None, true),
+        (Some("final"), Some(Visibility::Public), false),
+        (Some("final"), None, true),
+    ];
+    for (adaptation, (want_alias, want_visibility, want_final)) in adaptations.iter().zip(expected) {
+        let TraitAdaptation::Alias { method, alias, visibility, is_final, .. } = adaptation else {
+            panic!("Expected trait alias adaptation, got {adaptation:?}");
+        };
+        assert_eq!(method, "foo");
+        assert_eq!(alias.as_deref(), want_alias, "{adaptation:?}");
+        assert_eq!(*visibility, want_visibility, "{adaptation:?}");
+        assert_eq!(*is_final, want_final, "{adaptation:?}");
     }
 }
 
@@ -186,6 +219,7 @@ fn test_parse_enum_trait_use_adaptation() {
                     method,
                     alias,
                     visibility,
+                    ..
                 } => {
                     assert_eq!(trait_name.as_deref(), Some("HasLabel"));
                     assert_eq!(method, "label");

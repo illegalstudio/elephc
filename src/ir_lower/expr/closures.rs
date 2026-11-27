@@ -359,6 +359,9 @@ pub(super) fn lower_closure_with_context(
         .collect::<Vec<_>>();
     let name = ctx.next_closure_name();
     ctx.register_closure_display_name(&name, expr.span.line);
+    if let Some(display) = ctx.peek_closure_display_name(&name) {
+        super::scalar_param_guards::register_closure_param_lines(&display, expr.span);
+    }
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
@@ -613,6 +616,7 @@ pub(crate) fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
 pub(crate) fn expr_writes_local(expr: &Expr, name: &str) -> bool {
     match &expr.kind {
         ExprKind::Runtime(_) => true,
+        ExprKind::Reference(inner) => expr_writes_local(inner, name),
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             expr_is_variable(target, name)
                 || expr_writes_local(target, name)
@@ -970,6 +974,7 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
 pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_contains_eval_call),
+        ExprKind::Reference(inner) => expr_contains_eval_call(inner),
         ExprKind::FunctionCall { name, args } => {
             is_eval_call_name(name) || args.iter().any(expr_contains_eval_call)
         }

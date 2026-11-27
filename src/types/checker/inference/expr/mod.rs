@@ -56,6 +56,7 @@ impl Checker {
         }
         match &expr.kind {
             ExprKind::Runtime(_) => Err(CompileError::new(expr.span, "Runtime fragment syntax must be lowered by Magician")),
+            ExprKind::Reference(inner) => self.infer_type(inner, env),
             ExprKind::IncludeValue { .. }
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null

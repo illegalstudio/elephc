@@ -242,6 +242,7 @@ pub(super) fn global_instruction_name<'a>(
 /// Returns the value type carried by a global load or store instruction.
 pub(super) fn global_instruction_value_type(function: &Function, inst: &Instruction) -> Option<PhpType> {
     match inst.op {
+        Op::LoadGlobalRefCell => Some(PhpType::Mixed),
         Op::LoadGlobal => {
             let result = inst.result?;
             function.value(result).map(|value| value.php_type.clone())

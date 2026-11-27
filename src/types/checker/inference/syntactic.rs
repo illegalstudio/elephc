@@ -320,6 +320,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr, profile: SemanticProfile) -> PhpTy
 /// Estimates the original expression before declaration producer binding changes integer kinds.
 fn infer_unbound_expr_type_syntactic(expr: &Expr, profile: SemanticProfile) -> PhpType {
     match &expr.kind {
+        // A reference element carries the storage type of the place it aliases.
+        ExprKind::Reference(inner) => infer_expr_type_syntactic(inner, profile),
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,

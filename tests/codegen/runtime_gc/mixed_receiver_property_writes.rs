@@ -11,6 +11,9 @@
 //! - The loop count is high enough that a per-iteration leak of one block is unmistakable.
 //! - Before the fix these programs were trivially clean because the store never happened; the
 //!   point of the tests is that they stay clean now that it does.
+//! - Receivers that cannot hold the property (a non-object, a Closure, a readonly class, an enum)
+//!   raise PHP's Error and retire the value they were handed; the enum fixture tolerates only
+//!   the enum case singleton as a live block.
 
 use crate::support::*;
 
@@ -254,4 +257,161 @@ echo $t->z ? "T" : "F", ":", $t->f, "\n";
 "#,
     );
     assert_clean(out, "F:60\n");
+}
+
+/// PHP source shared by the literal-name and runtime-name receiver refusal fixtures.
+///
+/// `@NAME@` is replaced by the property expression each fixture writes through.
+const RECEIVER_REFUSAL_SOURCE: &str = r#"<?php
+readonly class RefusedReadonly {}
+class RefusedPlain {}
+function refused_write($obj, string $text): void {
+    try {
+        $name = "p" . $text;
+        $obj->@NAME@ = "v" . $text;
+        echo "stored ", $obj->@NAME@, "\n";
+    } catch (Error $e) {
+        echo get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+for ($i = 0; $i < 3; $i++) {
+    refused_write(new RefusedPlain(), "a");
+    refused_write(new RefusedReadonly(), "b");
+    refused_write(function () {}, "d");
+    refused_write(5, "e");
+    refused_write(true, "f");
+    refused_write(false, "g");
+    refused_write(null, "h");
+    refused_write([1], "i");
+    refused_write("s", "j");
+    refused_write(1.5, "k");
+    refused_write(new stdClass(), "l");
+}
+"#;
+
+/// Expected output of one round of [`RECEIVER_REFUSAL_SOURCE`], with `@NAME@` standing for the
+/// property name PHP reports.
+const RECEIVER_REFUSAL_ROUND: &str = "stored va
+Error: Cannot create dynamic property RefusedReadonly::$@b@
+Error: Cannot create dynamic property Closure::$@d@
+Error: Attempt to assign property \"@e@\" on int
+Error: Attempt to assign property \"@f@\" on true
+Error: Attempt to assign property \"@g@\" on false
+Error: Attempt to assign property \"@h@\" on null
+Error: Attempt to assign property \"@i@\" on array
+Error: Attempt to assign property \"@j@\" on string
+Error: Attempt to assign property \"@k@\" on float
+stored vl
+";
+
+/// Builds the expected output, naming each refused property the way the fixture spells it.
+fn receiver_refusal_expected(name: impl Fn(&str) -> String) -> String {
+    let mut round = RECEIVER_REFUSAL_ROUND.to_string();
+    for suffix in ["b", "d", "e", "f", "g", "h", "i", "j", "k"] {
+        round = round.replace(&format!("@{suffix}@"), &name(suffix));
+    }
+    round.repeat(3)
+}
+
+/// A literal-name write through an untyped receiver raises PHP's Error for a readonly class, a
+/// Closure and every non-object, instead of dropping the write and leaking the value cell.
+#[test]
+fn test_mixed_receiver_literal_write_refuses_receivers_without_property_storage() {
+    let out = compile_and_run_with_heap_debug(&RECEIVER_REFUSAL_SOURCE.replace("@NAME@", "label"));
+    assert_clean(out, &receiver_refusal_expected(|_| "label".to_string()));
+}
+
+/// The runtime-name form reports the evaluated name in each Error.
+#[test]
+fn test_mixed_receiver_runtime_name_write_refuses_receivers_without_property_storage() {
+    let out = compile_and_run_with_heap_debug(&RECEIVER_REFUSAL_SOURCE.replace("@NAME@", "$name"));
+    assert_clean(out, &receiver_refusal_expected(|suffix| format!("p{suffix}")));
+}
+
+/// An intermediate property hop on a non-object or a Closure raises PHP's modification Error.
+#[test]
+fn test_mixed_receiver_write_hop_refuses_non_objects_and_closures() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class HopOuter { public $inner; }
+function hop_write($obj): void {
+    try {
+        $obj->inner->x = 1;
+        echo "stored\n";
+    } catch (Error $e) {
+        echo get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+$outer = new HopOuter();
+$outer->inner = new stdClass();
+hop_write($outer);
+hop_write(7);
+hop_write(function () {});
+"#,
+    );
+    assert_clean(
+        out,
+        "stored\nError: Attempt to modify property \"inner\" on int\n\
+         Error: Cannot create dynamic property Closure::$inner\n",
+    );
+}
+
+/// An enum refuses literal and runtime-name writes. The enum case singleton is the one block that
+/// stays live, so a leaked value cell per write would show up as extra live blocks.
+#[test]
+fn test_mixed_receiver_write_refuses_an_enum_receiver() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+enum RefusedEnum { case One; }
+class RefusedEnumPlain {}
+function enum_write($obj, string $text): void {
+    try {
+        $obj->label = "v" . $text;
+        echo "stored\n";
+    } catch (Error $e) {
+        echo $e->getMessage(), "\n";
+    }
+    try {
+        $name = "p" . $text;
+        $obj->$name = "v" . $text;
+        echo "stored\n";
+    } catch (Error $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+for ($i = 0; $i < 20; $i++) {
+    enum_write(new RefusedEnumPlain(), "a");
+    enum_write(RefusedEnum::One, "b");
+}
+"#,
+    );
+    let round = "stored\nstored\nCannot create dynamic property RefusedEnum::$label\n\
+                 Cannot create dynamic property RefusedEnum::$pb\n";
+    assert_eq!(out.stdout, round.repeat(20), "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: live_blocks=1 "),
+        "expected only the enum singleton to stay live, got: {}",
+        out.stderr
+    );
+}
+
+/// The runtime Mixed setter releases the value cell when it cannot store the write.
+///
+/// `ArrayObject` keeps a compiler-owned layout with no per-instance property hash, so this backend
+/// still drops the dynamic property PHP would create there. The dropped write must not leak the
+/// boxed value it was handed (storing the property is issue #2552).
+#[test]
+fn test_mixed_receiver_dropped_write_releases_the_value_cell() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class DroppedPlain {}
+function dropped_write($obj, string $text): void { $obj->label = $text . "!"; }
+for ($i = 0; $i < 20; $i++) {
+    dropped_write(new DroppedPlain(), "a" . $i);
+    dropped_write(new ArrayObject([]), "b" . $i);
+}
+echo "done\n";
+"#,
+    );
+    assert_clean(out, "done\n");
 }

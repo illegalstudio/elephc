@@ -12,11 +12,11 @@
 //
 // fwrite() buffers the entry content in memory; fclose() assembles the native
 // PHAR (PHP stub + manifest + bytes, with the manifest size/CRC-32 fields filled
-// in) and flushes it to disk.
+// in, plus a SHA-256 signature trailer) and flushes it to disk.
 
 $out = fopen("phar://examples/phar-writer/greeting.phar/message.txt", "w");
 fwrite($out, "Hello from a phar entry written by elephc!\n");
-fwrite($out, "Milestone-1: one uncompressed entry, signatureless.\n");
+fwrite($out, "Milestone-1: one uncompressed entry, SHA-256-signed.\n");
 fclose($out);
 
 // The writer produced a real file on disk. elephc's phar:// reader parses the

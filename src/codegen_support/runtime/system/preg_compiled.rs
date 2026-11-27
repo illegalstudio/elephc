@@ -6,7 +6,7 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` with the regex runtime.
 //!
 //! Key details:
-//! - `__rt_preg_compile` strips the delimiters, rejects the removed `/e` modifier and
+//! - `__rt_preg_compile` strips the delimiters, rejects the patterns PHP rejects before compiling, and
 //!   compiles through `elephc_pcre2_v1_compile`, returning the opaque shim handle or `0`.
 //! - `__rt_preg_match_compiled` runs one exec through `__rt_preg_exec`, which records the
 //!   call's own match error; a match or a failed match leaves `preg_last_error()` alone.
@@ -49,7 +49,7 @@ fn emit_compile_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{save_off}"));                  // set new frame pointer
     // -- strip delimiters and materialize the PCRE pattern --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1=stripped, x2=len, x3=flags
-    emitter.instruction("tbnz x3, #30, __rt_preg_compile_fail");                // the removed /e modifier is invalid in PHP 8
+    emitter.instruction("tbnz x3, #30, __rt_preg_compile_fail");                // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("str x3, [sp, #{flags_off}]"));                // save the compile flags across the C-string helper
     emitter.instruction("bl __rt_pcre_to_posix");                               // materialize the PCRE pattern as a C string
     super::emit_prepare_regex_locale(emitter);
@@ -138,8 +138,8 @@ fn emit_compile_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the pattern pointer into the preg-strip input register
     emitter.instruction("mov rdx, rsi");                                        // move the pattern length into the preg-strip input register
     emitter.instruction("call __rt_preg_strip");                                // strip delimiters and collect the regex flags
-    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
-    emitter.instruction("jc __rt_preg_compile_fail");                           // PHP 8 rejects /e as an unknown modifier
+    emitter.instruction("bt rcx, 30");                                          // did delimiter parsing reject the pattern?
+    emitter.instruction("jc __rt_preg_compile_fail");                           // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("mov QWORD PTR [rsp + {flags_off}], rcx"));    // save the compile flags across the C-string helper
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize the PCRE pattern as a C string
     super::emit_prepare_regex_locale(emitter);

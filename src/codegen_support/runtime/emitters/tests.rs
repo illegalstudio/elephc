@@ -107,6 +107,30 @@ fn test_runtime_can_omit_regex_helpers() {
     assert!(!asm.contains("__rt_preg_split:"));
 }
 
+/// Verifies `addcslashes()` only pays for its helper when lowered code or the descriptor
+/// invoker can reference it.
+#[test]
+fn test_runtime_can_gate_addcslashes_helper() {
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        let mut omitted = Emitter::new(target);
+        emit_runtime(&mut omitted, RuntimeFeatures::none());
+        assert!(!omitted.output().contains("__rt_addcslashes:"), "{target:?}");
+
+        let mut included = Emitter::new(target);
+        emit_runtime(
+            &mut included,
+            RuntimeFeatures {
+                addcslashes: true,
+                ..RuntimeFeatures::none()
+            },
+        );
+        assert!(included.output().contains("__rt_addcslashes:"), "{target:?}");
+    }
+}
+
 /// Verifies the shared mbstring helper is omitted when neither AOT nor eval requires it.
 #[test]
 fn test_runtime_can_gate_mbstring_helpers() {
@@ -653,6 +677,41 @@ fn preg_match_capture_rejects_removed_e_modifier_before_compile() {
         assert!(
             count.contains(count_reject),
             "{name}: count-only preg_match must reject /e"
+        );
+    }
+}
+
+/// `__rt_preg_strip` records PHP's `/r` modifier as the shim's private
+/// `PCRE2_EXTRA_CASELESS_RESTRICT` bit on every supported target.
+#[test]
+fn preg_strip_records_caseless_restrict_modifier() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_runtime(
+            &mut emitter,
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            },
+        );
+        let asm = emitter.output();
+        let body = helper_body(&asm, "__rt_preg_strip");
+        let (compare, materialize, record) = match target.arch {
+            Arch::AArch64 => ("cmp w9, #114", "mov x12, #0x80000", "orr x3, x3, x12"),
+            Arch::X86_64 => ("cmp r8d, 114", "or rcx, 0x80000", "or rcx, 0x80000"),
+        };
+        assert!(
+            body.contains(compare),
+            "{name}: __rt_preg_strip does not inspect the /r modifier"
+        );
+        assert!(
+            body.contains(materialize),
+            "{name}: __rt_preg_strip does not materialize the /r compile flag"
+        );
+        assert!(
+            body.contains(record),
+            "{name}: __rt_preg_strip does not record PCRE2_EXTRA_CASELESS_RESTRICT"
         );
     }
 }

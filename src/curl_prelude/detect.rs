@@ -258,6 +258,7 @@ fn packed_field_refs_curl(field: &PackedField) -> bool {
 fn expr_refs_curl(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_curl),
+        ExprKind::Reference(inner) => expr_refs_curl(inner),
         // Leaves and identifier-only forms carry no curl reference.
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)

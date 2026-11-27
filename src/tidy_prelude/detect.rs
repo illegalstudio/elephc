@@ -433,6 +433,7 @@ fn expr_refs_tidy(expr: &Expr) -> bool {
             expr_refs_tidy(value) || instanceof_target_refs_tidy(target)
         }
         ExprKind::UnaryPlus(inner)
+        | ExprKind::Reference(inner)
         | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)

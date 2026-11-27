@@ -301,9 +301,6 @@ pub(super) fn parse_closure(
                 *pos += 1;
                 // A trailing comma closes the list: `use ($a, $b,)` (PHP 8.0+).
                 if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
-                    if crate::syntax::parser::runtime_fragment() {
-                        return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected capture after ','"));
-                    }
                     break;
                 }
             }
@@ -469,6 +466,7 @@ pub(super) fn collect_arrow_expr_captures(
         ExprKind::Runtime(runtime) => {
             for value in runtime.exprs() { collect_arrow_expr_captures(value, bound, seen, captures); }
         },
+        ExprKind::Reference(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),
         ExprKind::Variable(name)
         | ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
@@ -700,6 +698,7 @@ fn parse_closure_params(
     let mut params = Vec::new();
     let mut param_attributes = Vec::new();
     let retain_attributes = crate::syntax::parser::runtime_fragment();
+    let mut param_lines = Vec::new();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -714,14 +713,12 @@ fn parse_closure_params(
             *pos += 1;
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
-                if crate::syntax::parser::runtime_fragment() {
-                    return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected parameter after ','"));
-                }
                 break;
             }
         }
         // PHP 8.0 closure-parameter attributes (`fn(#[X] $a) => …`).
         let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
+        param_lines.push(tokens.get(*pos).map_or(span.line, |(_, token)| token.span.line));
         if retain_attributes {
             param_attributes.push(attributes);
         }
@@ -779,6 +776,7 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
+    crate::syntax::parser::stmt::params::record_param_lines(span, param_lines);
     Ok((params, param_attributes, variadic, variadic_by_ref, variadic_type))
 }
 
@@ -829,11 +827,7 @@ pub(crate) fn parse_statement_unset_call(
     span: Span,
 ) -> Result<Expr, CompileError> {
     let args = parse_args_in(tokens, pos, span, ArgumentSyntax::Unset)?;
-    if crate::syntax::parser::runtime_fragment() {
-        if let Some((Token::Comma, metadata)) = pos.checked_sub(2).and_then(|index| tokens.get(index)) {
-            return Err(CompileError::new(metadata.span, "Expected unset operand after ','"));
-        }
-    } else {
+    if !crate::syntax::parser::runtime_fragment() {
         validate_language_construct("unset", &args, tokens, *pos, span)?;
     }
     let span = crate::syntax::parser::expr::span_through_prev_token(tokens, *pos, span);

@@ -106,8 +106,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// `strict_types` mode, which changes the serialized callable layout.
 /// Format 32 rejects a `declare(strict_types=...)` that follows another eval statement.
 /// Format 33 reparses cached scripts and parse failures with the shared Chopper frontend.
-/// Format 35 retains semantic profiles through the shared Chopper parser entry points.
-pub(crate) const FORMAT_VERSION: u32 = 35;
+/// Format 34 records the `as final` flag of a trait alias adaptation.
+/// Format 35 adds the `@` and `throw` expressions, `const` statements, the `@` token, and the
+/// by-reference return flag of eval functions and closures.
+/// Format 36 adds the enum-case receiver check of property fetches in `const` initializers.
+/// Format 37 combines the Chopper payload and its semantic profile with those AST changes.
+pub(crate) const FORMAT_VERSION: u32 = 37;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

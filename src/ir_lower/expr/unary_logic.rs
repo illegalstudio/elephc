@@ -297,7 +297,7 @@ pub(super) fn lower_logical_xor(
 }
 
 /// Converts a lowered PHP value into a canonical boolean and releases an owned input.
-pub(super) fn lower_truthy_bool(
+pub(crate) fn lower_truthy_bool(
     ctx: &mut LoweringContext<'_, '_>,
     input: LoweredValue,
     span: Option<crate::span::Span>,

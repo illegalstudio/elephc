@@ -23,6 +23,8 @@ use crate::parser::SharedParseFailure;
 pub(crate) mod attributes;
 mod classes;
 mod class_like;
+mod constant_expressions;
+mod constant_folding;
 mod members;
 mod signatures;
 mod closures;
@@ -206,19 +208,19 @@ fn lower_statements(scope: &Scope<'_>, ast: impl IntoIterator<Item = Stmt>, stat
             },
             StmtKind::FunctionDecl {
                 name, type_params, params, param_attributes, variadic, variadic_by_ref,
-                variadic_type, return_type, by_ref_return: false, body,
+                variadic_type, return_type, by_ref_return, body,
             } => {
                 if type_params.is_empty() {
                     lower_function(
                         scope, name, params, stmt.attributes, param_attributes, variadic, variadic_by_ref,
-                        variadic_type, return_type, body, stmt.span,
+                        variadic_type, return_type, by_ref_return, body, stmt.span,
                     )?
                 } else {
                     let type_scope = scope.with_type_parameters(&type_params);
                     let qualified = scope.qualify(&name);
                     let prototype = lower_function(
                         &type_scope, name, params, stmt.attributes, param_attributes, variadic,
-                        variadic_by_ref, variadic_type, return_type, body, stmt.span,
+                        variadic_by_ref, variadic_type, return_type, by_ref_return, body, stmt.span,
                     )?;
                     EvalStmt::GenericDecl(Box::new(templates::retain_template(
                         &type_scope, type_params, qualified, stmt.span, prototype,
@@ -252,6 +254,20 @@ fn lower_statements(scope: &Scope<'_>, ast: impl IntoIterator<Item = Stmt>, stat
         statements.push(stmt);
     }
     Some(())
+}
+
+/// Lowers a `const` statement, which PHP allows only at file or namespace level.
+///
+/// Nested statement lists never reach this: `lower_statements` refuses a `ConstDecl`, so a
+/// `const` inside a function, method, closure or block makes the fragment invalid, as in PHP.
+/// An initializer that is not a constant expression makes it invalid too, before any statement
+/// of the fragment runs, as PHP's compile error does.
+fn lower_const_decl(scope: &Scope<'_>, name: String, value: Expr) -> Option<EvalStmt> {
+    let value = lower_expression(scope, value)?;
+    constant_expressions::is_constant_expression(&value).then(|| EvalStmt::ConstDecl {
+        name: scope.qualify(&name),
+        value: constant_expressions::mark_property_receivers(value),
+    })
 }
 
 /// Recognizes an unqualified call to the unset language construct.

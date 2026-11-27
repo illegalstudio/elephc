@@ -60,7 +60,7 @@ fn core_ini_runtime_access_display_modes_and_restore() {
         assert_eq!(state.display_errors(), mode, "{value:?}");
         assert_eq!(&*state.get(b"display_errors").unwrap(), value);
     }
-    for name in [b"arg_separator.input".as_slice(), b"max_input_vars", b"max_input_nesting_level", b"missing"] {
+    for name in [b"arg_separator.input".as_slice(), b"max_input_vars", b"max_input_nesting_level", b"filter.default", b"filter.default_flags", b"missing"] {
         assert!(state.set(name, IniString::new(b"0")).is_none());
         state.restore(name);
     }
@@ -138,8 +138,8 @@ fn core_ini_abi_and_query_provider_share_request_state() {
     let mut all = call(INI_GET_ALL, &[MbArgV1::boolean(true)]);
     let bytes = unsafe { std::slice::from_raw_parts(all.bytes, all.len as usize) };
     let (graph, owners) = decode_ini_array(bytes, all.value as u64).unwrap();
-    assert_eq!(graph.arrays()[0].len(), 4);
-    assert_eq!(owners.len(), 8);
+    assert_eq!(graph.arrays()[0].len(), 6);
+    assert_eq!(owners.len(), 12);
     unsafe { elephc_mbstring_release_v1(&mut all); }
     std::thread::spawn(|| assert_eq!(query(QUERY_CONFIG_ENTRY), (b";&".to_vec(), 2, 1, 0))).join().unwrap();
     assert_eq!(query(QUERY_CONFIG_FIELD).3, 1);

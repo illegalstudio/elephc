@@ -85,7 +85,7 @@ pub(super) fn lower_dynamic_place_call(ctx: &mut LoweringContext<'_, '_>, name: 
     let result = descriptor_invoker_result_type(Some(signature));
     let mut callback = root_descriptor_callback(ctx, callback, result, expr.span);
     let arguments = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut callback, args, expr.span);
-    Some(emit_callable_descriptor_invoke(ctx, callback, arguments, expr.span))
+    Some(emit_callable_descriptor_invoke(ctx, callback, arguments, false, expr.span))
 }
 
 /// Recognizes a runtime property name without treating an unpacked array value as its source property.

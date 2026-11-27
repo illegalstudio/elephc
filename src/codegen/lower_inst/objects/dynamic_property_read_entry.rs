@@ -169,7 +169,7 @@ pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(line));
+    crate::codegen::shared_literal_property_write::emit_source_line(ctx, scratch, line);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
 }
 

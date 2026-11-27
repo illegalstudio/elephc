@@ -74,6 +74,24 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ctx.store_result_value(result)
 }
 
+/// Lowers `LoadLocalRefCellPtr`: reads the raw managed-cell pointer from a ref-cell owner slot.
+///
+/// The owner slot stores one pointer word regardless of the cell's payload type, so this load
+/// must bypass the payload-typed coercion `LoadLocal` applies. The result is a borrowed address:
+/// callers retain the cell themselves when they publish it into another owner.
+pub(super) fn lower_load_local_ref_cell_ptr(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("load_local_ref_cell_ptr missing result value")
+    })?;
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    ctx.store_int_result_value(result)
+}
+
 /// Returns whether a load reads pointer storage that can hold a zero pointer through a `null` view.
 fn pointer_slot_read_as_null(source_ty: &PhpType, result_ty: &PhpType) -> bool {
     result_ty.codegen_repr() == PhpType::Void
@@ -248,6 +266,10 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             Ok(())
         }
+        // A void binding holds one raw container word: zero before the first write, then the
+        // container a loop iteration published. Reading it as a hash keeps that word for the
+        // auto-vivifier, which reuses the existing table instead of allocating a fresh one.
+        (PhpType::Void | PhpType::Never, PhpType::Array(_) | PhpType::AssocArray { .. }) => Ok(()),
         // Flow typing can prove null while the frame retains its earlier container or
         // pointer representation. Materialize PHP null instead of exposing its zero word.
         (PhpType::Mixed | PhpType::Pointer(_) | PhpType::Packed(_)

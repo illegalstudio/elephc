@@ -25,6 +25,7 @@ mod compare;
 mod curl;
 pub(crate) mod data;
 mod diagnostics;
+mod filter_regex;
 mod error_handlers;
 mod handler_state;
 mod warning_dispatch;

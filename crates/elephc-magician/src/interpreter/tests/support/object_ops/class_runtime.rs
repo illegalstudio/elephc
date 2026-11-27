@@ -120,6 +120,8 @@ impl FakeOps {
             "locked" => Ok(Some(
                 EVAL_REFLECTION_MEMBER_FLAG_PUBLIC | EVAL_REFLECTION_MEMBER_FLAG_FINAL,
             )),
+            // Flags only: a private AOT method for parent-override validation tests.
+            "hidden" => Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PRIVATE)),
             _ => Ok(None),
         }
     }

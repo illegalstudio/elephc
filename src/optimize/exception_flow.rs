@@ -160,8 +160,12 @@ fn declared_entry_check(signature: &FunctionSig) -> Option<EntryCheck> {
     // `?array &$v`) or of a union of them checks a boxed (`mixed`) argument at the call
     // boundary and raises `TypeError` there (the EIR reference-argument guards), so it can
     // throw too.
+    //
+    // A by-value nullable class or class union (`?A`, `A|B|null`) keeps boxed storage, and a
+    // `mixed` argument bound to it runs the runtime class check before the body.
     signature.params.iter().enumerate().any(|(index, (_, ty))| {
         matches!(ty.codegen_repr(), PhpType::Object(_))
+            || crate::types::object_boundary::declared_object_boundary(ty).is_some()
             || (signature.ref_params.get(index).copied().unwrap_or(false)
                 && by_ref_param_checks_boxed_argument(signature, index, ty))
     }).then_some(EntryCheck::NonFreshArguments)
@@ -711,9 +715,14 @@ impl ExceptionFlowAnalysis {
             StmtKind::Global { vars } => vars.iter().fold(ThrownTypes::default(), |thrown, name|
                 thrown.combined(self.local_retirement_throws(&Expr::var(name)))),
             StmtKind::ConstDecl { value: expr, .. } => operand(expr),
+            // A value a `string`/`float`/`bool` return refuses is released while the
+            // `TypeError` unwinds, so a destructor it runs can throw too.
             StmtKind::Return(Some(expr)) => operand(expr).combined(
                 if super::return_boundaries::active_return_boundary_may_throw(expr) {
-                    ThrownTypes::exact("TypeError")
+                    let thrown = ThrownTypes::exact("TypeError");
+                    if super::return_boundaries::active_return_boundary_releases_refused_value() {
+                        thrown.combined(self.temporary_destruction_throws(expr, class_context))
+                    } else { thrown }
                 } else { ThrownTypes::default() }),
             StmtKind::Throw(expr) => operand(expr)
                 .combined(self.thrown_value_types(expr, bindings, class_context)),
@@ -919,21 +928,31 @@ impl ExceptionFlowAnalysis {
     }
 
     /// Queries an operation separately from operand evaluation for source-order checker edges.
+    ///
+    /// A call the checker recorded as binding a `mixed`/union argument to a declared scalar
+    /// parameter can throw anything: the runtime check raises `TypeError`, but binding to
+    /// `int` can raise a deprecation a user error handler turns into any exception, and
+    /// binding to `string` can call a `__toString()` that throws.
     fn expr_throws_at_boundary(
         &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
-        let thrown = self.expr_throws_without_binding(expr, bindings, class_context, include_operands);
-        if super::semantic_context::implicit_value_boundary_may_throw(expr)
+        let thrown = self.operation_throws_at_boundary(expr, bindings, class_context, include_operands);
+        if super::binding_decisions::call_has_scalar_guard_arg(call_args(expr)) {
+            thrown.combined(ThrownTypes::unknown())
+        } else if super::semantic_context::implicit_value_boundary_may_throw(expr)
             || super::semantic_context::comparison_boundary_may_throw(expr)
             || super::semantic_context::string_boundary_may_throw(expr)
-            || super::semantic_context::array_key_boundary_may_throw(expr) {
+            || super::semantic_context::array_key_boundary_may_throw(expr)
+        {
             thrown.combined(ThrownTypes::exact("TypeError"))
-        } else { thrown }
+        } else {
+            thrown
+        }
     }
 
-    /// Computes callee and operand exceptions before adding the caller's exact binding guard.
-    fn expr_throws_without_binding(
+    /// Computes one operation's throws, plus its operands' when `include_operands` is set.
+    fn operation_throws_at_boundary(
         &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
@@ -1142,7 +1161,12 @@ impl ExceptionFlowAnalysis {
                 .combined(operand(callable))
                 .combined(self.temporary_destruction_throws(value, class_context))
                 .combined(self.callable_value_retirement_throws(callable, class_context))
-                .combined(self.callable_expr_throws(callable, bindings, class_context)),
+                .combined(self.callable_expr_throws(callable, bindings, class_context))
+                // Binding the piped value runs the scalar-parameter check: a `TypeError`, or
+                // whatever an error handler or `__toString()` it reaches throws.
+                .combined(if callable_value_binding_effect(callable, std::slice::from_ref(value.as_ref())).may_throw {
+                    ThrownTypes::unknown()
+                } else { ThrownTypes::default() }),
             ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => ThrownTypes::default(),
             ExprKind::ArrayLiteral(items) => operands(items),
             ExprKind::ArrayLiteralAssoc(items) => items.iter().fold(
@@ -1677,4 +1701,19 @@ fn reads_reporting_constant(expr: &Expr) -> bool {
             };
     });
     found
+}
+
+/// The argument list of a call expression, empty for any other expression.
+pub(super) fn call_args(expr: &Expr) -> &[Expr] {
+    match &expr.kind {
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::ExprCall { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::NullsafeMethodCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => args.as_slice(),
+        _ => &[],
+    }
 }

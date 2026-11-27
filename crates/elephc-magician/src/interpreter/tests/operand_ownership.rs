@@ -12,9 +12,12 @@ use super::super::*;
 use super::support::*;
 
 /// A by-value foreach receiver is retired after every normal or abrupt body exit.
+///
+/// `throw 42;` raises PHP's `Error` for a non-object operand; an unmatched `match` is the
+/// runtime-fatal exit.
 #[test]
 fn foreach_receiver_lease_covers_every_exit() {
-    for body in ["", "break;", "return $value;", "missingForeachBody();", "throw 42;"] {
+    for body in ["", "break;", "return $value;", "missingForeachBody();", "throw 42;", "echo match (1) { 2 => 3 };"] {
         let mut values = FakeOps::default();
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
@@ -23,10 +26,10 @@ fn foreach_receiver_lease_covers_every_exit() {
         let result = execute_program_outcome_with_context(
             &mut context, &program, &mut scope, &mut values,
         );
-        if body.contains("missingForeachBody") {
+        if body.contains("missingForeachBody") || body.starts_with("throw") {
             assert!(matches!(result, Ok(EvalOutcome::Throwable(_))), "{source}");
         } else {
-            assert_eq!(result.is_err(), body == "throw 42;", "{source}");
+            assert_eq!(result.is_err(), body.starts_with("echo match"), "{source}");
         }
         let arrays = values.values.iter().filter_map(|(id, value)| {
             matches!(value, FakeValue::Array(_)).then_some(*id)
@@ -155,7 +158,7 @@ fn thrown_storage_values_keep_an_independent_control_owner() {
     }
 }
 
-/// Rejecting a non-object throw retires its temporary value before propagating the fatal status.
+/// Rejecting a non-object throw retires its temporary value before raising PHP's `Error`.
 #[test]
 fn rejected_throw_releases_its_temporary_operand() {
     let mut values = FakeOps::default();
@@ -163,9 +166,10 @@ fn rejected_throw_releases_its_temporary_operand() {
     let mut scope = ElephcEvalScope::new();
     let program = parse_fragment(b"throw 42;").unwrap();
     let result = execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values);
-    assert!(matches!(result, Err(EvalStatus::RuntimeFatal)));
-    assert_eq!(values.releases.len(), 1);
-    assert_eq!(values.cell_owners[&(values.releases[0].as_ptr() as usize)], 0);
+    assert!(matches!(result, Ok(EvalOutcome::Throwable(_))));
+    let operand = values.releases[0];
+    assert_eq!(values.get(operand), FakeValue::Int(42));
+    assert_eq!(values.cell_owners[&(operand.as_ptr() as usize)], 0);
 }
 
 /// Raw staging cleanup releases the current slot, not a stale original address consumed by native code.

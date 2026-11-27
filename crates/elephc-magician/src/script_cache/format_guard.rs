@@ -112,9 +112,11 @@ mod tests {
     /// `strict_types` mode, which changes the serialized payload.
     /// BUMPED TO 32: strict_types declarations must precede every other eval statement.
     /// BUMPED TO 33: Chopper scans and parses included scripts and eval fragments.
-    /// BUMPED TO 34: semantic profiles are retained through the shared Chopper payload.
-    /// BUMPED TO 35: the profiled Chopper parser owns every cached script entry point.
-    const RECORDED_FINGERPRINT: u64 = 10_736_117_818_830_913_745;
+    /// BUMPED TO 35: `@` and `throw` expressions, `const` statements, the `@` token, and
+    /// the by-reference return flag of eval functions and closures.
+    /// BUMPED TO 36: the enum-case receiver check of property fetches in `const` initializers.
+    /// BUMPED TO 37: the profiled Chopper payload carries the merged AST.
+    const RECORDED_FINGERPRINT: u64 = 1829448089533980380;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

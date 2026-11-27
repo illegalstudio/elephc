@@ -293,6 +293,12 @@ impl NativeFunction {
         // Registered AOT user functions ignore the descriptor ABI's trailing lexical-scope
         // argument. Eval-owned callbacks have their own scope stack, so global is the only
         // honest native invocation-site value at this bridge boundary.
-        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr(), -1))
+        //
+        // The invoker consumes an encoded invocation profile: the weak/strict scope sits above
+        // the private low bits (the `call_user_func*` by-reference warning marker). A raw `-1`
+        // would set bit 1 and make every direct native invocation take the by-value path, so
+        // pass the encoded weak-global scope. The invoker decodes it back to `-1` before calling
+        // the AOT function.
+        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr(), -4))
     }
 }
