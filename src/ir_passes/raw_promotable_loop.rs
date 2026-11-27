@@ -123,6 +123,15 @@ fn expendable_cells(
     plan: &Plan,
 ) -> (HashSet<LocalSlotId>, HashSet<ValueId>) {
     let mut slots: HashSet<LocalSlotId> = plan.updates.iter().map(|update| update.slot).collect();
+    // The copied fast path deliberately omits every complete transient owner scope on its
+    // straight path. Their mixed-fallback slots therefore belong to this rewrite just like
+    // the arithmetic results below, while slots outside the copied path remain protected.
+    slots.extend(
+        super::transient_owner_scopes::collect(function)
+            .into_iter()
+            .filter(|scope| plan.path.contains(&scope.block))
+            .map(|scope| scope.slot),
+    );
     let mut values = HashSet::new();
     for block in &function.blocks {
         let inside = lp.contains(block.id);
