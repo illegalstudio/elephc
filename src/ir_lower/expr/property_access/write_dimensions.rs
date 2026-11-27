@@ -47,7 +47,7 @@ fn lower_dimension_select(
     if let Some(slot) = key_owner { register_owned_call_operand(ctx, slot, expr.span); }
     let result = native_xml_reads::dispatch(
         ctx, borrowed, expr, PhpType::Mixed, false,
-        |ctx, receiver| lower_method_call_with_receiver(ctx, receiver,
+        |ctx, receiver| lower_method_call_with_receiver_direct(ctx, receiver,
             "__elephc_dimension_select", &[
                 key.clone(), Expr::new(ExprKind::BoolLiteral(throw_on_failure), expr.span),
                 Expr::new(ExprKind::BoolLiteral(true), expr.span),

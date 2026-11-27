@@ -110,7 +110,8 @@ for ($i = 0; $i < 3; $i++) { $n += strlen(strstr($s, 'needle')) + $i; }
 echo $n;
 "#,
     );
-    assert!(ir.contains("runtime.strstr_len"), "{ir}");
+    let helper = ir.find("runtime.strstr_len").unwrap_or_else(|| panic!("{ir}"));
     assert!(!ir.contains("runtime.strstr "), "{ir}");
-    assert!(!ir.contains("push_call_operand_owner"), "{ir}");
+    assert!(!ir[..helper].contains("push_call_operand_owner"),
+        "the sunk haystack must not retain an operand owner before the raw helper: {ir}");
 }

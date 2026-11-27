@@ -347,6 +347,7 @@ pub(super) fn lower_instance_runtime_intrinsic(
     ref_params.extend(callee_ref_params.iter().copied());
     let call_args =
         materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
+    retain_consumed_intrinsic_arguments(ctx, intrinsic, &param_types, 1)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(
@@ -409,6 +410,10 @@ pub(super) fn lower_static_runtime_intrinsic(
         &param_types,
         &callee_ref_params,
     )?;
+    let mut abi_param_types = Vec::with_capacity(param_types.len() + 1);
+    abi_param_types.push(PhpType::Int);
+    abi_param_types.extend_from_slice(&param_types);
+    retain_consumed_intrinsic_arguments(ctx, intrinsic, &abi_param_types, 1)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(
@@ -433,6 +438,62 @@ pub(super) fn lower_static_runtime_intrinsic(
     }
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
+}
+
+/// Gives each boxed intrinsic argument its own owner after ABI materialization.
+///
+/// Intrinsic parameter indexes are caller-visible. `first_visible` skips an instance receiver or
+/// the hidden called-class id. The native helper consumes each retained owner on both success and
+/// throw paths, while the source expression keeps its original PHP owner.
+fn retain_consumed_intrinsic_arguments(
+    ctx: &mut FunctionContext<'_>,
+    intrinsic: IntrinsicCall,
+    abi_param_types: &[PhpType],
+    first_visible: usize,
+) -> Result<()> {
+    if intrinsic.consumed_mixed_parameters().is_empty() {
+        return Ok(());
+    }
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, abi_param_types, 0);
+    for &visible_index in intrinsic.consumed_mixed_parameters() {
+        let abi_index = first_visible + visible_index;
+        let assignment = assignments.get(abi_index).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "intrinsic {}::{} consumes missing argument {}",
+                intrinsic.class_name(),
+                intrinsic.method_key(),
+                visible_index,
+            ))
+        })?;
+        if assignment.ty.codegen_repr() != PhpType::Mixed {
+            return Err(CodegenIrError::invalid_module(format!(
+                "intrinsic {}::{} consumes non-Mixed argument {} ({:?})",
+                intrinsic.class_name(),
+                intrinsic.method_key(),
+                visible_index,
+                assignment.ty,
+            )));
+        }
+        if assignment.in_register() {
+            let register = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
+            elephc_memoir::temporary_owners::emit_retain_consumed_register_argument(
+                ctx.emitter,
+                register,
+            );
+            continue;
+        }
+        let stack_offset = assignments[..abi_index]
+            .iter()
+            .filter(|candidate| !candidate.in_register())
+            .map(|candidate| usize::from(candidate.ty != PhpType::Void) * 16)
+            .sum();
+        elephc_memoir::temporary_owners::emit_retain_consumed_stack_argument(
+            ctx.emitter,
+            stack_offset,
+        );
+    }
+    Ok(())
 }
 
 /// Lowers `CallbackFilterIterator::__elephcAcceptCallback()` through its stored descriptor.

@@ -352,6 +352,9 @@ impl CounterProof {
                     | Op::IShrA
                     | Op::INeg
                     | Op::IBitNot
+                    | Op::ICheckedAddToInt
+                    | Op::ICheckedSubToInt
+                    | Op::ICheckedMulToInt
                     | Op::ICheckedNumericChainToInt => {}
                     // A proven integer converts to the same PHP decimal spelling whether its
                     // frame slot is scalar or boxed. Cold diagnostics may keep this conversion

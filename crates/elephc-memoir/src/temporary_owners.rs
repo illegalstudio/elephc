@@ -9,6 +9,53 @@
 
 use crate::{abi, Arch, Emitter};
 
+/// Retains a register-passed boxed argument that its callee consumes.
+///
+/// Outgoing argument registers are already materialized. Preserve the result register because it
+/// is also the first AArch64 argument register, then give the selected box an independent owner
+/// without disturbing the remaining call arguments.
+pub fn emit_retain_consumed_register_argument(
+    emitter: &mut impl Emitter,
+    argument: &str,
+) {
+    emitter.comment("retain boxed argument consumed by intrinsic");
+    let result = abi::int_result_reg(emitter);
+    let preserve_result = argument != result;
+    if preserve_result {
+        abi::emit_push_reg(emitter, result);
+        abi::emit_reg_move(emitter, result, argument);
+    }
+    if emitter.arch() == Arch::X86_64 {
+        abi::emit_push_reg(emitter, "rcx");
+    }
+    abi::emit_call_label(emitter, "__rt_incref");
+    if emitter.arch() == Arch::X86_64 {
+        abi::emit_pop_reg(emitter, "rcx");
+    }
+    if preserve_result {
+        abi::emit_pop_reg(emitter, result);
+    }
+}
+
+/// Retains a stack-passed boxed argument that its callee consumes.
+///
+/// `offset` addresses the finalized outgoing overflow area before this helper's aligned result
+/// spill. The spill therefore shifts the selected argument by one temporary stack slot.
+pub fn emit_retain_consumed_stack_argument(emitter: &mut impl Emitter, offset: usize) {
+    emitter.comment("retain boxed argument consumed by intrinsic");
+    let result = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result);
+    emitter.emit_load_temporary_stack_slot(result, offset + 16);
+    if emitter.arch() == Arch::X86_64 {
+        abi::emit_push_reg(emitter, "rcx");
+    }
+    abi::emit_call_label(emitter, "__rt_incref");
+    if emitter.arch() == Arch::X86_64 {
+        abi::emit_pop_reg(emitter, "rcx");
+    }
+    abi::emit_pop_reg(emitter, result);
+}
+
 /// Emits the non-escaping unary callback for a temporary owner slot on every native ABI.
 pub fn emit_cleanup_call_operand_owner(emitter: &mut impl Emitter) {
     emit_owner_cleanup_entry(emitter, "__rt_cleanup_call_operand_owner", "__rt_decref_any");

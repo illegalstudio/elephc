@@ -7,8 +7,8 @@
 //! Key details:
 //! - Generic reflector accessors read live values and omit uninitialized properties.
 //! - Constructing a reflector does not postpone a displaced object's destructor.
-//! - Building an enum's reflector fills the constant map compiled `getConstants()` reads, which
-//!   materializes the enum's case singletons; they then keep their process-lifetime owner.
+//! - Building an enum's reflector fills the constant map compiled `getConstants()` reads, while
+//!   final runtime shutdown retires the process-scoped enum singleton owners.
 
 use crate::support::*;
 
@@ -44,8 +44,8 @@ echo $second['value'];
 }
 
 /// Eval stores owned name strings, which repeated AOT map reads must continue borrowing. The
-/// only block left live is the enum case the eval-built `ReflectionEnum` materialized for its
-/// constant map, as a compiled `ReflectionEnum` does.
+/// enum case materialized by the eval-built `ReflectionEnum` remains valid until final runtime
+/// shutdown, where its process-scoped owner is retired with the other Magician registries.
 #[test]
 fn test_eval_reflector_static_name_lifetimes_bundle() {
     let source = r#"<?php
@@ -90,15 +90,14 @@ echo 'done';
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
     assert_eq!(output.stdout, "1:11|1:11|1:11|1:11|0:-|1:2:1|0:-|done");
-    let live = output.stderr.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
-        .collect::<Vec<_>>();
-    assert_eq!(live.len(), 1, "{}", output.stderr);
-    assert!(live[0].contains("kind=4 refs=1 ") && live[0].ends_with("class=EvalStaticNameEnum"),
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.lines().any(|line| line.starts_with("HEAP DEBUG: live offset=")),
         "{}", output.stderr);
 }
 
 /// Generic class accessors use populated enum slots on builtin and user-derived reflectors.
-/// The enum case keeps its ordinary process-lifetime owner after an enum cases array is released.
+/// The enum case keeps its process-scoped owner after a cases array is released, then final
+/// runtime shutdown retires that owner after all user code has completed.
 #[test]
 fn test_reflection_enum_inherited_collections_use_enum_metadata() {
     let source = r#"<?php
@@ -137,12 +136,9 @@ unset($case, $cases);
             .expect("heap debug allocation summary");
         let count = |prefix: &str| summary.split_whitespace()
             .find_map(|field| field.strip_prefix(prefix)).unwrap().parse::<u64>().unwrap();
-        assert_eq!(count("allocs=") - count("frees="), 1, "{diagnostic}");
-        assert_eq!(count("live_blocks="), 1, "{diagnostic}");
-        let live = diagnostic.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
-            .collect::<Vec<_>>();
-        assert_eq!(live.len(), 1, "{diagnostic}");
-        assert!(live[0].contains("kind=4 refs=1 ")
-            && live[0].ends_with("class=InheritedReflectionEnumSubject"), "{diagnostic}");
+        assert_eq!(count("allocs="), count("frees="), "{diagnostic}");
+        assert_eq!(count("live_blocks="), 0, "{diagnostic}");
+        assert!(!diagnostic.lines().any(|line| line.starts_with("HEAP DEBUG: live offset=")),
+            "{diagnostic}");
     }
 }
