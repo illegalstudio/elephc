@@ -24,6 +24,7 @@ TCP/TLS socket, so no libxml2 or native SOAP library is required.
 | Options | `location`, `uri`, `style`, `use`, `soap_version`, `login`, `password`, `connection_timeout`, `trace`, `exceptions`, `user_agent`, `stream_context`, `keep_headers` |
 | WSDL | WSDL 1.1 documents, recursive imports/includes, endpoint and target-namespace discovery, and `__getFunctions()`/`__getTypes()` operation/struct metadata |
 | Transport | SOAP 1.1 and SOAP 1.2 envelopes, `http://` and `https://`/`tls://`, HTTP Basic authentication, request/response tracing |
+| Encoding | `SOAP_ENCODED` list arrays (`SOAP-ENC:Array`/`arrayType`) and associative maps (`ns2:Map`), plus encoded array/map response decoding |
 | Constants | `SOAP_1_1`, `SOAP_1_2`, `SOAP_RPC`, `SOAP_DOCUMENT`, `SOAP_ENCODED`, `SOAP_LITERAL`, actor constants |
 
 In WSDL mode the `location` and `uri` options override the discovered endpoint
@@ -48,7 +49,7 @@ $result = $client->__soapCall("Add", [["a" => 2, "b" => 3]]);
 
 ## Deferred surface
 
-- Encoded arrays/objects (`SOAP_ENCODED`), MTOM and attachments.
+- MTOM and attachments.
 - WSDL-described `SoapServer` operation metadata; the server dispatches
   RPC-style requests by operation name and returns `<return>` values.
 - WSDL-described `SoapServer` operation metadata; the server dispatches

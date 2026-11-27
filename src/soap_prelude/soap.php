@@ -251,19 +251,29 @@ class SoapClient
         $params = "";
         if (\count($args) === 1 && \is_array($args[0])) {
             foreach ($args[0] as $name => $value) {
-                $params .= __elephc_soap_value((string) $name, $value);
+                $params .= __elephc_soap_value((string) $name, $value, $this->__use);
             }
         } else {
             foreach ($args as $index => $value) {
-                $params .= __elephc_soap_value("param" . $index, $value);
+                $params .= __elephc_soap_value("param" . $index, $value, $this->__use);
             }
         }
         $envelope = $this->__version === SOAP_1_2
             ? "http://www.w3.org/2003/05/soap-envelope"
             : "http://schemas.xmlsoap.org/soap/envelope/";
+        $encoded = $this->__use === SOAP_ENCODED;
+        $encoding = $this->__version === SOAP_1_2
+            ? "http://www.w3.org/2003/05/soap-encoding"
+            : "http://schemas.xmlsoap.org/soap/encoding/";
         $request = '<?xml version="1.0" encoding="UTF-8"?>'
             . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '"'
             . ' xmlns:ns1="' . __elephc_soap_escape($uri) . '"'
+            . ($encoded
+                ? ' xmlns:xsd="http://www.w3.org/2001/XMLSchema"'
+                    . ' xmlns:SOAP-ENC="' . $encoding . '"'
+                    . ' xmlns:ns2="http://xml.apache.org/xml-soap"'
+                    . ' SOAP-ENV:encodingStyle="' . $encoding . '"'
+                : '')
             . ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
             . '<SOAP-ENV:Body><ns1:' . __elephc_soap_name($function) . '>'
             . $params
@@ -324,7 +334,6 @@ class SoapClient
             $headers[] = "Content-Type: text/xml; charset=utf-8";
             $headers[] = "SOAPAction: \"" . $action . "\"";
         }
-        $headers[] = "Connection: close";
         $headers[] = "User-Agent: " . $this->__userAgent;
         if ($this->__login !== "") {
             $headers[] = "Authorization: Basic " . \base64_encode($this->__login . ":" . $this->__password);
@@ -657,9 +666,12 @@ function __elephc_soap_name(string $name): string
     return $clean === "" ? "item" : $clean;
 }
 
-function __elephc_soap_value(string $name, mixed $value): string
+function __elephc_soap_value(string $name, mixed $value, int $use = SOAP_LITERAL): string
 {
     $tag = __elephc_soap_name($name);
+    if ($use === SOAP_ENCODED) {
+        return __elephc_soap_encoded_value($tag, $value);
+    }
     if ($value === null) {
         return "<ns1:" . $tag . " xsi:nil=\"true\"/>";
     }
@@ -679,6 +691,107 @@ function __elephc_soap_value(string $name, mixed $value): string
         $text = (string) $value;
     }
     return "<ns1:" . $tag . ">" . __elephc_soap_escape($text) . "</ns1:" . $tag . ">";
+}
+
+function __elephc_soap_encoded_value(string $tag, mixed $value): string
+{
+    if ($value === null) {
+        return "<ns1:" . $tag . " xsi:nil=\"true\"/>";
+    }
+    if (\is_array($value)) {
+        return __elephc_soap_encoded_array($tag, $value);
+    }
+    if (\is_object($value)) {
+        return __elephc_soap_encoded_array($tag, \get_object_vars($value));
+    }
+    return __elephc_soap_encoded_scalar($tag, $value);
+}
+
+function __elephc_soap_encoded_type(mixed $value): string
+{
+    if (\is_bool($value)) {
+        return "xsd:boolean";
+    }
+    if (\is_int($value)) {
+        return "xsd:int";
+    }
+    if (\is_float($value)) {
+        return "xsd:float";
+    }
+    if (\is_string($value)) {
+        return "xsd:string";
+    }
+    return "xsd:anyType";
+}
+
+function __elephc_soap_encoded_scalar(string $tag, mixed $value): string
+{
+    $type = __elephc_soap_encoded_type($value);
+    if (\is_bool($value)) {
+        $text = $value ? "true" : "false";
+    } else {
+        $text = (string) $value;
+    }
+    return "<" . $tag . " xsi:type=\"" . $type . "\">" . __elephc_soap_escape($text) . "</" . $tag . ">";
+}
+
+function __elephc_soap_encoded_array(string $tag, mixed $value): string
+{
+    if (!\is_array($value)) {
+        return __elephc_soap_encoded_scalar($tag, $value);
+    }
+    $items = (array) $value;
+    $list = true;
+    $index = 0;
+    foreach ($items as $key => $item) {
+        if ($key !== $index) {
+            $list = false;
+            break;
+        }
+        $index++;
+    }
+    if ($list) {
+        $count = \count($items);
+        $item_type = "xsd:anyType";
+        if ($count > 0) {
+            $first = true;
+            foreach ($items as $item) {
+                $type = __elephc_soap_encoded_type($item);
+                if ($first) {
+                    $item_type = $type;
+                    $first = false;
+                } elseif ($type !== $item_type) {
+                    $item_type = "xsd:anyType";
+                    break;
+                }
+            }
+        }
+        $body = "";
+        foreach ($items as $item) {
+            if (\is_array($item)) {
+                $body .= __elephc_soap_encoded_array("item", (array) $item);
+            } elseif (\is_object($item)) {
+                $body .= __elephc_soap_encoded_array("item", \get_object_vars($item));
+            } else {
+                $body .= __elephc_soap_encoded_scalar("item", $item);
+            }
+        }
+        return "<ns1:" . $tag . " SOAP-ENC:arrayType=\"" . $item_type . "[" . $count . "]\" xsi:type=\"SOAP-ENC:Array\">"
+            . $body . "</ns1:" . $tag . ">";
+    }
+    $body = "";
+    foreach ($items as $key => $item) {
+        $key_xml = __elephc_soap_encoded_scalar("key", (string) $key);
+        if (\is_array($item)) {
+            $value_xml = __elephc_soap_encoded_array("value", (array) $item);
+        } elseif (\is_object($item)) {
+            $value_xml = __elephc_soap_encoded_array("value", \get_object_vars($item));
+        } else {
+            $value_xml = __elephc_soap_encoded_scalar("value", $item);
+        }
+        $body .= "<item>" . $key_xml . $value_xml . "</item>";
+    }
+    return "<ns1:" . $tag . " xsi:type=\"ns2:Map\">" . $body . "</ns1:" . $tag . ">";
 }
 
 function __elephc_soap_xml_value(mixed $value): string
@@ -1384,6 +1497,35 @@ function __elephc_soap_http_exchange(string $method, string $location, string $p
     ];
 }
 
+function __elephc_soap_decode_value(mixed $value)
+{
+    if (!\is_array($value) || !\array_key_exists("item", $value)) {
+        return $value;
+    }
+    $items = $value["item"];
+    if (!\is_array($items)) {
+        return [$items];
+    }
+    if (\array_key_exists("key", $items) && \array_key_exists("value", $items)) {
+        return [(string) $items["key"] => $items["value"]];
+    }
+    $is_map = true;
+    foreach ($items as $item) {
+        if (!\is_array($item) || !\array_key_exists("key", $item) || !\array_key_exists("value", $item)) {
+            $is_map = false;
+            break;
+        }
+    }
+    if ($is_map) {
+        $map = [];
+        foreach ($items as $item) {
+            $map[(string) $item["key"]] = $item["value"];
+        }
+        return $map;
+    }
+    return $items;
+}
+
 function __elephc_soap_response(string $xml, int $version = SOAP_1_1)
 {
     $root = __elephc_soap_element($xml, 0);
@@ -1426,11 +1568,11 @@ function __elephc_soap_response(string $xml, int $version = SOAP_1_1)
     }
     if (\is_array($first[1]) && \count($first[1]) === 1) {
         if (\array_key_exists("result", $first[1])) {
-            return $first[1]["result"];
+            return __elephc_soap_decode_value($first[1]["result"]);
         }
         if (\array_key_exists("return", $first[1])) {
-            return $first[1]["return"];
+            return __elephc_soap_decode_value($first[1]["return"]);
         }
     }
-    return $first[1];
+    return __elephc_soap_decode_value($first[1]);
 }

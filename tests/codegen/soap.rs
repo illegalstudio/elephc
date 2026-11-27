@@ -81,6 +81,7 @@ fn test_soap_client_wsdl_less_keep_headers() {
 $client = new SoapClient(null, [
     "location" => "http://127.0.0.1:__PORT__/soap",
     "uri" => "urn:test",
+    "use" => SOAP_LITERAL,
     "keep_headers" => ["authorization"],
     "login" => "user",
     "password" => "pass",
@@ -506,5 +507,107 @@ var_dump($client->__getTypes());
         out,
         "NULL\nNULL\narray(1) {\n  [0]=>\n  string(32) \"AddResponse Add(Add $parameters)\"\n}\n\
          array(2) {\n  [0]=>\n  string(30) \"struct Add {\n int a;\n int b;\n}\"\n  [1]=>\n  string(35) \"struct AddResponse {\n int result;\n}\"\n}\n"
+    );
+}
+
+/// SOAP_ENCODED serialises list arrays and maps, and decodes encoded responses.
+#[test]
+fn test_soap_encoded_arrays_and_maps() {
+    let listener = TcpListener::bind(("0.0.0.0", 0)).expect("bind SOAP encoded fixture");
+    let port = listener.local_addr().unwrap().port();
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let server_capture = Arc::clone(&captured);
+    let worker = thread::spawn(move || {
+        for index in 0..2 {
+            let mut stream = accept_connection(&listener);
+            let request = read_request(&mut stream);
+            server_capture.lock().unwrap().push(request);
+            let body = if index == 0 {
+                r#"<?xml version="1.0"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+  xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body><ns:TestResponse xmlns:ns="urn:test">
+    <return SOAP-ENC:arrayType="xsd:string[2]" xsi:type="SOAP-ENC:Array">
+      <item xsi:type="xsd:string">a</item>
+      <item xsi:type="xsd:string">b</item>
+    </return>
+  </ns:TestResponse></soap:Body>
+</soap:Envelope>"#
+            } else {
+                r#"<?xml version="1.0"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+  xmlns:ns2="http://xml.apache.org/xml-soap"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body><ns:TestResponse xmlns:ns="urn:test">
+    <return xsi:type="ns2:Map">
+      <item><key xsi:type="xsd:string">x</key><value xsi:type="xsd:int">1</value></item>
+      <item><key xsi:type="xsd:string">y</key><value xsi:type="xsd:int">2</value></item>
+    </return>
+  </ns:TestResponse></soap:Body>
+</soap:Envelope>"#
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).expect("write encoded response");
+        }
+    });
+
+    let source = r#"<?php
+$client = new SoapClient(null, [
+    "location" => "http://127.0.0.1:__PORT__/soap",
+    "uri" => "urn:test",
+    "use" => SOAP_ENCODED,
+]);
+$list = $client->Test(["a", "b"], ["x" => 1, "y" => 2]);
+echo implode(",", $list), "\n";
+$map = $client->Test([], []);
+echo $map["x"], ":", $map["y"], "\n";
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let out = compile_and_run(&source);
+    worker.join().expect("SOAP encoded fixture thread");
+    assert_eq!(out, "a,b\n1:2\n");
+    let requests = captured.lock().unwrap();
+    assert!(
+        requests[0].contains("xmlns:SOAP-ENC=\"http://schemas.xmlsoap.org/soap/encoding/\""),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[0].contains("SOAP-ENV:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\""),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[0].contains("SOAP-ENC:arrayType=\"xsd:string[2]\""),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[0].contains("<item xsi:type=\"xsd:string\">a</item>"),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[0].contains("xsi:type=\"ns2:Map\""),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[0].contains("<key xsi:type=\"xsd:string\">x</key>"),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[0].contains("<value xsi:type=\"xsd:int\">1</value>"),
+        "{}",
+        requests[0]
     );
 }
