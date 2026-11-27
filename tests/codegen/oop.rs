@@ -89,6 +89,8 @@ mod constants;
 mod abstract_properties;
 #[path = "oop/property_hooks.rs"]
 mod property_hooks;
+#[path = "oop/magic_property_php86.rs"]
+mod magic_property_php86;
 #[path = "oop/datetime.rs"]
 mod datetime;
 #[path = "oop/datetime_lazy_evaluation.rs"]

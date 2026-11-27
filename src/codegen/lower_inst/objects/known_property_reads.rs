@@ -1003,6 +1003,36 @@ pub(super) fn emit_hash_or_magic_empty_read(
     emit_magic_isset_result_bool(ctx, &isset);
     let absent_label = ctx.next_label("hash_magic_empty_absent");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &absent_label);
+    // PHP 8.6: `__isset()` may materialize the name by writing it into the object's
+    // property table. `??`/`empty()` must read that freshly stored value directly
+    // instead of calling `__get()`, while `isset()` keeps its probe-only answer.
+    if let Some(hash_offset) = hash_offset {
+        if crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+        {
+            let get_label = ctx.next_label("hash_magic_empty_get");
+            let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.load_value_to_reg(object, object_reg)?;
+            emit_scope_dynamic_property_hash_lookup(
+                ctx,
+                property,
+                object_reg,
+                hash_offset,
+                &get_label,
+            );
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                  // return the value materialized by __isset
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, rdi");                // return the value materialized by __isset
+                }
+            }
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&get_label);
+        }
+    }
     match &get {
         Some(get) => {
             emit_magic_get_args(ctx, object, property)?;
