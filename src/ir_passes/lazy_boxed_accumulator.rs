@@ -86,21 +86,26 @@ impl IrPass for LazyBoxedAccumulator {
         for plan in &plans {
             let mut trial = function.clone();
             apply(&mut trial, plan);
-            slots.insert(plan.slot);
-            let results: Vec<ValueId> = plan
-                .sites
-                .iter()
-                .filter_map(|site| function.instruction(site.binop).and_then(|inst| inst.result))
-                .collect();
-            values.extend(results.iter().copied());
-            if cells.kept_by(&frame_cells(&trial, data), &slots, &values) {
+            let mut trial_slots = slots.clone();
+            let mut trial_values = values.clone();
+            trial_slots.insert(plan.slot);
+            // The rewrite relocates the arithmetic result, every transparent owner copy and
+            // the complete temporary publication scope. Those cells belong to this rewritten
+            // plan, so a later independent plan must not treat their relocation as collateral
+            // damage while it still protects every unrelated frame cell.
+            for member in plan.sites.iter().flat_map(|site| site.members.iter()) {
+                trial_slots.extend(slots_of(function, *member));
+                trial_values.extend(
+                    function
+                        .instruction(*member)
+                        .and_then(|instruction| instruction.result),
+                );
+            }
+            if cells.kept_by(&frame_cells(&trial, data), &trial_slots, &trial_values) {
                 *function = trial;
+                slots = trial_slots;
+                values = trial_values;
                 changed = true;
-            } else {
-                slots.remove(&plan.slot);
-                for value in results {
-                    values.remove(&value);
-                }
             }
         }
         changed
