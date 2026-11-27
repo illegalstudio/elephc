@@ -3825,7 +3825,17 @@ fn runtime_debug_info_entry(
     } else {
         "__debugInfo"
     });
-    if (class_info.is_internal && !hosted) || var_dump_debug_info_projection(class_info).is_some() {
+    // An enum renders `enum(E::C)` only when it declares no `__debugInfo()`. PHP enters
+    // the `(n) { ... }` form even when the body folds to an empty array (or the method is
+    // non-public, which only warns), so enums skip the static projection and keep the
+    // runtime entry.
+    let is_enum = class_info.interfaces.iter().any(|interface| {
+        let interface = interface.trim_start_matches('\\');
+        interface.eq_ignore_ascii_case("UnitEnum") || interface.eq_ignore_ascii_case("BackedEnum")
+    });
+    if (class_info.is_internal && !hosted)
+        || (!is_enum && var_dump_debug_info_projection(class_info).is_some())
+    {
         return none;
     }
     let Some(impl_class) = class_info.method_impl_classes.get(&key) else {

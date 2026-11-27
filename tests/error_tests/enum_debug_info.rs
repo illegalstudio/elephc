@@ -8,8 +8,8 @@
 //! - Sources are transcribed from
 //!   `Zend/tests/enum/debugInfo/{param_validation,return_validation}.phpt`.
 //! - php-src reports the same two failures as fatal errors at declaration time; elephc
-//!   rejects them while compiling. The visibility-warning fixture stays out until the
-//!   runtime dump path can warn and still render `enum(E::C) (0) { }`.
+//!   rejects them while compiling. The visibility-warning fixture lives in the codegen
+//!   suite because it warns and still renders `enum(E::C) (0) { }`.
 
 use super::*;
 

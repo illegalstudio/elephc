@@ -19,7 +19,7 @@
 //!   the call introduces at the same top-level point.
 
 use crate::parser::ast::{
-    ClassConst, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr, UseKind,
+    ClassConst, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr, UseKind, Visibility,
 };
 use crate::synthetic_class::*;
 
@@ -36,15 +36,23 @@ pub fn inject(program: Program) -> Program {
     }
     let mut messages = Vec::new();
     collect_statements(&program, &mut messages);
-    if messages.is_empty() {
+    let mut warnings = Vec::new();
+    collect_magic_visibility(&program, &mut warnings);
+    if messages.is_empty() && warnings.is_empty() {
         return program;
     }
     let helper = internal_declarations(|| {
-        let mut body = Vec::with_capacity(messages.len());
+        let mut body = Vec::with_capacity(messages.len() + warnings.len());
         for message in &messages {
             body.push(s_expr(e_call(
                 "\\trigger_error",
                 vec![e_str(message.as_str()), e_const("E_USER_DEPRECATED")],
+            )));
+        }
+        for warning in &warnings {
+            body.push(s_expr(e_call(
+                "\\trigger_error",
+                vec![e_str(warning.as_str()), e_const("E_USER_WARNING")],
             )));
         }
         vec![function(HELPER).body(body).build()]
@@ -121,6 +129,32 @@ fn collect_statements(statements: &[Stmt], messages: &mut Vec<String>) {
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => collect_statements(body, messages),
+            _ => {}
+        }
+    }
+}
+
+/// Collects PHP's warning for a magic method declared without public visibility.
+fn collect_magic_visibility(statements: &[Stmt], warnings: &mut Vec<String>) {
+    for statement in statements {
+        match &statement.kind {
+            StmtKind::ClassDecl { name, methods, .. }
+            | StmtKind::InterfaceDecl { name, methods, .. }
+            | StmtKind::TraitDecl { name, methods, .. }
+            | StmtKind::EnumDecl { name, methods, .. } => {
+                for method in methods {
+                    if method.name.eq_ignore_ascii_case("__debugInfo")
+                        && method.visibility != Visibility::Public
+                    {
+                        warnings.push(format!(
+                            "The magic method {name}::__debugInfo() must have public visibility"
+                        ));
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => collect_magic_visibility(body, warnings),
             _ => {}
         }
     }
@@ -338,6 +372,22 @@ mod tests {
             "<?php class A { public function __construct() { } public function f(): int { return 1; } }"
         )
         .is_empty());
+    }
+
+    /// A non-public `__debugInfo()` produces PHP's magic-method visibility warning.
+    #[test]
+    fn non_public_debug_info_collects_warning() {
+        let mut warnings = Vec::new();
+        collect_magic_visibility(
+            &parse(
+                "<?php enum Foo { case Bar; private function __debugInfo(): array { return []; } }",
+            ),
+            &mut warnings,
+        );
+        assert_eq!(
+            warnings,
+            vec!["The magic method Foo::__debugInfo() must have public visibility"]
+        );
     }
 
     /// A nullable `__debugInfo()` return is deprecated with the declaring class named.
