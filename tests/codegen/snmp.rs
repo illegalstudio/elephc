@@ -388,3 +388,87 @@ $snmp->close();
         "bool(true)\nbool(true)\n.1.3.6.1.2.1.1.1.0=one\n.1.3.6.1.2.1.1.2.0=two\n.1.3.6.1.2.1.1.3.0=three\nbool(true)\n0\n"
     );
 }
+
+/// A MIB file resolves symbolic OIDs and renders names/enums in walk keys/values.
+#[test]
+fn test_snmp_mib_resolution_and_rendering() {
+    let server = UdpSocket::bind(("127.0.0.1", 0)).expect("bind SNMP MIB fixture");
+    let port = server.local_addr().unwrap().port();
+    let worker = thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        for _ in 0..5 {
+            let (size, peer) = server.recv_from(&mut buffer).expect("SNMP request");
+            let request = &buffer[..size];
+            let (version, community) = request_header(request);
+            let (pdu_tag, request_id, varbinds) = request_details(request);
+            let reply = if pdu_tag == 0xA0 {
+                multi_response(
+                    &version,
+                    &community,
+                    request_id,
+                    vec![(
+                        ".1.3.6.1.4.1.424242.1.0".to_string(),
+                        0x04,
+                        b"value".to_vec(),
+                    )],
+                )
+            } else {
+                let current = varbinds.first().cloned().unwrap_or_default();
+                let entries = if current == ".1.3.6.1.4.1.424242" {
+                    vec![
+                        (
+                            ".1.3.6.1.4.1.424242.1.0".to_string(),
+                            0x04,
+                            b"value".to_vec(),
+                        ),
+                        (".1.3.6.1.4.1.424242.2.0".to_string(), 0x02, vec![2]),
+                    ]
+                } else {
+                    vec![(".1.3.6.1.3.0".to_string(), 0x05, Vec::new())]
+                };
+                multi_response(&version, &community, request_id, entries)
+            };
+            server.send_to(&reply, peer).expect("SNMP response");
+        }
+    });
+
+    let source = r#"<?php
+$mib = 'ELEPHC-MIB DEFINITIONS ::= BEGIN
+elephc OBJECT IDENTIFIER ::= { enterprises 424242 }
+elephcName OBJECT-TYPE
+    SYNTAX DisplayString
+    MAX-ACCESS read-only
+    STATUS current
+    ::= { elephc 1 }
+elephcState OBJECT-TYPE
+    SYNTAX INTEGER { up(1), down(2) }
+    MAX-ACCESS read-only
+    STATUS current
+    ::= { elephc 2 }
+END
+';
+file_put_contents("elephc-test.mib", $mib);
+var_dump(snmp_read_mib("elephc-test.mib"));
+$host = "127.0.0.1:__PORT__";
+snmp_set_oid_output_format(\Snmp\OidOutput::Suffix);
+echo snmp2_get($host, "public", "elephcName.0", 1000000, 1), "\n";
+$walk = snmp2_walk($host, "public", "elephc", 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_oid_output_format(\Snmp\OidOutput::Module);
+snmp_set_enum_print(true);
+$walk = snmp2_walk($host, "public", "elephc", 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let out = compile_and_run(&source);
+    worker.join().expect("SNMP MIB fixture thread");
+    assert_eq!(
+        out,
+        "bool(true)\nvalue\nelephcName.0=value\nelephcState.0=down\nELEPHC-MIB::elephcName.0=value\nELEPHC-MIB::elephcState.0=2\n"
+    );
+}

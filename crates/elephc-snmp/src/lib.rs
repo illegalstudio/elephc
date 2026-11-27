@@ -20,6 +20,7 @@ use std::sync::{Mutex, OnceLock};
 
 mod ber;
 mod client;
+mod mib;
 mod v3;
 
 use client::{Response, Value};
@@ -389,6 +390,104 @@ pub unsafe extern "C" fn elephc_snmp_request_bulk(
             )
         };
         store_response(response)
+    })
+}
+
+/// C ABI: loads a MIB file; returns 1 on success and 0 on failure.
+///
+/// # Safety
+/// `path` must reference `path_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_read_mib(path: *const u8, path_len: usize) -> i64 {
+    guarded(0, || {
+        let Some(path) = bytes(path, path_len) else {
+            return 0;
+        };
+        let Ok(path) = std::str::from_utf8(path) else {
+            return 0;
+        };
+        i64::from(mib::read_mib(path))
+    })
+}
+
+/// C ABI: sets the colon-separated MIB search directories.
+///
+/// # Safety
+/// `dirs` must reference `dirs_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_init_mib(dirs: *const u8, dirs_len: usize) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let Some(dirs) = bytes(dirs, dirs_len) else {
+            return;
+        };
+        if let Ok(dirs) = std::str::from_utf8(dirs) {
+            mib::init_dirs(dirs);
+        }
+    }));
+}
+
+/// C ABI: resolves a numeric or symbolic OID, or returns null.
+///
+/// # Safety
+/// `oid` must reference `oid_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_resolve_oid(oid: *const u8, oid_len: usize) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(oid) = bytes(oid, oid_len) else {
+            return ptr::null();
+        };
+        let Ok(oid) = std::str::from_utf8(oid) else {
+            return ptr::null();
+        };
+        mib::resolve(oid)
+            .map(|oid| publish(oid.as_bytes()))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: renders an OID using net-snmp's output format, or returns null.
+///
+/// # Safety
+/// `oid` must reference `oid_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_render_oid(
+    oid: *const u8,
+    oid_len: usize,
+    format: i64,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(oid) = bytes(oid, oid_len) else {
+            return ptr::null();
+        };
+        let Ok(oid) = std::str::from_utf8(oid) else {
+            return ptr::null();
+        };
+        mib::render(oid, format)
+            .map(|oid| publish(oid.as_bytes()))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: returns the enum label for a value at an OID, or null.
+///
+/// # Safety
+/// `oid` must reference `oid_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_enum_label(
+    oid: *const u8,
+    oid_len: usize,
+    value: i64,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(oid) = bytes(oid, oid_len) else {
+            return ptr::null();
+        };
+        let Ok(oid) = std::str::from_utf8(oid) else {
+            return ptr::null();
+        };
+        mib::enum_label(oid, value)
+            .map(|label| publish(label.as_bytes()))
+            .unwrap_or(ptr::null())
     })
 }
 
