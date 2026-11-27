@@ -385,6 +385,114 @@ fn boxed_checked_result_narrows_for_scalar_output() {
     );
 }
 
+/// Boxed narrowing removes only the exclusive unwind owner and keeps the destination box.
+#[test]
+fn boxed_checked_result_drops_obsolete_transient_owner_scope() {
+    let mut function = Function::new("boxed_owner_scope".to_string(), IrType::Void, PhpType::Void);
+    let checked_value;
+    let destination_owner;
+    let transient_owner;
+    let transient_slot;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let destination_slot = builder.add_local(
+            Some("destination".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        transient_slot = builder.add_local(
+            Some("transient-owner".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::HiddenTemp,
+        );
+        let input = emit_unknown_int(&mut builder, "input");
+        let mask = builder.emit_const_i64(31);
+        let bounded = emit_scalar_binop(&mut builder, Op::IBitAnd, input, mask);
+        let one = builder.emit_const_i64(1);
+        checked_value = builder
+            .emit(
+                Op::ICheckedAdd,
+                vec![bounded, one],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .unwrap();
+        destination_owner = builder
+            .emit(
+                Op::Acquire,
+                vec![checked_value],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .unwrap();
+        transient_owner = builder
+            .emit(
+                Op::Acquire,
+                vec![checked_value],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .unwrap();
+        builder.emit_store_local(transient_slot, transient_owner);
+        builder.emit(
+            Op::PushCallOperandOwner,
+            Vec::new(),
+            Some(Immediate::LocalSlot(transient_slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.emit(
+            Op::Release,
+            vec![checked_value],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.emit_store_local(destination_slot, destination_owner);
+        for op in [Op::PopCallOperandOwner, Op::ReleaseLocalSlot] {
+            builder.emit(
+                op,
+                Vec::new(),
+                Some(Immediate::LocalSlot(transient_slot)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+        }
+        builder.terminate(Terminator::Return { value: None });
+    }
+    validate_function(&function).unwrap();
+
+    assert!(specialize(&mut function));
+    validate_function(&function).unwrap();
+    let defining_op = |function: &Function, value: ValueId| {
+        let crate::ir::ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {
+            panic!("value must be instruction-defined");
+        };
+        function.instruction(inst).unwrap().op
+    };
+    assert_eq!(defining_op(&function, checked_value), Op::IAdd);
+    assert_eq!(defining_op(&function, destination_owner), Op::Acquire);
+    assert_eq!(defining_op(&function, transient_owner), Op::Nop);
+    assert!(function.instructions.iter().all(|instruction| {
+        instruction.immediate != Some(Immediate::LocalSlot(transient_slot))
+            || instruction.op == Op::Nop
+    }));
+}
+
 /// A boxed producer feeding numeric-chain fusion is left intact for the later pass.
 #[test]
 fn boxed_checked_result_preserves_numeric_chain_fusion() {

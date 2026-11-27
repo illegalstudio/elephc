@@ -14,6 +14,8 @@
 //!   ranges, preventing abstract interpretation from unrolling loops one iteration at a time.
 //! - Every arithmetic proof uses `i128`; unknown or unsupported shapes keep PHP's checked
 //!   overflow-to-float path unchanged.
+//! - Narrowing a boxed result also erases exclusive exceptional-owner scopes that protected only
+//!   the old box; ordinary Mixed destinations retain their own materialization.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -27,6 +29,7 @@ use super::cfg::has_exception_handlers;
 use super::dominance::{compute_dominance, DominanceInfo};
 use super::driver::IrPass;
 use super::loops::compute_loops;
+use super::rewrite::neutralize_to_nop;
 
 /// Maximum number of block transfers before a malformed or unexpectedly complex CFG fails closed.
 const MAX_DATAFLOW_STEPS: usize = 100_000;
@@ -1168,7 +1171,17 @@ fn rewrite_candidate(function: &mut Function, candidate: InstId) {
     else {
         return;
     };
+    let narrowed_box = function
+        .instruction(candidate)
+        .is_some_and(|inst| inst.result_type != IrType::I64);
     let result = function.instruction(candidate).and_then(|inst| inst.result);
+    let obsolete_owner_ops = if narrowed_box {
+        result
+            .map(|result| exclusive_scalar_owner_operations(function, result))
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
     if let Some(inst) = function.instruction_mut(candidate) {
         inst.op = replacement;
         inst.result_type = IrType::I64;
@@ -1182,4 +1195,22 @@ fn rewrite_candidate(function: &mut Function, candidate: InstId) {
         value.php_type = PhpType::Int;
         value.ownership = Ownership::NonHeap;
     }
+    for id in obsolete_owner_ops {
+        if let Some(instruction) = function.instruction_mut(id) {
+            neutralize_to_nop(instruction);
+        }
+    }
+}
+
+/// Finds complete owner scopes whose temporary chain exists only for this soon-scalar result.
+fn exclusive_scalar_owner_operations(function: &Function, result: ValueId) -> HashSet<InstId> {
+    let mut operations = HashSet::new();
+    for scope in super::transient_owner_scopes::collect(function) {
+        let Some(chain) = scope.exclusive_forwarding_chain_to(function, result) else {
+            continue;
+        };
+        operations.extend(scope.operations());
+        operations.extend(chain);
+    }
+    operations
 }

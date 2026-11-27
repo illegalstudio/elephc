@@ -109,7 +109,7 @@ echo $h;
     assert!(!optimized.contains("= mixed_numeric_binop "));
 }
 
-/// Checks signed-overflow guards and float suffixes via Linux x86_64 and AArch64 targets.
+/// Checks near or wide signed-overflow guards and float suffixes on both backend architectures.
 #[test]
 fn test_checked_numeric_chain_has_target_aware_fast_and_slow_paths() {
     let source = "<?php $h = $argc; echo ($h * 31 + $argc) & 0x3fffffff;";
@@ -125,7 +125,11 @@ fn test_checked_numeric_chain_has_target_aware_fast_and_slow_paths() {
     assert!(arm.contains("op=ichecked_numeric_chain_to_int"));
     assert!(arm.contains("smulh "));
     assert!(arm.contains("b.ne "));
-    assert!(arm.contains("b.vs "));
+    assert!(
+        arm.contains("b.vs ")
+            || (arm.contains("b.vc 1f") && arm.contains("checked_numeric_chain_overflow")),
+        "AArch64 must branch to the add-overflow slow path:\n{arm}"
+    );
     assert!(arm.contains("fmul d0, d0, d1"));
     assert!(arm.contains("fadd d0, d0, d1"));
     assert!(!arm.contains("bl __rt_mixed_numeric_add"));

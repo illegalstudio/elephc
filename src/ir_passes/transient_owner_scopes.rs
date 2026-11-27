@@ -9,6 +9,8 @@
 //! - The same slot may host independent complete scopes in mutually exclusive blocks.
 //! - Cross-block lifetimes, incomplete scopes and otherwise-addressed slots fail closed.
 
+use std::collections::HashSet;
+
 use crate::ir::{
     BlockId, Function, Immediate, InstId, LocalKind, LocalSlotId, Op, ValueDef, ValueId,
 };
@@ -58,6 +60,32 @@ impl TransientOwnerScope {
             value = producer.operands[0];
         }
         None
+    }
+
+    /// Returns the forwarding chain only when none of its temporary results escape this scope.
+    pub(super) fn exclusive_forwarding_chain_to(
+        &self,
+        function: &Function,
+        source: ValueId,
+    ) -> Option<Vec<InstId>> {
+        let chain = self.forwarding_chain_to(function, source)?;
+        let mut allowed = self.operations.iter().copied().collect::<HashSet<_>>();
+        allowed.extend(chain.iter().copied());
+        for id in &chain {
+            let result = function.instruction(*id)?.result?;
+            if function.instructions.iter().enumerate().any(|(raw, instruction)| {
+                instruction.operands.contains(&result)
+                    && !allowed.contains(&InstId::from_raw(raw as u32))
+            }) || function
+                .blocks
+                .iter()
+                .filter_map(|block| block.terminator.as_ref())
+                .any(|terminator| terminator.used_values().contains(&result))
+            {
+                return None;
+            }
+        }
+        Some(chain)
     }
 }
 

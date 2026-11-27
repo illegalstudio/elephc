@@ -347,7 +347,13 @@ pub(super) fn lower_instance_runtime_intrinsic(
     ref_params.extend(callee_ref_params.iter().copied());
     let call_args =
         materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
-    retain_consumed_intrinsic_arguments(ctx, intrinsic, &param_types, 1)?;
+    retain_consumed_intrinsic_arguments(
+        ctx,
+        intrinsic,
+        &param_types,
+        1,
+        &inst.operands[1..],
+    )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(
@@ -413,7 +419,7 @@ pub(super) fn lower_static_runtime_intrinsic(
     let mut abi_param_types = Vec::with_capacity(param_types.len() + 1);
     abi_param_types.push(PhpType::Int);
     abi_param_types.extend_from_slice(&param_types);
-    retain_consumed_intrinsic_arguments(ctx, intrinsic, &abi_param_types, 1)?;
+    retain_consumed_intrinsic_arguments(ctx, intrinsic, &abi_param_types, 1, &inst.operands)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(
@@ -444,12 +450,15 @@ pub(super) fn lower_static_runtime_intrinsic(
 ///
 /// Intrinsic parameter indexes are caller-visible. `first_visible` skips an instance receiver or
 /// the hidden called-class id. The native helper consumes each retained owner on both success and
-/// throw paths, while the source expression keeps its original PHP owner.
+/// throw paths, while a source whose owner remains scheduled for cleanup keeps its original PHP
+/// owner. A one-shot owned operand, or a non-Mixed operand freshly boxed by ABI materialization,
+/// transfers that owner directly and must not be retained twice.
 fn retain_consumed_intrinsic_arguments(
     ctx: &mut FunctionContext<'_>,
     intrinsic: IntrinsicCall,
     abi_param_types: &[PhpType],
     first_visible: usize,
+    visible_operands: &[ValueId],
 ) -> Result<()> {
     if intrinsic.consumed_mixed_parameters().is_empty() {
         return Ok(());
@@ -458,6 +467,14 @@ fn retain_consumed_intrinsic_arguments(
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, abi_param_types, 0);
     for &visible_index in intrinsic.consumed_mixed_parameters() {
         let abi_index = first_visible + visible_index;
+        let operand = visible_operands.get(visible_index).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "intrinsic {}::{} consumes missing operand {}",
+                intrinsic.class_name(),
+                intrinsic.method_key(),
+                visible_index,
+            ))
+        })?;
         let assignment = assignments.get(abi_index).ok_or_else(|| {
             CodegenIrError::invalid_module(format!(
                 "intrinsic {}::{} consumes missing argument {}",
@@ -474,6 +491,20 @@ fn retain_consumed_intrinsic_arguments(
                 visible_index,
                 assignment.ty,
             )));
+        }
+        let source_ty = ctx.raw_value_php_type(*operand)?;
+        let param_ty = abi_param_types.get(abi_index).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "intrinsic {}::{} consumes missing parameter type {}",
+                intrinsic.class_name(),
+                intrinsic.method_key(),
+                abi_index,
+            ))
+        })?;
+        if direct_call_arg_creates_mixed_temp(&source_ty, param_ty)
+            || ctx.value_can_transfer_ownership_to_consumer(*operand)?
+        {
+            continue;
         }
         if assignment.in_register() {
             let register = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);

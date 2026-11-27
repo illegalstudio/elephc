@@ -846,6 +846,9 @@ fn consuming_spl_offsets_retain_borrowed_boxes_on_all_targets() {
 function readFixedOffset(SplFixedArray $array, mixed $offset): mixed {
     return $array[$offset];
 }
+function readFixedLiteral(SplFixedArray $array): mixed {
+    return $array[0];
+}
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -872,5 +875,13 @@ function readFixedOffset(SplFixedArray $array, mixed $offset): mixed {
             assert!(preserved < incref && incref < restored,
                 "{target}: rcx must surround the nested retain call");
         }
+        let literal_body = asm.split_once("@fn name=readFixedLiteral ").unwrap().1
+            .split_once("@endfn name=readFixedLiteral").unwrap().0;
+        let (literal_before, _) = literal_body.split_once("__rt_spl_fixed_offset_get")
+            .unwrap_or_else(|| {
+                panic!("{target}: missing literal SplFixedArray offset helper in {literal_body}")
+            });
+        assert!(!literal_before.contains("retain boxed argument consumed by intrinsic"),
+            "{target}: an already-owned literal offset must transfer without a second retain in {literal_body}");
     }
 }
