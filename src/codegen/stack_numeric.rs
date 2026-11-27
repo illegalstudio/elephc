@@ -364,13 +364,17 @@ impl Proof<'_> {
             return false;
         }
         let mut stores = HashSet::new();
-        if !self.value_uses(value, id, &mut HashSet::new(), &mut stores)
-            || stores.iter().filter(|&&slot| !self.scoped_temp(slot)).count() > 1
-        {
+        if !self.value_uses(value, id, &mut HashSet::new(), &mut stores) {
+            return false;
+        }
+        let ordinary_stores = stores.iter().filter(|&&slot| !self.scoped_temp(slot)).count();
+        if ordinary_stores > 1 {
             return false;
         }
         // A box is selected only as a local seed (a guarded counter's exit publication).
-        if boxed && stores.len() != 1 {
+        // Complete scoped owner slots may mirror that one ordinary destination while the
+        // assignment is in flight, and are retired before the producer can run again.
+        if boxed && ordinary_stores != 1 {
             return false;
         }
         stores.into_iter().all(|slot| self.slot(slot))
