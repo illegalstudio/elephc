@@ -65,6 +65,72 @@ const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_INTERACTIVE = 16777216;
 const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_SENSITIVE = 33554432;
 const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_SENSITIVE = 1073741824;
 
+
+const SODIUM_CRYPTO_GENERICHASH_BYTES = 32;
+const SODIUM_CRYPTO_GENERICHASH_BYTES_MIN = 16;
+const SODIUM_CRYPTO_GENERICHASH_BYTES_MAX = 64;
+const SODIUM_CRYPTO_GENERICHASH_KEYBYTES = 32;
+const SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MIN = 16;
+const SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MAX = 64;
+const SODIUM_CRYPTO_AUTH_BYTES = 32;
+const SODIUM_CRYPTO_AUTH_KEYBYTES = 32;
+const SODIUM_CRYPTO_KDF_BYTES_MIN = 16;
+const SODIUM_CRYPTO_KDF_BYTES_MAX = 64;
+const SODIUM_CRYPTO_KDF_CONTEXTBYTES = 8;
+const SODIUM_CRYPTO_KDF_KEYBYTES = 32;
+const SODIUM_CRYPTO_SIGN_BYTES = 64;
+const SODIUM_CRYPTO_SIGN_KEYPAIRBYTES = 96;
+const SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES = 32;
+const SODIUM_CRYPTO_SIGN_SECRETKEYBYTES = 64;
+const SODIUM_CRYPTO_SIGN_SEEDBYTES = 32;
+const SODIUM_CRYPTO_BOX_KEYPAIRBYTES = 64;
+const SODIUM_CRYPTO_BOX_MACBYTES = 16;
+const SODIUM_CRYPTO_BOX_NONCEBYTES = 24;
+const SODIUM_CRYPTO_BOX_PUBLICKEYBYTES = 32;
+const SODIUM_CRYPTO_BOX_SEALBYTES = 48;
+const SODIUM_CRYPTO_BOX_SECRETKEYBYTES = 32;
+const SODIUM_CRYPTO_BOX_SEEDBYTES = 32;
+const SODIUM_CRYPTO_KX_KEYPAIRBYTES = 64;
+const SODIUM_CRYPTO_KX_PUBLICKEYBYTES = 32;
+const SODIUM_CRYPTO_KX_SECRETKEYBYTES = 32;
+const SODIUM_CRYPTO_KX_SEEDBYTES = 32;
+const SODIUM_CRYPTO_KX_SESSIONKEYBYTES = 32;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_ABYTES = 16;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES = 32;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES = 8;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NSECBYTES = 0;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_ABYTES = 16;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES = 32;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES = 12;
+const SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NSECBYTES = 0;
+const SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_ABYTES = 16;
+const SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES = 32;
+const SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES = 24;
+const SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NSECBYTES = 0;
+const SODIUM_CRYPTO_AEAD_AES256GCM_ABYTES = 16;
+const SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES = 32;
+const SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES = 12;
+const SODIUM_CRYPTO_AEAD_AES256GCM_NSECBYTES = 0;
+const SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_ABYTES = 17;
+const SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES = 24;
+const SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES = 32;
+const SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE = 0;
+const SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_PUSH = 1;
+const SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_REKEY = 2;
+const SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL = 3;
+const SODIUM_CRYPTO_STREAM_KEYBYTES = 32;
+const SODIUM_CRYPTO_STREAM_NONCEBYTES = 24;
+const SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES = 32;
+const SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES = 24;
+const SODIUM_CRYPTO_SCALARMULT_BYTES = 32;
+const SODIUM_CRYPTO_SCALARMULT_SCALARBYTES = 32;
+const SODIUM_CRYPTO_SHORTHASH_BYTES = 8;
+const SODIUM_CRYPTO_SHORTHASH_KEYBYTES = 16;
+const SODIUM_BASE64_VARIANT_ORIGINAL = 1;
+const SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING = 3;
+const SODIUM_BASE64_VARIANT_URLSAFE = 5;
+const SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING = 7;
+
 class SodiumException extends \Exception
 {
 }
@@ -116,6 +182,49 @@ extern "elephc_sodium" {
     function elephc_sodium_pwhash_scryptsalsa208sha256(int $length, string $password, int $passwordLength, string $salt, int $saltLength, int $opslimit, int $memlimit): ptr;
     function elephc_sodium_pwhash_scryptsalsa208sha256_str(string $password, int $passwordLength, string $salt, int $saltLength, int $opslimit, int $memlimit): ptr;
     function elephc_sodium_pwhash_scryptsalsa208sha256_str_verify(string $password, int $passwordLength, string $hash, int $hashLength): int;
+    function elephc_sodium_generichash(string $message, int $messageLength, string $key, int $keyLength, int $outputLength): ptr;
+    function elephc_sodium_generichash_init(string $key, int $keyLength, int $outputLength): ptr;
+    function elephc_sodium_generichash_update(string $state, int $stateLength, string $message, int $messageLength): ptr;
+    function elephc_sodium_generichash_final(string $state, int $stateLength, int $outputLength): ptr;
+    function elephc_sodium_auth(string $message, int $messageLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_auth_verify(string $mac, int $macLength, string $message, int $messageLength, string $key, int $keyLength): int;
+    function elephc_sodium_kdf(int $subkeyLength, int $subkeyId, string $context, int $contextLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_shorthash(string $message, int $messageLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_sign_seed_keypair(string $seed, int $seedLength): ptr;
+    function elephc_sodium_sign_publickey_from_secretkey(string $secretKey, int $secretKeyLength): ptr;
+    function elephc_sodium_sign_detached(string $message, int $messageLength, string $secretKey, int $secretKeyLength): ptr;
+    function elephc_sodium_sign(string $message, int $messageLength, string $secretKey, int $secretKeyLength): ptr;
+    function elephc_sodium_sign_open(string $signedMessage, int $signedMessageLength, string $publicKey, int $publicKeyLength): ptr;
+    function elephc_sodium_sign_verify_detached(string $signature, int $signatureLength, string $message, int $messageLength, string $publicKey, int $publicKeyLength): int;
+    function elephc_sodium_sign_pk_to_curve25519(string $publicKey, int $publicKeyLength): ptr;
+    function elephc_sodium_sign_sk_to_curve25519(string $secretKey, int $secretKeyLength): ptr;
+    function elephc_sodium_box_seed_keypair(string $seed, int $seedLength): ptr;
+    function elephc_sodium_box_publickey_from_secretkey(string $secretKey, int $secretKeyLength): ptr;
+    function elephc_sodium_box_encrypt(string $message, int $messageLength, string $nonce, int $nonceLength, string $keyPair, int $keyPairLength): ptr;
+    function elephc_sodium_box_decrypt(string $ciphertext, int $ciphertextLength, string $nonce, int $nonceLength, string $keyPair, int $keyPairLength): ptr;
+    function elephc_sodium_scalarmult(string $secretKey, int $secretKeyLength, string $publicKey, int $publicKeyLength): ptr;
+    function elephc_sodium_scalarmult_base(string $secretKey, int $secretKeyLength): ptr;
+    function elephc_sodium_kx_seed_keypair(string $seed, int $seedLength): ptr;
+    function elephc_sodium_kx_client_session_keys(string $keyPair, int $keyPairLength, string $serverKey, int $serverKeyLength): ptr;
+    function elephc_sodium_kx_server_session_keys(string $keyPair, int $keyPairLength, string $clientKey, int $clientKeyLength): ptr;
+    function elephc_sodium_aead_chacha20poly1305_encrypt(string $message, int $messageLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_chacha20poly1305_decrypt(string $ciphertext, int $ciphertextLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_chacha20poly1305_ietf_encrypt(string $message, int $messageLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_chacha20poly1305_ietf_decrypt(string $ciphertext, int $ciphertextLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_xchacha20poly1305_ietf_encrypt(string $message, int $messageLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_xchacha20poly1305_ietf_decrypt(string $ciphertext, int $ciphertextLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_aes256gcm_encrypt(string $message, int $messageLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_aes256gcm_decrypt(string $ciphertext, int $ciphertextLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_secretstream_init_push(string $key, int $keyLength, string $header, int $headerLength): ptr;
+    function elephc_sodium_secretstream_init_pull(string $header, int $headerLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_secretstream_push(string $state, int $stateLength, string $message, int $messageLength, string $aad, int $aadLength, int $tag): ptr;
+    function elephc_sodium_secretstream_pull(string $state, int $stateLength, string $ciphertext, int $ciphertextLength, string $aad, int $aadLength): ptr;
+    function elephc_sodium_secretstream_rekey(string $state, int $stateLength): ptr;
+    function elephc_sodium_stream(int $length, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_stream_xor(string $message, int $messageLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_stream_xchacha20(int $length, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_stream_xchacha20_xor(string $message, int $messageLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_stream_xchacha20_xor_ic(string $message, int $messageLength, string $nonce, int $nonceLength, int $counter, string $key, int $keyLength): ptr;
     function elephc_sodium_last_len(): int;
 }
 
@@ -913,4 +1022,1011 @@ function sodium_crypto_pwhash_scryptsalsa208sha256_str_verify(string $hash, stri
     }
     $result = \elephc_sodium_pwhash_scryptsalsa208sha256_str_verify($password, \strlen($password), $hash, \strlen($hash));
     return $result === 1;
+}
+
+function sodium_crypto_generichash(string $message, string $key = "", int $length = SODIUM_CRYPTO_GENERICHASH_BYTES): string
+{
+    if ($length < SODIUM_CRYPTO_GENERICHASH_BYTES_MIN || $length > SODIUM_CRYPTO_GENERICHASH_BYTES_MAX) {
+        throw new \SodiumException("unsupported output length");
+    }
+    $keyLength = \strlen($key);
+    if ($keyLength !== 0 && ($keyLength < SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MIN || $keyLength > SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MAX)) {
+        throw new \SodiumException("unsupported key length");
+    }
+    $pointer = \elephc_sodium_generichash($message, \strlen($message), $key, $keyLength, $length);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_generichash(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_generichash_init(string $key = "", int $length = SODIUM_CRYPTO_GENERICHASH_BYTES): string
+{
+    if ($length < SODIUM_CRYPTO_GENERICHASH_BYTES_MIN || $length > SODIUM_CRYPTO_GENERICHASH_BYTES_MAX) {
+        throw new \SodiumException("unsupported output length");
+    }
+    $keyLength = \strlen($key);
+    if ($keyLength !== 0 && ($keyLength < SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MIN || $keyLength > SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MAX)) {
+        throw new \SodiumException("unsupported key length");
+    }
+    $pointer = \elephc_sodium_generichash_init($key, $keyLength, $length);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_generichash_init(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_generichash_update(string &$state, string $message): bool
+{
+    $pointer = \elephc_sodium_generichash_update($state, \strlen($state), $message, \strlen($message));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_generichash_update(): internal error");
+    }
+    $state = \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+    return true;
+}
+
+function sodium_crypto_generichash_final(string &$state, int $length = SODIUM_CRYPTO_GENERICHASH_BYTES): string
+{
+    if ($length < SODIUM_CRYPTO_GENERICHASH_BYTES_MIN || $length > SODIUM_CRYPTO_GENERICHASH_BYTES_MAX) {
+        throw new \SodiumException("unsupported output length");
+    }
+    $pointer = \elephc_sodium_generichash_final($state, \strlen($state), $length);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_generichash_final(): internal error");
+    }
+    $output = \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+    $state = "";
+    return $output;
+}
+
+function sodium_crypto_generichash_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_GENERICHASH_KEYBYTES);
+}
+
+function sodium_crypto_auth(string $message, string $key): string
+{
+    if (\strlen($key) !== SODIUM_CRYPTO_AUTH_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_auth(): Argument #2 (\$key) must be SODIUM_CRYPTO_AUTH_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_auth($message, \strlen($message), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_auth(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_auth_verify(string $mac, string $message, string $key): bool
+{
+    if (\strlen($key) !== SODIUM_CRYPTO_AUTH_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_auth_verify(): Argument #3 (\$key) must be SODIUM_CRYPTO_AUTH_KEYBYTES bytes long");
+    }
+    if (\strlen($mac) !== SODIUM_CRYPTO_AUTH_BYTES) {
+        return false;
+    }
+    return \elephc_sodium_auth_verify($mac, \strlen($mac), $message, \strlen($message), $key, \strlen($key)) === 1;
+}
+
+function sodium_crypto_auth_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_AUTH_KEYBYTES);
+}
+
+function sodium_crypto_kdf_derive_from_key(int $subkey_length, int $subkey_id, string $context, string $key): string
+{
+    if ($subkey_length < SODIUM_CRYPTO_KDF_BYTES_MIN) {
+        throw new \SodiumException("sodium_crypto_kdf_derive_from_key(): Argument #1 (\$subkey_length) must be greater than or equal to SODIUM_CRYPTO_KDF_BYTES_MIN");
+    }
+    if ($subkey_length > SODIUM_CRYPTO_KDF_BYTES_MAX) {
+        throw new \SodiumException("sodium_crypto_kdf_derive_from_key(): Argument #1 (\$subkey_length) must be less than or equal to SODIUM_CRYPTO_KDF_BYTES_MAX");
+    }
+    if (\strlen($context) !== SODIUM_CRYPTO_KDF_CONTEXTBYTES) {
+        throw new \SodiumException("sodium_crypto_kdf_derive_from_key(): Argument #3 (\$context) must be SODIUM_CRYPTO_KDF_CONTEXTBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_KDF_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_kdf_derive_from_key(): Argument #4 (\$key) must be SODIUM_CRYPTO_KDF_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_kdf($subkey_length, $subkey_id, $context, \strlen($context), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_kdf_derive_from_key(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_kdf_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_KDF_KEYBYTES);
+}
+
+function sodium_crypto_shorthash(string $message, string $key): string
+{
+    if (\strlen($key) !== SODIUM_CRYPTO_SHORTHASH_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_shorthash(): Argument #2 (\$key) must be SODIUM_CRYPTO_SHORTHASH_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_shorthash($message, \strlen($message), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_shorthash(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_shorthash_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_SHORTHASH_KEYBYTES);
+}
+
+function sodium_crypto_sign_seed_keypair(string $seed): string
+{
+    if (\strlen($seed) !== SODIUM_CRYPTO_SIGN_SEEDBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_seed_keypair(): Argument #1 (\$seed) must be SODIUM_CRYPTO_SIGN_SEEDBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_sign_seed_keypair($seed, \strlen($seed));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_sign_seed_keypair(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_sign_keypair(): string
+{
+    return \sodium_crypto_sign_seed_keypair(\random_bytes(SODIUM_CRYPTO_SIGN_SEEDBYTES));
+}
+
+function sodium_crypto_sign_keypair_from_secretkey_and_publickey(string $secret_key, string $public_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_keypair_from_secretkey_and_publickey(): Argument #1 (\$secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long");
+    }
+    if (\strlen($public_key) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_keypair_from_secretkey_and_publickey(): Argument #2 (\$public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long");
+    }
+    return $secret_key . $public_key;
+}
+
+function sodium_crypto_sign_secretkey(string $key_pair): string
+{
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_SIGN_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_secretkey(): Argument #1 (\$key_pair) must be SODIUM_CRYPTO_SIGN_KEYPAIRBYTES bytes long");
+    }
+    return \substr($key_pair, 0, SODIUM_CRYPTO_SIGN_SECRETKEYBYTES);
+}
+
+function sodium_crypto_sign_publickey(string $key_pair): string
+{
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_SIGN_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_publickey(): Argument #1 (\$key_pair) must be SODIUM_CRYPTO_SIGN_KEYPAIRBYTES bytes long");
+    }
+    return \substr($key_pair, SODIUM_CRYPTO_SIGN_SECRETKEYBYTES, SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES);
+}
+
+function sodium_crypto_sign_publickey_from_secretkey(string $secret_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_publickey_from_secretkey(): Argument #1 (\$secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_sign_publickey_from_secretkey($secret_key, \strlen($secret_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_sign_publickey_from_secretkey(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_sign_detached(string $message, string $secret_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_detached(): Argument #2 (\$secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_sign_detached($message, \strlen($message), $secret_key, \strlen($secret_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_sign_detached(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_sign(string $message, string $secret_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign(): Argument #2 (\$secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_sign($message, \strlen($message), $secret_key, \strlen($secret_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_sign(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_sign_open(string $signed_message, string $public_key): string|false
+{
+    if (\strlen($public_key) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_open(): Argument #2 (\$public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long");
+    }
+    if (\strlen($signed_message) < SODIUM_CRYPTO_SIGN_BYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_sign_open($signed_message, \strlen($signed_message), $public_key, \strlen($public_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_sign_verify_detached(string $signature, string $message, string $public_key): bool
+{
+    if (\strlen($signature) !== SODIUM_CRYPTO_SIGN_BYTES) {
+        throw new \SodiumException("sodium_crypto_sign_verify_detached(): Argument #1 (\$signature) must be SODIUM_CRYPTO_SIGN_BYTES bytes long");
+    }
+    if (\strlen($public_key) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_verify_detached(): Argument #3 (\$public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long");
+    }
+    return \elephc_sodium_sign_verify_detached($signature, \strlen($signature), $message, \strlen($message), $public_key, \strlen($public_key)) === 1;
+}
+
+function sodium_crypto_sign_ed25519_pk_to_curve25519(string $public_key): string
+{
+    if (\strlen($public_key) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_ed25519_pk_to_curve25519(): Argument #1 (\$public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_sign_pk_to_curve25519($public_key, \strlen($public_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_sign_ed25519_pk_to_curve25519(): invalid public key");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_sign_ed25519_sk_to_curve25519(string $secret_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_sign_ed25519_sk_to_curve25519(): Argument #1 (\$secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_sign_sk_to_curve25519($secret_key, \strlen($secret_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_sign_ed25519_sk_to_curve25519(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_box_seed_keypair(string $seed): string
+{
+    if (\strlen($seed) !== SODIUM_CRYPTO_BOX_SEEDBYTES) {
+        throw new \SodiumException("sodium_crypto_box_seed_keypair(): Argument #1 (\$seed) must be SODIUM_CRYPTO_BOX_SEEDBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_box_seed_keypair($seed, \strlen($seed));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_box_seed_keypair(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_box_keypair(): string
+{
+    $secret = \random_bytes(SODIUM_CRYPTO_BOX_SECRETKEYBYTES);
+    $pointer = \elephc_sodium_box_publickey_from_secretkey($secret, \strlen($secret));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_box_keypair(): internal error");
+    }
+    return $secret . \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_box_keypair_from_secretkey_and_publickey(string $secret_key, string $public_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_BOX_SECRETKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_box_keypair_from_secretkey_and_publickey(): Argument #1 (\$secret_key) must be SODIUM_CRYPTO_BOX_SECRETKEYBYTES bytes long");
+    }
+    if (\strlen($public_key) !== SODIUM_CRYPTO_BOX_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_box_keypair_from_secretkey_and_publickey(): Argument #2 (\$public_key) must be SODIUM_CRYPTO_BOX_PUBLICKEYBYTES bytes long");
+    }
+    return $secret_key . $public_key;
+}
+
+function sodium_crypto_box_secretkey(string $key_pair): string
+{
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_BOX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_box_secretkey(): Argument #1 (\$key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long");
+    }
+    return \substr($key_pair, 0, SODIUM_CRYPTO_BOX_SECRETKEYBYTES);
+}
+
+function sodium_crypto_box_publickey(string $key_pair): string
+{
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_BOX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_box_publickey(): Argument #1 (\$key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long");
+    }
+    return \substr($key_pair, SODIUM_CRYPTO_BOX_SECRETKEYBYTES, SODIUM_CRYPTO_BOX_PUBLICKEYBYTES);
+}
+
+function sodium_crypto_box_publickey_from_secretkey(string $secret_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_BOX_SECRETKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_box_publickey_from_secretkey(): Argument #1 (\$secret_key) must be SODIUM_CRYPTO_BOX_SECRETKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_box_publickey_from_secretkey($secret_key, \strlen($secret_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_box_publickey_from_secretkey(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_box(string $message, string $nonce, string $key_pair): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_BOX_NONCEBYTES) {
+        throw new \SodiumException("sodium_crypto_box(): Argument #2 (\$nonce) must be SODIUM_CRYPTO_BOX_NONCEBYTES bytes long");
+    }
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_BOX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_box(): Argument #3 (\$key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_box_encrypt($message, \strlen($message), $nonce, \strlen($nonce), $key_pair, \strlen($key_pair));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_box(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_box_open(string $ciphertext, string $nonce, string $key_pair): string|false
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_BOX_NONCEBYTES) {
+        throw new \SodiumException("sodium_crypto_box_open(): Argument #2 (\$nonce) must be SODIUM_CRYPTO_BOX_NONCEBYTES bytes long");
+    }
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_BOX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_box_open(): Argument #3 (\$key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_BOX_MACBYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_box_decrypt($ciphertext, \strlen($ciphertext), $nonce, \strlen($nonce), $key_pair, \strlen($key_pair));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_box_seal(string $message, string $public_key): string
+{
+    if (\strlen($public_key) !== SODIUM_CRYPTO_BOX_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_box_seal(): Argument #2 (\$public_key) must be SODIUM_CRYPTO_BOX_PUBLICKEYBYTES bytes long");
+    }
+    $ephemeral = \sodium_crypto_box_keypair();
+    $ephemeral_public = \sodium_crypto_box_publickey($ephemeral);
+    $ephemeral_secret = \sodium_crypto_box_secretkey($ephemeral);
+    $nonce = \sodium_crypto_generichash($ephemeral_public . $public_key, "", SODIUM_CRYPTO_BOX_NONCEBYTES);
+    $pair = \sodium_crypto_box_keypair_from_secretkey_and_publickey($ephemeral_secret, $public_key);
+    return $ephemeral_public . \sodium_crypto_box($message, $nonce, $pair);
+}
+
+function sodium_crypto_box_seal_open(string $ciphertext, string $key_pair): string|false
+{
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_BOX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_box_seal_open(): Argument #2 (\$key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_BOX_SEALBYTES) {
+        return false;
+    }
+    $ephemeral_public = \substr($ciphertext, 0, SODIUM_CRYPTO_BOX_PUBLICKEYBYTES);
+    $body = \substr($ciphertext, SODIUM_CRYPTO_BOX_PUBLICKEYBYTES);
+    $public_key = \sodium_crypto_box_publickey($key_pair);
+    $nonce = \sodium_crypto_generichash($ephemeral_public . $public_key, "", SODIUM_CRYPTO_BOX_NONCEBYTES);
+    $pair = \sodium_crypto_box_keypair_from_secretkey_and_publickey(\sodium_crypto_box_secretkey($key_pair), $ephemeral_public);
+    return \sodium_crypto_box_open($body, $nonce, $pair);
+}
+
+function sodium_crypto_kx_seed_keypair(string $seed): string
+{
+    if (\strlen($seed) !== SODIUM_CRYPTO_KX_SEEDBYTES) {
+        throw new \SodiumException("sodium_crypto_kx_seed_keypair(): Argument #1 (\$seed) must be SODIUM_CRYPTO_KX_SEEDBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_kx_seed_keypair($seed, \strlen($seed));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_kx_seed_keypair(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_kx_keypair(): string
+{
+    $secret = \random_bytes(SODIUM_CRYPTO_KX_SECRETKEYBYTES);
+    $pointer = \elephc_sodium_scalarmult_base($secret, \strlen($secret));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_kx_keypair(): internal error");
+    }
+    return $secret . \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_kx_secretkey(string $key_pair): string
+{
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_KX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_kx_secretkey(): Argument #1 (\$key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long");
+    }
+    return \substr($key_pair, 0, SODIUM_CRYPTO_KX_SECRETKEYBYTES);
+}
+
+function sodium_crypto_kx_publickey(string $key_pair): string
+{
+    if (\strlen($key_pair) !== SODIUM_CRYPTO_KX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_kx_publickey(): Argument #1 (\$key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long");
+    }
+    return \substr($key_pair, SODIUM_CRYPTO_KX_SECRETKEYBYTES, SODIUM_CRYPTO_KX_PUBLICKEYBYTES);
+}
+
+function sodium_crypto_kx_client_session_keys(string $client_key_pair, string $server_key): array
+{
+    if (\strlen($client_key_pair) !== SODIUM_CRYPTO_KX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_kx_client_session_keys(): Argument #1 (\$client_key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long");
+    }
+    if (\strlen($server_key) !== SODIUM_CRYPTO_KX_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_kx_client_session_keys(): Argument #2 (\$server_key) must be SODIUM_CRYPTO_KX_PUBLICKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_kx_client_session_keys($client_key_pair, \strlen($client_key_pair), $server_key, \strlen($server_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_kx_client_session_keys(): internal error");
+    }
+    $keys = \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+    return [\substr($keys, 0, SODIUM_CRYPTO_KX_SESSIONKEYBYTES), \substr($keys, SODIUM_CRYPTO_KX_SESSIONKEYBYTES)];
+}
+
+function sodium_crypto_kx_server_session_keys(string $server_key_pair, string $client_key): array
+{
+    if (\strlen($server_key_pair) !== SODIUM_CRYPTO_KX_KEYPAIRBYTES) {
+        throw new \SodiumException("sodium_crypto_kx_server_session_keys(): Argument #1 (\$server_key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long");
+    }
+    if (\strlen($client_key) !== SODIUM_CRYPTO_KX_PUBLICKEYBYTES) {
+        throw new \SodiumException("sodium_crypto_kx_server_session_keys(): Argument #2 (\$client_key) must be SODIUM_CRYPTO_KX_PUBLICKEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_kx_server_session_keys($server_key_pair, \strlen($server_key_pair), $client_key, \strlen($client_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_kx_server_session_keys(): internal error");
+    }
+    $keys = \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+    return [\substr($keys, 0, SODIUM_CRYPTO_KX_SESSIONKEYBYTES), \substr($keys, SODIUM_CRYPTO_KX_SESSIONKEYBYTES)];
+}
+
+function sodium_crypto_scalarmult(string $secret_key, string $public_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_SCALARMULT_SCALARBYTES) {
+        throw new \SodiumException("sodium_crypto_scalarmult(): Argument #1 (\$secret_key) must be SODIUM_CRYPTO_SCALARMULT_SCALARBYTES bytes long");
+    }
+    if (\strlen($public_key) !== SODIUM_CRYPTO_SCALARMULT_BYTES) {
+        throw new \SodiumException("sodium_crypto_scalarmult(): Argument #2 (\$public_key) must be SODIUM_CRYPTO_SCALARMULT_BYTES bytes long");
+    }
+    $pointer = \elephc_sodium_scalarmult($secret_key, \strlen($secret_key), $public_key, \strlen($public_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_scalarmult(): invalid public key");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_scalarmult_base(string $secret_key): string
+{
+    if (\strlen($secret_key) !== SODIUM_CRYPTO_SCALARMULT_SCALARBYTES) {
+        throw new \SodiumException("sodium_crypto_scalarmult_base(): Argument #1 (\$secret_key) must be SODIUM_CRYPTO_SCALARMULT_SCALARBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_scalarmult_base($secret_key, \strlen($secret_key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_scalarmult_base(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_chacha20poly1305_encrypt(string $message, string $additional_data, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_encrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_encrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_aead_chacha20poly1305_encrypt($message, \strlen($message), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_encrypt(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_chacha20poly1305_decrypt(string $ciphertext, string $additional_data, string $nonce, string $key): string|false
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_decrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_decrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_ABYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_aead_chacha20poly1305_decrypt($ciphertext, \strlen($ciphertext), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_chacha20poly1305_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES);
+}
+
+function sodium_crypto_aead_chacha20poly1305_ietf_encrypt(string $message, string $additional_data, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_ietf_encrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_ietf_encrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_aead_chacha20poly1305_ietf_encrypt($message, \strlen($message), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_ietf_encrypt(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_chacha20poly1305_ietf_decrypt(string $ciphertext, string $additional_data, string $nonce, string $key): string|false
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_ietf_decrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_chacha20poly1305_ietf_decrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_ABYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_aead_chacha20poly1305_ietf_decrypt($ciphertext, \strlen($ciphertext), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_chacha20poly1305_ietf_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES);
+}
+
+function sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(string $message, string $additional_data, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_aead_xchacha20poly1305_ietf_encrypt($message, \strlen($message), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(string $ciphertext, string $additional_data, string $nonce, string $key): string|false
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_ABYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_aead_xchacha20poly1305_ietf_decrypt($ciphertext, \strlen($ciphertext), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_xchacha20poly1305_ietf_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES);
+}
+
+function sodium_crypto_aead_aes256gcm_is_available(): bool
+{
+    return true;
+}
+
+function sodium_crypto_aead_aes256gcm_encrypt(string $message, string $additional_data, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aes256gcm_encrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aes256gcm_encrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_aead_aes256gcm_encrypt($message, \strlen($message), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_aead_aes256gcm_encrypt(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_aes256gcm_decrypt(string $ciphertext, string $additional_data, string $nonce, string $key): string|false
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aes256gcm_decrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aes256gcm_decrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_AEAD_AES256GCM_ABYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_aead_aes256gcm_decrypt($ciphertext, \strlen($ciphertext), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_aes256gcm_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES);
+}
+
+function sodium_crypto_secretstream_xchacha20poly1305_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES);
+}
+
+function sodium_crypto_secretstream_xchacha20poly1305_init_push(string $key): array
+{
+    if (\strlen($key) !== SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_init_push(): Argument #1 (\$key) must be SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES bytes long");
+    }
+    $header = \random_bytes(SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES);
+    $pointer = \elephc_sodium_secretstream_init_push($key, \strlen($key), $header, \strlen($header));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_init_push(): internal error");
+    }
+    return [\__elephc_ptr_read_string($pointer, \elephc_sodium_last_len()), $header];
+}
+
+function sodium_crypto_secretstream_xchacha20poly1305_init_pull(string $header, string $key): string
+{
+    if (\strlen($header) !== SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_init_pull(): Argument #1 (\$header) must be SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_init_pull(): Argument #2 (\$key) must be SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_secretstream_init_pull($header, \strlen($header), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_init_pull(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_secretstream_xchacha20poly1305_push(mixed &$state, string $message, string $additional_data = "", int $tag = SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE): string
+{
+    if (!\is_string($state) || \strlen($state) !== 52) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_push(): Argument #1 (\$state) must be a reference to a state");
+    }
+    $pointer = \elephc_sodium_secretstream_push($state, \strlen($state), $message, \strlen($message), $additional_data, \strlen($additional_data), $tag);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_push(): internal error");
+    }
+    $output = \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+    $state = \substr($output, 0, 52);
+    return \substr($output, 52);
+}
+
+function sodium_crypto_secretstream_xchacha20poly1305_pull(mixed &$state, string $ciphertext, string $additional_data = ""): array|false
+{
+    if (!\is_string($state) || \strlen($state) !== 52) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_pull(): Argument #1 (\$state) must be a reference to a state");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_ABYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_secretstream_pull($state, \strlen($state), $ciphertext, \strlen($ciphertext), $additional_data, \strlen($additional_data));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    $output = \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+    $state = \substr($output, 0, 52);
+    $tag = \ord(\substr($output, 52, 1));
+    return [\substr($output, 53), $tag];
+}
+
+function sodium_crypto_secretstream_xchacha20poly1305_rekey(mixed &$state): void
+{
+    if (!\is_string($state) || \strlen($state) !== 52) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_rekey(): Argument #1 (\$state) must be a reference to a state");
+    }
+    $pointer = \elephc_sodium_secretstream_rekey($state, \strlen($state));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_secretstream_xchacha20poly1305_rekey(): internal error");
+    }
+    $state = \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_stream(int $length, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_STREAM_NONCEBYTES) {
+        throw new \SodiumException("sodium_crypto_stream(): Argument #2 (\$nonce) must be SODIUM_CRYPTO_STREAM_NONCEBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_STREAM_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_stream(): Argument #3 (\$key) must be SODIUM_CRYPTO_STREAM_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_stream($length, $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_stream(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_stream_xor(string $message, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_STREAM_NONCEBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xor(): Argument #2 (\$nonce) must be SODIUM_CRYPTO_STREAM_NONCEBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_STREAM_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xor(): Argument #3 (\$key) must be SODIUM_CRYPTO_STREAM_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_stream_xor($message, \strlen($message), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_stream_xor(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_stream_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_STREAM_KEYBYTES);
+}
+
+function sodium_crypto_stream_xchacha20(int $length, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20(): Argument #2 (\$nonce) must be SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20(): Argument #3 (\$key) must be SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_stream_xchacha20($length, $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_stream_xchacha20_xor(string $message, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20_xor(): Argument #2 (\$nonce) must be SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20_xor(): Argument #3 (\$key) must be SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_stream_xchacha20_xor($message, \strlen($message), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20_xor(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_stream_xchacha20_xor_ic(string $message, string $nonce, int $counter, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20_xor_ic(): Argument #2 (\$nonce) must be SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20_xor_ic(): Argument #4 (\$key) must be SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES bytes long");
+    }
+    if ($counter < 0) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20_xor_ic(): Argument #3 (\$counter) must be greater than or equal to 0");
+    }
+    $pointer = \elephc_sodium_stream_xchacha20_xor_ic($message, \strlen($message), $nonce, \strlen($nonce), $counter, $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_stream_xchacha20_xor_ic(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_stream_xchacha20_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES);
+}
+
+function sodium_compare(string $string1, string $string2): int
+{
+    $left = \strlen($string1);
+    $right = \strlen($string2);
+    $length = $left < $right ? $left : $right;
+    for ($i = 0; $i < $length; $i++) {
+        $a = \ord(\substr($string1, $i, 1));
+        $b = \ord(\substr($string2, $i, 1));
+        if ($a < $b) {
+            return -1;
+        }
+        if ($a > $b) {
+            return 1;
+        }
+    }
+    if ($left === $right) {
+        return 0;
+    }
+    return $left < $right ? -1 : 1;
+}
+
+function sodium_memcmp(string $string1, string $string2): int
+{
+    if (\strlen($string1) !== \strlen($string2)) {
+        throw new \SodiumException("sodium_memcmp(): Argument #1 (\$string1) and argument #2 (\$string_2) must have the same length");
+    }
+    $left = \strlen($string1);
+    $difference = 0;
+    for ($i = 0; $i < $left; $i++) {
+        $difference |= \ord(\substr($string1, $i, 1)) ^ \ord(\substr($string2, $i, 1));
+    }
+    return $difference === 0 ? 0 : -1;
+}
+
+function sodium_add(string &$string1, string $string2): void
+{
+    if (\strlen($string1) !== \strlen($string2)) {
+        throw new \SodiumException("sodium_add(): Argument #1 (\$string1) and argument #2 (\$string_2) must have the same length");
+    }
+    $length = \strlen($string1);
+    $result = "";
+    $carry = 0;
+    for ($i = 0; $i < $length; $i++) {
+        $sum = \ord(\substr($string1, $i, 1)) + \ord(\substr($string2, $i, 1)) + $carry;
+        $result .= \chr($sum & 0xff);
+        $carry = $sum >> 8;
+    }
+    $string1 = $result;
+}
+
+function sodium_increment(string &$string): void
+{
+    $length = \strlen($string);
+    $result = "";
+    $carry = 1;
+    for ($i = 0; $i < $length; $i++) {
+        $sum = \ord(\substr($string, $i, 1)) + $carry;
+        $result .= \chr($sum & 0xff);
+        $carry = $sum >> 8;
+    }
+    $string = $result;
+}
+
+function sodium_memzero(string &$string): void
+{
+    $string = \str_repeat("\0", \strlen($string));
+}
+
+function sodium_pad(string $string, int $block_size): string
+{
+    if ($block_size <= 0) {
+        throw new \SodiumException("sodium_pad(): Argument #2 (\$block_size) must be greater than 0");
+    }
+    $length = \strlen($string);
+    $padding = $block_size - ($length % $block_size);
+    $string .= "\x80";
+    $string .= \str_repeat("\0", $padding - 1);
+    return $string;
+}
+
+function sodium_unpad(string $string, int $block_size): string
+{
+    if ($block_size <= 0) {
+        throw new \SodiumException("sodium_unpad(): Argument #2 (\$block_size) must be greater than 0");
+    }
+    $length = \strlen($string);
+    if ($length === 0 || $length % $block_size !== 0) {
+        throw new \SodiumException("invalid padding");
+    }
+    $position = $length - 1;
+    while ($position >= 0 && \substr($string, $position, 1) === "\0") {
+        $position--;
+    }
+    if ($position < 0 || \substr($string, $position, 1) !== "\x80") {
+        throw new \SodiumException("invalid padding");
+    }
+    return \substr($string, 0, $position);
+}
+
+function sodium_bin2hex(string $string): string
+{
+    return \bin2hex($string);
+}
+
+function sodium_hex2bin(string $string, ?string $ignore = null): string
+{
+    $clean = $string;
+    if ($ignore !== null) {
+        $clean = "";
+        for ($i = 0; $i < \strlen($string); $i++) {
+            $character = \substr($string, $i, 1);
+            if (\strpos($ignore, $character) === false) {
+                $clean .= $character;
+            }
+        }
+    }
+    if (\strlen($clean) % 2 !== 0) {
+        throw new \SodiumException("sodium_hex2bin(): Argument #1 (\$string) must be a valid hexadecimal string");
+    }
+    $valid = "0123456789abcdefABCDEF";
+    for ($i = 0; $i < \strlen($clean); $i++) {
+        if (\strpos($valid, \substr($clean, $i, 1)) === false) {
+            throw new \SodiumException("sodium_hex2bin(): Argument #1 (\$string) must be a valid hexadecimal string");
+        }
+    }
+    $decoded = @\hex2bin($clean);
+    if (!\is_string($decoded)) {
+        throw new \SodiumException("sodium_hex2bin(): Argument #1 (\$string) must be a valid hexadecimal string");
+    }
+    return $decoded;
+}
+
+function sodium_bin2base64(string $string, int $id): string
+{
+    if ($id !== SODIUM_BASE64_VARIANT_ORIGINAL && $id !== SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING && $id !== SODIUM_BASE64_VARIANT_URLSAFE && $id !== SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING) {
+        throw new \SodiumException("sodium_bin2base64(): Argument #2 (\$id) must be a valid base64 variant identifier");
+    }
+    $encoded = \base64_encode($string);
+    if ($id === SODIUM_BASE64_VARIANT_URLSAFE || $id === SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING) {
+        $encoded = \str_replace("+", "-", $encoded);
+        $encoded = \str_replace("/", "_", $encoded);
+    }
+    if ($id === SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING || $id === SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING) {
+        while (\substr($encoded, -1) === "=") {
+            $encoded = \substr($encoded, 0, -1);
+        }
+    }
+    return $encoded;
+}
+
+function sodium_base642bin(string $string, int $id, ?string $ignore = null): string
+{
+    if ($id !== SODIUM_BASE64_VARIANT_ORIGINAL && $id !== SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING && $id !== SODIUM_BASE64_VARIANT_URLSAFE && $id !== SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING) {
+        throw new \SodiumException("sodium_base642bin(): Argument #2 (\$id) must be a valid base64 variant identifier");
+    }
+    $clean = $string;
+    if ($ignore !== null) {
+        $clean = "";
+        for ($i = 0; $i < \strlen($string); $i++) {
+            $character = \substr($string, $i, 1);
+            if (\strpos($ignore, $character) === false) {
+                $clean .= $character;
+            }
+        }
+    }
+    if ($id === SODIUM_BASE64_VARIANT_URLSAFE || $id === SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING) {
+        $clean = \str_replace("-", "+", $clean);
+        $clean = \str_replace("_", "/", $clean);
+    }
+    while (\strlen($clean) % 4 !== 0) {
+        $clean .= "=";
+    }
+    $decoded = \base64_decode($clean, true);
+    if (!\is_string($decoded)) {
+        throw new \SodiumException("invalid base64 string");
+    }
+    return $decoded;
+}
+
+function sodium_crypto_pwhash_str_needs_rehash(string $password, int $opslimit, int $memlimit): bool
+{
+    if (\strpos($password, SODIUM_CRYPTO_PWHASH_STRPREFIX) === 0) {
+        $parts = \explode("$", $password);
+        $parameters = \explode(",", (string) ($parts[3] ?? ""));
+        $memory = 0;
+        $time = 0;
+        $parallelism = 0;
+        foreach ($parameters as $parameter) {
+            if (\strpos($parameter, "m=") === 0) {
+                $memory = (int) \substr($parameter, 2);
+            }
+            if (\strpos($parameter, "t=") === 0) {
+                $time = (int) \substr($parameter, 2);
+            }
+            if (\strpos($parameter, "p=") === 0) {
+                $parallelism = (int) \substr($parameter, 2);
+            }
+        }
+        return $memory !== (int) ($memlimit / 1024) || $time !== $opslimit || $parallelism !== 1;
+    }
+    return true;
 }

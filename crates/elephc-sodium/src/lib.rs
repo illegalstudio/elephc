@@ -19,11 +19,20 @@ use std::cell::RefCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
+mod aead;
 mod aes;
+mod blake2b;
+mod boxes;
+mod chacha;
+mod hashes;
 mod ipcrypt;
 mod kem;
+mod kx;
 mod pwhash;
+mod secretstream;
 mod shake;
+mod sign;
+mod stream;
 use shake::ShakeKind;
 
 use crypto_secretbox::{

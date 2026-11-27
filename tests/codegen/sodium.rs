@@ -427,3 +427,216 @@ ValueError:sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #3 ($memlim
 ValueError:sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #3 ($salt) must be SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES bytes long\n"
     );
 }
+
+/// Generichash, auth, KDF and shorthash match libsodium's documented vectors.
+#[test]
+fn test_sodium_generichash_auth_kdf_shorthash() {
+    let out = compile_and_run(
+        r#"<?php
+$key = str_repeat("k", 32);
+$key16 = str_repeat("k", 16);
+$message = "hello";
+echo bin2hex(sodium_crypto_generichash($message)), "\n";
+echo bin2hex(sodium_crypto_generichash($message, "", 16)), "\n";
+echo bin2hex(sodium_crypto_generichash($message, $key16, 32)), "\n";
+$state = sodium_crypto_generichash_init("", 32);
+sodium_crypto_generichash_update($state, "he");
+sodium_crypto_generichash_update($state, "llo");
+echo bin2hex(sodium_crypto_generichash_final($state, 32)), "\n";
+echo bin2hex(sodium_crypto_auth($message, $key)), "\n";
+echo sodium_crypto_auth_verify(sodium_crypto_auth($message, $key), $message, $key) ? "auth_ok" : "auth_bad", "\n";
+echo bin2hex(sodium_crypto_kdf_derive_from_key(32, 7, "context!", $key)), "\n";
+echo bin2hex(sodium_crypto_shorthash($message, $key16)), "\n";
+echo strlen(sodium_crypto_generichash_keygen()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf\n\
+         46fb7408d4f285228f4af516ea25851b\n\
+         94072b2b462d672f8d29d1675fcdce0408bd8a5d8345d0202faa908513c2b3ff\n\
+         324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf\n\
+         d1d5b8a0f98474ab10a4966537473add27863dbc60446d3804e210cdadb752ad\n\
+         auth_ok\n\
+         896ec86a37c2bc1b068c0b945dbbc1838280277b0e2a2ff0fc2e16227044431d\n\
+         fecf1a72463c4d9e\n\
+         32\n"
+    );
+}
+
+/// Ed25519 key derivation, detached/combined signatures and rejection paths.
+#[test]
+fn test_sodium_sign_family() {
+    let out = compile_and_run(
+        r#"<?php
+$seed = str_repeat("s", 32);
+$pair = sodium_crypto_sign_seed_keypair($seed);
+$secret = sodium_crypto_sign_secretkey($pair);
+$public = sodium_crypto_sign_publickey($pair);
+echo bin2hex($public), "\n";
+$signature = sodium_crypto_sign_detached("hello", $secret);
+echo bin2hex($signature), "\n";
+echo sodium_crypto_sign_verify_detached($signature, "hello", $public) ? "verify" : "bad", "\n";
+echo sodium_crypto_sign_open(sodium_crypto_sign("hello", $secret), $public), "\n";
+echo sodium_crypto_sign_verify_detached($signature, "tampered", $public) ? "bad" : "reject", "\n";
+echo sodium_crypto_sign_publickey_from_secretkey($secret) === $public ? "derive" : "bad", "\n";
+echo strlen(sodium_crypto_sign_keypair()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "fec1428673f6afe89264b3807344ae8b269d125a503855202687db5a7128579f\n\
+         4c7f91db0f26f32ed8f04893c9b5861c9bab4f88537dad0741d167b858255de5\
+         e1e3306e95c43ca6d5ed0bdf8ffe3c86cf410b370c89c7e6f69d01a45e9fbe08\n\
+         verify\n\
+         hello\n\
+         reject\n\
+         derive\n\
+         96\n"
+    );
+}
+
+/// Curve25519 box, sealed box and KX session keys agree across both sides.
+#[test]
+fn test_sodium_box_kx_family() {
+    let out = compile_and_run(
+        r#"<?php
+$seed = str_repeat("s", 32);
+$pair = sodium_crypto_box_seed_keypair($seed);
+$nonce = str_repeat("n", 24);
+$cipher = sodium_crypto_box("hello", $nonce, $pair);
+echo bin2hex(sodium_crypto_box_publickey($pair)), "\n";
+echo bin2hex($cipher), "\n";
+echo sodium_crypto_box_open($cipher, $nonce, $pair), "\n";
+$sealed = sodium_crypto_box_seal("secret", sodium_crypto_box_publickey($pair));
+echo sodium_crypto_box_seal_open($sealed, $pair), ":", strlen($sealed), "\n";
+$client = sodium_crypto_kx_seed_keypair(str_repeat("c", 32));
+$server = sodium_crypto_kx_seed_keypair(str_repeat("s", 32));
+$client_keys = sodium_crypto_kx_client_session_keys($client, sodium_crypto_kx_publickey($server));
+$server_keys = sodium_crypto_kx_server_session_keys($server, sodium_crypto_kx_publickey($client));
+echo bin2hex($client_keys[0]), "\n";
+echo bin2hex($client_keys[1]), "\n";
+echo ($client_keys[0] === $server_keys[1] && $client_keys[1] === $server_keys[0]) ? "session" : "bad", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "c3c490800a4fa9abb5d55cc5578269e889fcb05fe2f1edbb9cd9fdc4a9c2014d\n\
+         80c58585eb440793aa57279a0455240b9623aa47e0\n\
+         hello\n\
+         secret:54\n\
+         0b61f01b012bdc704d5cb066d1978f8510a50ad387ec262c98c0820264acadf3\n\
+         0209f91e8a56a959af6b140d153f7c74e1104fd6a93d124c1d3c20017087e540\n\
+         session\n"
+    );
+}
+
+/// AEAD families and stream helpers match libsodium's wire format.
+#[test]
+fn test_sodium_aead_stream_family() {
+    let out = compile_and_run(
+        r#"<?php
+$key = str_repeat("k", 32);
+$nonce8 = str_repeat("n", 8);
+$nonce12 = str_repeat("n", 12);
+$nonce24 = str_repeat("n", 24);
+$legacy = sodium_crypto_aead_chacha20poly1305_encrypt("hello", "ad", $nonce8, $key);
+echo bin2hex($legacy), ":", sodium_crypto_aead_chacha20poly1305_decrypt($legacy, "ad", $nonce8, $key), "\n";
+$aead = sodium_crypto_aead_chacha20poly1305_ietf_encrypt("hello", "ad", $nonce12, $key);
+echo bin2hex($aead), ":", sodium_crypto_aead_chacha20poly1305_ietf_decrypt($aead, "ad", $nonce12, $key), "\n";
+$xchacha = sodium_crypto_aead_xchacha20poly1305_ietf_encrypt("hello", "ad", $nonce24, $key);
+echo bin2hex($xchacha), ":", sodium_crypto_aead_xchacha20poly1305_ietf_decrypt($xchacha, "ad", $nonce24, $key), "\n";
+$gcm = sodium_crypto_aead_aes256gcm_encrypt("hello", "ad", $nonce12, $key);
+echo bin2hex($gcm), ":", sodium_crypto_aead_aes256gcm_decrypt($gcm, "ad", $nonce12, $key), "\n";
+$tampered = substr($gcm, 0, -1) . "X";
+var_dump(sodium_crypto_aead_aes256gcm_decrypt($tampered, "ad", $nonce12, $key));
+echo bin2hex(sodium_crypto_stream(16, $nonce24, $key)), "\n";
+echo bin2hex(sodium_crypto_stream_xor("hello", $nonce24, $key)), "\n";
+echo bin2hex(sodium_crypto_stream_xchacha20(16, $nonce24, $key)), "\n";
+echo bin2hex(sodium_crypto_stream_xchacha20_xor("hello", $nonce24, $key)), "\n";
+echo bin2hex(sodium_crypto_stream_xchacha20_xor_ic("hello", $nonce24, 3, $key)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "3d0105d90104c96e9096f13b73817242e77c8c43b3:hello\n\
+         e69a523ead3e9e4afd85b28a17fd7b7b438d46cddd:hello\n\
+         9d9da4d9a984c3672f08ec06b0492c584f5ef15477:hello\n\
+         f05e8bdc7e6253125933b5b14bbe5b1474032744d4:hello\n\
+         bool(false)\n\
+         91172bd584998fa76d97a543eccf9eaf\n\
+         f97247b9eb\n\
+         93a68aa3fb23e8c037e4a89be4ae63d1\n\
+         fbc3e6cf94\n\
+         f45f9e6486\n"
+    );
+}
+
+/// Secretstream pulls a libsodium fixture and round-trips fresh streams.
+#[test]
+fn test_sodium_secretstream_family() {
+    let out = compile_and_run(
+        r#"<?php
+$key = str_repeat("k", 32);
+$header = hex2bin("aed3f1ba74be5f265a1b0191f31edd27c3562569c53e90a3");
+$cipher = hex2bin("ee6221186394aaaafee93cf16d06b24496bf15186db1");
+$state = sodium_crypto_secretstream_xchacha20poly1305_init_pull($header, $key);
+$result = sodium_crypto_secretstream_xchacha20poly1305_pull($state, $cipher, "");
+echo $result[0], ":", $result[1], "\n";
+$push = sodium_crypto_secretstream_xchacha20poly1305_init_push($key);
+$state = $push[0];
+$cipher = sodium_crypto_secretstream_xchacha20poly1305_push($state, "hello", "", SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE);
+echo strlen($cipher), "\n";
+$pull = sodium_crypto_secretstream_xchacha20poly1305_init_pull($push[1], $key);
+$result = sodium_crypto_secretstream_xchacha20poly1305_pull($pull, $cipher, "");
+echo $result[0], ":", $result[1], "\n";
+$tampered = substr($cipher, 0, -1) . "X";
+var_dump(sodium_crypto_secretstream_xchacha20poly1305_pull($pull, $tampered, ""));
+"#,
+    );
+    assert_eq!(out, "hello:0\n22\nhello:0\nbool(false)\n");
+}
+
+/// Comparison, mutation, padding, base64 and hex helpers match PHP.
+#[test]
+fn test_sodium_helpers() {
+    let out = compile_and_run(
+        r#"<?php
+echo sodium_compare("a", "b"), sodium_compare("b", "a"), sodium_compare("a", "a"), "\n";
+echo sodium_memcmp("abc", "abc"), sodium_memcmp("abc", "abd"), "\n";
+$add = "\xff\xff";
+sodium_add($add, "\x01\x00");
+echo bin2hex($add), "\n";
+$increment = "\xff\xff";
+sodium_increment($increment);
+echo bin2hex($increment), "\n";
+$padded = sodium_pad("hello", 8);
+echo bin2hex($padded), ":", sodium_unpad($padded, 8), "\n";
+echo sodium_bin2base64("hello\xff", SODIUM_BASE64_VARIANT_ORIGINAL), ":",
+    sodium_bin2base64("hello\xff", SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING), "\n";
+echo bin2hex(sodium_base642bin("aGVsbG8=", SODIUM_BASE64_VARIANT_ORIGINAL)), "\n";
+echo bin2hex(sodium_hex2bin("aa bb", " ")), "\n";
+try {
+    sodium_hex2bin("zz");
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    sodium_memcmp("a", "bb");
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+$hash = sodium_crypto_pwhash_str("pw", 2, 67108864);
+var_dump(sodium_crypto_pwhash_str_needs_rehash($hash, 2, 67108864));
+var_dump(sodium_crypto_pwhash_str_needs_rehash($hash, 3, 67108864));
+"#,
+    );
+    assert_eq!(
+        out,
+        "-110\n0-1\n0000\n0000\n68656c6c6f800000:hello\n\
+         aGVsbG//:aGVsbG__\n68656c6c6f\naabb\n\
+         sodium_hex2bin(): Argument #1 ($string) must be a valid hexadecimal string\n\
+         sodium_memcmp(): Argument #1 ($string1) and argument #2 ($string_2) must have the same length\n\
+         bool(false)\nbool(true)\n"
+    );
+}
