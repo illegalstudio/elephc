@@ -138,6 +138,15 @@ const SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES = 32;
 const SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_BYTES = 32;
 const SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES = 32;
 
+const SODIUM_CRYPTO_AEAD_AEGIS128L_ABYTES = 32;
+const SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES = 16;
+const SODIUM_CRYPTO_AEAD_AEGIS128L_NPUBBYTES = 16;
+const SODIUM_CRYPTO_AEAD_AEGIS128L_NSECBYTES = 0;
+const SODIUM_CRYPTO_AEAD_AEGIS256_ABYTES = 32;
+const SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES = 32;
+const SODIUM_CRYPTO_AEAD_AEGIS256_NPUBBYTES = 32;
+const SODIUM_CRYPTO_AEAD_AEGIS256_NSECBYTES = 0;
+
 class SodiumException extends \Exception
 {
 }
@@ -245,6 +254,10 @@ extern "elephc_sodium" {
     function elephc_sodium_ristretto255_scalar_invert(string $input, int $inputLength): ptr;
     function elephc_sodium_ristretto255_scalarmult(string $scalar, int $scalarLength, string $point, int $pointLength): ptr;
     function elephc_sodium_ristretto255_scalarmult_base(string $scalar, int $scalarLength): ptr;
+    function elephc_sodium_aead_aegis128l_encrypt(string $message, int $messageLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_aegis128l_decrypt(string $ciphertext, int $ciphertextLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_aegis256_encrypt(string $message, int $messageLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
+    function elephc_sodium_aead_aegis256_decrypt(string $ciphertext, int $ciphertextLength, string $aad, int $aadLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
     function elephc_sodium_last_len(): int;
 }
 
@@ -2205,4 +2218,80 @@ function sodium_crypto_scalarmult_ristretto255_base(string $n): string
         throw new \SodiumException("Result is identity element");
     }
     return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_aegis128l_encrypt(string $message, string $additional_data, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_AEGIS128L_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis128l_encrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_AEGIS128L_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis128l_encrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_aead_aegis128l_encrypt($message, \strlen($message), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_aead_aegis128l_encrypt(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_aegis128l_decrypt(string $ciphertext, string $additional_data, string $nonce, string $key): string|false
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_AEGIS128L_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis128l_decrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_AEGIS128L_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis128l_decrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_AEAD_AEGIS128L_ABYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_aead_aegis128l_decrypt($ciphertext, \strlen($ciphertext), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_aegis128l_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES);
+}
+
+function sodium_crypto_aead_aegis256_encrypt(string $message, string $additional_data, string $nonce, string $key): string
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_AEGIS256_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis256_encrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_AEGIS256_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis256_encrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_aead_aegis256_encrypt($message, \strlen($message), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_aead_aegis256_encrypt(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_aegis256_decrypt(string $ciphertext, string $additional_data, string $nonce, string $key): string|false
+{
+    if (\strlen($nonce) !== SODIUM_CRYPTO_AEAD_AEGIS256_NPUBBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis256_decrypt(): Argument #3 (\$nonce) must be SODIUM_CRYPTO_AEAD_AEGIS256_NPUBBYTES bytes long");
+    }
+    if (\strlen($key) !== SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES) {
+        throw new \SodiumException("sodium_crypto_aead_aegis256_decrypt(): Argument #4 (\$key) must be SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES bytes long");
+    }
+    if (\strlen($ciphertext) < SODIUM_CRYPTO_AEAD_AEGIS256_ABYTES) {
+        return false;
+    }
+    $pointer = \elephc_sodium_aead_aegis256_decrypt($ciphertext, \strlen($ciphertext), $additional_data, \strlen($additional_data), $nonce, \strlen($nonce), $key, \strlen($key));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return false;
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_aead_aegis256_keygen(): string
+{
+    return \random_bytes(SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES);
 }

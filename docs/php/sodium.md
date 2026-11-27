@@ -21,7 +21,7 @@ supported target.
 | Auth | `sodium_crypto_auth()`, `_verify()`, `_keygen()` | HMAC-SHA512 truncated to 32 bytes, like libsodium. |
 | KDF | `sodium_crypto_kdf_derive_from_key()`, `_keygen()` | BLAKE2b with libsodium's salt/personal layout. |
 | KX | `sodium_crypto_kx_keypair()`, `_seed_keypair()`, `_secretkey()`, `_publickey()`, `_client_session_keys()`, `_server_session_keys()` | X25519 plus BLAKE2b-512 session-key derivation. |
-| AEAD | `sodium_crypto_aead_chacha20poly1305_*`, `_chacha20poly1305_ietf_*`, `_xchacha20poly1305_ietf_*`, `_aes256gcm_*` | Legacy 8-byte-nonce ChaCha20-Poly1305, IETF, XChaCha20-IETF, and AES-256-GCM; `_aes256gcm_is_available()` is always true. |
+| AEAD | `sodium_crypto_aead_chacha20poly1305_*`, `_chacha20poly1305_ietf_*`, `_xchacha20poly1305_ietf_*`, `_aes256gcm_*`, `_aegis128l_*`, `_aegis256_*` | Legacy 8-byte-nonce ChaCha20-Poly1305, IETF, XChaCha20-IETF, AES-256-GCM, and PHP 8.6's AEGIS-128L/AEGIS-256; `_aes256gcm_is_available()` is always true. |
 | Secretstream | `sodium_crypto_secretstream_xchacha20poly1305_keygen()`, `_init_push()`, `_init_pull()`, `_push()`, `_pull()`, `_rekey()` | PHP-style numeric state/header arrays and by-reference states. |
 | Stream | `sodium_crypto_stream()`, `_xor()`, `_keygen()`, `sodium_crypto_stream_xchacha20()`, `_xor()`, `_xor_ic()`, `_keygen()` | XSalsa20 and XChaCha20 keystreams. |
 | Scalarmult | `sodium_crypto_scalarmult()`, `_base()` | X25519 with libsodium's all-zero rejection. |
@@ -57,8 +57,6 @@ diagnostics for the delivered functions.
 
 ## Deferred ext/sodium surface
 
-- `sodium_crypto_aead_aegis128l_*`, `sodium_crypto_aead_aegis256_*`, and their
-  constants (PHP 8.6's AEGIS AEAD families).
 - `sodium_crypto_sign_ed25519_pk_to_curve25519` errors for non-canonical or
   low-order points beyond the current `SodiumException` path.
 

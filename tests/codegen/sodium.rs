@@ -701,3 +701,31 @@ echo strlen(sodium_crypto_core_ristretto255_random()), ":",
          32:32\n"
     );
 }
+
+/// AEGIS-128L and AEGIS-256 ciphertexts match libsodium's PHP vectors.
+#[test]
+fn test_sodium_aegis_family() {
+    let out = compile_and_run(
+        r#"<?php
+$key16 = str_repeat("k", 16);
+$nonce16 = str_repeat("n", 16);
+$key32 = str_repeat("k", 32);
+$nonce32 = str_repeat("n", 32);
+$cipher128 = sodium_crypto_aead_aegis128l_encrypt("hello", "ad", $nonce16, $key16);
+echo bin2hex($cipher128), ":", sodium_crypto_aead_aegis128l_decrypt($cipher128, "ad", $nonce16, $key16), "\n";
+$cipher256 = sodium_crypto_aead_aegis256_encrypt("hello", "ad", $nonce32, $key32);
+echo bin2hex($cipher256), ":", sodium_crypto_aead_aegis256_decrypt($cipher256, "ad", $nonce32, $key32), "\n";
+$tampered = substr($cipher128, 0, -1) . "X";
+var_dump(sodium_crypto_aead_aegis128l_decrypt($tampered, "ad", $nonce16, $key16));
+echo strlen(sodium_crypto_aead_aegis128l_keygen()), ":",
+    strlen(sodium_crypto_aead_aegis256_keygen()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "607ccb15b0bb84ac2e6c2859c4b9b678862ea42abff37a175d1800257481360d23654aa412:hello\n\
+         304098fab477291f6f684d90c9d21ef2eea34480837241d9b0dec3d92bd4f93e459f5b0c88:hello\n\
+         bool(false)\n\
+         16:32\n"
+    );
+}

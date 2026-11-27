@@ -20,6 +20,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
 mod aead;
+mod aegis;
 mod aes;
 mod blake2b;
 mod boxes;
