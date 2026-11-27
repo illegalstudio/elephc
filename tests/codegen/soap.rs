@@ -363,12 +363,19 @@ $server->setClass("Calculator");
 $server->handle($request);
 "#,
     );
-    assert!(out.contains("<ns1:return>5</ns1:return>"), "{out}");
-    assert!(out.contains("<ns1:return>20</ns1:return>"), "{out}");
     assert!(
-        out.contains("http://www.w3.org/2003/05/soap-envelope"),
+        out.contains("<return xsi:type=\"xsd:int\">5</return>"),
         "{out}"
     );
+    assert!(
+        out.contains("<return xsi:type=\"xsd:int\">20</return>"),
+        "{out}"
+    );
+    assert!(
+        out.contains("xmlns:env=\"http://www.w3.org/2003/05/soap-envelope\""),
+        "{out}"
+    );
+    assert!(out.contains("<rpc:result>return</rpc:result>"), "{out}");
 }
 
 /// SoapServer serialises handler exceptions as SOAP 1.2 faults.
@@ -385,9 +392,79 @@ $server->addFunction("fail");
 $server->handle($request);
 "#,
     );
-    assert!(out.contains("<SOAP-ENV:Fault>"), "{out}");
-    assert!(out.contains("<SOAP-ENV:Value>Server</SOAP-ENV:Value>"), "{out}");
-    assert!(out.contains("<SOAP-ENV:Text xml:lang=\"en\">boom</SOAP-ENV:Text>"), "{out}");
+    assert!(out.contains("<env:Fault>"), "{out}");
+    assert!(out.contains("<env:Value>env:Receiver</env:Value>"), "{out}");
+    assert!(out.contains("<env:Text xml:lang=\"en\">boom</env:Text>"), "{out}");
+}
+
+/// SoapServer consumes WSDL style/use metadata for document and RPC dispatch.
+#[test]
+fn test_soap_server_wsdl_document_and_rpc() {
+    let out = compile_and_run(
+        r#"<?php
+function add(mixed $args) {
+    return ["result" => $args->a + $args->b];
+}
+function calc(mixed $a, mixed $b) {
+    return ["sum" => $a + $b, "product" => $a * $b];
+}
+$document = '<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:add" targetNamespace="urn:add">
+  <types><xsd:schema targetNamespace="urn:add">
+    <xsd:element name="Add"><xsd:complexType><xsd:sequence>
+      <xsd:element name="a" type="xsd:int"/>
+      <xsd:element name="b" type="xsd:int"/>
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="AddResponse"><xsd:complexType><xsd:sequence>
+      <xsd:element name="result" type="xsd:int"/>
+    </xsd:sequence></xsd:complexType></xsd:element>
+  </xsd:schema></types>
+  <message name="AddInput"><part name="parameters" element="tns:Add"/></message>
+  <message name="AddOutput"><part name="parameters" element="tns:AddResponse"/></message>
+  <portType name="P"><operation name="Add"><input message="tns:AddInput"/><output message="tns:AddOutput"/></operation></portType>
+  <binding name="B" type="tns:P"><soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/><operation name="Add"><soap:operation soapAction="urn:add#Add"/><input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation></binding>
+  <service name="S"><port name="Port" binding="tns:B"><soap:address location="http://127.0.0.1:1/soap"/></port></service>
+</definitions>';
+$rpc = '<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:rpc" targetNamespace="urn:rpc">
+  <message name="CalcInput"><part name="a" type="xsd:int"/><part name="b" type="xsd:int"/></message>
+  <message name="CalcOutput"><part name="sum" type="xsd:int"/><part name="product" type="xsd:int"/></message>
+  <portType name="P"><operation name="Calc"><input message="tns:CalcInput"/><output message="tns:CalcOutput"/></operation></portType>
+  <binding name="B" type="tns:P"><soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/><operation name="Calc"><soap:operation soapAction="urn:rpc#Calc"/><input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation></binding>
+  <service name="S"><port name="Port" binding="tns:B"><soap:address location="http://127.0.0.1:1/soap"/></port></service>
+</definitions>';
+file_put_contents("add.wsdl", $document);
+file_put_contents("calc.wsdl", $rpc);
+$server = new SoapServer("add.wsdl");
+$server->addFunction("add");
+var_dump($server->getFunctions());
+var_dump($server->__getLastResponse());
+$server->handle('<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns:Add xmlns:ns="urn:add"><a>2</a><b>3</b></ns:Add></soap:Body></soap:Envelope>');
+echo "\n";
+$server = new SoapServer("calc.wsdl");
+$server->addFunction("calc");
+$server->handle('<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns:Calc xmlns:ns="urn:rpc"><a>2</a><b>3</b></ns:Calc></soap:Body></soap:Envelope>');
+"#,
+    );
+    assert!(
+        out.contains("array(1) {\n  [0]=>\n  string(3) \"add\"\n}"),
+        "{out}"
+    );
+    assert!(out.contains("NULL"), "{out}");
+    assert!(
+        out.contains("<ns1:AddResponse><ns1:result>5</ns1:result></ns1:AddResponse>"),
+        "{out}"
+    );
+    assert!(
+        out.contains("<SOAP-ENV:CalcResponse><sum>5</sum><product>6</product></SOAP-ENV:CalcResponse>"),
+        "{out}"
+    );
 }
 
 /// SOAP tracing exposes request/response headers and persists response cookies.

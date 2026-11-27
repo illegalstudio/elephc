@@ -420,6 +420,8 @@ class SoapServer
     private array $__headers = [];
     private ?SoapFault $__fault = null;
     private int $__persistence = SOAP_PERSISTENCE_REQUEST;
+    private bool $__hasWsdl = false;
+    private array $__wsdl = [];
 
     public function __construct(?string $wsdl, array $options = [])
     {
@@ -434,8 +436,15 @@ class SoapServer
                 if ($this->__uri === "") {
                     $this->__uri = (string) ($scan["target"] ?? "");
                 }
+                $this->__wsdl = __elephc_soap_wsdl_metadata($xml);
+                $this->__hasWsdl = true;
             }
         }
+    }
+
+    public function __getLastResponse(): ?string
+    {
+        return null;
     }
 
     public function setClass(string $class, mixed ...$args): void
@@ -532,6 +541,16 @@ class SoapServer
                 }
             }
         }
+        $operationInfo = null;
+        $arguments = $params;
+        if ($this->__hasWsdl) {
+            $operationInfo = __elephc_soap_wsdl_operation($this->__wsdl, $name);
+            if (!\is_array($operationInfo)) {
+                $this->__emitFault(new \SoapFault("Server", "Function '" . $name . "' doesn't exist"));
+                return;
+            }
+            $arguments = __elephc_soap_wsdl_arguments($this->__wsdl, (array) $operationInfo, $name, $params);
+        }
         try {
             $result = null;
             $resolved = "";
@@ -545,11 +564,11 @@ class SoapServer
                     }
                 }
                 if ($resolved === "") {
-                    throw new \SoapFault("Server", "Function ('" . $name . "') is not a valid method for this service");
+                    throw new \SoapFault("Server", "Function '" . $name . "' doesn't exist");
                 }
-                $result = \call_user_func_array([$object, $resolved], $params);
+                $result = \call_user_func_array([$object, $resolved], $arguments);
             } elseif ($this->__allFunctions) {
-                $result = \call_user_func_array($name, $params);
+                $result = \call_user_func_array($name, $arguments);
             } else {
                 foreach ($this->__functions as $function) {
                     if (\strcasecmp($function, $name) === 0) {
@@ -558,45 +577,159 @@ class SoapServer
                     }
                 }
                 if ($resolved === "") {
-                    throw new \SoapFault("Server", "Function ('" . $name . "') is not a valid method for this service");
+                    throw new \SoapFault("Server", "Function '" . $name . "' doesn't exist");
                 }
-                $result = \call_user_func_array($resolved, $params);
+                $result = \call_user_func_array($resolved, $arguments);
             }
             if ($result instanceof \SoapFault) {
                 $this->__emitFault($result);
                 return;
             }
-            $this->__emitResponse($name, $result);
+            $this->__emitResponse($name, $result, (array) $operationInfo);
         } catch (\SoapFault $fault) {
             $this->__emitFault($fault);
         }
     }
 
-    private function __emitResponse(string $name, mixed $result): void
+    private function __emitResponse(string $name, mixed $result, ?array $operation = null): void
     {
-        $tag = __elephc_soap_name($name) . "Response";
-        $namespace = $this->__uri === "" ? "" : ' xmlns:ns1="' . __elephc_soap_escape($this->__uri) . '"';
-        $body = "";
-        if ($result !== null) {
-            $body = __elephc_soap_value("return", $result);
-        }
+        $envPrefix = $this->__version === SOAP_1_2 ? "env" : "SOAP-ENV";
         $headerXml = "";
         foreach ($this->__headers as $header) {
             $headerName = __elephc_soap_name($header->name);
             $headerXml .= '<ns2:' . $headerName . ' xmlns:ns2="' . __elephc_soap_escape($header->namespace) . '">'
                 . __elephc_soap_xml_value($header->data) . '</ns2:' . $headerName . '>';
         }
-        $headerBlock = $headerXml === "" ? "" : '<SOAP-ENV:Header>' . $headerXml . '</SOAP-ENV:Header>';
-        $envelope = $this->__version === SOAP_1_2
-            ? "http://www.w3.org/2003/05/soap-envelope"
-            : "http://schemas.xmlsoap.org/soap/envelope/";
-        $xml = '<?xml version="1.0" encoding="UTF-8"?>'
-            . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '"'
-            . ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-            . $headerBlock
-            . '<SOAP-ENV:Body><ns1:' . $tag . $namespace . '>'
-            . $body
-            . '</ns1:' . $tag . '></SOAP-ENV:Body></SOAP-ENV:Envelope>';
+        $headerBlock = $headerXml === "" ? "" : '<' . $envPrefix . ':Header>' . $headerXml . '</' . $envPrefix . ':Header>';
+
+        if ($this->__hasWsdl && $operation !== null) {
+            $this->__emitWsdlResponse($name, $result, $operation, $headerBlock);
+            return;
+        }
+
+        $soap12 = $this->__version === SOAP_1_2;
+        $body = __elephc_soap_server_encoded_value("return", $result, $soap12);
+        $mapNamespace = \strpos($body, "ns2:") !== false
+            ? ' xmlns:ns2="http://xml.apache.org/xml-soap"'
+            : "";
+        $uriNamespace = $this->__uri === "" ? "" : ' xmlns:ns1="' . __elephc_soap_escape($this->__uri) . '"';
+        $tag = __elephc_soap_name($name) . "Response";
+        if ($soap12) {
+            $envelope = "http://www.w3.org/2003/05/soap-envelope";
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                . '<env:Envelope xmlns:env="' . $envelope . '"' . $uriNamespace
+                . ' xmlns:xsd="http://www.w3.org/2001/XMLSchema"'
+                . ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+                . ' xmlns:enc="http://www.w3.org/2003/05/soap-encoding"' . $mapNamespace . '>'
+                . $headerBlock
+                . '<env:Body xmlns:rpc="http://www.w3.org/2003/05/soap-rpc">'
+                . '<ns1:' . $tag . ' env:encodingStyle="http://www.w3.org/2003/05/soap-encoding">'
+                . '<rpc:result>return</rpc:result>'
+                . $body
+                . '</ns1:' . $tag . '>'
+                . '</env:Body></env:Envelope>';
+        } else {
+            $envelope = "http://schemas.xmlsoap.org/soap/envelope/";
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '"' . $uriNamespace
+                . ' xmlns:xsd="http://www.w3.org/2001/XMLSchema"'
+                . ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+                . ' xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/"' . $mapNamespace
+                . ' SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+                . $headerBlock
+                . '<SOAP-ENV:Body><ns1:' . $tag . '>'
+                . $body
+                . '</ns1:' . $tag . '></SOAP-ENV:Body></SOAP-ENV:Envelope>';
+        }
+        $this->__sendHeaders($xml);
+        echo $xml;
+    }
+
+    private function __emitWsdlResponse(string $name, mixed $result, array $operation, string $headerBlock): void
+    {
+        $style = (string) ($operation["style"] ?? "document");
+        $output = $operation["output"] ?? [];
+        $soap12 = $this->__version === SOAP_1_2;
+        $envPrefix = $soap12 ? "env" : "SOAP-ENV";
+        $props = null;
+        if (\is_array($result)) {
+            $props = $result;
+        } elseif (\is_object($result)) {
+            $props = \get_object_vars($result);
+        }
+        $body = "";
+        if ($style === "document") {
+            $element = "";
+            if ($output !== [] && ($output[0]["kind"] ?? "") === "E") {
+                $element = (string) $output[0]["type"];
+            }
+            if ($element === "") {
+                $element = __elephc_soap_name($name) . "Response";
+            }
+            $fields = __elephc_soap_wsdl_fields((string) ($this->__wsdl["elements"][$element] ?? ""));
+            if ($props !== null) {
+                if ($fields !== []) {
+                    foreach ($fields as $fieldName => $fieldType) {
+                        if (!\array_key_exists($fieldName, $props)) {
+                            throw new \SoapFault("Server", "SOAP-ERROR: Encoding: object has no '" . $fieldName . "' property");
+                        }
+                        $body .= __elephc_soap_value((string) $fieldName, $props[$fieldName]);
+                    }
+                } else {
+                    foreach ($props as $fieldName => $fieldValue) {
+                        $body .= __elephc_soap_value((string) $fieldName, $fieldValue);
+                    }
+                }
+            }
+            $uriNamespace = $this->__uri === "" ? "" : ' xmlns:ns1="' . __elephc_soap_escape($this->__uri) . '"';
+            if ($soap12) {
+                $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                    . '<env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope"' . $uriNamespace . '>'
+                    . $headerBlock
+                    . '<env:Body><ns1:' . $element . '>' . $body . '</ns1:' . $element . '></env:Body></env:Envelope>';
+            } else {
+                $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                    . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"' . $uriNamespace . '>'
+                    . $headerBlock
+                    . '<SOAP-ENV:Body><ns1:' . $element . '>' . $body . '</ns1:' . $element . '></SOAP-ENV:Body></SOAP-ENV:Envelope>';
+            }
+            $this->__sendHeaders($xml);
+            echo $xml;
+            return;
+        }
+
+        $parts = $output;
+        if (\count($parts) === 1) {
+            $part = $parts[0];
+            $value = $result;
+            if (($part["kind"] ?? "") === "T") {
+                $value = __elephc_soap_coerce((string) $part["type"], $result);
+            }
+            $body = __elephc_soap_literal_unprefixed_value((string) $part["name"], $value);
+        } elseif (\count($parts) > 1) {
+            foreach ($parts as $part) {
+                if ($props === null || !\array_key_exists((string) $part["name"], $props)) {
+                    throw new \SoapFault("Server", "SOAP-ERROR: Encoding: object has no '" . $part["name"] . "' property");
+                }
+                $value = $props[(string) $part["name"]];
+                if (($part["kind"] ?? "") === "T") {
+                    $value = __elephc_soap_coerce((string) $part["type"], $value);
+                }
+                $body .= __elephc_soap_literal_unprefixed_value((string) $part["name"], $value);
+            }
+        }
+        $tag = __elephc_soap_name($name) . "Response";
+        if ($soap12) {
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                . '<env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope">'
+                . $headerBlock
+                . '<env:Body><env:' . $tag . '>' . $body . '</env:' . $tag . '></env:Body></env:Envelope>';
+        } else {
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
+                . $headerBlock
+                . '<SOAP-ENV:Body><SOAP-ENV:' . $tag . '>' . $body . '</SOAP-ENV:' . $tag . '></SOAP-ENV:Body></SOAP-ENV:Envelope>';
+        }
         $this->__sendHeaders($xml);
         echo $xml;
     }
@@ -606,20 +739,33 @@ class SoapServer
         $envelope = $this->__version === SOAP_1_2
             ? "http://www.w3.org/2003/05/soap-envelope"
             : "http://schemas.xmlsoap.org/soap/envelope/";
+        $standard = ["Client", "Server", "VersionMismatch", "MustUnderstand"];
+        $code = (string) $fault->faultcode;
         if ($this->__version === SOAP_1_2) {
-            $faultXml = '<SOAP-ENV:Fault><SOAP-ENV:Code><SOAP-ENV:Value>'
-                . __elephc_soap_escape($fault->faultcode)
-                . '</SOAP-ENV:Value></SOAP-ENV:Code><SOAP-ENV:Reason><SOAP-ENV:Text xml:lang="en">'
+            $value = $code;
+            if (\in_array($code, $standard, true)) {
+                $mapped = $code === "Client" ? "Sender" : ($code === "Server" ? "Receiver" : $code);
+                $value = "env:" . $mapped;
+            }
+            $faultXml = '<env:Fault><env:Code><env:Value>'
+                . __elephc_soap_escape($value)
+                . '</env:Value></env:Code><env:Reason><env:Text xml:lang="en">'
                 . __elephc_soap_escape($fault->faultstring)
-                . '</SOAP-ENV:Text></SOAP-ENV:Reason></SOAP-ENV:Fault>';
+                . '</env:Text></env:Reason></env:Fault>';
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                . '<env:Envelope xmlns:env="' . $envelope . '">'
+                . '<env:Body>' . $faultXml . '</env:Body></env:Envelope>';
         } else {
-            $faultXml = '<SOAP-ENV:Fault><faultcode>' . __elephc_soap_escape($fault->faultcode)
+            if (\in_array($code, $standard, true)) {
+                $code = "SOAP-ENV:" . $code;
+            }
+            $faultXml = '<SOAP-ENV:Fault><faultcode>' . __elephc_soap_escape($code)
                 . '</faultcode><faultstring>' . __elephc_soap_escape($fault->faultstring)
                 . '</faultstring></SOAP-ENV:Fault>';
+            $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+                . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '">'
+                . '<SOAP-ENV:Body>' . $faultXml . '</SOAP-ENV:Body></SOAP-ENV:Envelope>';
         }
-        $xml = '<?xml version="1.0" encoding="UTF-8"?>'
-            . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '">'
-            . '<SOAP-ENV:Body>' . $faultXml . '</SOAP-ENV:Body></SOAP-ENV:Envelope>';
         @\header("HTTP/1.1 500 Internal Server Error");
         $this->__sendHeaders($xml);
         echo $xml;
@@ -1196,6 +1342,260 @@ function __elephc_soap_stack_find(array $stack, string $prefix): string
     return "";
 }
 
+function __elephc_soap_wsdl_parts(string $text): array
+{
+    $parts = [];
+    foreach (\explode("\n", \trim($text)) as $line) {
+        if ($line === "") {
+            continue;
+        }
+        $fields = \explode("|", $line);
+        if (\count($fields) < 2) {
+            continue;
+        }
+        $kind = "T";
+        $type = $fields[0];
+        $colon = \strpos($fields[0], ":");
+        if ($colon !== false) {
+            $kind = \substr($fields[0], 0, $colon);
+            $type = \substr($fields[0], $colon + 1);
+        }
+        $parts[] = ["kind" => $kind, "type" => $type, "name" => $fields[1]];
+    }
+    return $parts;
+}
+
+function __elephc_soap_wsdl_fields(string $text): array
+{
+    $fields = [];
+    foreach (\explode("\n", \trim($text)) as $line) {
+        $line = \trim($line);
+        if ($line === "" || \substr($line, -1) !== ";") {
+            continue;
+        }
+        $line = \substr($line, 0, -1);
+        $space = \strrpos($line, " ");
+        if ($space === false) {
+            continue;
+        }
+        $type = \trim(\substr($line, 0, $space));
+        $name = \trim(\substr($line, $space + 1));
+        if ($name !== "") {
+            $fields[$name] = $type;
+        }
+    }
+    return $fields;
+}
+
+function __elephc_soap_wsdl_operation(array $wsdl, string $name): mixed
+{
+    $messages = $wsdl["messages"] ?? [];
+    $fallback = null;
+    foreach (\explode("\n", \trim((string) ($wsdl["operations"] ?? ""))) as $line) {
+        if ($line === "") {
+            continue;
+        }
+        $fields = \explode("|", $line);
+        if (\count($fields) < 3) {
+            continue;
+        }
+        $operation_name = $fields[0];
+        $input_name = __elephc_soap_local($fields[1]);
+        $output_name = __elephc_soap_local($fields[2]);
+        $input = __elephc_soap_wsdl_parts((string) ($messages[$input_name] ?? ""));
+        $entry = [
+            "name" => $operation_name,
+            "style" => (string) ($wsdl["style"] ?? "document"),
+            "use" => (string) ($wsdl["use"] ?? "literal"),
+            "input" => $input,
+            "output" => __elephc_soap_wsdl_parts((string) ($messages[$output_name] ?? "")),
+        ];
+        if ($operation_name === $name) {
+            return $entry;
+        }
+        if ($fallback === null) {
+            foreach ($input as $part) {
+                if (($part["kind"] ?? "") === "E" && (string) $part["type"] === $name) {
+                    $fallback = $entry;
+                    break;
+                }
+            }
+        }
+    }
+    return $fallback;
+}
+
+function __elephc_soap_wsdl_arguments(array $wsdl, array $operation, string $name, array $params): array
+{
+    $parts = $operation["input"] ?? [];
+    if (($operation["style"] ?? "document") === "document") {
+        $element = "";
+        foreach ($parts as $part) {
+            if (($part["kind"] ?? "") === "E") {
+                $element = (string) $part["type"];
+                break;
+            }
+        }
+        if ($element === "") {
+            $element = $name;
+        }
+        $fields = __elephc_soap_wsdl_fields((string) ($wsdl["elements"][$element] ?? ""));
+        $wrapper = new \stdClass();
+        foreach ($params as $childName => $childValue) {
+            $childType = (string) ($fields[(string) $childName] ?? "");
+            $wrapper->{(string) $childName} = $childType === ""
+                ? $childValue
+                : __elephc_soap_coerce($childType, $childValue);
+        }
+        return [$wrapper];
+    }
+    $arguments = [];
+    foreach ($parts as $part) {
+        $partName = (string) $part["name"];
+        $value = \array_key_exists($partName, $params) ? $params[$partName] : null;
+        if (($part["kind"] ?? "") === "T") {
+            $value = __elephc_soap_coerce((string) $part["type"], $value);
+        }
+        $arguments[] = $value;
+    }
+    return $arguments;
+}
+
+function __elephc_soap_coerce(string $type, mixed $value): mixed
+{
+    if ($type === "int") {
+        if (\is_array($value)) {
+            return \count($value) > 0 ? 1 : 0;
+        }
+        if (\is_object($value)) {
+            return 1;
+        }
+        return (int) $value;
+    }
+    if ($type === "bool") {
+        if (\is_string($value)) {
+            $lower = \strtolower(\trim($value));
+            if ($lower === "true" || $lower === "1") {
+                return true;
+            }
+            if ($lower === "false" || $lower === "0" || $lower === "") {
+                return false;
+            }
+        }
+        return (bool) $value;
+    }
+    if ($type === "float") {
+        if (\is_array($value)) {
+            return \count($value) > 0 ? 1.0 : 0.0;
+        }
+        if (\is_object($value)) {
+            return 1.0;
+        }
+        return (float) $value;
+    }
+    if ($type === "string") {
+        if (\is_array($value)) {
+            return "Array";
+        }
+        if (\is_object($value)) {
+            return "Object";
+        }
+        return (string) $value;
+    }
+    return $value;
+}
+
+function __elephc_soap_literal_unprefixed_value(string $name, mixed $value): string
+{
+    $tag = __elephc_soap_name($name);
+    if ($value === null) {
+        return "<" . $tag . " xsi:nil=\"true\"/>";
+    }
+    if (\is_array($value)) {
+        $body = "";
+        foreach ($value as $key => $item) {
+            $body .= __elephc_soap_literal_unprefixed_value((string) $key, $item);
+        }
+        return "<" . $tag . ">" . $body . "</" . $tag . ">";
+    }
+    if (\is_object($value)) {
+        return __elephc_soap_literal_unprefixed_value($tag, \get_object_vars($value));
+    }
+    $text = \is_bool($value) ? ($value ? "true" : "false") : (string) $value;
+    return "<" . $tag . ">" . __elephc_soap_escape($text) . "</" . $tag . ">";
+}
+
+function __elephc_soap_server_encoded_value(string $tag, mixed $value, bool $soap12): string
+{
+    if ($value === null) {
+        return "<" . $tag . " xsi:nil=\"true\"/>";
+    }
+    if (\is_object($value)) {
+        $prefix = $soap12 ? "enc" : "SOAP-ENC";
+        $body = "";
+        foreach (\get_object_vars($value) as $key => $item) {
+            $body .= __elephc_soap_server_encoded_value((string) $key, $item, $soap12);
+        }
+        return "<" . $tag . " xsi:type=\"" . $prefix . ":Struct\">" . $body . "</" . $tag . ">";
+    }
+    if (\is_array($value)) {
+        $items = $value;
+        $list = true;
+        $index = 0;
+        foreach ($items as $key => $item) {
+            if ($key !== $index) {
+                $list = false;
+                break;
+            }
+            $index++;
+        }
+        if ($list) {
+            $prefix = $soap12 ? "enc" : "SOAP-ENC";
+            $count = \count($items);
+            $item_type = "xsd:anyType";
+            if ($count > 0) {
+                $first_type = "";
+                foreach ($items as $item) {
+                    $type = __elephc_soap_encoded_type($item);
+                    if ($first_type === "") {
+                        $first_type = $type;
+                    } elseif ($type !== $first_type) {
+                        $first_type = "xsd:anyType";
+                        break;
+                    }
+                }
+                $item_type = $first_type;
+            }
+            $body = "";
+            foreach ($items as $item) {
+                $body .= __elephc_soap_server_encoded_value("item", $item, $soap12);
+            }
+            if ($soap12) {
+                return "<" . $tag . " " . $prefix . ":itemType=\"" . $item_type . "\" "
+                    . $prefix . ":arraySize=\"" . $count . "\" xsi:type=\"" . $prefix . ":Array\">"
+                    . $body . "</" . $tag . ">";
+            }
+            return "<" . $tag . " " . $prefix . ":arrayType=\"" . $item_type . "[" . $count . "]\""
+                . " xsi:type=\"" . $prefix . ":Array\">" . $body . "</" . $tag . ">";
+        }
+        $body = "";
+        foreach ($items as $key => $item) {
+            $body .= "<item>" . __elephc_soap_server_encoded_value("key", (string) $key, $soap12)
+                . __elephc_soap_server_encoded_value("value", $item, $soap12) . "</item>";
+        }
+        return "<" . $tag . " xsi:type=\"ns2:Map\">" . $body . "</" . $tag . ">";
+    }
+    return __elephc_soap_encoded_scalar($tag, $value);
+}
+
+function __elephc_soap_part_type(string $raw): string
+{
+    if (\strpos($raw, "E:") === 0 || \strpos($raw, "T:") === 0) {
+        return \substr($raw, 2);
+    }
+    return $raw;
+}
+
 function __elephc_soap_xsd_type(string $type): string
 {
     $local = __elephc_soap_local($type);
@@ -1225,6 +1625,8 @@ function __elephc_soap_wsdl_metadata(string $xml): array
     $field_text = [];
     $message_text = [];
     $operations_text = "";
+    $style = "document";
+    $use = "literal";
     $current_operation_name = "";
     $current_operation_input = "";
     $current_operation_output = "";
@@ -1338,11 +1740,11 @@ function __elephc_soap_wsdl_metadata(string $xml): array
         if ($local === "part") {
             $message_name = __elephc_soap_stack_find($stack, "message:");
             if ($message_name !== "") {
-                $part_type = "string";
+                $part_type = "T:string";
                 if (($attributes["element"] ?? "") !== "") {
-                    $part_type = __elephc_soap_local((string) $attributes["element"]);
+                    $part_type = "E:" . __elephc_soap_local((string) $attributes["element"]);
                 } elseif (($attributes["type"] ?? "") !== "") {
-                    $part_type = __elephc_soap_xsd_type((string) $attributes["type"]);
+                    $part_type = "T:" . __elephc_soap_xsd_type((string) $attributes["type"]);
                 }
                 $part_name = (string) ($attributes["name"] ?? "parameters");
                 if ($part_name === "") {
@@ -1351,6 +1753,13 @@ function __elephc_soap_wsdl_metadata(string $xml): array
                 $message_text[$message_name] = ($message_text[$message_name] ?? "")
                     . $part_type . "|" . $part_name . "\n";
             }
+            continue;
+        }
+        if ($local === "binding" && isset($attributes["style"])) {
+            $style = (string) $attributes["style"];
+        }
+        if ($local === "body" && isset($attributes["use"])) {
+            $use = (string) $attributes["use"];
             continue;
         }
         if (($local === "portType" || $local === "binding") && !$self_closing) {
@@ -1398,7 +1807,7 @@ function __elephc_soap_wsdl_metadata(string $xml): array
             if (\count($output_parts) > 0) {
                 $output_pair = \explode("|", $output_parts[0]);
                 if (\count($output_pair) > 0) {
-                    $return_type = $output_pair[0];
+                    $return_type = __elephc_soap_part_type($output_pair[0]);
                 }
             }
         }
@@ -1407,7 +1816,7 @@ function __elephc_soap_wsdl_metadata(string $xml): array
             foreach (\explode("\n", \trim($message_text[$input_name])) as $part) {
                 $pair = \explode("|", $part);
                 if (\count($pair) >= 2) {
-                    $parameters[] = $pair[0] . " $" . $pair[1];
+                    $parameters[] = __elephc_soap_part_type($pair[0]) . " $" . $pair[1];
                 }
             }
         }
@@ -1428,7 +1837,15 @@ function __elephc_soap_wsdl_metadata(string $xml): array
         $types[] = $text;
     }
 
-    return ["functions" => $functions, "types" => $types];
+    return [
+        "functions" => $functions,
+        "types" => $types,
+        "style" => $style,
+        "use" => $use,
+        "operations" => $operations_text,
+        "messages" => $message_text,
+        "elements" => $field_text,
+    ];
 }
 
 function __elephc_soap_http_request(string $method, string $location, string $payload, array $headers, int $timeout): string
