@@ -201,6 +201,17 @@ pub unsafe extern "C" fn elephc_sodium_sign_verify_detached(
     })
 }
 
+/// Converts a canonical Ed25519 public key to Curve25519, rejecting torsion points.
+fn ed25519_pk_to_curve25519(public_key: &[u8]) -> Option<[u8; 32]> {
+    let encoded: [u8; 32] = public_key.try_into().ok()?;
+    let compressed = CompressedEdwardsY(encoded);
+    let point = compressed.decompress()?;
+    if point.is_small_order() || !point.is_torsion_free() {
+        return None;
+    }
+    Some(point.to_montgomery().to_bytes())
+}
+
 /// C ABI: converts an Ed25519 public key to a Curve25519 public key.
 ///
 /// # Safety
@@ -217,14 +228,9 @@ pub unsafe extern "C" fn elephc_sodium_sign_pk_to_curve25519(
         if public_key.len() != 32 {
             return ptr::null();
         }
-        let compressed = CompressedEdwardsY(public_key.try_into().expect("public key length"));
-        let Some(point) = compressed.decompress() else {
-            return ptr::null();
-        };
-        if point.is_small_order() || !point.is_torsion_free() {
-            return ptr::null();
-        }
-        publish(&point.to_montgomery().to_bytes())
+        ed25519_pk_to_curve25519(public_key)
+            .map(|converted| publish(&converted))
+            .unwrap_or(ptr::null())
     })
 }
 
@@ -253,4 +259,59 @@ pub unsafe extern "C" fn elephc_sodium_sign_sk_to_curve25519(
         hashed.fill(0);
         publish(&scalar)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ed25519_pk_to_curve25519;
+
+    /// Decodes a lowercase hex string into bytes.
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    /// Renders bytes as lowercase hex.
+    fn hex_text(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Matches libsodium's accept/reject set for Ed25519-to-Curve25519 conversion.
+    #[test]
+    fn converts_only_main_subgroup_points() {
+        let rejected = [
+            str::repeat("00", 32),
+            format!("01{}", str::repeat("00", 31)),
+            format!("ec{}7f", str::repeat("ff", 30)),
+            format!("ed{}7f", str::repeat("ff", 30)),
+            format!("ee{}7f", str::repeat("ff", 30)),
+            format!("{}80", str::repeat("00", 31)),
+            format!("01{}80", str::repeat("00", 30)),
+            format!("02{}", str::repeat("00", 31)),
+            format!("03{}", str::repeat("00", 31)),
+            format!("{}7f", str::repeat("ff", 31)),
+        ];
+        for public_key in rejected {
+            assert!(
+                ed25519_pk_to_curve25519(&hex_bytes(&public_key)).is_none(),
+                "libsodium rejects {public_key}"
+            );
+        }
+        let accepted = [
+            (
+                "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+                "1b1b58dd50ea14b60da17b790cd02754d970c9bab864ebb3c0f3016fe51d3f57",
+            ),
+            (
+                "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+                "60346e7c911a5f6ba154129174cafe75b294ac3bbd5549632f48cec6266f8410",
+            ),
+        ];
+        for (public_key, expected) in accepted {
+            let converted = ed25519_pk_to_curve25519(&hex_bytes(public_key)).expect("accepted");
+            assert_eq!(hex_text(&converted), expected);
+        }
+    }
 }

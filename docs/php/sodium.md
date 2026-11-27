@@ -55,13 +55,13 @@ echo sodium_crypto_box_seal_open($sealed, $keypair), "\n";
 `SodiumException` carries php-src's invalid-length and invalid-domain
 diagnostics for the delivered functions.
 
-## Deferred ext/sodium surface
+## Ed25519 conversion validation
 
-- `sodium_crypto_sign_ed25519_pk_to_curve25519` errors for non-canonical or
-  low-order points beyond the current `SodiumException` path.
-
-None of those names are declared, so a program that calls them fails at
-compile time rather than silently returning a wrong value.
+`sodium_crypto_sign_ed25519_pk_to_curve25519()` rejects non-canonical encodings,
+small-order points, and points outside the main subgroup with libsodium's
+`SodiumException("conversion failed")`. The accepted/rejected set and the
+converted bytes are locked to libsodium vectors for identity, low-order,
+non-canonical, and valid seed-derived keys.
 
 ## Linking
 

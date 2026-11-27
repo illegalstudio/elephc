@@ -13,8 +13,9 @@
 //! - Range checks live in the PHP wrapper so PHP 8.6's `ValueError` text is
 //!   exact; this module returns `None` for unsupported parameters.
 
+use argon2::password_hash::phc::PasswordHash;
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier},
+    password_hash::{PasswordHasher, PasswordVerifier},
     Algorithm, Argon2, Params, Version,
 };
 
@@ -24,18 +25,12 @@ pub(crate) const ALG_ARGON2I13: i64 = 1;
 pub(crate) const ALG_ARGON2ID13: i64 = 2;
 /// `SODIUM_CRYPTO_PWHASH_SALTBYTES`.
 pub(crate) const SALTBYTES: usize = 16;
-/// `SODIUM_CRYPTO_PWHASH_OPSLIMIT_MIN`.
-pub(crate) const OPSLIMIT_MIN: i64 = 1;
-/// `SODIUM_CRYPTO_PWHASH_MEMLIMIT_MIN`.
-pub(crate) const MEMLIMIT_MIN: i64 = 8192;
 /// `SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES`.
 pub(crate) const SCRYPT_SALTBYTES: usize = 32;
 /// `SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_BYTES_MIN`.
 pub(crate) const SCRYPT_BYTES_MIN: usize = 16;
 /// `SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_MIN`.
 pub(crate) const SCRYPT_OPSLIMIT_MIN: i64 = 32768;
-/// `SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_MIN`.
-pub(crate) const SCRYPT_MEMLIMIT_MIN: i64 = 16_777_216;
 
 /// Hashes `password` with Argon2i/Argon2id and the libsodium parameter mapping.
 pub(crate) fn hash(
