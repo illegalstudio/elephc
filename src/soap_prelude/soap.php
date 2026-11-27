@@ -9,6 +9,9 @@ const SOAP_LITERAL = 2;
 const SOAP_ACTOR_NEXT = 1;
 const SOAP_ACTOR_NONE = 2;
 const SOAP_ACTOR_UNLIMATERECEIVER = 3;
+const SOAP_PERSISTENCE_REQUEST = 2;
+const SOAP_PERSISTENCE_SESSION = 1;
+const SOAP_FUNCTIONS_ALL = 999;
 
 class SoapFault extends \Exception
 {
@@ -80,6 +83,7 @@ class SoapClient
     private string $__uri = "";
     private int $__style = SOAP_RPC;
     private int $__use = SOAP_ENCODED;
+    private int $__version = SOAP_1_1;
     private string $__login = "";
     private string $__password = "";
     private int $__timeout = 30;
@@ -100,6 +104,9 @@ class SoapClient
         }
         if (isset($options["use"])) {
             $this->__use = (int) $options["use"];
+        }
+        if (isset($options["soap_version"])) {
+            $this->__version = (int) $options["soap_version"] === SOAP_1_2 ? SOAP_1_2 : SOAP_1_1;
         }
         $this->__login = (string) ($options["login"] ?? "");
         $this->__password = (string) ($options["password"] ?? "");
@@ -166,26 +173,32 @@ class SoapClient
                 $params .= __elephc_soap_value("param" . $index, $value);
             }
         }
+        $envelope = $this->__version === SOAP_1_2
+            ? "http://www.w3.org/2003/05/soap-envelope"
+            : "http://schemas.xmlsoap.org/soap/envelope/";
         $request = '<?xml version="1.0" encoding="UTF-8"?>'
-            . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"'
+            . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '"'
             . ' xmlns:ns1="' . __elephc_soap_escape($uri) . '"'
             . ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
             . '<SOAP-ENV:Body><ns1:' . __elephc_soap_name($function) . '>'
             . $params
             . '</ns1:' . __elephc_soap_name($function) . '></SOAP-ENV:Body></SOAP-ENV:Envelope>';
-        $headers = [
-            "Content-Type: text/xml; charset=utf-8",
-            "SOAPAction: \"" . $soapAction . "\"",
-            "Connection: close",
-            "User-Agent: " . $this->__userAgent,
-        ];
+        $headers = [];
+        if ($this->__version === SOAP_1_2) {
+            $headers[] = "Content-Type: application/soap+xml; charset=utf-8; action=\"" . $soapAction . "\"";
+        } else {
+            $headers[] = "Content-Type: text/xml; charset=utf-8";
+            $headers[] = "SOAPAction: \"" . $soapAction . "\"";
+        }
+        $headers[] = "Connection: close";
+        $headers[] = "User-Agent: " . $this->__userAgent;
         if ($this->__login !== "") {
             $headers[] = "Authorization: Basic " . \base64_encode($this->__login . ":" . $this->__password);
         }
         $response = __elephc_soap_http_request("POST", $location, $request, $headers, $this->__timeout);
         $this->__lastRequest = $request;
         $this->__lastResponse = $response;
-        return __elephc_soap_response($response);
+        return __elephc_soap_response($response, $this->__version);
     }
 
     public function __call(string $name, array $arguments)
@@ -235,6 +248,233 @@ class SoapClient
 
     public function __setCookie(string $name, ?string $value = null): void
     {
+    }
+}
+
+
+class SoapServer
+{
+    private string $__uri = "";
+    private int $__version = SOAP_1_1;
+    private mixed $__object = null;
+    private array $__functions = [];
+    private bool $__allFunctions = false;
+    private array $__headers = [];
+    private ?SoapFault $__fault = null;
+    private int $__persistence = SOAP_PERSISTENCE_REQUEST;
+
+    public function __construct(?string $wsdl, array $options = [])
+    {
+        $this->__uri = (string) ($options["uri"] ?? "");
+        if (isset($options["soap_version"])) {
+            $this->__version = (int) $options["soap_version"] === SOAP_1_2 ? SOAP_1_2 : SOAP_1_1;
+        }
+        if ($wsdl !== null && $wsdl !== "") {
+            $xml = @\file_get_contents($wsdl);
+            if (\is_string($xml) && $xml !== "") {
+                $scan = __elephc_soap_scan_wsdl($xml);
+                if ($this->__uri === "") {
+                    $this->__uri = (string) ($scan["target"] ?? "");
+                }
+            }
+        }
+    }
+
+    public function setClass(string $class, mixed ...$args): void
+    {
+        $this->__object = new $class(...$args);
+    }
+
+    public function setObject(object $object): void
+    {
+        $this->__object = $object;
+    }
+
+    public function addFunction(mixed $functions): void
+    {
+        if ($functions === SOAP_FUNCTIONS_ALL) {
+            $this->__allFunctions = true;
+            return;
+        }
+        if (\is_array($functions)) {
+            foreach ($functions as $function) {
+                $this->addFunction($function);
+            }
+            return;
+        }
+        if (!\is_string($functions)) {
+            throw new \SoapFault("Client", "Invalid function name");
+        }
+        $this->__functions[] = $functions;
+    }
+
+    public function getFunctions(): array
+    {
+        return $this->__functions;
+    }
+
+    public function setPersistence(int $mode): void
+    {
+        $this->__persistence = $mode;
+    }
+
+    public function addSoapHeader(SoapHeader $header): void
+    {
+        $this->__headers[] = $header;
+    }
+
+    public function fault(string $code, string $string, ?string $actor = null, mixed $details = null, ?string $name = null): void
+    {
+        $this->__fault = new \SoapFault($code, $string, $actor, $details, $name);
+    }
+
+    public function handle(?string $request = null): void
+    {
+        if ($this->__fault !== null) {
+            $this->__emitFault($this->__fault);
+            return;
+        }
+        $payload = "";
+        if ($request !== null) {
+            $payload = $request;
+        } else {
+            $loaded = @\file_get_contents("php://input");
+            if (\is_string($loaded)) {
+                $payload = $loaded;
+            }
+        }
+        $root = __elephc_soap_element((string) $payload, 0);
+        if ($root[0] === "" || !\is_array($root[1]) || !\array_key_exists("Body", $root[1])) {
+            $this->__emitFault(new \SoapFault("Client", "Invalid request"));
+            return;
+        }
+        $body = $root[1]["Body"];
+        if (!\is_array($body)) {
+            $this->__emitFault(new \SoapFault("Client", "Invalid request"));
+            return;
+        }
+        $operation = null;
+        foreach ($body as $childName => $childValue) {
+            if ($childName === "__text") {
+                continue;
+            }
+            $operation = [(string) $childName, $childValue];
+            break;
+        }
+        if ($operation === null) {
+            $this->__emitFault(new \SoapFault("Client", "Invalid request"));
+            return;
+        }
+        $name = (string) $operation[0];
+        $params = [];
+        if (\is_array($operation[1])) {
+            foreach ($operation[1] as $parameterName => $parameterValue) {
+                if ((string) $parameterName !== "__text") {
+                    $params[(string) $parameterName] = $parameterValue;
+                }
+            }
+        }
+        try {
+            $result = null;
+            $resolved = "";
+            if ($this->__object !== null) {
+                $object = $this->__object;
+                $methods = \get_class_methods(\get_class($object));
+                foreach ($methods as $method) {
+                    if (\strcasecmp($method, $name) === 0) {
+                        $resolved = $method;
+                        break;
+                    }
+                }
+                if ($resolved === "") {
+                    throw new \SoapFault("Server", "Function ('" . $name . "') is not a valid method for this service");
+                }
+                $result = \call_user_func_array([$object, $resolved], $params);
+            } elseif ($this->__allFunctions) {
+                $result = \call_user_func_array($name, $params);
+            } else {
+                foreach ($this->__functions as $function) {
+                    if (\strcasecmp($function, $name) === 0) {
+                        $resolved = $function;
+                        break;
+                    }
+                }
+                if ($resolved === "") {
+                    throw new \SoapFault("Server", "Function ('" . $name . "') is not a valid method for this service");
+                }
+                $result = \call_user_func_array($resolved, $params);
+            }
+            if ($result instanceof \SoapFault) {
+                $this->__emitFault($result);
+                return;
+            }
+            $this->__emitResponse($name, $result);
+        } catch (\SoapFault $fault) {
+            $this->__emitFault($fault);
+        }
+    }
+
+    private function __emitResponse(string $name, mixed $result): void
+    {
+        $tag = __elephc_soap_name($name) . "Response";
+        $namespace = $this->__uri === "" ? "" : ' xmlns:ns1="' . __elephc_soap_escape($this->__uri) . '"';
+        $body = "";
+        if ($result !== null) {
+            $body = __elephc_soap_value("return", $result);
+        }
+        $headerXml = "";
+        foreach ($this->__headers as $header) {
+            $headerName = __elephc_soap_name($header->name);
+            $headerXml .= '<ns2:' . $headerName . ' xmlns:ns2="' . __elephc_soap_escape($header->namespace) . '">'
+                . __elephc_soap_xml_value($header->data) . '</ns2:' . $headerName . '>';
+        }
+        $headerBlock = $headerXml === "" ? "" : '<SOAP-ENV:Header>' . $headerXml . '</SOAP-ENV:Header>';
+        $envelope = $this->__version === SOAP_1_2
+            ? "http://www.w3.org/2003/05/soap-envelope"
+            : "http://schemas.xmlsoap.org/soap/envelope/";
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+            . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '"'
+            . ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+            . $headerBlock
+            . '<SOAP-ENV:Body><ns1:' . $tag . $namespace . '>'
+            . $body
+            . '</ns1:' . $tag . '></SOAP-ENV:Body></SOAP-ENV:Envelope>';
+        $this->__sendHeaders($xml);
+        echo $xml;
+    }
+
+    private function __emitFault(\SoapFault $fault): void
+    {
+        $envelope = $this->__version === SOAP_1_2
+            ? "http://www.w3.org/2003/05/soap-envelope"
+            : "http://schemas.xmlsoap.org/soap/envelope/";
+        if ($this->__version === SOAP_1_2) {
+            $faultXml = '<SOAP-ENV:Fault><SOAP-ENV:Code><SOAP-ENV:Value>'
+                . __elephc_soap_escape($fault->faultcode)
+                . '</SOAP-ENV:Value></SOAP-ENV:Code><SOAP-ENV:Reason><SOAP-ENV:Text xml:lang="en">'
+                . __elephc_soap_escape($fault->faultstring)
+                . '</SOAP-ENV:Text></SOAP-ENV:Reason></SOAP-ENV:Fault>';
+        } else {
+            $faultXml = '<SOAP-ENV:Fault><faultcode>' . __elephc_soap_escape($fault->faultcode)
+                . '</faultcode><faultstring>' . __elephc_soap_escape($fault->faultstring)
+                . '</faultstring></SOAP-ENV:Fault>';
+        }
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>'
+            . '<SOAP-ENV:Envelope xmlns:SOAP-ENV="' . $envelope . '">'
+            . '<SOAP-ENV:Body>' . $faultXml . '</SOAP-ENV:Body></SOAP-ENV:Envelope>';
+        @\header("HTTP/1.1 500 Internal Server Error");
+        $this->__sendHeaders($xml);
+        echo $xml;
+    }
+
+    private function __sendHeaders(string $xml): void
+    {
+        if ($this->__version === SOAP_1_2) {
+            @\header("Content-Type: application/soap+xml; charset=utf-8");
+        } else {
+            @\header("Content-Type: text/xml; charset=utf-8");
+        }
+        @\header("Content-Length: " . \strlen($xml));
     }
 }
 
@@ -290,6 +530,27 @@ function __elephc_soap_value(string $name, mixed $value): string
         $text = (string) $value;
     }
     return "<ns1:" . $tag . ">" . __elephc_soap_escape($text) . "</ns1:" . $tag . ">";
+}
+
+function __elephc_soap_xml_value(mixed $value): string
+{
+    if ($value === null) {
+        return "";
+    }
+    if (\is_array($value)) {
+        $body = "";
+        foreach ($value as $key => $item) {
+            $body .= __elephc_soap_value((string) $key, $item);
+        }
+        return $body;
+    }
+    if (\is_object($value)) {
+        return __elephc_soap_xml_value(\get_object_vars($value));
+    }
+    if (\is_bool($value)) {
+        return $value ? "true" : "false";
+    }
+    return __elephc_soap_escape((string) $value);
 }
 
 function __elephc_soap_local(string $name): string
@@ -710,7 +971,7 @@ function __elephc_soap_http_request(string $method, string $location, string $pa
     return $body;
 }
 
-function __elephc_soap_response(string $xml)
+function __elephc_soap_response(string $xml, int $version = SOAP_1_1)
 {
     $root = __elephc_soap_element($xml, 0);
     if ($root[0] === "" || !\is_array($root[1]) || !\array_key_exists("Body", $root[1])) {
@@ -733,12 +994,30 @@ function __elephc_soap_response(string $xml)
     }
     if ($first[0] === "Fault") {
         $fault = $first[1];
+        if ($version === SOAP_1_2 && \is_array($fault)) {
+            $code = "SOAP-ENV:Server";
+            $codeNode = $fault["Code"] ?? null;
+            if (\is_array($codeNode)) {
+                $code = (string) ($codeNode["Value"] ?? $code);
+            }
+            $string = "SOAP fault";
+            $reasonNode = $fault["Reason"] ?? null;
+            if (\is_array($reasonNode)) {
+                $string = (string) ($reasonNode["Text"] ?? $string);
+            }
+            throw new \SoapFault($code, $string);
+        }
         $code = \is_array($fault) ? (string) ($fault["faultcode"] ?? "SOAP-ENV:Server") : "SOAP-ENV:Server";
         $string = \is_array($fault) ? (string) ($fault["faultstring"] ?? "SOAP fault") : (string) $fault;
         throw new \SoapFault($code, $string);
     }
-    if (\is_array($first[1]) && \count($first[1]) === 1 && \array_key_exists("result", $first[1])) {
-        return $first[1]["result"];
+    if (\is_array($first[1]) && \count($first[1]) === 1) {
+        if (\array_key_exists("result", $first[1])) {
+            return $first[1]["result"];
+        }
+        if (\array_key_exists("return", $first[1])) {
+            return $first[1]["return"];
+        }
     }
     return $first[1];
 }

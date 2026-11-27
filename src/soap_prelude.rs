@@ -1,16 +1,16 @@
 //! Purpose:
-//! Declares the first PHP `ext/soap` client slice (`SoapClient`/`SoapFault`)
-//! and its WSDL-less request/response implementation.
+//! Declares PHP's `ext/soap` client and server surface (`SoapClient`,
+//! `SoapServer`, `SoapFault`, header/value helpers) and its HTTP implementation.
 //!
 //! Called from:
 //! - `crate::pipeline::compile_config` when the program names a SOAP class or
 //!   function.
 //!
 //! Key details:
-//! - The client is WSDL-less: it requires `location` and `uri` options and
-//!   posts a SOAP 1.1 envelope through the existing HTTP stream wrapper.
-//! - The `keep_headers` option is validated and stored; WSDL imports, where
-//!   PHP 8.6 applies header redaction, are not implemented yet.
+//! - The client supports WSDL and WSDL-less modes, SOAP 1.1/1.2 envelopes, and
+//!   PHP 8.6's cross-origin `keep_headers` redaction during WSDL imports.
+//! - `SoapServer` dispatches RPC-style requests to registered functions or
+//!   object methods and serialises SOAP 1.1/1.2 responses and faults.
 //! - Response parsing is a small namespace-tolerant XML reader in PHP so the
 //!   prelude does not force the XML/libxml2 prelude into every SOAP program.
 
@@ -29,9 +29,10 @@ fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
             || name == "soapheader"
             || name == "soapvar"
             || name == "soapparam"
+            || name == "soapserver"
     }) || usage.literals.iter().any(|literal| {
         let literal = literal.to_ascii_lowercase();
-        literal == "soapclient" || literal == "soapfault"
+        literal == "soapclient" || literal == "soapfault" || literal == "soapserver"
     })
 }
 
