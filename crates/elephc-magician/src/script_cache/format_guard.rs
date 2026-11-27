@@ -116,7 +116,7 @@ mod tests {
     /// the by-reference return flag of eval functions and closures.
     /// BUMPED TO 36: the enum-case receiver check of property fetches in `const` initializers.
     /// BUMPED TO 37: the profiled Chopper payload carries the merged AST.
-    const RECORDED_FINGERPRINT: u64 = 1829448089533980380;
+    const RECORDED_FINGERPRINT: u64 = 16_525_043_275_646_075_872;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///
