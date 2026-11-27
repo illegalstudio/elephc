@@ -102,8 +102,8 @@ pub(super) fn lower_boxed_spread_args(
         let valid = compare_ints(ctx, count.value, max.value, CmpPredicate::Sle, span);
         require(ctx, valid, "ArgumentCountError", &format!("{builtin}(): Too many arguments for unpacked call"), span);
     }
-    // A fixed user signature binds its parameters in PHP's order: a parameter skipped before a
-    // bound one fails first ("not passed"), then each parameter is either missing (too few
+    // A fixed user signature binds its parameters in PHP's order: a required parameter skipped
+    // before a bound one fails first ("not passed"), then each parameter is either missing (too few
     // arguments) or checked against its declared scalar type, so a `TypeError` for an earlier
     // parameter precedes the `ArgumentCountError` for a later missing one.
     let check_in_order = !hidden && !preserve_values;
@@ -261,7 +261,7 @@ pub(super) fn lower_boxed_spread_args(
     } })
 }
 
-/// Throws PHP's "not passed" `ArgumentCountError` for a parameter the unpacked arguments
+/// Throws PHP's "not passed" `ArgumentCountError` for a required parameter the unpacked arguments
 /// skipped while binding a later one (`f(...['t' => $x])` leaves `$s` unpassed), before any
 /// parameter is checked. A missing TRAILING parameter is reported later, in parameter order.
 ///
@@ -286,7 +286,8 @@ fn emit_unpassed_parameter_checks(
         branch(ctx, next);
         ctx.builder.position_at_end(next);
     }
-    for index in 0..count.saturating_sub(1) {
+    let required = crate::types::call_args::required_param_count(sig);
+    for index in 0..required.min(count.saturating_sub(1)) {
         let filled = ctx.load_local(&state.filled[index], Some(span));
         let check = ctx.builder.create_named_block("spread.unpassed.check", Vec::new());
         let ok = ctx.builder.create_named_block("spread.unpassed.ok", Vec::new());
