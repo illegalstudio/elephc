@@ -134,14 +134,30 @@ echo $n;
     );
 }
 
-/// Guard for the sorts that still refuse a float, so the refusal stays deliberate.
+/// `asort`/`arsort` promote a packed float list and keep each value on its original key.
 ///
-/// `asort` and the natural-order sorts keep their keys and have no comparator to hand a slot
-/// to, which is also why they already refuse strings and boxed `Mixed`. Admitting floats to
-/// `sort`/`rsort` must not quietly admit them here.
+/// Natural-order sorts still have no float comparator, so they keep refusing the list.
 #[test]
-fn key_preserving_sorts_still_refuse_float_elements() {
-    for name in ["asort", "arsort", "natsort", "natcasesort"] {
+fn key_preserving_float_sorts_keep_keys_or_refuse() {
+    let out = compile_and_run(
+        r#"<?php
+function pairs(array $items): string {
+    $out = "";
+    foreach ($items as $key => $value) {
+        $out .= $key . "=" . $value . " ";
+    }
+    return $out;
+}
+$a = [1.5, 0.5, 2.5];
+asort($a);
+echo pairs($a), "\n";
+$b = [1.5, 0.5, 2.5];
+arsort($b);
+echo pairs($b), "\n";
+"#,
+    );
+    assert_eq!(out, "1=0.5 0=1.5 2=2.5 \n2=2.5 0=1.5 1=0.5 \n");
+    for name in ["natsort", "natcasesort"] {
         let error = compile_source_expect_backend_error(&format!(
             "<?php $a = [2.5, 1.5]; {name}($a);"
         ));

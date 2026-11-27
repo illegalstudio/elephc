@@ -13,7 +13,7 @@
 use super::*;
 use std::collections::HashMap;
 
-use crate::ir_lower::context::{IfArmExit, ReflectionBindings, StaticCallableBinding};
+use crate::ir_lower::context::{IfArmExit, RefAliasGroups, ReflectionBindings, StaticCallableBinding};
 use crate::types::TypeEnv;
 
 mod runtime_choice;
@@ -69,6 +69,7 @@ fn lower_if_chain(
     lower_condition(ctx, condition, then_block, else_block);
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
+    let split_groups = ctx.ref_alias_groups_snapshot();
     let split_static_callables = ctx.static_callable_locals_snapshot();
     let split_reflection = ctx.reflection_bindings_snapshot();
     // Interior-alias markers are a MAY fact, so the arms are unioned rather than sequenced.
@@ -80,6 +81,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
+    ctx.restore_ref_alias_groups(split_groups.clone());
     ctx.restore_static_callable_locals(split_static_callables.clone());
     ctx.restore_reflection_bindings(split_reflection.clone());
     lower_block(ctx, then_body);
@@ -96,6 +98,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
+    ctx.restore_ref_alias_groups(split_groups);
     ctx.restore_static_callable_locals(split_static_callables);
     ctx.restore_reflection_bindings(split_reflection);
     ctx.restore_borrowed_element_ref_locals(split_borrowed_refs);
@@ -215,6 +218,7 @@ pub(super) fn pending_join_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) ->
         initialized: ctx.initialized_slots_snapshot(),
         static_callables: ctx.static_callable_locals_snapshot(),
         reflection: ctx.reflection_bindings_snapshot(),
+        ref_groups: ctx.ref_alias_groups_snapshot(),
     }
 }
 
@@ -240,6 +244,7 @@ pub(super) fn join_edges(
         return;
     };
     ctx.restore_local_types(first.types.clone());
+    ctx.restore_ref_alias_groups(first.ref_groups.clone());
     ctx.restore_initialized_slots(first.initialized.clone());
     let mut initialized = first.initialized.clone();
     for edge in edges.iter().skip(1) {
@@ -458,6 +463,7 @@ fn finish_type_join(
     if arms.len() < 2 {
         if let Some(arm) = arms.first() {
             ctx.restore_local_types(arm.types.clone());
+            ctx.restore_ref_alias_groups(arm.ref_groups.clone());
             ctx.restore_static_callable_locals(arm.static_callables.clone());
             ctx.restore_reflection_bindings(arm.reflection.clone());
         } else {
@@ -481,8 +487,12 @@ fn finish_type_join(
         joined_reflection.intersect(&arm.reflection);
     }
     let saved_types = ctx.local_types_snapshot();
+    let joined_groups = RefAliasGroups::intersect(
+        &arms.iter().map(|arm| &arm.ref_groups).collect::<Vec<_>>(),
+    );
     for arm in &arms {
         ctx.restore_local_types(arm.types.clone());
+        ctx.restore_ref_alias_groups(arm.ref_groups.clone());
         let hash_conversions = arm_hash_conversions(arm, &joined);
         let conversions = arm_conversions(arm, &joined);
         let mixed_conversions = arm_mixed_conversions(arm, &edge_boxed);
@@ -496,6 +506,7 @@ fn finish_type_join(
         });
     }
     ctx.restore_local_types(saved_types);
+    ctx.restore_ref_alias_groups(joined_groups);
     for (name, ty) in joined {
         if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
             ctx.set_retyped_container_local_type(&name, ty);

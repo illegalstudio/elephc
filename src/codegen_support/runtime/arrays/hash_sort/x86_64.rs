@@ -42,7 +42,41 @@ fn emit_entry_points(emitter: &mut Emitter) {
         emitter.instruction(&format!("mov edx, {}", mode));                     // select the key-sort direction
         emitter.instruction("jmp __rt_hash_key_sort_enter");                    // resolve PHP sort flags into the mode word
     }
+    emit_user_entry(
+        emitter,
+        "__rt_hash_uasort",
+        super::MODE_USER_VALUE,
+        "sort a hash by a user value comparator",
+    );
+    emit_user_entry(
+        emitter,
+        "__rt_hash_uksort",
+        super::MODE_USER_KEY,
+        "sort a hash by a user key comparator",
+    );
     emit_key_sort_entry(emitter);
+}
+
+/// Emits a user-sort entry that keeps the callback in callee-saved registers for the compare step.
+///
+/// Input: `rdi` hash, `rsi` callback, `rdx` optional capture environment. The engine only sees
+/// the mode word. `r12` and `r13` are restored before returning because the caller may be using them.
+fn emit_user_entry(emitter: &mut Emitter, label: &str, mode: i64, description: &str) {
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {label} ({description}) ---"));
+    emitter.label_global(label);
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before saving the callback registers
+    emitter.instruction("mov rbp, rsp");                                        // establish a frame so the callback registers can be restored after the engine
+    emitter.instruction("push r12");                                            // preserve the caller's comparator register
+    emitter.instruction("push r13");                                            // preserve the caller's capture-environment register
+    emitter.instruction("mov r12, rsi");                                        // r12 = user comparator, live across every comparison
+    emitter.instruction("mov r13, rdx");                                        // r13 = optional capture environment, or zero
+    emitter.instruction(&format!("mov esi, {mode}"));                           // select the user key or value mode
+    emitter.instruction("call __rt_hash_sort_links");                           // relink the hash with the user comparator
+    emitter.instruction("pop r13");                                             // restore the caller's capture-environment register
+    emitter.instruction("pop r12");                                             // restore the caller's comparator register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return with the table reordered in place
 }
 
 /// Emits the shared key-sort prologue that resolves PHP's `$flags` into a comparator selector.
@@ -253,6 +287,8 @@ fn emit_compare_entries(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // allocate the aligned comparison frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right entry address
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the comparison mode
+    emitter.instruction("test rdx, 4");                                         // bit 2 selects a user comparator
+    emitter.instruction("jnz __rt_hsort_cmp_user");                             // user sorts call the comparator instead of PHP's table
     emitter.instruction("mov rsi, rdx");                                        // pass the mode to the left operand reader
     emitter.instruction("call __rt_hash_sort_triple");                          // materialize the left comparison triple
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the left runtime tag
@@ -289,6 +325,24 @@ fn emit_compare_entries(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // pass the right low payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // pass the right high payload word
     emitter.instruction("call __rt_php_compare");                               // apply PHP's general value comparison table
+    emitter.instruction("jmp __rt_hsort_cmp_done");                             // value comparison is complete
+    emitter.label("__rt_hsort_cmp_user");
+    emitter.instruction("test rdx, 2");                                         // bit 1 selects entry values; otherwise the comparator sees keys
+    emitter.instruction("jnz __rt_hsort_cmp_user_value");                       // load value payload words for uasort
+    emitter.instruction("mov rax, QWORD PTR [rdi + 8]");                        // load the left integer key
+    emitter.instruction("mov rsi, QWORD PTR [rsi + 8]");                        // load the right integer key
+    emitter.instruction("jmp __rt_hsort_cmp_user_call");                        // call the comparator with the two keys
+    emitter.label("__rt_hsort_cmp_user_value");
+    emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                       // load the left value payload word
+    emitter.instruction("mov rsi, QWORD PTR [rsi + 24]");                       // load the right value payload word
+    emitter.label("__rt_hsort_cmp_user_call");
+    emitter.instruction("mov rdi, rax");                                        // pass the left operand in the first argument register
+    emitter.instruction("test r13, r13");                                       // check whether this comparator captures an environment
+    emitter.instruction("jz __rt_hsort_cmp_user_go");                           // keep the two-argument ABI when the comparator captures nothing
+    emitter.instruction("mov rdx, r13");                                        // pass the capture environment after the compared pair
+    emitter.label("__rt_hsort_cmp_user_go");
+    emitter.instruction("call r12");                                            // call the user comparator; its signed result is the order
+    emitter.instruction("jmp __rt_hsort_cmp_done");                             // restore the comparison frame and return that result
     emitter.label("__rt_hsort_cmp_done");
     emitter.instruction("mov rsp, rbp");                                        // release the comparison frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

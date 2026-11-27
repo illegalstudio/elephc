@@ -58,6 +58,13 @@ pub(super) const KEY_COMPARATOR_NATURAL: i64 = 5;
 /// Selector for `SORT_NATURAL | SORT_FLAG_CASE` key ordering.
 pub(super) const KEY_COMPARATOR_NATURAL_CI: i64 = 6;
 
+/// Mode bit selecting a user comparator. Bit 0 stays clear so the engine does not
+/// reverse the callback's own order. Bit 1 selects values (`uasort`) rather than keys (`uksort`).
+pub(super) const MODE_USER_KEY: i64 = 4;
+
+/// Mode word for `uasort()`: user comparator over entry values, ascending as the callback reports.
+pub(super) const MODE_USER_VALUE: i64 = 6;
+
 /// The case-folded selectors sit directly above their base. That is what lets the key-sort
 /// entry stub add `SORT_FLAG_CASE` into the selector instead of branching on it.
 const _: () = assert!(KEY_COMPARATOR_STRING_CI == KEY_COMPARATOR_STRING + 1);

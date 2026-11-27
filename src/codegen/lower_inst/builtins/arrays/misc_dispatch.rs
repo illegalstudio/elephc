@@ -208,13 +208,34 @@ pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
+///
+/// A promoted integer list is a hash. Natural order of integers is numeric order, so that
+/// hash uses the key-preserving value sort. String hashes stay on the indexed refusal.
 pub(crate) fn lower_natsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if integer_hash_value_sort(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_asort");
+    }
     lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", None)
 }
 
 /// Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
+///
+/// Integer values have no case, so a promoted integer list uses the same key-preserving
+/// value sort as `natsort()`.
 pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if integer_hash_value_sort(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_asort");
+    }
     lower_indexed_array_sort(ctx, inst, "natcasesort", "__rt_natcasesort", None)
+}
+
+/// Reports whether this receiver is a hash whose values are integers.
+fn integer_hash_value_sort(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    let array = expect_operand(inst, 0)?;
+    Ok(matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Int
+    ))
 }
 
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.

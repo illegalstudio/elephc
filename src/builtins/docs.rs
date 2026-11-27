@@ -205,6 +205,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",
         BuiltinArgumentLowering::UserValueSort => "user_value_sort",
         BuiltinArgumentLowering::ReverseKeySort => "reverse_key_sort",
+        BuiltinArgumentLowering::PreservePackedKeys => "preserve_packed_keys",
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
         BuiltinArgumentLowering::ArraySplice => "array_splice",
         BuiltinArgumentLowering::XmlHandlerSetter => "xml_handler_setter",

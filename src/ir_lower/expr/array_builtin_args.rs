@@ -538,14 +538,23 @@ fn lower_planned_builtin_call_args(
                 })
                 .collect()
         }
+        _ if canonical == "array_walk" && !args.iter().any(is_spread_arg) => {
+            lower_array_walk_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
+            if canonical == "uasort" =>
+        {
+            lower_packed_key_preserving_sort_args(ctx, &canonical, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
-        crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort => {
-            lower_reverse_key_sort_args(ctx, sig, args)
+        crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort
+        | crate::builtins::semantics::BuiltinArgumentLowering::PreservePackedKeys => {
+            lower_packed_key_preserving_sort_args(ctx, &canonical, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::OpensslEncrypt => {
             prepare_openssl_encrypt_tag_local(ctx, args);
@@ -906,13 +915,89 @@ fn lower_getenv_args(
     }
 }
 
-/// Promotes a packed local before `krsort()` so descending iteration can preserve integer keys.
+/// Lowers `array_walk`, boxing a packed list when the callback's first parameter is by-reference.
 ///
-/// Packed storage has no independent iteration-order metadata: reversing its slots would also
-/// change `$array[0]`. Converting the by-reference local to hash storage keeps each key/value pair
-/// intact while allowing the runtime helper to reorder only the insertion-order links.
-fn lower_reverse_key_sort_args(
+/// The indexed walker passes the value and the key. A by-reference parameter needs the boxed
+/// walker, which aliases the element and writes the callback's assignment back into the list.
+fn lower_array_walk_args(
     ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    let Some(plan) = plan_key_sort_args(sig, args) else {
+        return lower_args_with_signature(ctx, Some(sig), args);
+    };
+    let by_ref = plan
+        .iter()
+        .find_map(|(slot, arg)| (*slot == 1).then_some(arg))
+        .is_some_and(|callback| callback_first_param_is_by_ref(ctx, callback));
+    let mut bound = Vec::with_capacity(plan.len());
+    for (slot, arg) in &plan {
+        let value = if *slot == 0 && by_ref {
+            box_packed_walk_receiver(ctx, arg)
+                .unwrap_or_else(|| lower_arg_with_signature(ctx, sig, *slot, arg))
+        } else {
+            lower_arg_with_signature(ctx, sig, *slot, arg)
+        };
+        bound.push((*slot, value));
+    }
+    bound.sort_by_key(|(slot, _)| *slot);
+    bound.into_iter().map(|(_, value)| value).collect()
+}
+
+/// Reports whether a walk callback assigns through its first parameter.
+fn callback_first_param_is_by_ref(ctx: &LoweringContext<'_, '_>, callback: &Expr) -> bool {
+    match &callback.kind {
+        ExprKind::Closure { params, .. } => {
+            params.first().is_some_and(|(_, _, _, by_ref)| *by_ref)
+        }
+        ExprKind::StringLiteral(name) => ctx
+            .functions
+            .get(name.as_str())
+            .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false)),
+        _ => false,
+    }
+}
+
+/// Replaces a packed local with a Mixed cell so `array_walk` can alias its elements.
+fn box_packed_walk_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    arg: &Expr,
+) -> Option<crate::ir::ValueId> {
+    let ExprKind::Variable(name) = &arg.kind else {
+        return None;
+    };
+    if !matches!(ctx.local_type(name).codegen_repr(), PhpType::Array(_)) {
+        return None;
+    }
+    let source = ctx.load_local(name, Some(arg.span));
+    let boxed = ctx.emit_value(
+        Op::MixedBox,
+        vec![source.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(arg.span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(arg.span));
+    ctx.store_mutated_local(name, boxed, PhpType::Mixed, Some(arg.span));
+    ctx.retype_ref_alias_group(name, PhpType::Mixed);
+    Some(ctx.load_local(name, Some(arg.span)).value)
+}
+
+/// Promotes a packed local before a sort that must keep its integer keys.
+///
+/// Packed storage has no independent iteration-order metadata: permuting its slots also
+/// renumbers `$array[0]`. Converting the by-reference local to hash storage keeps each
+/// key/value pair intact while the runtime helper reorders only the insertion-order links.
+/// `ksort()` skips the promotion when the flags cannot reorder keys `0..n-1`. `natsort()`
+/// and `natcasesort()` promote only integer elements, whose natural order is numeric order.
+fn lower_packed_key_preserving_sort_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
@@ -928,14 +1013,24 @@ fn lower_reverse_key_sort_args(
     let Some(receiver) = receiver else {
         return lower_args_with_signature(ctx, Some(sig), args);
     };
+    if !should_promote_packed_sort(canonical, ctx, receiver, &plan) {
+        return lower_user_or_plain_sort_args(ctx, canonical, sig, args);
+    }
     if !is_indexed_array_ref_arg(ctx, sig, 0, receiver) {
-        return lower_args_with_signature(ctx, Some(sig), args);
+        return lower_user_or_plain_sort_args(ctx, canonical, sig, args);
     }
     let mut receiver_value = None;
     let mut flags_value = None;
     for (slot, arg) in &plan {
         if *slot == 0 {
             receiver_value = lower_indexed_array_ref_arg_to_hash(ctx, sig, 0, arg);
+        } else if canonical == "uasort" && matches!(arg.kind, ExprKind::Closure { .. }) {
+            let element = sort_receiver_element_type(ctx, receiver);
+            flags_value = Some(if matches!(element, PhpType::Object(_)) {
+                lower_value_sort_comparator_closure(ctx, arg, element)
+            } else {
+                lower_arg_with_signature(ctx, sig, *slot, arg)
+            });
         } else {
             flags_value = Some(lower_arg_with_signature(ctx, sig, *slot, arg));
         }
@@ -1001,7 +1096,68 @@ pub(super) fn plan_key_sort_args(sig: &FunctionSig, args: &[Expr]) -> Option<Vec
     bound.iter().any(|(slot, _)| *slot == 0).then_some(bound)
 }
 
-/// Reports whether `arg` is the packed by-reference local that `krsort()` must promote.
+/// Reports whether this sort has to turn a packed list into an int-keyed hash first.
+fn should_promote_packed_sort(
+    canonical: &str,
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &Expr,
+    plan: &[(usize, Expr)],
+) -> bool {
+    match canonical {
+        "krsort" | "asort" | "arsort" | "uasort" | "uksort" => true,
+        "natsort" | "natcasesort" => sort_receiver_element_type(ctx, receiver) == PhpType::Int,
+        "ksort" => !packed_ksort_flags_keep_numeric_order(plan),
+        _ => false,
+    }
+}
+
+/// Lowers a sort that is not promoting its receiver, keeping `uasort`'s closure typing.
+fn lower_user_or_plain_sort_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    if canonical == "uasort"
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        lower_user_value_sort_args(ctx, Some(sig), args)
+    } else {
+        lower_args_with_signature(ctx, Some(sig), args)
+    }
+}
+
+/// Returns the value type a sort receiver's elements have before promotion.
+fn sort_receiver_element_type(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> PhpType {
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return PhpType::Mixed;
+    };
+    match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr(),
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        other => other,
+    }
+}
+
+/// Reports whether `ksort()` flags leave keys `0..n-1` in their current order.
+///
+/// `SORT_REGULAR`, `SORT_NUMERIC`, and `SORT_NATURAL` (with or without `SORT_FLAG_CASE`)
+/// compare those keys in numeric order. `SORT_STRING` and `SORT_LOCALE_STRING` compare the
+/// decimal text, so `10` sorts before `2`. A non-literal flag is promoted because the
+/// runtime value might be one of those string modes.
+fn packed_ksort_flags_keep_numeric_order(plan: &[(usize, Expr)]) -> bool {
+    let Some(flags) = plan.iter().find_map(|(slot, arg)| (*slot == 1).then_some(arg)) else {
+        return true;
+    };
+    let ExprKind::IntLiteral(value) = &flags.kind else {
+        return false;
+    };
+    const SORT_FLAG_CASE: i64 = 8;
+    matches!(value & !SORT_FLAG_CASE, 0 | 1 | 6)
+}
+
+/// Reports whether `arg` is the packed by-reference local that a key-preserving sort must promote.
 ///
 /// This mirrors, without evaluating anything, the shape `lower_indexed_array_ref_arg_to_hash`
 /// accepts.
@@ -1050,7 +1206,10 @@ fn lower_indexed_array_ref_arg_to_hash(
         Op::ArrayToHash.default_effects(),
         Some(arg.span),
     );
-    ctx.store_prepared_mutated_local(name, hash, assoc_ty, Some(arg.span));
+    ctx.store_prepared_mutated_local(name, hash, assoc_ty.clone(), Some(arg.span));
+    // `$r = &$a; krsort($r)` writes the hash through the shared cell. `$a` would otherwise
+    // keep its packed logical type and read that hash as a list.
+    ctx.retype_ref_alias_group(name, assoc_ty);
     Some(ctx.load_local(name, Some(arg.span)).value)
 }
 

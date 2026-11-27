@@ -229,6 +229,7 @@ fn lower_foreach_selected(
     ctx: &mut LoweringContext<'_, '_>, array: &Expr, key_var: Option<&str>,
     value_var: &str, value_by_ref: bool, body: &[Stmt], loop_span: Span,
 ) {
+    let entry_groups = ctx.ref_alias_groups_snapshot();
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
@@ -471,6 +472,7 @@ fn lower_foreach_selected(
             ctx.builder.position_at_end(exit);
         }
     }
+    ctx.restore_ref_alias_groups(entry_groups);
     ctx.clear_static_callable_locals();
     if by_ref_origin.is_some() {
         ctx.emit_void(

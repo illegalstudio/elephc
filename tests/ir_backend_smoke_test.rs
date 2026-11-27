@@ -3169,7 +3169,7 @@ foreach ($uasorted as $value) { echo $value; }
 "#;
     assert_eq!(
         compile_and_run_ir_backend("instance_method_sort_callbacks", source),
-        "321:321:123"
+        "321:231:123"
     );
 }
 
@@ -4525,12 +4525,12 @@ fn ir_backend_handles_indexed_array_sorting() {
         (
             "asort_indexed_ints",
             "<?php $a = [3, 1, 2]; asort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "312",
         ),
         (
             "arsort_indexed_ints",
             "<?php $a = [1, 3, 2]; arsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "321",
+            "132",
         ),
         (
             "ksort_indexed_ints_preserves_slots",
@@ -4545,12 +4545,12 @@ fn ir_backend_handles_indexed_array_sorting() {
         (
             "natsort_indexed_ints",
             "<?php $a = [3, 1, 2]; natsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "312",
         ),
         (
             "natcasesort_indexed_ints",
             "<?php $a = [3, 1, 2]; natcasesort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "312",
         ),
         (
             "shuffle_indexed_ints",

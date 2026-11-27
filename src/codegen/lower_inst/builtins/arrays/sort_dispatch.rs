@@ -394,13 +394,30 @@ pub(super) fn lower_user_sort_static_callback(
     super::super::ensure_arg_count(inst, name, 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
-    let elem_ty = user_sort_element_type(ctx.value_php_type(array)?, name)?;
-    let sort_helper = user_sort_runtime_label(&elem_ty);
+    let preserving_hash = hash_preserving_user_sort(ctx, array, name)?;
+    let elem_ty = if preserving_hash {
+        hash_user_sort_compared_type(ctx, array, name)?
+    } else {
+        user_sort_element_type(ctx.value_php_type(array)?, name)?
+    };
+    let sort_helper = if !preserving_hash {
+        user_sort_runtime_label(&elem_ty)
+    } else if name == "uksort" {
+        "__rt_hash_uksort"
+    } else {
+        "__rt_hash_uasort"
+    };
     let callback_arg_types = [elem_ty.clone(), elem_ty];
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
     receiver.prepare_consuming_storeback(ctx, array)?;
-    ensure_unique_sort_source(ctx, array)?;
+    if preserving_hash {
+        if !super::hash_sort_source_is_published_mixed_cell(ctx, array)? {
+            ensure_unique_hash_sort_source(ctx, array)?;
+        }
+    } else {
+        ensure_unique_sort_source(ctx, array)?;
+    }
     // The comparator is user code: publish with the retain deferred until the helper is back,
     // so a throwing comparator leaves no retained reference behind.
     let retain_owed = receiver.store_back_value_before_callback(ctx, array)?;
@@ -420,6 +437,7 @@ pub(super) fn lower_user_sort_static_callback(
             callback_binding,
             sort_helper,
             retain_owed,
+            preserving_hash,
         );
     }
     match callback_ty {
@@ -430,17 +448,15 @@ pub(super) fn lower_user_sort_static_callback(
                 callback_arg_types.to_vec(),
                 PhpType::Int,
                 |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
-                    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, sort_helper);
-                    if retain_owed {
-                        ctx.retain_receiver_after_callback(array)?;
-                    }
-                    Ok(())
+                    emit_user_sort_invocation(
+                        ctx,
+                        array,
+                        wrapper_label,
+                        env_bytes,
+                        sort_helper,
+                        preserving_hash,
+                        retain_owed,
+                    )
                 },
             )?;
             abi::emit_load_int_immediate(
@@ -461,17 +477,15 @@ pub(super) fn lower_user_sort_static_callback(
                 super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
-                    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, sort_helper);
-                    if retain_owed {
-                        ctx.retain_receiver_after_callback(array)?;
-                    }
-                    Ok(())
+                    emit_user_sort_invocation(
+                        ctx,
+                        array,
+                        wrapper_label,
+                        env_bytes,
+                        sort_helper,
+                        preserving_hash,
+                        retain_owed,
+                    )
                 },
             )?;
             abi::emit_load_int_immediate(
@@ -497,7 +511,90 @@ pub(super) fn lower_user_sort_static_callback(
         callback_binding,
         sort_helper,
         retain_owed,
+        preserving_hash,
     )
+}
+
+/// Reports whether `uasort` or `uksort` should relink a hash instead of permuting packed slots.
+fn hash_preserving_user_sort(
+    ctx: &FunctionContext<'_>,
+    array: ValueId,
+    name: &str,
+) -> Result<bool> {
+    if !matches!(name, "uasort" | "uksort") {
+        return Ok(false);
+    }
+    Ok(matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ))
+}
+
+/// Returns the type the user comparator receives for a hash-preserving sort.
+///
+/// `uksort` compares integer keys. `uasort` compares 8-byte value payloads. String keys and
+/// string values stay unsupported: the comparator ABI for those is two registers per operand.
+fn hash_user_sort_compared_type(
+    ctx: &FunctionContext<'_>,
+    array: ValueId,
+    name: &str,
+) -> Result<PhpType> {
+    let PhpType::AssocArray { key, value } = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{name} hash sort requires an associative array"
+        )));
+    };
+    let compared = if name == "uksort" {
+        key.codegen_repr()
+    } else {
+        value.codegen_repr()
+    };
+    if matches!(
+        compared,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Mixed
+            | PhpType::Object(_)
+            | PhpType::Void
+            | PhpType::Never
+    ) {
+        return Ok(compared);
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{name} for PHP type {:?}",
+        ctx.value_php_type(array)?
+    )))
+}
+
+/// Calls a user-sort runtime with the callback, receiver, and optional capture environment.
+///
+/// Indexed helpers take `(callback, array, env)`. Hash helpers take `(array, callback, env)`
+/// because the shared link sorter already owns the first argument as the table.
+fn emit_user_sort_invocation(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    wrapper_label: &str,
+    env_bytes: usize,
+    sort_helper: &str,
+    preserving_hash: bool,
+    retain_owed: bool,
+) -> Result<()> {
+    let callback_reg = abi::int_arg_reg_name(ctx.emitter.target, if preserving_hash { 1 } else { 0 });
+    let array_reg = abi::int_arg_reg_name(ctx.emitter.target, if preserving_hash { 0 } else { 1 });
+    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    if preserving_hash {
+        ctx.load_value_to_reg(array, array_reg)?;
+        abi::emit_symbol_address(ctx.emitter, callback_reg, wrapper_label);
+    } else {
+        abi::emit_symbol_address(ctx.emitter, callback_reg, wrapper_label);
+        ctx.load_value_to_reg(array, array_reg)?;
+    }
+    load_static_callback_env_arg(ctx, env_reg, env_bytes);
+    abi::emit_call_label(ctx.emitter, sort_helper);
+    if retain_owed {
+        ctx.retain_receiver_after_callback(array)?;
+    }
+    Ok(())
 }
 
 /// Calls the user-sort runtime with a statically recovered callback binding.
@@ -514,19 +611,19 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     callback_binding: StaticSortCallbackBinding,
     sort_helper: &str,
     retain_owed: bool,
+    preserving_hash: bool,
 ) -> Result<()> {
     let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
-    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
-    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, sort_helper);
-    if retain_owed {
-        ctx.retain_receiver_after_callback(array)?;
-    }
+    emit_user_sort_invocation(
+        ctx,
+        array,
+        &callback_label,
+        env_bytes,
+        sort_helper,
+        preserving_hash,
+        retain_owed,
+    )?;
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }

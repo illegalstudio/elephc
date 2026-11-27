@@ -78,7 +78,9 @@ pub(super) fn lower_try_catch(
     // `try` is nested in; recording the depth is what tells `terminate_throw` which loops it
     // really leaves (issue #690).
     ctx.push_try_loop_depth();
+    let entry_groups = ctx.ref_alias_groups_snapshot();
     lower_block(ctx, try_body);
+    ctx.restore_ref_alias_groups(entry_groups);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
     if !ctx.builder.insertion_block_is_terminated() {
@@ -153,13 +155,16 @@ pub(super) fn lower_try_catch_finally(
     );
     // See the twin in `lower_try_catch`: the handler is active for this body only.
     ctx.push_try_loop_depth();
+    let entry_groups = ctx.ref_alias_groups_snapshot();
     lower_block(ctx, try_body);
+    ctx.restore_ref_alias_groups(entry_groups);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
     // The finalizer is emitted once for the normal edge and again for every exceptional edge.
     // Preserve the try exit facts before the first copy: an `unset` or retype in that copy must
     // not change how the handler-side copies lower their earlier statements.
     let handler_types = ctx.local_types_snapshot();
+    let handler_groups = ctx.ref_alias_groups_snapshot();
     let handler_initialized = ctx.initialized_slots_snapshot();
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
@@ -172,6 +177,7 @@ pub(super) fn lower_try_catch_finally(
 
     ctx.builder.position_at_end(handler_block);
     ctx.restore_local_types(handler_types);
+    ctx.restore_ref_alias_groups(handler_groups);
     ctx.restore_initialized_slots(handler_initialized);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);

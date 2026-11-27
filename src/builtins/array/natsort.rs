@@ -9,6 +9,8 @@
 //!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
 //! - `check` requires the argument be an Array or AssocArray, returning Void.
+//! - `PreservePackedKeys` promotes a packed list of integers. Natural order of those
+//!   values is numeric order, so the hash value sort keeps the keys.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -17,8 +19,9 @@ use crate::types::PhpType;
 builtin! {
     contract: "natsort",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Natsort,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Natsort),
+        crate::builtins::semantics::BuiltinArgumentLowering::PreservePackedKeys,
     ),
 }
 

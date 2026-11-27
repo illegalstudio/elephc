@@ -102,6 +102,7 @@ fn switch_dispatch_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) -> IfArmEx
         initialized: ctx.initialized_slots_snapshot(),
         static_callables: HashMap::new(),
         reflection: ctx.reflection_bindings_snapshot(),
+        ref_groups: ctx.ref_alias_groups_snapshot(),
     }
 }
 
@@ -402,6 +403,7 @@ fn enter_switch_body(
     if dispatch.len() == 1 {
         let edge = dispatch.pop().expect("one edge");
         ctx.restore_local_types(edge.types);
+        ctx.restore_ref_alias_groups(edge.ref_groups);
         ctx.restore_initialized_slots(edge.initialized);
         ctx.builder.position_at_end(edge.tail);
         return;

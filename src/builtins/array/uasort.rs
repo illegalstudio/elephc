@@ -10,6 +10,9 @@
 //!   mutation (ir_lower reads `ref_params` from the registry sig).
 //! - `check` derives the comparator element type from the array value type and validates both
 //!   callback parameters contextually, including object and opaque element types. Returns `Void`.
+//! - Packed lists are promoted to int-keyed hashes before the comparator runs, so the value
+//!   order can change without renumbering the keys. The `UserValueSort` lowering still types
+//!   an unannotated object comparator.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;

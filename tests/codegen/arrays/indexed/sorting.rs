@@ -149,8 +149,8 @@ echo implode(',', $d), "\n";
     );
 }
 
-/// Verifies asort maintains key-value associations and sorts by values in ascending order.
-/// Fixture: [3, 1, 2] → sorted [1, 2, 3] → first element $a[0] should be 1.
+/// Verifies asort keeps each value on its original key.
+/// Fixture: [3, 1, 2] sorts to keys 1, 2, 0, so `$a[0]` stays 3.
 #[test]
 fn test_asort() {
     let out = compile_and_run(
@@ -160,11 +160,11 @@ asort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "3");
 }
 
-/// Verifies arsort maintains key-value associations and sorts by values in descending order.
-/// Fixture: [1, 3, 2] → sorted descending [3, 2, 1] → first element $a[0] should be 3.
+/// Verifies arsort keeps each value on its original key.
+/// Fixture: [1, 3, 2] sorts to keys 1, 2, 0, so `$a[0]` stays 1.
 #[test]
 fn test_arsort() {
     let out = compile_and_run(
@@ -174,7 +174,7 @@ arsort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "3");
+    assert_eq!(out, "1");
 }
 
 /// Verifies ksort sorts by keys in ascending order, preserving values.
@@ -634,8 +634,8 @@ krsort($matrix["missing"]);
     );
 }
 
-/// Verifies natsort sorts values naturally (human ordering), preserving key-value associations.
-/// Fixture: [3, 1, 2] → natural sort [1, 2, 3] → first element $a[0] should be 1.
+/// Verifies natsort keeps each integer on its original key.
+/// Fixture: [3, 1, 2] sorts to keys 1, 2, 0, so `$a[0]` stays 3.
 #[test]
 fn test_natsort() {
     let out = compile_and_run(
@@ -645,11 +645,11 @@ natsort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "3");
 }
 
-/// Verifies natcasesort sorts values naturally case-insensitively, preserving key-value associations.
-/// Fixture: [3, 1, 2] → case-insensitive natural sort [1, 2, 3] → first element $a[0] should be 1.
+/// Verifies natcasesort keeps each integer on its original key.
+/// Fixture: [3, 1, 2] sorts to keys 1, 2, 0, so `$a[0]` stays 3.
 #[test]
 fn test_natcasesort() {
     let out = compile_and_run(
@@ -659,7 +659,147 @@ natcasesort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "3");
+}
+
+/// Verifies key-preserving sorts on a packed list keep the original keys.
+///
+/// `asort`, `arsort`, `uasort`, `uksort`, `natsort`, and `natcasesort` used to
+/// permute the packed slots and renumber them from zero.
+#[test]
+fn test_packed_list_key_preserving_sorts() {
+    let out = compile_and_run(
+        r#"<?php
+function pairs(array $items): string {
+    $out = "";
+    foreach ($items as $key => $value) {
+        $out .= $key . "=" . $value . " ";
+    }
+    return $out;
+}
+$a = [3, 1, 2];
+asort($a);
+echo pairs($a), "\n";
+$a = [3, 1, 2];
+arsort($a);
+echo pairs($a), "\n";
+$a = [3, 1, 2];
+uasort($a, fn($x, $y) => $x <=> $y);
+echo pairs($a), "\n";
+$a = [3, 1, 2];
+uksort($a, fn($x, $y) => $y <=> $x);
+echo pairs($a), "\n";
+$a = [3, 1, 2];
+natsort($a);
+echo pairs($a), "\n";
+$a = [3, 1, 2];
+natcasesort($a);
+echo pairs($a), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1=1 2=2 0=3 \n0=3 2=2 1=1 \n1=1 2=2 0=3 \n2=2 1=1 0=3 \n1=1 2=2 0=3 \n1=1 2=2 0=3 \n"
+    );
+}
+
+/// Verifies `krsort` through a reference sorts the packed list and leaves an earlier copy intact.
+#[test]
+fn test_krsort_reference_to_packed_list() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1, 2];
+$r = &$a;
+krsort($r);
+$out = "";
+foreach ($a as $key => $value) {
+    $out .= $key . "=" . $value . " ";
+}
+echo $out, "\n";
+$b = [3, 1, 2];
+$s = &$b;
+$copy = $b;
+krsort($s);
+echo $copy[0], $copy[1], $copy[2], "\n";
+foreach ($b as $key => $value) {
+    echo $key, "=", $value, " ";
+}
+"#,
+    );
+    assert_eq!(out, "2=2 1=1 0=3 \n312\n2=2 1=1 0=3 ");
+}
+
+/// Verifies `ksort` under string flags reorders decimal keys of a packed list.
+///
+/// `SORT_NATURAL` and the default leave `0..n-1` in place. `SORT_STRING` and
+/// `SORT_LOCALE_STRING` compare the decimal text, so `10` sorts before `2`.
+#[test]
+fn test_ksort_packed_list_string_flags() {
+    let out = compile_and_run(
+        r#"<?php
+function keys(array $items): string {
+    $out = "";
+    foreach ($items as $key => $value) {
+        $out .= $key . " ";
+    }
+    return $out;
+}
+$a = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+ksort($a, SORT_STRING);
+echo keys($a), "\n";
+$b = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+ksort($b, SORT_NATURAL);
+echo keys($b), "\n";
+$c = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+ksort($c);
+echo keys($c), "\n";
+$d = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+ksort($d, SORT_LOCALE_STRING);
+echo keys($d), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0 1 10 11 2 3 4 5 6 7 8 9 \n0 1 2 3 4 5 6 7 8 9 10 11 \n0 1 2 3 4 5 6 7 8 9 10 11 \n0 1 10 11 2 3 4 5 6 7 8 9 \n"
+    );
+}
+
+/// Verifies `array_walk` passes the key of a local packed list for closures, arrows, and named callbacks.
+#[test]
+fn test_array_walk_packed_list_passes_key() {
+    let out = compile_and_run(
+        r#"<?php
+function show($value, $key) { echo $key, "=", $value, " "; }
+function show_one($value) { echo $value, " "; }
+function walk_local() {
+    $items = [30, 10];
+    array_walk($items, function ($value, $key) { echo $key, "=", $value, " "; });
+}
+$a = [30, 10];
+array_walk($a, function ($value, $key) { echo $key, "=", $value, " "; });
+echo "\n";
+$b = [30, 10];
+array_walk($b, function (&$value, $key) { $value = $key; });
+echo $b[0], ",", $b[1], "\n";
+$c = [30, 10];
+array_walk($c, fn($value, $key) => print($key . "=" . $value . " "));
+echo "\n";
+$d = [30, 10];
+array_walk($d, "show");
+echo "\n";
+$e = [30, 10];
+array_walk($e, "show_one");
+echo "\n";
+$f = [30, 10];
+array_walk($f, function (int $value, int $key) { echo $key, "=", $value, " "; });
+echo "\n";
+walk_local();
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=30 1=10 \n0,1\n0=30 1=10 \n0=30 1=10 \n30 10 \n0=30 1=10 \n0=30 1=10 "
+    );
 }
 
 /// Verifies compiled PHP output for sort string array.
