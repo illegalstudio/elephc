@@ -19,9 +19,10 @@ TCP/TLS socket, so no libxml2 or native SOAP library is required.
 | Classes | `SoapClient`, `SoapServer`, `SoapFault`, `SoapHeader`, `SoapVar`, `SoapParam` |
 | Client calls | `__soapCall()`, `__call()` |
 | Server | `SoapServer::handle()`, `setClass()`, `setObject()`, `addFunction()`, `fault()`, `addSoapHeader()`, `setPersistence()`, `getFunctions()` |
-| Introspection | `__getFunctions()`, `__getTypes()`, `__getLastRequest()`, `__getLastResponse()`, `__setLocation()`, `__setSoapHeaders()` |
+| Introspection | `__getFunctions()`, `__getTypes()`, `__getLastRequest()`, `__getLastResponse()`, `__getLastRequestHeaders()`, `__getLastResponseHeaders()`, `__setLocation()`, `__setSoapHeaders()` |
+| Transport hooks | `__doRequest()`, response-cookie capture through `__getCookies()`/`__setCookie()`, `Soap\Url`, `Soap\Sdl`, and the SOAP/XSD constant set |
 | Options | `location`, `uri`, `style`, `use`, `soap_version`, `login`, `password`, `connection_timeout`, `trace`, `exceptions`, `user_agent`, `stream_context`, `keep_headers` |
-| WSDL | WSDL 1.1 documents, recursive imports/includes, endpoint and target-namespace discovery |
+| WSDL | WSDL 1.1 documents, recursive imports/includes, endpoint and target-namespace discovery, and `__getFunctions()`/`__getTypes()` operation/struct metadata |
 | Transport | SOAP 1.1 and SOAP 1.2 envelopes, `http://` and `https://`/`tls://`, HTTP Basic authentication, request/response tracing |
 | Constants | `SOAP_1_1`, `SOAP_1_2`, `SOAP_RPC`, `SOAP_DOCUMENT`, `SOAP_ENCODED`, `SOAP_LITERAL`, actor constants |
 
@@ -48,9 +49,8 @@ $result = $client->__soapCall("Add", [["a" => 2, "b" => 3]]);
 ## Deferred surface
 
 - Encoded arrays/objects (`SOAP_ENCODED`), MTOM and attachments.
-- WSDL `binding`/`port` operation metadata in `__getFunctions()` and
-  `__getTypes()`; those methods currently return empty arrays.
-- Persistent cookies, `__getCookies()` population, and `__setCookie()` behavior.
+- WSDL-described `SoapServer` operation metadata; the server dispatches
+  RPC-style requests by operation name and returns `<return>` values.
 - WSDL-described `SoapServer` operation metadata; the server dispatches
   RPC-style requests by operation name and returns `<return>` values.
 

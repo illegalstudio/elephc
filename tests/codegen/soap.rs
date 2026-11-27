@@ -464,3 +464,47 @@ echo class_exists("Soap\\Url") ? "url" : "bad", ":",
     );
     assert_eq!(out, "1:2:32:1:300:999998:101:147\nurl:sdl\n");
 }
+
+/// WSDL mode exposes `__getFunctions()` and `__getTypes()` metadata.
+#[test]
+fn test_soap_wsdl_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+$wsdl = '<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:add" targetNamespace="urn:add">
+  <types>
+    <xsd:schema targetNamespace="urn:add" elementFormDefault="qualified">
+      <xsd:element name="Add"><xsd:complexType><xsd:sequence>
+          <xsd:element name="a" type="xsd:int"/>
+          <xsd:element name="b" type="xsd:int"/>
+      </xsd:sequence></xsd:complexType></xsd:element>
+      <xsd:element name="AddResponse"><xsd:complexType><xsd:sequence>
+          <xsd:element name="result" type="xsd:int"/>
+      </xsd:sequence></xsd:complexType></xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="AddInput"><part name="parameters" element="tns:Add"/></message>
+  <message name="AddOutput"><part name="parameters" element="tns:AddResponse"/></message>
+  <portType name="CalculatorPortType"><operation name="Add"><input message="tns:AddInput"/><output message="tns:AddOutput"/></operation></portType>
+  <binding name="CalculatorBinding" type="tns:CalculatorPortType"><operation name="Add"><soap:operation soapAction="urn:add#Add"/></operation></binding>
+  <service name="CalculatorService"><port name="CalculatorPort" binding="tns:CalculatorBinding"><soap:address location="http://127.0.0.1:1/soap"/></port></service>
+</definitions>
+';
+file_put_contents("add.wsdl", $wsdl);
+$plain = new SoapClient(null, ["location" => "http://127.0.0.1:1/soap", "uri" => "urn:x"]);
+var_dump($plain->__getFunctions());
+var_dump($plain->__getTypes());
+$client = new SoapClient("add.wsdl", ["location" => "http://127.0.0.1:1/soap"]);
+var_dump($client->__getFunctions());
+var_dump($client->__getTypes());
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nNULL\narray(1) {\n  [0]=>\n  string(32) \"AddResponse Add(Add $parameters)\"\n}\n\
+         array(2) {\n  [0]=>\n  string(30) \"struct Add {\n int a;\n int b;\n}\"\n  [1]=>\n  string(35) \"struct AddResponse {\n int result;\n}\"\n}\n"
+    );
+}

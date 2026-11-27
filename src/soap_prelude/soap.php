@@ -171,6 +171,9 @@ class SoapClient
     private string $__lastRequestHeaders = "";
     private string $__lastResponseHeaders = "";
     private array $__cookies = [];
+    private array $__wsdlFunctions = [];
+    private array $__wsdlTypes = [];
+    private bool $__hasWsdl = false;
     private mixed $__headers = null;
 
     public function __construct(?string $wsdl, array $options = [])
@@ -211,6 +214,10 @@ class SoapClient
             }
             $headers[] = "User-Agent: " . $this->__userAgent;
             $scan = __elephc_soap_fetch_wsdl($wsdl, $headers, $this->__keepHeaders, $wsdl, $this->__timeout, 0);
+            $this->__hasWsdl = true;
+            $metadata = __elephc_soap_wsdl_metadata((string) ($scan["xml"] ?? ""));
+            $this->__wsdlFunctions = $metadata["functions"];
+            $this->__wsdlTypes = $metadata["types"];
             if ($this->__location === "") {
                 $this->__location = (string) ($scan["address"] ?? "");
             }
@@ -273,14 +280,14 @@ class SoapClient
         return $this->__soapCall($name, $arguments);
     }
 
-    public function __getFunctions(): array
+    public function __getFunctions(): ?array
     {
-        return [];
+        return $this->__hasWsdl ? $this->__wsdlFunctions : null;
     }
 
-    public function __getTypes(): array
+    public function __getTypes(): ?array
     {
-        return [];
+        return $this->__hasWsdl ? $this->__wsdlTypes : null;
     }
 
     public function __getLastRequest(): ?string
@@ -1036,11 +1043,19 @@ function __elephc_soap_scan_wsdl(string $xml): array
 function __elephc_soap_fetch_wsdl(string $url, array $headers, array $keep, string $origin, int $timeout, int $depth): array
 {
     if ($depth > 5) {
-        return ["imports" => [], "address" => "", "target" => ""];
+        return ["imports" => [], "address" => "", "target" => "", "xml" => ""];
     }
     $same = __elephc_soap_same_origin($url, $origin);
     $send = __elephc_soap_filter_headers($headers, $keep, $same);
-    $xml = __elephc_soap_http_request("GET", $url, "", $send, $timeout);
+    if (\strpos($url, "http://") !== 0 && \strpos($url, "https://") !== 0) {
+        $loaded = @\file_get_contents($url);
+        if (!\is_string($loaded)) {
+            throw new \SoapFault("HTTP", "Could not read WSDL");
+        }
+        $xml = $loaded;
+    } else {
+        $xml = __elephc_soap_http_request("GET", $url, "", $send, $timeout);
+    }
     $scan = __elephc_soap_scan_wsdl($xml);
     $address = (string) ($scan["address"] ?? "");
     $target = (string) ($scan["target"] ?? "");
@@ -1054,7 +1069,253 @@ function __elephc_soap_fetch_wsdl(string $url, array $headers, array $keep, stri
             $target = (string) $child["target"];
         }
     }
-    return ["imports" => $scan["imports"], "address" => $address, "target" => $target];
+    return ["imports" => $scan["imports"], "address" => $address, "target" => $target, "xml" => $xml];
+}
+
+function __elephc_soap_stack_find(array $stack, string $prefix): string
+{
+    for ($index = \count($stack) - 1; $index >= 0; $index--) {
+        $entry = $stack[$index];
+        if (\strpos($entry, $prefix) === 0) {
+            return \substr($entry, \strlen($prefix));
+        }
+    }
+    return "";
+}
+
+function __elephc_soap_xsd_type(string $type): string
+{
+    $local = __elephc_soap_local($type);
+    if ($local === "int" || $local === "integer" || $local === "long" || $local === "short"
+        || $local === "byte" || $local === "unsignedInt" || $local === "unsignedLong"
+        || $local === "unsignedShort" || $local === "unsignedByte"
+        || $local === "nonNegativeInteger" || $local === "positiveInteger"
+        || $local === "nonPositiveInteger" || $local === "negativeInteger") {
+        return "int";
+    }
+    if ($local === "boolean" || $local === "bool") {
+        return "bool";
+    }
+    if ($local === "float" || $local === "double" || $local === "decimal") {
+        return "float";
+    }
+    if ($local === "string" || $local === "normalizedString" || $local === "token"
+        || $local === "anyURI" || $local === "QName" || $local === "base64Binary"
+        || $local === "hexBinary") {
+        return "string";
+    }
+    return $local;
+}
+
+function __elephc_soap_wsdl_metadata(string $xml): array
+{
+    $field_text = [];
+    $message_text = [];
+    $operations_text = "";
+    $current_operation_name = "";
+    $current_operation_input = "";
+    $current_operation_output = "";
+    $current_operation_port = false;
+    $stack = [];
+    $position = 0;
+    $length = \strlen($xml);
+    while ($position < $length) {
+        $start = \strpos($xml, "<", $position);
+        if ($start === false) {
+            break;
+        }
+        if (\substr($xml, $start, 4) === "<!--") {
+            $comment_end = \strpos($xml, "-->", $start);
+            $position = $comment_end === false ? $length : $comment_end + 3;
+            continue;
+        }
+        if (\substr($xml, $start, 2) === "<?") {
+            $declaration_end = \strpos($xml, "?>", $start);
+            $position = $declaration_end === false ? $length : $declaration_end + 2;
+            continue;
+        }
+        $end = \strpos($xml, ">", $start);
+        if ($end === false) {
+            break;
+        }
+        $tag = \substr($xml, $start + 1, $end - $start - 1);
+        $position = $end + 1;
+        if (\substr($tag, 0, 1) === "/") {
+            $close_name = \substr($tag, 1);
+            $close_space = \strpos($close_name, " ");
+            if ($close_space !== false) {
+                $close_name = \substr($close_name, 0, $close_space);
+            }
+            $close_local = __elephc_soap_local($close_name);
+            for ($index = \count($stack) - 1; $index >= 0; $index--) {
+                $entry = $stack[$index];
+                if ($entry === $close_local || \strpos($entry, $close_local . ":") === 0) {
+                    $remaining = [];
+                    foreach ($stack as $stack_index => $stack_entry) {
+                        if ($stack_index !== $index) {
+                            $remaining[] = $stack_entry;
+                        }
+                    }
+                    $stack = $remaining;
+                    if ($close_local === "operation") {
+                        if ($current_operation_port) {
+                            $operations_text .= $current_operation_name . "|"
+                                . $current_operation_input . "|"
+                                . $current_operation_output . "\n";
+                        }
+                        $current_operation_port = false;
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+        $self_closing = \substr($tag, -1) === "/";
+        if ($self_closing) {
+            $tag = \substr($tag, 0, -1);
+        }
+        $tag_space = \strpos($tag, " ");
+        $name = $tag_space === false ? $tag : \substr($tag, 0, $tag_space);
+        $local = __elephc_soap_local($name);
+        $attributes = __elephc_soap_attributes($tag);
+        if ($local === "complexType") {
+            $type_name = (string) ($attributes["name"] ?? "");
+            if ($type_name !== "") {
+                if (!isset($field_text[$type_name])) {
+                    $field_text[$type_name] = "";
+                }
+                if (!$self_closing) {
+                    $stack[] = "element:" . $type_name;
+                }
+            }
+            if (!$self_closing) {
+                $stack[] = "complexType";
+            }
+            continue;
+        }
+        if ($local === "element" && isset($attributes["name"])) {
+            $field_name = (string) $attributes["name"];
+            $field_type = (string) ($attributes["type"] ?? "");
+            if ($field_type !== "") {
+                $owner = __elephc_soap_stack_find($stack, "element:");
+                if ($owner !== "") {
+                    $field_text[$owner] = ($field_text[$owner] ?? "")
+                        . __elephc_soap_xsd_type($field_type) . " " . $field_name . ";\n";
+                }
+                continue;
+            }
+            if (!isset($field_text[$field_name])) {
+                $field_text[$field_name] = "";
+            }
+            if (!$self_closing) {
+                $stack[] = "element:" . $field_name;
+            }
+            continue;
+        }
+        if ($local === "message" && isset($attributes["name"])) {
+            $message_name = (string) $attributes["name"];
+            if (!isset($message_text[$message_name])) {
+                $message_text[$message_name] = "";
+            }
+            if (!$self_closing) {
+                $stack[] = "message:" . $message_name;
+            }
+            continue;
+        }
+        if ($local === "part") {
+            $message_name = __elephc_soap_stack_find($stack, "message:");
+            if ($message_name !== "") {
+                $part_type = "string";
+                if (($attributes["element"] ?? "") !== "") {
+                    $part_type = __elephc_soap_local((string) $attributes["element"]);
+                } elseif (($attributes["type"] ?? "") !== "") {
+                    $part_type = __elephc_soap_xsd_type((string) $attributes["type"]);
+                }
+                $part_name = (string) ($attributes["name"] ?? "parameters");
+                if ($part_name === "") {
+                    $part_name = "parameters";
+                }
+                $message_text[$message_name] = ($message_text[$message_name] ?? "")
+                    . $part_type . "|" . $part_name . "\n";
+            }
+            continue;
+        }
+        if (($local === "portType" || $local === "binding") && !$self_closing) {
+            $stack[] = $local;
+            continue;
+        }
+        if ($local === "operation" && isset($attributes["name"])) {
+            $current_operation_name = (string) $attributes["name"];
+            $current_operation_input = "";
+            $current_operation_output = "";
+            $current_operation_port = \in_array("portType", $stack, true);
+            if (!$self_closing) {
+                $stack[] = "operation";
+            }
+            continue;
+        }
+        if ($local === "input" || $local === "output") {
+            if ($current_operation_port && isset($attributes["message"])) {
+                if ($local === "input") {
+                    $current_operation_input = (string) $attributes["message"];
+                } else {
+                    $current_operation_output = (string) $attributes["message"];
+                }
+            }
+            continue;
+        }
+    }
+
+    $functions = [];
+    $operation_lines = \explode("\n", \trim($operations_text));
+    foreach ($operation_lines as $operation_line) {
+        if ($operation_line === "") {
+            continue;
+        }
+        $operation_parts = \explode("|", $operation_line);
+        if (\count($operation_parts) < 3) {
+            continue;
+        }
+        $operation_name = $operation_parts[0];
+        $input_name = __elephc_soap_local($operation_parts[1]);
+        $output_name = __elephc_soap_local($operation_parts[2]);
+        $return_type = "void";
+        if ($output_name !== "" && isset($message_text[$output_name]) && $message_text[$output_name] !== "") {
+            $output_parts = \explode("\n", \trim($message_text[$output_name]));
+            if (\count($output_parts) > 0) {
+                $output_pair = \explode("|", $output_parts[0]);
+                if (\count($output_pair) > 0) {
+                    $return_type = $output_pair[0];
+                }
+            }
+        }
+        $parameters = [];
+        if ($input_name !== "" && isset($message_text[$input_name]) && $message_text[$input_name] !== "") {
+            foreach (\explode("\n", \trim($message_text[$input_name])) as $part) {
+                $pair = \explode("|", $part);
+                if (\count($pair) >= 2) {
+                    $parameters[] = $pair[0] . " $" . $pair[1];
+                }
+            }
+        }
+        $functions[] = $return_type . " " . $operation_name . "(" . \implode(", ", $parameters) . ")";
+    }
+
+    $types = [];
+    foreach ($field_text as $element_name => $lines) {
+        $trimmed = \trim($lines);
+        if ($trimmed === "") {
+            continue;
+        }
+        $text = "struct " . $element_name . " {";
+        foreach (\explode("\n", $trimmed) as $line) {
+            $text .= "\n " . $line;
+        }
+        $text .= "\n}";
+        $types[] = $text;
+    }
+
+    return ["functions" => $functions, "types" => $types];
 }
 
 function __elephc_soap_http_request(string $method, string $location, string $payload, array $headers, int $timeout): string
