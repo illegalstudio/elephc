@@ -144,8 +144,7 @@ fn nullable_declared_boundaries_native_preserve_contracts() {
         let output = super::native_module::run(&module);
         let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "strict={strict} optimize={optimize}: {stdout}; {stderr}");
-        assert_eq!(stdout, if strict { "LP|R|S:kept|NULL:7:8:NULL:NULL" }
-            else { "L||S:kept|NULL:7:8:NULL:NULL" }, "{stderr}");
+        assert_eq!(stdout, "LP|R|S:kept|NULL:7:8:NULL:NULL", "strict={strict} optimize={optimize}: {stderr}");
         assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
       }
     }
@@ -155,12 +154,15 @@ fn nullable_declared_boundaries_native_preserve_contracts() {
 #[test]
 fn nullable_declared_boundaries_emit_on_every_target() {
     let source = include_str!("../../../tests/fixtures/strict/nullable_boundaries.php");
-    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let target = Target::parse(name).unwrap();
-        let module = super::semantic_sources::lower_capturing_arguments(source, target, profile, false, SourceMode::Php);
-        crate::ir::validate_module(&module).unwrap();
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    for strict in [false, true] {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, strict);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = super::semantic_sources::lower_capturing_arguments(source, target, profile, false, SourceMode::Php);
+            crate::ir::validate_module(&module).unwrap();
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            assert_eq!(assembly.contains(elephc_semantics::nullability::NON_NULL_MESSAGE), strict, "{name}");
+        }
     }
 }
 

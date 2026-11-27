@@ -53,10 +53,14 @@ fn try_lower_with_capture(source: &str, target: Target, profile: SemanticProfile
     let _profile = crate::optimize::scoped_semantic_profile(profile);
     if optimize {
         program = crate::optimize::fold_constants_for_target(program, target);
-        program = crate::optimize::propagate_constants(program, checked.mixed_storage_local_names(), checked.buffer_read_sites.clone());
-        program = crate::optimize::prune_constant_control_flow(program, checked.local_binding_decision_spans());
-        program = crate::optimize::normalize_control_flow(program, checked.local_binding_decision_spans());
-        program = crate::optimize::eliminate_dead_code(program, checked.local_binding_decision_spans());
+        let optimizer = crate::optimize::PostTypecheckOptimizer::new_with_type_metadata(
+            &program, &checked.functions, &checked.classes, &checked.interfaces,
+            &checked.scalar_guard_arg_sites,
+        );
+        program = optimizer.propagate(program, checked.mixed_storage_local_names(), checked.buffer_read_sites.clone());
+        program = optimizer.prune(program, checked.local_binding_decision_spans());
+        program = optimizer.normalize(program, checked.local_binding_decision_spans());
+        program = optimizer.eliminate_dead_code(program, checked.local_binding_decision_spans());
     }
     let mut module = crate::ir_lower::lower_program(&program, &checked, target, false)?;
     if optimize { crate::ir_passes::optimize_module(&mut module); }
