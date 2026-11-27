@@ -472,3 +472,17 @@ foreach ($walk as $oid => $value) {
         "bool(true)\nvalue\nelephcName.0=value\nelephcState.0=down\nELEPHC-MIB::elephcName.0=value\nELEPHC-MIB::elephcState.0=2\n"
     );
 }
+
+/// The ext/snmp global constants and the VERSION_2c alias match PHP 8.6.
+#[test]
+fn test_snmp_constants() {
+    let out = compile_and_run(
+        r#"<?php
+echo SNMP_OID_OUTPUT_SUFFIX, ":", SNMP_OID_OUTPUT_NONE, ":",
+    SNMP_VALUE_OBJECT, ":", SNMP_COUNTER, ":", SNMP_TIMETICKS, ":",
+    SNMP_UINTEGER, "\n";
+echo SNMP::VERSION_2c, ":", SNMP::VERSION_2C, "\n";
+"#,
+    );
+    assert_eq!(out, "1:6:2:66:67:71\n1:1\n");
+}

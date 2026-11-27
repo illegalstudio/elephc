@@ -388,3 +388,79 @@ $server->handle($request);
     assert!(out.contains("<SOAP-ENV:Value>Server</SOAP-ENV:Value>"), "{out}");
     assert!(out.contains("<SOAP-ENV:Text xml:lang=\"en\">boom</SOAP-ENV:Text>"), "{out}");
 }
+
+/// SOAP tracing exposes request/response headers and persists response cookies.
+#[test]
+fn test_soap_client_headers_and_cookies() {
+    let listener = TcpListener::bind(("0.0.0.0", 0)).expect("bind SOAP header fixture");
+    let port = listener.local_addr().unwrap().port();
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let server_capture = Arc::clone(&captured);
+    let worker = thread::spawn(move || {
+        for index in 0..2 {
+            let mut stream = accept_connection(&listener);
+            let request = read_request(&mut stream);
+            server_capture.lock().unwrap().push(request);
+            let body = format!(
+                r#"<?xml version="1.0"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body><ns:CallResponse xmlns:ns="urn:test"><return>{}</return></ns:CallResponse></soap:Body>
+</soap:Envelope>"#,
+                index + 1
+            );
+            let cookie = if index == 0 {
+                "Set-Cookie: session=abc; Path=/\r\n"
+            } else {
+                ""
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml; charset=utf-8\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                cookie,
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).expect("write SOAP response");
+        }
+    });
+
+    let source = r#"<?php
+$client = new SoapClient(null, [
+    "location" => "http://127.0.0.1:__PORT__/soap",
+    "uri" => "urn:test",
+    "trace" => true,
+]);
+echo $client->__soapCall("Call", []), "\n";
+echo strpos($client->__getLastRequestHeaders(), "POST /soap HTTP/1.1") !== false ? "reqh" : "bad", "\n";
+echo strpos($client->__getLastResponseHeaders(), "Set-Cookie: session=abc") !== false ? "resh" : "bad", "\n";
+echo $client->__getCookies()["session"] ?? "missing", "\n";
+echo $client->__soapCall("Call", []), "\n";
+$fault = new SoapFault("Server", "boom");
+echo $fault, "\n";
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let out = compile_and_run(&source);
+    worker.join().expect("SOAP header fixture thread");
+    assert_eq!(
+        out,
+        "1\nreqh\nresh\nabc\n2\nSoapFault exception: [Server] boom\n"
+    );
+    let requests = captured.lock().unwrap();
+    assert!(requests.len() == 2, "{requests:?}");
+    assert!(requests[1].contains("Cookie: session=abc"), "{}", requests[1]);
+}
+
+/// SOAP constants and the PHP 8.6 `Soap\Url`/`Soap\Sdl` classes exist.
+#[test]
+fn test_soap_constants_and_classes() {
+    let out = compile_and_run(
+        r#"<?php
+echo SOAP_1_1, ":", SOAP_1_2, ":", SOAP_COMPRESSION_ACCEPT, ":",
+    SOAP_AUTHENTICATION_DIGEST, ":", SOAP_ENC_ARRAY, ":", UNKNOWN_TYPE, ":",
+    XSD_STRING, ":", XSD_ANYXML, "\n";
+echo class_exists("Soap\\Url") ? "url" : "bad", ":",
+    class_exists("Soap\\Sdl") ? "sdl" : "bad", "\n";
+"#,
+    );
+    assert_eq!(out, "1:2:32:1:300:999998:101:147\nurl:sdl\n");
+}

@@ -13,6 +13,76 @@ const SOAP_PERSISTENCE_REQUEST = 2;
 const SOAP_PERSISTENCE_SESSION = 1;
 const SOAP_FUNCTIONS_ALL = 999;
 
+const SOAP_COMPRESSION_ACCEPT = 32;
+const SOAP_COMPRESSION_GZIP = 0;
+const SOAP_COMPRESSION_DEFLATE = 16;
+const SOAP_AUTHENTICATION_BASIC = 0;
+const SOAP_AUTHENTICATION_DIGEST = 1;
+const SOAP_SINGLE_ELEMENT_ARRAYS = 1;
+const SOAP_WAIT_ONE_WAY_CALLS = 2;
+const SOAP_USE_XSI_ARRAY_TYPE = 4;
+const SOAP_SSL_METHOD_TLS = 0;
+const SOAP_SSL_METHOD_SSLv2 = 1;
+const SOAP_SSL_METHOD_SSLv3 = 2;
+const SOAP_SSL_METHOD_SSLv23 = 3;
+const SOAP_ENC_ARRAY = 300;
+const SOAP_ENC_OBJECT = 301;
+const UNKNOWN_TYPE = 999998;
+const APACHE_MAP = 200;
+const WSDL_CACHE_NONE = 0;
+const WSDL_CACHE_DISK = 1;
+const WSDL_CACHE_MEMORY = 2;
+const WSDL_CACHE_BOTH = 3;
+const XSD_1999_NAMESPACE = "http://www.w3.org/1999/XMLSchema";
+const XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema";
+const XSD_1999_TIMEINSTANT = 401;
+const XSD_ANYTYPE = 145;
+const XSD_ANYURI = 117;
+const XSD_ANYXML = 147;
+const XSD_BASE64BINARY = 116;
+const XSD_BOOLEAN = 102;
+const XSD_BYTE = 137;
+const XSD_DATE = 109;
+const XSD_DATETIME = 107;
+const XSD_DECIMAL = 103;
+const XSD_DOUBLE = 105;
+const XSD_DURATION = 106;
+const XSD_ENTITIES = 130;
+const XSD_ENTITY = 129;
+const XSD_FLOAT = 104;
+const XSD_GDAY = 113;
+const XSD_GMONTH = 114;
+const XSD_GMONTHDAY = 112;
+const XSD_GYEAR = 111;
+const XSD_GYEARMONTH = 110;
+const XSD_HEXBINARY = 115;
+const XSD_ID = 126;
+const XSD_IDREF = 127;
+const XSD_IDREFS = 128;
+const XSD_INT = 135;
+const XSD_INTEGER = 131;
+const XSD_LANGUAGE = 122;
+const XSD_LONG = 134;
+const XSD_NAME = 124;
+const XSD_NCNAME = 125;
+const XSD_NEGATIVEINTEGER = 133;
+const XSD_NMTOKEN = 123;
+const XSD_NMTOKENS = 144;
+const XSD_NONNEGATIVEINTEGER = 138;
+const XSD_NONPOSITIVEINTEGER = 132;
+const XSD_NORMALIZEDSTRING = 120;
+const XSD_NOTATION = 119;
+const XSD_POSITIVEINTEGER = 143;
+const XSD_QNAME = 118;
+const XSD_SHORT = 136;
+const XSD_STRING = 101;
+const XSD_TIME = 108;
+const XSD_TOKEN = 121;
+const XSD_UNSIGNEDBYTE = 142;
+const XSD_UNSIGNEDINT = 140;
+const XSD_UNSIGNEDLONG = 139;
+const XSD_UNSIGNEDSHORT = 141;
+
 class SoapFault extends \Exception
 {
     public string $faultcode = "";
@@ -31,6 +101,11 @@ class SoapFault extends \Exception
         $this->detail = $details;
         $this->faultname = $name;
         $this->headerfault = $headerFault;
+    }
+
+    public function __toString(): string
+    {
+        return "SoapFault exception: [" . $this->faultcode . "] " . $this->faultstring;
     }
 }
 
@@ -93,6 +168,9 @@ class SoapClient
     private array $__keepHeaders = [];
     private string $__lastRequest = "";
     private string $__lastResponse = "";
+    private string $__lastRequestHeaders = "";
+    private string $__lastResponseHeaders = "";
+    private array $__cookies = [];
     private mixed $__headers = null;
 
     public function __construct(?string $wsdl, array $options = [])
@@ -183,21 +261,10 @@ class SoapClient
             . '<SOAP-ENV:Body><ns1:' . __elephc_soap_name($function) . '>'
             . $params
             . '</ns1:' . __elephc_soap_name($function) . '></SOAP-ENV:Body></SOAP-ENV:Envelope>';
-        $headers = [];
-        if ($this->__version === SOAP_1_2) {
-            $headers[] = "Content-Type: application/soap+xml; charset=utf-8; action=\"" . $soapAction . "\"";
-        } else {
-            $headers[] = "Content-Type: text/xml; charset=utf-8";
-            $headers[] = "SOAPAction: \"" . $soapAction . "\"";
+        $response = $this->__doRequest($request, $location, $soapAction, $this->__version);
+        if ($response === null) {
+            return null;
         }
-        $headers[] = "Connection: close";
-        $headers[] = "User-Agent: " . $this->__userAgent;
-        if ($this->__login !== "") {
-            $headers[] = "Authorization: Basic " . \base64_encode($this->__login . ":" . $this->__password);
-        }
-        $response = __elephc_soap_http_request("POST", $location, $request, $headers, $this->__timeout);
-        $this->__lastRequest = $request;
-        $this->__lastResponse = $response;
         return __elephc_soap_response($response, $this->__version);
     }
 
@@ -241,13 +308,88 @@ class SoapClient
         return true;
     }
 
+    public function __doRequest(string $request, string $location, string $action, int $version, bool $oneWay = false, ?string $uriParserClass = null): ?string
+    {
+        $headers = [];
+        if ($version === SOAP_1_2) {
+            $headers[] = "Content-Type: application/soap+xml; charset=utf-8; action=\"" . $action . "\"";
+        } else {
+            $headers[] = "Content-Type: text/xml; charset=utf-8";
+            $headers[] = "SOAPAction: \"" . $action . "\"";
+        }
+        $headers[] = "Connection: close";
+        $headers[] = "User-Agent: " . $this->__userAgent;
+        if ($this->__login !== "") {
+            $headers[] = "Authorization: Basic " . \base64_encode($this->__login . ":" . $this->__password);
+        }
+        if ($this->__cookies !== []) {
+            $pairs = [];
+            foreach ($this->__cookies as $name => $value) {
+                $pairs[] = $name . "=" . $value;
+            }
+            $headers[] = "Cookie: " . \implode("; ", $pairs);
+        }
+        $exchange = __elephc_soap_http_exchange("POST", $location, $request, $headers, $this->__timeout);
+        $this->__lastRequest = $request;
+        $this->__lastResponse = (string) $exchange["body"];
+        $this->__lastRequestHeaders = (string) $exchange["request_headers"];
+        $this->__lastResponseHeaders = (string) $exchange["response_headers"];
+        $this->__storeCookies((string) $exchange["response_headers"]);
+        if ($oneWay) {
+            return null;
+        }
+        return (string) $exchange["body"];
+    }
+
+    private function __storeCookies(string $headers): void
+    {
+        foreach (\explode("\r\n", $headers) as $line) {
+            $colon = \strpos($line, ":");
+            if ($colon === false) {
+                continue;
+            }
+            if (\strtolower(\substr($line, 0, $colon)) !== "set-cookie") {
+                continue;
+            }
+            $cookie = \trim(\substr($line, $colon + 1));
+            $semicolon = \strpos($cookie, ";");
+            if ($semicolon !== false) {
+                $cookie = \substr($cookie, 0, $semicolon);
+            }
+            $equals = \strpos($cookie, "=");
+            if ($equals === false) {
+                continue;
+            }
+            $name = \trim(\substr($cookie, 0, $equals));
+            $value = \trim(\substr($cookie, $equals + 1));
+            if ($name !== "") {
+                $this->__cookies[$name] = $value;
+            }
+        }
+    }
+
+    public function __getLastRequestHeaders(): ?string
+    {
+        return $this->__trace ? $this->__lastRequestHeaders : null;
+    }
+
+    public function __getLastResponseHeaders(): ?string
+    {
+        return $this->__trace ? $this->__lastResponseHeaders : null;
+    }
+
     public function __getCookies(): array
     {
-        return [];
+        return $this->__cookies;
     }
 
     public function __setCookie(string $name, ?string $value = null): void
     {
+        if ($value === null) {
+            unset($this->__cookies[$name]);
+        } else {
+            $this->__cookies[$name] = $value;
+        }
     }
 }
 
@@ -917,6 +1059,12 @@ function __elephc_soap_fetch_wsdl(string $url, array $headers, array $keep, stri
 
 function __elephc_soap_http_request(string $method, string $location, string $payload, array $headers, int $timeout): string
 {
+    $exchange = __elephc_soap_http_exchange($method, $location, $payload, $headers, $timeout);
+    return (string) $exchange["body"];
+}
+
+function __elephc_soap_http_exchange(string $method, string $location, string $payload, array $headers, int $timeout): array
+{
     $parts = \parse_url($location);
     if (!\is_array($parts) || !isset($parts["host"])) {
         throw new \SoapFault("HTTP", "Invalid SOAP location");
@@ -968,7 +1116,11 @@ function __elephc_soap_http_request(string $method, string $location, string $pa
             }
         }
     }
-    return $body;
+    return [
+        "body" => $body,
+        "request_headers" => $head,
+        "response_headers" => $header_block . "\r\n\r\n",
+    ];
 }
 
 function __elephc_soap_response(string $xml, int $version = SOAP_1_1)
