@@ -1257,10 +1257,15 @@ fn is_keyed_array_predicate_callback(label: &str) -> bool {
 /// Converts a static `call_user_func_array()` argument container into ordinary call arguments.
 ///
 /// String keys become named arguments while integer keys remain positional, matching the EIR
-/// helper that lowers the same literal container into descriptor arguments.
+/// helper that lowers the same literal container into descriptor arguments. The checker sees
+/// the place underneath an explicit reference while lowering retains the original marker.
 fn static_call_user_func_array_args(arg_array: &Expr) -> Option<Vec<Expr>> {
+    let argument_value = |value: &Expr| match &value.kind {
+        ExprKind::Reference(place) => place.as_ref().clone(),
+        _ => value.clone(),
+    };
     match &arg_array.kind {
-        ExprKind::ArrayLiteral(items) => Some(items.clone()),
+        ExprKind::ArrayLiteral(items) => Some(items.iter().map(argument_value).collect()),
         ExprKind::ArrayLiteralAssoc(pairs) => {
             let mut args = Vec::with_capacity(pairs.len());
             for (key, value) in pairs {
@@ -1268,11 +1273,11 @@ fn static_call_user_func_array_args(arg_array: &Expr) -> Option<Vec<Expr>> {
                     ExprKind::StringLiteral(name) => args.push(Expr::new(
                         ExprKind::NamedArg {
                             name: name.clone(),
-                            value: Box::new(value.clone()),
+                            value: Box::new(argument_value(value)),
                         },
                         value.span,
                     )),
-                    ExprKind::IntLiteral(_) => args.push(value.clone()),
+                    ExprKind::IntLiteral(_) => args.push(argument_value(value)),
                     _ => return None,
                 }
             }

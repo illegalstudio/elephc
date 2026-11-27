@@ -42,6 +42,11 @@ $object = new SettypeStringEffect(); $target = $argc > 0 ? 'string' : 'STRING';
 settype($object, $target); echo '|', $effect;
 array $referencePack = ['42', 'integer']; $elementAlias =& $referencePack[0];
 call_user_func_array('settype', $referencePack); echo is_int($elementAlias) ? '|L' : '|X';
+$value = '42'; call_user_func_array('settype', ['var' => &$value, 'type' => 'integer']);
+echo is_int($alias) ? '|A' : '|X';
+$value = 'junk';
+try { call_user_func_array('settype', [&$value, 'integer']); echo '|X'; }
+catch (ValueError $error) { echo '|I:', $alias; }
 "#;
 
 /// Prepared callable conversion graphs validate and emit for every supported target.
@@ -84,17 +89,9 @@ fn strict_settype_callables_native_values_failures_and_owners() {
         let output = super::native_module::run(&module);
         let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "opt={optimize}: {stdout} {stderr}");
-        assert_eq!(stdout, "9223372036854775807|F|junk|junk|N|S|T|Rkept|Bkept|Ckept|V|P|Q|original|original|mutated|W|9|L", "opt={optimize}");
+        assert_eq!(stdout, "9223372036854775807|F|junk|junk|N|S|T|Rkept|Bkept|Ckept|V|P|Q|original|original|mutated|W|9|L|A|I:junk", "opt={optimize}");
         assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
     }
-}
-
-/// Explicit array-literal references retain their target-independent parser diagnostic.
-#[test]
-fn strict_settype_callables_array_literal_references_remain_diagnosed() {
-    let error = crate::parser::parse(&crate::lexer::tokenize(
-        "<?php mixed $value = '42'; call_user_func_array('settype', [&$value, 'integer']);").unwrap()).unwrap_err();
-    assert!(error.message.contains("Reference elements in array literals"), "{error:?}");
 }
 
 /// Prepared bodies also compile in permissive catalogs while retaining ordinary numeric conversion.
