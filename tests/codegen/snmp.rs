@@ -13,6 +13,7 @@
 
 use std::net::UdpSocket;
 use std::thread;
+use std::time::Duration;
 
 use crate::support::*;
 
@@ -402,8 +403,10 @@ fn test_snmp_mib_resolution_and_rendering() {
     let port = server.local_addr().unwrap().port();
     let worker = thread::spawn(move || {
         let mut buffer = [0u8; 4096];
-        for _ in 0..8 {
-            let (size, peer) = server.recv_from(&mut buffer).expect("SNMP request");
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("SNMP MIB fixture timeout");
+        while let Ok((size, peer)) = server.recv_from(&mut buffer) {
             let request = &buffer[..size];
             let (version, community) = request_header(request);
             let (pdu_tag, request_id, varbinds) = request_details(request);
