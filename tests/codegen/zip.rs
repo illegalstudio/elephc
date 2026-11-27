@@ -36,6 +36,10 @@ echo $zip->numFiles, ":", count($zip), "\n";
 echo $zip->getNameIndex(0), ":", $zip->getNameIndex(1), "\n";
 echo $zip->getFromName("hello.txt");
 echo $zip->getFromIndex(1);
+$stream = $zip->getStreamName("hello.txt");
+if (is_resource($stream)) {
+    echo stream_get_contents($stream);
+}
 $missing = $zip->locateName("missing");
 echo $zip->locateName("stored.txt"), ":", $missing === false ? "none" : "found", "\n";
 $stat = $zip->statName("hello.txt");
@@ -47,7 +51,7 @@ echo $unchanged === $data ? "same" : "different", "\n";
     let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
     assert_eq!(
         out,
-        "open\n2:2\nhello.txt:stored.txt\nHello, ZIP!\nstored\n1:none\nhello.txt:12:8\nsame\n"
+        "open\n2:2\nhello.txt:stored.txt\nHello, ZIP!\nstored\nHello, ZIP!\n1:none\nhello.txt:12:8\nsame\n"
     );
 }
 
