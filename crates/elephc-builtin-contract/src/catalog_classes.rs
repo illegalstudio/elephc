@@ -235,6 +235,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("PDORow", "pdorow", Class, Pdo, Prelude),
     class!("PDOStatement", "pdostatement", Class, Pdo, Prelude),
     class!("Phar", "phar", Class, Phar, CheckerInjected),
+    class!("PharException", "pharexception", Class, Phar, CheckerInjected),
     class!("PharData", "phardata", Class, Phar, CheckerInjected),
     class!("finfo", "finfo", Class, Fileinfo, Prelude, cloneable: false),
     class!("PharFileInfo", "pharfileinfo", Class, Phar, CheckerInjected),

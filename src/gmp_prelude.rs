@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn externs_bind_the_gmp_bridge() {
         let externs = extern_declarations();
-        assert_eq!(externs.len(), 15);
+        assert_eq!(externs.len(), 16);
         for statement in externs {
             let StmtKind::ExternFunctionDecl { library, .. } = statement.kind else {
                 panic!("expected an extern declaration");

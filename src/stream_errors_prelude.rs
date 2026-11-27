@@ -72,11 +72,11 @@ function __elephc_tls_set_psk_client_cb($callback) {
         if ($psk === null) {
             return null;
         }
-        if (!\is_a($psk, "Openssl\Psk")) {
-            throw new \TypeError("PSK callback must return Openssl\Psk or null");
+        if (!\is_a($psk, "Openssl" . "\\" . "Psk")) {
+            throw new \TypeError("PSK callback must return " . "Openssl" . "\\" . "Psk" . " or null");
         }
         if ($psk->identity === null) {
-            throw new \ValueError("Client PSK callback must return Openssl\Psk with a non-null identity");
+            throw new \ValueError("Client PSK callback must return " . "Openssl" . "\\" . "Psk" . " with a non-null identity");
         }
         $length = \strlen($psk->identity);
         return \chr(($length >> 24) & 255)
@@ -95,11 +95,9 @@ function __elephc_tls_set_psk_client_cb($callback) {
 
 function __elephc_tls_apply_psk_client($options) {
     $callback = null;
-    if (\is_array($options)
-        && \isset($options["ssl"])
-        && \is_array($options["ssl"])
-        && \array_key_exists("psk_client_cb", $options["ssl"])) {
-        $callback = $options["ssl"]["psk_client_cb"];
+    $ssl = \is_array($options) ? ($options["ssl"] ?? null) : null;
+    if (\is_array($ssl) && \array_key_exists("psk_client_cb", $ssl)) {
+        $callback = $ssl["psk_client_cb"];
     }
     \__elephc_tls_set_psk_client_cb($callback);
 }
@@ -114,7 +112,7 @@ function __elephc_tls_set_session_new_cb_cb($callback) {
     }
     $normalized = \__elephc_normalize_callable($callback);
     $wrapped = function ($stream, $pem) use ($normalized) {
-        $session = \call_user_func(["Openssl\\Session", "import"], $pem);
+        $session = \call_user_func(["Openssl" . "\\" . "Session", "import"], $pem);
         $normalized($stream, $session);
     };
     $wrapped = \__elephc_normalize_callable($wrapped);
@@ -124,11 +122,9 @@ function __elephc_tls_set_session_new_cb_cb($callback) {
 
 function __elephc_tls_apply_session_new($options) {
     $callback = null;
-    if (\is_array($options)
-        && \isset($options["ssl"])
-        && \is_array($options["ssl"])
-        && \array_key_exists("session_new_cb", $options["ssl"])) {
-        $callback = $options["ssl"]["session_new_cb"];
+    $ssl = \is_array($options) ? ($options["ssl"] ?? null) : null;
+    if (\is_array($ssl) && \array_key_exists("session_new_cb", $ssl)) {
+        $callback = $ssl["session_new_cb"];
     }
     \__elephc_tls_set_session_new_cb_cb($callback);
 }

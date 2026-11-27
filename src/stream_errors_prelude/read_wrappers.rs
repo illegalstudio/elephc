@@ -1225,7 +1225,6 @@ fn context_get_options_wrapper() -> Stmt {
                     vec![e_var("context")],
                 ))]),
             ),
-            s_return(e_array(vec![])),
         ])
         .build()
 }

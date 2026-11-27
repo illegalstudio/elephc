@@ -118,6 +118,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_zip",
+        env_var: "ELEPHC_ZIP_LIB_DIR",
+        crate_name: "elephc-zip",
+        flag_name: "zip",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The archive engine backs PHP's ZipArchive surface.
+        php_extensions: &["zip"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_pdo",
         env_var: "ELEPHC_PDO_LIB_DIR",
         crate_name: "elephc-pdo",

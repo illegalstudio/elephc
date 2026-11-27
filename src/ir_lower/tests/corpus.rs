@@ -191,6 +191,15 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         // ext/filter is a synthetic prelude the CLI injects on use; the filter
         // codegen and PHPT suites compile it directly.
         "filter",
+        // ZipArchive and the OpenSSL TLS session example are injected preludes that
+        // also need the PHP 8.6 profile; tests/codegen/zip.rs and openssl_php86.rs
+        // compile their real profiles.
+        "zip-archive",
+        "tls-session-resume",
+        "tls-psk",
+        // The 8.6 tour uses Time\Duration and RetryPolicy declarations supplied by
+        // the 8.6 profile/preludes; its dedicated codegen fixtures cover it.
+        "php-8.6",
     ];
     main_php
         .parent()

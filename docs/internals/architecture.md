@@ -668,6 +668,7 @@ crates/
 ├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
+├── elephc-zip/                In-memory `ZipArchive` bridge over the elephc-phar ZIP reader/writer
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint
 ├── elephc-process-context/    Shared worker signal deferral and child-process inheritance
 ├── elephc-random/             Pure-Rust `ext/random` engines, CSPRNG, and global Mt19937 state bridge

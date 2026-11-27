@@ -121,6 +121,7 @@ pub(crate) mod stream_errors_prelude;
 pub(crate) mod io_poll_prelude;
 /// PHP 8.6 `pack()`/`unpack()` endianness prelude injection.
 pub(crate) mod pack_prelude;
+pub mod zip_prelude;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
 /// mysqli (MySQL / MariaDB over the elephc_pdo bridge) prelude injection.

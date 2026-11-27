@@ -107,6 +107,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["openssl"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_zip",
+        package: "elephc-zip",
+        php_extensions: &["zip"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
         // This archive backs both PDO and mysqli; the injected surface reports which

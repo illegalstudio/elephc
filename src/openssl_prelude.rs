@@ -45,7 +45,7 @@ pub fn inject_if_used(
     if crate::codegen_support::compile_php_version() < crate::php_version::PhpVersion::Php86 {
         return program;
     }
-    if !force && !program_uses_openssl_classes(&program) {
+    if !force && !requested(&program) {
         return program;
     }
     let includes_session = force || program_uses_session(&program);
@@ -55,8 +55,12 @@ pub fn inject_if_used(
     declarations
 }
 
-/// Returns whether the program names an `Openssl\` class or an `openssl_*` function.
-fn program_uses_openssl_classes(program: &[Stmt]) -> bool {
+/// Returns whether the user program names an `Openssl\` class or an `openssl_*` function.
+///
+/// Called from `crate::pipeline` before compiler preludes are injected, so a
+/// stream-error helper mentioning `Openssl\Session` cannot force the libssl
+/// bridge into every program that reads a file.
+pub fn requested(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
     usage.classes.iter().any(|name| name.starts_with("openssl\\"))
         || usage.functions.iter().any(|name| name.starts_with("openssl_"))

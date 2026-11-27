@@ -1,0 +1,16 @@
+[package]
+name = "elephc-zip"
+version = "0.1.0"
+edition = "2021"
+description = "In-memory ZIP archive bridge for elephc's ZipArchive surface"
+license = "MIT"
+publish = false
+
+# Built as a C-callable staticlib for compiled programs that use ZipArchive,
+# and as an rlib so the archive API is unit-testable.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+elephc-phar = { path = "../elephc-phar" }
+flate2 = "1"

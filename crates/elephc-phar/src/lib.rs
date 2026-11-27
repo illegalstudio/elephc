@@ -28,6 +28,7 @@ mod signature;
 mod streams;
 mod tar_read;
 mod tar_write;
+mod zip_api;
 mod zip_crypto;
 mod zip_read;
 mod zip_write;
@@ -70,6 +71,10 @@ pub use archive_api::{
 };
 pub use ffi_archive::*;
 pub use ffi_stream::*;
+pub use zip_api::{
+    dos_to_unix, extract_zip_entry, locate_zip_entry, open_zip_data, unix_to_dos,
+    zip_entry_compressed_payload, ZipArchiveData, ZipEntryInfo,
+};
 
 #[cfg(test)]
 mod tests;

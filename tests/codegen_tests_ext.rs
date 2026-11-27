@@ -51,6 +51,7 @@ mod codegen {
     mod pcntl;
     mod posix;
     mod xml;
+    mod zip;
     mod tokenizer;
     mod calendar;
     mod time_duration_php_src;

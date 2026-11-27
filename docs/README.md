@@ -68,6 +68,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Core classes and constants](php/core-symbols.md) - weak references and maps, attributes, enum interfaces, exceptions, and predefined constants
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
+- [Zip](php/zip.md): `ZipArchive` in-memory archives, the PHP 8.6 `openString()`/`closeString()` methods, extraction, globbing, and the pure-Rust `elephc-zip` bridge
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
 - [OPcache](php/opcache.md): the Zend OPcache API over compiled scripts and the runtime cache for dynamic include/require, optional file caching, live statistics, and the `opcache.*` directive matrix
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`

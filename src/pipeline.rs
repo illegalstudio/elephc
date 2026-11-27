@@ -300,6 +300,8 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         && program_uses_libssl_tls(&ast);
     let tls_session_new = php_version >= crate::php_version::PhpVersion::Php86
         && program_uses_session_new_cb(&ast);
+    let openssl_surface = php_version >= crate::php_version::PhpVersion::Php86
+        && crate::openssl_prelude::requested(&ast);
     timings.record_since("resolve", phase_started);
     // Compile-time deprecations raised while each physical file was prepared, reported where
     // php-src reports them: before the program runs, ahead of the checker's own diagnostics.
@@ -628,6 +630,16 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     if uri_used {
         linked_php_surfaces.push("uri".to_string());
     }
+    // Inject OpenSSL before the stream-error prelude so its own helpers cannot
+    // be mistaken for user code that needs the libssl bridge.
+    let ast = crate::openssl_prelude::inject_if_used(
+        ast,
+        with_crates.contains("openssl")
+            || tls_session_new
+            || tls_libssl
+            || openssl_surface,
+        &mut prelude_inventory,
+    );
     // Declare the URI surface before the core prelude so every later injected prelude sees a
     // complete class set; the URI prelude itself depends only on checker-injected core classes.
     let ast = crate::core_prelude::inject_if_used(
@@ -639,9 +651,9 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     );
     let ast = crate::parse_str_prelude::inject_if_used(ast, &ini_overrides, &mut prelude_inventory);
     let ast = crate::time_prelude::inject_if_used(ast, autoloaded("time"), &mut prelude_inventory);
-    let ast = crate::openssl_prelude::inject_if_used(
+    let ast = crate::zip_prelude::inject_if_used(
         ast,
-        with_crates.contains("openssl") || tls_session_new,
+        with_crates.contains("zip"),
         &mut prelude_inventory,
     );
     let ast = crate::clamp_prelude::inject_if_used(ast, autoloaded("clamp"), &mut prelude_inventory);

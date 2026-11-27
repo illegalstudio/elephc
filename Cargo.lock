@@ -1069,6 +1069,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-zip"
+version = "0.1.0"
+dependencies = [
+ "elephc-phar",
+ "flate2",
+]
+
+[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

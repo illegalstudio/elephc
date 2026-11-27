@@ -40,6 +40,7 @@ env:
     -p elephc-tls
     -p elephc-tls-openssl
     -p elephc-pdo
+    -p elephc-zip
     -p elephc-crypto
     -p elephc-openssl
     -p elephc-bcmath

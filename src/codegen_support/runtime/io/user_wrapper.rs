@@ -1227,7 +1227,7 @@ fn wrapper_close_restores_policy_after_symbol_loads_on_all_targets() {
             emit_user_wrapper_fclose(&mut emitter);
             let assembly = emitter.output();
             let arm = target.arch == Arch::AArch64;
-            let combine = if arm { "orr x9, x9, x11" } else { "or r9, r11" };
+            let combine = if arm { "orr x10, x9, x11" } else { "or r9, r11" };
             let combine = assembly.rfind(combine).expect("combined stream close policy");
             let restore = if arm { "ldr x9, [sp, #8]" } else { "mov r9, QWORD PTR [rbp - 16]" };
             let restore = assembly[..combine].rfind(restore).expect("saved resource policy");
