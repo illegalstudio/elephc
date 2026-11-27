@@ -1302,7 +1302,7 @@ function sodium_crypto_sign_ed25519_pk_to_curve25519(string $public_key): string
     }
     $pointer = \elephc_sodium_sign_pk_to_curve25519($public_key, \strlen($public_key));
     if (\__elephc_ptr_is_null($pointer)) {
-        throw new \SodiumException("sodium_crypto_sign_ed25519_pk_to_curve25519(): invalid public key");
+        throw new \SodiumException("conversion failed");
     }
     return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
 }

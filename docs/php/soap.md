@@ -52,8 +52,6 @@ $result = $client->__soapCall("Add", [["a" => 2, "b" => 3]]);
 - MTOM and attachments.
 - WSDL-described `SoapServer` operation metadata; the server dispatches
   RPC-style requests by operation name and returns `<return>` values.
-- WSDL-described `SoapServer` operation metadata; the server dispatches
-  RPC-style requests by operation name and returns `<return>` values.
 
 Calling an undeclared member fails at compile time rather than pretending to
 work.

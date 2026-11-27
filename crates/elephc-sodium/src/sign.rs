@@ -221,6 +221,9 @@ pub unsafe extern "C" fn elephc_sodium_sign_pk_to_curve25519(
         let Some(point) = compressed.decompress() else {
             return ptr::null();
         };
+        if point.is_small_order() || !point.is_torsion_free() {
+            return ptr::null();
+        }
         publish(&point.to_montgomery().to_bytes())
     })
 }

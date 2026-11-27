@@ -729,3 +729,28 @@ echo strlen(sodium_crypto_aead_aegis128l_keygen()), ":",
          16:32\n"
     );
 }
+
+/// Ed25519 public-key conversion rejects invalid, small-order and off-subgroup keys.
+#[test]
+fn test_sodium_ed25519_pk_conversion_errors() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([str_repeat("\x00", 32), str_repeat("\xff", 32), str_repeat("\x01", 32)] as $public) {
+    try {
+        sodium_crypto_sign_ed25519_pk_to_curve25519($public);
+        echo "accepted\n";
+    } catch (Throwable $error) {
+        echo get_class($error), ":", $error->getMessage(), "\n";
+    }
+}
+$keypair = sodium_crypto_sign_keypair();
+$converted = sodium_crypto_sign_ed25519_pk_to_curve25519(sodium_crypto_sign_publickey($keypair));
+echo strlen($converted), ":", bin2hex($converted) === bin2hex(sodium_crypto_scalarmult_base(sodium_crypto_sign_ed25519_sk_to_curve25519(sodium_crypto_sign_secretkey($keypair)))) ? "match" : "mismatch", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "SodiumException:conversion failed\nSodiumException:conversion failed\n\
+         SodiumException:conversion failed\n32:match\n"
+    );
+}
