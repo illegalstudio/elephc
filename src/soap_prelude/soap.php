@@ -93,9 +93,6 @@ class SoapClient
 
     public function __construct(?string $wsdl, array $options = [])
     {
-        if ($wsdl !== null && $wsdl !== "") {
-            throw new \SoapFault("Client", "WSDL mode is not implemented");
-        }
         $this->__location = (string) ($options["location"] ?? "");
         $this->__uri = (string) ($options["uri"] ?? "");
         if (isset($options["style"])) {
@@ -121,6 +118,20 @@ class SoapClient
                 throw new \SoapFault("Client", "keep_headers must contain only strings");
             }
             $this->__keepHeaders[] = \strtolower($header);
+        }
+        if ($wsdl !== null && $wsdl !== "") {
+            $headers = __elephc_soap_headers_from_context($options["stream_context"] ?? null);
+            if ($this->__login !== "") {
+                $headers[] = "Authorization: Basic " . \base64_encode($this->__login . ":" . $this->__password);
+            }
+            $headers[] = "User-Agent: " . $this->__userAgent;
+            $scan = __elephc_soap_fetch_wsdl($wsdl, $headers, $this->__keepHeaders, $wsdl, $this->__timeout, 0);
+            if ($this->__location === "") {
+                $this->__location = (string) ($scan["address"] ?? "");
+            }
+            if ($this->__uri === "") {
+                $this->__uri = (string) ($scan["target"] ?? "");
+            }
         }
         if ($this->__location === "") {
             throw new \SoapFault("Client", "SoapClient requires a location in WSDL-less mode");
@@ -171,7 +182,7 @@ class SoapClient
         if ($this->__login !== "") {
             $headers[] = "Authorization: Basic " . \base64_encode($this->__login . ":" . $this->__password);
         }
-        $response = __elephc_soap_http_post($location, $request, $headers, $this->__timeout);
+        $response = __elephc_soap_http_request("POST", $location, $request, $headers, $this->__timeout);
         $this->__lastRequest = $request;
         $this->__lastResponse = $response;
         return __elephc_soap_response($response);
@@ -410,7 +421,240 @@ function __elephc_soap_element(string $xml, int $position): array
     return [$name, $text, $position];
 }
 
-function __elephc_soap_http_post(string $location, string $payload, array $headers, int $timeout): string
+function __elephc_soap_same_origin(string $left, string $right): bool
+{
+    $a = \parse_url($left);
+    $b = \parse_url($right);
+    if (!\is_array($a) || !\is_array($b)) {
+        return false;
+    }
+    $schemeA = \strtolower((string) ($a["scheme"] ?? "http"));
+    $schemeB = \strtolower((string) ($b["scheme"] ?? "http"));
+    $portA = (int) ($a["port"] ?? ($schemeA === "https" ? 443 : 80));
+    $portB = (int) ($b["port"] ?? ($schemeB === "https" ? 443 : 80));
+    return $schemeA === $schemeB
+        && \strcasecmp((string) ($a["host"] ?? ""), (string) ($b["host"] ?? "")) === 0
+        && $portA === $portB;
+}
+
+function __elephc_soap_header_name(string $header): string
+{
+    $colon = \strpos($header, ":");
+    return $colon === false ? "" : \strtolower(\trim(\substr($header, 0, $colon)));
+}
+
+function __elephc_soap_headers_from_context(mixed $context): array
+{
+    if (!\is_resource($context)) {
+        return [];
+    }
+    $options = @\stream_context_get_options($context);
+    if (!\is_array($options) || !isset($options["http"])) {
+        return [];
+    }
+    $http = $options["http"];
+    if (!\is_array($http)) {
+        return [];
+    }
+    $header = $http["header"] ?? null;
+    $lines = [];
+    if (\is_array($header)) {
+        $lines = $header;
+    } elseif (\is_string($header)) {
+        $lines = \explode("\r\n", $header);
+        if (\count($lines) === 1) {
+            $lines = \explode("\n", $header);
+        }
+    }
+    $headers = [];
+    foreach ($lines as $line) {
+        $line = \trim((string) $line);
+        if ($line !== "") {
+            $headers[] = $line;
+        }
+    }
+    return $headers;
+}
+
+function __elephc_soap_filter_headers(array $headers, array $keep, bool $sameOrigin): array
+{
+    if ($sameOrigin) {
+        return $headers;
+    }
+    $filtered = [];
+    foreach ($headers as $header) {
+        $name = __elephc_soap_header_name($header);
+        if ($name === "authorization" || $name === "proxy-authorization" || $name === "cookie") {
+            if (!\in_array($name, $keep, true)) {
+                continue;
+            }
+        }
+        $filtered[] = $header;
+    }
+    return $filtered;
+}
+
+function __elephc_soap_resolve_url(string $base, string $relative): string
+{
+    if (\strpos($relative, "http://") === 0 || \strpos($relative, "https://") === 0) {
+        return $relative;
+    }
+    $parts = \parse_url($base);
+    if (!\is_array($parts) || !isset($parts["host"])) {
+        return $relative;
+    }
+    $scheme = (string) ($parts["scheme"] ?? "http");
+    $host = (string) $parts["host"];
+    $port = isset($parts["port"]) ? ":" . (string) $parts["port"] : "";
+    if (\substr($relative, 0, 1) === "/") {
+        return $scheme . "://" . $host . $port . $relative;
+    }
+    $path = (string) ($parts["path"] ?? "/");
+    $slash = \strrpos($path, "/");
+    $directory = $slash === false ? "/" : \substr($path, 0, $slash + 1);
+    return $scheme . "://" . $host . $port . $directory . $relative;
+}
+
+function __elephc_soap_attributes(string $tag): array
+{
+    $attributes = [];
+    $length = \strlen($tag);
+    $i = 0;
+    while ($i < $length) {
+        while ($i < $length) {
+            $char = \substr($tag, $i, 1);
+            if ($char !== " " && $char !== "\t" && $char !== "\r" && $char !== "\n") {
+                break;
+            }
+            $i++;
+        }
+        $name_start = $i;
+        while ($i < $length) {
+            $char = \substr($tag, $i, 1);
+            if ($char === "=" || $char === " " || $char === "\t" || $char === "\r" || $char === "\n" || $char === "/" || $char === ">") {
+                break;
+            }
+            $i++;
+        }
+        if ($i === $name_start) {
+            $i++;
+            continue;
+        }
+        $name = \substr($tag, $name_start, $i - $name_start);
+        while ($i < $length && \substr($tag, $i, 1) === " ") {
+            $i++;
+        }
+        if ($i >= $length || \substr($tag, $i, 1) !== "=") {
+            continue;
+        }
+        $i++;
+        while ($i < $length) {
+            $char = \substr($tag, $i, 1);
+            if ($char !== " " && $char !== "\t" && $char !== "\r" && $char !== "\n") {
+                break;
+            }
+            $i++;
+        }
+        if ($i >= $length) {
+            break;
+        }
+        $quote = \substr($tag, $i, 1);
+        if ($quote !== "\"" && $quote !== "'") {
+            continue;
+        }
+        $i++;
+        $value_end = \strpos($tag, $quote, $i);
+        if ($value_end === false) {
+            break;
+        }
+        $attributes[$name] = \substr($tag, $i, $value_end - $i);
+        $i = $value_end + 1;
+    }
+    return $attributes;
+}
+
+function __elephc_soap_scan_wsdl(string $xml): array
+{
+    $imports = [];
+    $address = "";
+    $target = "";
+    $position = 0;
+    $length = \strlen($xml);
+    while ($position < $length) {
+        $start = \strpos($xml, "<", $position);
+        if ($start === false) {
+            break;
+        }
+        if (\substr($xml, $start, 4) === "<!--") {
+            $comment_end = \strpos($xml, "-->", $start);
+            $position = $comment_end === false ? $length : $comment_end + 3;
+            continue;
+        }
+        if (\substr($xml, $start, 2) === "<?") {
+            $declaration_end = \strpos($xml, "?>", $start);
+            $position = $declaration_end === false ? $length : $declaration_end + 2;
+            continue;
+        }
+        if (\substr($xml, $start, 2) === "</") {
+            $position = $start + 2;
+            continue;
+        }
+        $tag_end = \strpos($xml, ">", $start);
+        if ($tag_end === false) {
+            break;
+        }
+        $tag = \substr($xml, $start + 1, $tag_end - $start - 1);
+        if (\substr($tag, -1) === "/") {
+            $tag = \substr($tag, 0, -1);
+        }
+        $space = \strpos($tag, " ");
+        $name = $space === false ? $tag : \substr($tag, 0, $space);
+        $local = __elephc_soap_local($name);
+        $attributes = __elephc_soap_attributes($tag);
+        if ($local === "import" || $local === "include") {
+            if (isset($attributes["location"])) {
+                $imports[] = $attributes["location"];
+            }
+            if (isset($attributes["schemaLocation"])) {
+                $imports[] = $attributes["schemaLocation"];
+            }
+        }
+        if ($local === "address" && $address === "" && isset($attributes["location"])) {
+            $address = $attributes["location"];
+        }
+        if ($local === "definitions" && $target === "" && isset($attributes["targetNamespace"])) {
+            $target = $attributes["targetNamespace"];
+        }
+        $position = $tag_end + 1;
+    }
+    return ["imports" => $imports, "address" => $address, "target" => $target];
+}
+
+function __elephc_soap_fetch_wsdl(string $url, array $headers, array $keep, string $origin, int $timeout, int $depth): array
+{
+    if ($depth > 5) {
+        return ["imports" => [], "address" => "", "target" => ""];
+    }
+    $same = __elephc_soap_same_origin($url, $origin);
+    $send = __elephc_soap_filter_headers($headers, $keep, $same);
+    $xml = __elephc_soap_http_request("GET", $url, "", $send, $timeout);
+    $scan = __elephc_soap_scan_wsdl($xml);
+    $address = (string) ($scan["address"] ?? "");
+    $target = (string) ($scan["target"] ?? "");
+    foreach ($scan["imports"] as $import) {
+        $resolved = __elephc_soap_resolve_url($url, (string) $import);
+        $child = __elephc_soap_fetch_wsdl($resolved, $headers, $keep, $origin, $timeout, $depth + 1);
+        if ($address === "" && ($child["address"] ?? "") !== "") {
+            $address = (string) $child["address"];
+        }
+        if ($target === "" && ($child["target"] ?? "") !== "") {
+            $target = (string) $child["target"];
+        }
+    }
+    return ["imports" => $scan["imports"], "address" => $address, "target" => $target];
+}
+
+function __elephc_soap_http_request(string $method, string $location, string $payload, array $headers, int $timeout): string
 {
     $parts = \parse_url($location);
     if (!\is_array($parts) || !isset($parts["host"])) {
@@ -429,11 +673,13 @@ function __elephc_soap_http_post(string $location, string $payload, array $heade
         throw new \SoapFault("HTTP", "Could not connect to SOAP server");
     }
     @\stream_set_timeout($socket, $timeout);
-    $head = "POST " . $path . " HTTP/1.1\r\n"
+    $head = $method . " " . $path . " HTTP/1.1\r\n"
         . "Host: " . $host . "\r\n"
-        . "Content-Length: " . \strlen($payload) . "\r\n"
-        . "Connection: close\r\n"
-        . \implode("\r\n", $headers) . "\r\n\r\n";
+        . "Connection: close\r\n";
+    if ($payload !== "") {
+        $head .= "Content-Length: " . \strlen($payload) . "\r\n";
+    }
+    $head .= \implode("\r\n", $headers) . "\r\n\r\n";
     if (@\fwrite($socket, $head . $payload) === false) {
         \fclose($socket);
         throw new \SoapFault("HTTP", "Could not send the SOAP request");

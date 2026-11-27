@@ -14,29 +14,13 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use crate::support::*;
 
-/// Accepts one loopback connection, failing the fixture after five seconds.
-fn accept_with_timeout(listener: &TcpListener) -> std::net::TcpStream {
-    listener.set_nonblocking(true).expect("nonblocking listener");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                stream.set_nonblocking(false).expect("blocking stream");
-                return stream;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    panic!("SOAP fixture timed out waiting for a request");
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => panic!("accept SOAP request: {error}"),
-        }
-    }
+/// Accepts one loopback connection.
+fn accept_connection(listener: &TcpListener) -> std::net::TcpStream {
+    let (stream, _) = listener.accept().expect("accept SOAP request");
+    stream
 }
 
 /// Reads one HTTP request from `stream`.
@@ -71,12 +55,12 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
 /// A WSDL-less SOAP call exercises the PHP prelude and HTTP transport.
 #[test]
 fn test_soap_client_wsdl_less_keep_headers() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind SOAP fixture");
+    let listener = TcpListener::bind(("0.0.0.0", 0)).expect("bind SOAP fixture");
     let port = listener.local_addr().unwrap().port();
     let captured = Arc::new(Mutex::new(String::new()));
     let server_capture = Arc::clone(&captured);
     let worker = thread::spawn(move || {
-        let mut stream = accept_with_timeout(&listener);
+        let mut stream = accept_connection(&listener);
         let request = read_request(&mut stream);
         *server_capture.lock().unwrap() = request;
         let body = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -123,10 +107,10 @@ echo strpos($client->__getLastResponse(), "AddResponse") !== false ? "response" 
 /// A SOAP Fault becomes a `SoapFault` with its code and message.
 #[test]
 fn test_soap_fault_response() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind SOAP fault fixture");
+    let listener = TcpListener::bind(("0.0.0.0", 0)).expect("bind SOAP fault fixture");
     let port = listener.local_addr().unwrap().port();
     let worker = thread::spawn(move || {
-        let mut stream = accept_with_timeout(&listener);
+        let mut stream = accept_connection(&listener);
         let _ = read_request(&mut stream);
         let body = r#"<?xml version="1.0"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
@@ -158,4 +142,101 @@ try {
     let out = compile_and_run(&source);
     worker.join().expect("SOAP fault fixture thread");
     assert_eq!(out, "SOAP-ENV:Server:boom\n");
+}
+
+/// Serves one HTTP response and records the request.
+fn serve_once(
+    listener: TcpListener,
+    body: String,
+    captured: Arc<Mutex<String>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut stream = accept_connection(&listener);
+        let request = read_request(&mut stream);
+        *captured.lock().unwrap() = request;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/xml; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).expect("write WSDL response");
+    })
+}
+
+/// Builds the original and imported WSDL bodies for a cross-host import.
+fn wsdl_pair(import_port: u16, original_port: u16) -> (String, String) {
+    let original = format!(
+        r#"<?xml version="1.0"?>
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  targetNamespace="urn:elephc">
+  <wsdl:import namespace="urn:imported" location="http://127.0.0.1:{import_port}/imported.wsdl"/>
+  <wsdl:service name="Elephc"><wsdl:port name="Port" binding="tns:Binding">
+    <soap:address location="http://127.0.0.1:{original_port}/soap"/>
+  </wsdl:port></wsdl:service>
+</wsdl:definitions>"#
+    );
+    let imported = r#"<?xml version="1.0"?>
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+  targetNamespace="urn:imported"/>"#
+        .to_string();
+    (original, imported)
+}
+
+/// Runs a WSDL-mode constructor with Cookie/Proxy-Authorization context headers.
+fn run_wsdl_import(keep_headers: &str) -> (String, String, String) {
+    let original_listener = TcpListener::bind(("0.0.0.0", 0)).expect("bind original WSDL");
+    let imported_listener = TcpListener::bind(("0.0.0.0", 0)).expect("bind imported WSDL");
+    let original_port = original_listener.local_addr().unwrap().port();
+    let imported_port = imported_listener.local_addr().unwrap().port();
+    let (original_body, imported_body) = wsdl_pair(imported_port, original_port);
+    let original_request = Arc::new(Mutex::new(String::new()));
+    let imported_request = Arc::new(Mutex::new(String::new()));
+    let original_worker = serve_once(
+        original_listener,
+        original_body,
+        Arc::clone(&original_request),
+    );
+    let imported_worker = serve_once(
+        imported_listener,
+        imported_body,
+        Arc::clone(&imported_request),
+    );
+
+    let source = r#"<?php
+$client = new SoapClient("http://127.0.0.1:__ORIGINAL_PORT__/wsdl", [
+    "login" => "user",
+    "password" => "pass",
+    "keep_headers" => __KEEP__,
+]);
+echo "ok\n";
+"#
+    .replace("__ORIGINAL_PORT__", &original_port.to_string())
+    .replace("__KEEP__", keep_headers);
+
+    let out = compile_and_run(&source);
+    original_worker.join().expect("original WSDL thread");
+    imported_worker.join().expect("imported WSDL thread");
+    let original = original_request.lock().unwrap().clone();
+    let imported = imported_request.lock().unwrap().clone();
+    (out, original, imported)
+}
+
+/// Cross-host WSDL imports redact Authorization, Cookie and Proxy-Authorization.
+#[test]
+fn test_soap_wsdl_import_redacts_sensitive_headers() {
+    let (out, original, imported) = run_wsdl_import("[]");
+    assert_eq!(out, "ok\n");
+    assert!(original.contains("Authorization: Basic dXNlcjpwYXNz"), "{original}");
+    assert!(!imported.contains("Authorization:"), "{imported}");
+}
+
+/// keep_headers restores Authorization and Cookie on cross-host imports but not
+/// Proxy-Authorization.
+#[test]
+fn test_soap_wsdl_import_keep_headers() {
+    let (out, original, imported) = run_wsdl_import("[\"authorization\"]");
+    assert_eq!(out, "ok\n");
+    assert!(original.contains("Authorization: Basic dXNlcjpwYXNz"), "{original}");
+    assert!(imported.contains("Authorization: Basic dXNlcjpwYXNz"), "{imported}");
 }

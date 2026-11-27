@@ -1,14 +1,16 @@
 ---
 title: "SOAP"
-description: "PHP's ext/soap client surface in elephc: WSDL-less SoapClient calls, SoapFault, and the PHP 8.6 keep_headers option."
+description: "PHP's ext/soap client surface in elephc: WSDL and WSDL-less SoapClient calls, WSDL imports, SoapFault, and the PHP 8.6 keep_headers option."
 sidebar:
   order: 26
 ---
 
-elephc implements the first `ext/soap` client slice as a PHP prelude. It is
-WSDL-less: calls use the `location` and `uri` constructor options and post a
-SOAP 1.1 envelope over a TCP/TLS socket, so no libxml2 or native SOAP library is
-required.
+elephc implements the `ext/soap` client as a PHP prelude. It supports both
+WSDL-less calls (using the `location` and `uri` options) and WSDL mode, where
+the client fetches the document, follows `wsdl:import`/`wsdl:include` and
+`xsd:import`/`xsd:include` locations, and uses the first `soap:address` it finds
+as the service endpoint. Everything is posted as a SOAP 1.1 envelope over a
+TCP/TLS socket, so no libxml2 or native SOAP library is required.
 
 ## Delivered surface
 
@@ -17,33 +19,39 @@ required.
 | Classes | `SoapClient`, `SoapFault`, `SoapHeader`, `SoapVar`, `SoapParam` |
 | Calls | `__soapCall()`, `__call()` |
 | Introspection | `__getFunctions()`, `__getTypes()`, `__getLastRequest()`, `__getLastResponse()`, `__setLocation()`, `__setSoapHeaders()` |
-| Options | `location`, `uri`, `style`, `use`, `login`, `password`, `connection_timeout`, `trace`, `exceptions`, `user_agent`, `keep_headers` |
-| Transport | `http://` and `tls://`, HTTP Basic authentication, request/response tracing |
+| Options | `location`, `uri`, `style`, `use`, `login`, `password`, `connection_timeout`, `trace`, `exceptions`, `user_agent`, `stream_context`, `keep_headers` |
+| WSDL | WSDL 1.1 documents, recursive imports/includes, endpoint and target-namespace discovery |
+| Transport | `http://` and `https://`/`tls://`, HTTP Basic authentication, request/response tracing |
 | Constants | `SOAP_1_1`, `SOAP_1_2`, `SOAP_RPC`, `SOAP_DOCUMENT`, `SOAP_ENCODED`, `SOAP_LITERAL`, actor constants |
 
-`keep_headers` is validated and stored as a lowercase header-name list. PHP
-8.6 applies it when importing a WSDL from a different host; WSDL imports are
-not implemented yet, so in the WSDL-less client the option has no request
-effect.
+In WSDL mode the `location` and `uri` options override the discovered endpoint
+and target namespace. WSDL fetches send the `stream_context` HTTP headers,
+`User-Agent`, and Basic `Authorization` credentials.
+
+`keep_headers` is validated and stored as a lowercase header-name list. PHP 8.6
+applies it when a WSDL import or include points at a different origin than the
+original WSDL. On a cross-origin fetch, elephc omits `Authorization`,
+`Proxy-Authorization`, and `Cookie` unless the lowercase name is listed in
+`keep_headers`. Same-origin imports receive every header.
 
 ```php
-$client = new SoapClient(null, [
-    "location" => "http://127.0.0.1:8080/soap",
-    "uri" => "urn:example",
+$client = new SoapClient("https://example.test/service.wsdl", [
+    "login" => "user",
+    "password" => "secret",
     "trace" => true,
+    "keep_headers" => ["authorization"],
 ]);
 $result = $client->__soapCall("Add", [["a" => 2, "b" => 3]]);
 ```
 
 ## Deferred surface
 
-- WSDL parsing and imports, including the PHP 8.6 cross-host `keep_headers`
-  redaction behavior.
 - SOAP 1.2 envelopes, encoded arrays/objects (`SOAP_ENCODED`), MTOM and
   attachments.
-- Persistent cookies, `__getCookies()` population, `__setCookie()` behavior,
-  and `__getFunctions()`/`__getTypes()` metadata.
-- `SoapServer`.
+- WSDL `binding`/`port` operation metadata in `__getFunctions()` and
+  `__getTypes()`; those methods currently return empty arrays.
+- Persistent cookies, `__getCookies()` population, and `__setCookie()` behavior.
+- `SoapServer`, including its WSDL mode.
 
 Calling an undeclared member fails at compile time rather than pretending to
 work.
