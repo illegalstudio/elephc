@@ -2669,10 +2669,10 @@ fn lower_omitted_defaults_and_tail(
     capture_values: bool,
 ) {
     for idx in fixed_arg_count..regular_param_count {
-        let Some(Some(default)) = sig.defaults.get(idx) else {
+        let Some(default) = sig.default_value(idx) else {
             break;
         };
-        let value = lower_arg_with_signature(ctx, sig, idx, default);
+        let value = lower_arg_with_signature(ctx, sig, idx, &default);
         // A later default can still throw (`array $l = [], int $n = 1 % 0`): root this one.
         let later_throws = sig.defaults.iter().take(regular_param_count).skip(idx + 1)
             .flatten().any(|later| !default_is_inert(later));
