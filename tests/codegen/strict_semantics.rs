@@ -25,6 +25,34 @@ echo implode(',', array_keys($items)), ':', implode(',', $items);
     assert_eq!(fixture.run(&["--strict-array-keys"]), "2,0,1:9,7,8");
 }
 
+/// A concrete array's reference write guards the original dynamic key before publishing.
+#[test]
+fn test_strict_array_reference_assignment_guards_dynamic_key() {
+    let source = r#"<?php
+function refKey(bool $take): mixed { return $take ? true : 'safe'; }
+$value = 7;
+$items = ['safe' => 1];
+try {
+    $items[refKey($argc > 0)] = &$value;
+    echo 'accepted';
+} catch (TypeError $error) {
+    echo 'refused';
+}
+echo ':', count($items), ':', $items['safe'];
+$items[refKey($argc < 0)] = &$value;
+$value = 9;
+echo ':', $items['safe'];
+"#;
+    let fixture = StrictFixture::new(source);
+    assert_eq!(fixture.run(&[]), "accepted:2:1:9");
+    for ir_opt in ["--ir-opt=on", "--ir-opt=off"] {
+        let output = fixture.capture(&["--strict-array-keys", "--heap-debug", ir_opt]);
+        assert_eq!(output.stdout, b"refused:1:1:9");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    }
+}
+
 /// Keeps the process arguments visible before strict source validation folds the program.
 #[test]
 fn test_strict_array_keys_accepts_cli_argv_and_argc() {

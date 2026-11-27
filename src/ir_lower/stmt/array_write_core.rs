@@ -378,7 +378,15 @@ fn lower_concrete_array_reference_bind(
         Op::LoadLocalRefCellPtr.default_effects(),
         Some(span),
     );
-    let (index_value, (), index_pins) = lower_write_key_then(ctx, index, |_| ());
+    let mut pending = [array_value];
+    let ((index_value, (), mut key_pins), mut index_pins) =
+        crate::ir_lower::expr::lower_with_pending_owners(ctx, &mut pending, span,
+            |ctx| lower_write_key_then(ctx, index, |_| ()));
+    let array_value = pending[0];
+    index_pins.append(&mut key_pins);
+    crate::ir_lower::array_key_guards::for_write(
+        ctx, array_value, index_value, cell, &index_pins, index.span,
+    );
     // The key expression may have bound the destination. Publish the fresh container only
     // after the key ran, and re-read the slot when the key could have replaced it.
     let array_value = match auto_viv {
