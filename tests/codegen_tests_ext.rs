@@ -53,6 +53,7 @@ mod codegen {
     mod xml;
     mod sodium;
     mod snmp;
+    mod soap;
     mod zip;
     mod tokenizer;
     mod calendar;

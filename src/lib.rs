@@ -124,6 +124,7 @@ pub(crate) mod pack_prelude;
 pub mod zip_prelude;
 pub mod sodium_prelude;
 pub mod snmp_prelude;
+pub mod soap_prelude;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
 /// mysqli (MySQL / MariaDB over the elephc_pdo bridge) prelude injection.
