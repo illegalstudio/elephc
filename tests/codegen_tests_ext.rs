@@ -51,6 +51,7 @@ mod codegen {
     mod pcntl;
     mod posix;
     mod xml;
+    mod sodium;
     mod zip;
     mod tokenizer;
     mod calendar;

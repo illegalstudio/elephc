@@ -1,0 +1,16 @@
+[package]
+name = "elephc-sodium"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust ext/sodium bridge for elephc"
+license = "MIT"
+publish = false
+
+# Built as a C-callable staticlib for compiled programs that use sodium_*,
+# and as an rlib so the AEAD wrappers are unit-testable.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+crypto_secretbox = { version = "0.1.1", default-features = false, features = ["std", "salsa20"] }
+keccak = "0.1.6"

@@ -151,6 +151,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         },
     },
     BridgeStaticlib {
+        lib_name: "elephc_sodium",
+        env_var: "ELEPHC_SODIUM_LIB_DIR",
+        crate_name: "elephc-sodium",
+        flag_name: "sodium",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The pure-Rust bridge implements PHP's ext/sodium surface.
+        php_extensions: &["sodium"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_crypto",
         env_var: "ELEPHC_CRYPTO_LIB_DIR",
         crate_name: "elephc-crypto",

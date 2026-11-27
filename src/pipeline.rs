@@ -656,6 +656,11 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("zip"),
         &mut prelude_inventory,
     );
+    let ast = crate::sodium_prelude::inject_if_used(
+        ast,
+        with_crates.contains("sodium"),
+        &mut prelude_inventory,
+    );
     let ast = crate::clamp_prelude::inject_if_used(ast, autoloaded("clamp"), &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(
         ast,

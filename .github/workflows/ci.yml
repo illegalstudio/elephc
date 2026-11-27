@@ -36,6 +36,7 @@ env:
   BRIDGE_CRATES: >-
     -p elephc-tls
     -p elephc-tls-openssl
+    -p elephc-sodium
     -p elephc-pdo
     -p elephc-zip
     -p elephc-crypto
