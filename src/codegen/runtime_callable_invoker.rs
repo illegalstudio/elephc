@@ -48,7 +48,7 @@ pub(in crate::codegen) use scalar_param_args::InvokerScalarGuards;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
 
-use elephc_memoir::values::throwable_storage;
+use elephc_memoir::{hash_layout::{self, EntryField}, values::throwable_storage};
 use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use public_args::InvokerParamShape;
 
@@ -2545,12 +2545,13 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x4, #40]");                           // inspect the original entry before __rt_hash_get dereferencing
+            hash_layout::emit_load_entry_field(emitter, "x9", "x4", EntryField::ValueTag);
             emitter.instruction("cmp x9, #11");                                 // a PHP reference owns a shared writable cell
             emitter.instruction(&format!("b.eq {entry_reference_label}"));      // forward that cell to the by-reference callee
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // inspect the original entry before __rt_hash_get dereferencing
+            hash_layout::emit_load_entry_field(emitter, "r9", "r8", EntryField::ValueTag);
+            emitter.instruction("cmp r9, 11");                                  // a PHP reference owns a shared writable cell
             emitter.instruction(&format!("je {entry_reference_label}"));        // forward that cell to the by-reference callee
         }
     }
@@ -2572,8 +2573,8 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&entry_reference_label);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("ldr x1, [x4, #24]"),              // load the managed reference from its hash entry
-        Arch::X86_64 => emitter.instruction("mov rdi, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
+        Arch::AArch64 => hash_layout::emit_load_entry_field(emitter, "x1", "x4", EntryField::ValueLow),
+        Arch::X86_64 => hash_layout::emit_load_entry_field(emitter, "rdi", "r8", EntryField::ValueLow),
     }
     abi::emit_load_int_immediate(emitter, raw_hi_reg, 7);                       // hash reference cells own one boxed Mixed payload
     push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);

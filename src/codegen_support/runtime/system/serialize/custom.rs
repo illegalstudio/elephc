@@ -15,8 +15,7 @@ use elephc_memoir::{FrameOffset, strings::scoped_stream::StreamScope};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::SerializableReturnAbi;
 
-const OUTPUT_STREAM: StreamScope<'static> = StreamScope {
-    active: super::stream::ACTIVE_STREAM,
+const OUTPUT_STREAM: StreamScope = StreamScope {
     saved: FrameOffset::new(80),
 };
 

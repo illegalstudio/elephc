@@ -41,6 +41,7 @@ use crate::codegen_support::sentinels::{
     emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// Byte width of one `_class_prop_desc_*` property row.
 const PROP_DESC_ROW_BYTES: u64 = 48;
@@ -67,7 +68,7 @@ pub fn emit_obj_prop_count(emitter: &mut Emitter) {
             emitter.instruction("ldr x11, [x11, x9, lsl #3]");                  // load this class's property descriptor
             emitter.instruction("ldr x12, [x11]");                              // the row count sits at descriptor offset 0
             emit_load_dump_dyn_hash(emitter, "x0", "x9", "x13", "x10", "__rt_obj_prop_count_rows");
-            emitter.instruction("ldr x13, [x13]");                              // load the dynamic-property hash entry count
+            hash_layout::emit_load_header_field(emitter, "x13", "x13", HeaderField::Count);
             emitter.instruction("add x12, x12, x13");                           // dynamic properties follow the declared rows
             emitter.label("__rt_obj_prop_count_rows");
             emitter.instruction("mov x0, x12");                                 // return declared rows plus dynamic entries
@@ -88,7 +89,8 @@ pub fn emit_obj_prop_count(emitter: &mut Emitter) {
             emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");           // load this class's property descriptor
             emitter.instruction("mov rax, QWORD PTR [r11]");                    // the row count sits at descriptor offset 0
             emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_obj_prop_count_rows_x86");
-            emitter.instruction("add rax, QWORD PTR [r10]");                    // dynamic properties follow the declared rows
+            hash_layout::emit_load_header_field(emitter, "r11", "r10", HeaderField::Count);
+            emitter.instruction("add rax, r11");                                // dynamic properties follow the declared rows
             emitter.label("__rt_obj_prop_count_rows_x86");
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_count_none_x86");

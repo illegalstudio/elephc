@@ -18,6 +18,7 @@ use elephc_memoir::values::hash_payload::HashPayloadSlots;
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::hash_layout::{EntryField, HeaderField};
 
 /// Emits `__rt_hash_spread` and `__rt_hash_project_spread` for the active target.
 ///
@@ -75,22 +76,21 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #72]");                                   // save the selected key transformation mode
 
     // -- derive the starting next integer key by scanning the destination for its largest integer key --
-    emitter.instruction("ldr x5, [x0, #8]");                                    // load the destination hash capacity as the scan bound
+    hash_layout::emit_load_header_field(emitter, "x5", "x0", HeaderField::Capacity);
     emitter.instruction("mov x6, #0");                                          // initialize the slot cursor
     emitter.instruction("mov x7, #0");                                          // track whether any integer key has been observed
     emitter.instruction("mov x8, #0");                                          // initialize the maximum integer key placeholder
     emitter.label("__rt_hash_spread_key_scan");
     emitter.instruction("cmp x6, x5");                                          // has every destination slot been inspected?
     emitter.instruction("b.ge __rt_hash_spread_key_scan_done");                 // finish scanning once the cursor reaches capacity
-    emitter.instruction("mov x9, #64");                                         // x9 = hash entry size in bytes
     hash_layout::emit_entry_address(emitter, "x10", "x0", "x6");
-    emitter.instruction("ldr x11, [x10]");                                      // load the occupied marker for this slot
+    hash_layout::emit_load_entry_field(emitter, "x11", "x10", EntryField::Occupied);
     emitter.instruction("cmp x11, #1");                                         // is this slot a live entry?
     emitter.instruction("b.ne __rt_hash_spread_key_scan_next");                 // ignore empty or tombstone slots while deriving the next key
-    emitter.instruction("ldr x11, [x10, #16]");                                 // load the normalized key length or integer sentinel
+    hash_layout::emit_load_entry_field(emitter, "x11", "x10", EntryField::KeyHigh);
     emitter.instruction("cmn x11, #1");                                         // check whether the key length is the integer-key sentinel
     emitter.instruction("b.ne __rt_hash_spread_key_scan_next");                 // string keys do not affect PHP's next automatic integer key
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored integer key payload
+    hash_layout::emit_load_entry_field(emitter, "x12", "x10", EntryField::KeyLow);
     emitter.instruction("cbz x7, __rt_hash_spread_key_scan_take");              // the first integer key seeds the maximum tracker
     emitter.instruction("cmp x12, x8");                                         // compare the candidate key against the current maximum
     emitter.instruction("b.le __rt_hash_spread_key_scan_next");                 // keep scanning if the candidate key is not larger
@@ -243,7 +243,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
 
     // -- derive the starting next integer key by scanning the destination for its largest integer key --
     emitter.instruction("mov r10, rdi");                                        // keep the destination hash pointer stable across the scan
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the destination hash capacity as the scan bound
+    hash_layout::emit_load_header_field(emitter, "r11", "r10", HeaderField::Capacity);
     emitter.instruction("xor r8d, r8d");                                        // initialize the slot cursor
     emitter.instruction("xor r9d, r9d");                                        // track whether any integer key has been observed
     emitter.instruction("xor eax, eax");                                        // initialize the maximum integer key placeholder
@@ -251,11 +251,13 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, r11");                                         // has every destination slot been inspected?
     emitter.instruction("jge __rt_hash_spread_x86_key_scan_done");              // finish scanning once the cursor reaches capacity
     hash_layout::emit_entry_address(emitter, "rcx", "r10", "r8");
-    emitter.instruction("cmp QWORD PTR [rcx], 1");                              // is this slot a live entry?
+    hash_layout::emit_load_entry_field(emitter, "rax", "rcx", EntryField::Occupied);
+    emitter.instruction("cmp rax, 1");                                          // is this slot a live entry?
     emitter.instruction("jne __rt_hash_spread_x86_key_scan_next");              // ignore empty or tombstone slots while deriving the next key
-    emitter.instruction("cmp QWORD PTR [rcx + 16], -1");                        // is the normalized key an integer key?
+    hash_layout::emit_load_entry_field(emitter, "rax", "rcx", EntryField::KeyHigh);
+    emitter.instruction("cmp rax, -1");                                         // is the normalized key an integer key?
     emitter.instruction("jne __rt_hash_spread_x86_key_scan_next");              // string keys do not affect PHP's next automatic integer key
-    emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // load the stored integer key payload
+    hash_layout::emit_load_entry_field(emitter, "rdx", "rcx", EntryField::KeyLow);
     emitter.instruction("test r9, r9");                                         // has any integer key seeded the maximum tracker?
     emitter.instruction("je __rt_hash_spread_x86_key_scan_take");               // the first integer key becomes the current maximum
     emitter.instruction("cmp rdx, rax");                                        // compare the candidate key against the current maximum

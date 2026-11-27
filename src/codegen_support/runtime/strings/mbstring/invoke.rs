@@ -11,6 +11,7 @@
 //! - Results use the existing native value/status/length/kind convention without unwinding.
 
 use super::*;
+use elephc_memoir::buffers::output::{self, ControlField};
 
 #[cfg(test)]
 #[path = "invoke/tests.rs"]
@@ -191,14 +192,18 @@ fn response_host(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
         abi::emit_load_int_immediate(emitter, "x9", (32_i64 << 32) | 1);
         emitter.instruction("str x9, [sp, #96]");                               // publish version one and the complete response host size
-        for (offset, symbol) in [(104, "_ob_in_handler"), (112, info.as_str()), (120, "__rt_mbstring_output_header")] {
+        output::emit_control_address(emitter, "x9", ControlField::InHandler);
+        emitter.instruction("str x9, [sp, #104]");                              // retain the live handler flag
+        for (offset, symbol) in [(112, info.as_str()), (120, "__rt_mbstring_output_header")] {
             abi::emit_symbol_address(emitter, "x9", symbol);
             emitter.instruction(&format!("str x9, [sp, #{offset}]"));           // retain the live handler flag and protected response callbacks
         }
     } else {
         abi::emit_load_int_immediate(emitter, "r10", (32_i64 << 32) | 1);
         emitter.instruction("mov QWORD PTR [rsp + 96], r10");                   // publish version one and the complete response host size
-        for (offset, symbol) in [(104, "_ob_in_handler"), (112, info.as_str()), (120, "__rt_mbstring_output_header")] {
+        output::emit_control_address(emitter, "r10", ControlField::InHandler);
+        emitter.instruction("mov QWORD PTR [rsp + 104], r10");                  // retain the live handler flag
+        for (offset, symbol) in [(112, info.as_str()), (120, "__rt_mbstring_output_header")] {
             abi::emit_symbol_address(emitter, "r10", symbol);
             emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], r10")); // retain the live handler flag and protected response callbacks
         }

@@ -26,7 +26,10 @@
 //!   Raw static properties retain their old words until their initializers re-run.
 //!   Optional managed Mixed bindings detach their cell and restore the uninitialized marker.
 
-use elephc_memoir::arena_reset::{emit_gc_state_reset, emit_heap_arena_reset};
+use elephc_memoir::{
+    arena_reset::{emit_gc_state_reset, emit_heap_arena_reset},
+    buffers::output::{self, ControlField},
+};
 
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, StaticLocalRecord};
@@ -218,9 +221,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     }
     emit_heap_arena_reset(emitter);
     if module.web_application {
-        abi::emit_store_imm_to_symbol(emitter, "_gc_candidates_enabled", 0, 1);
-        abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), "__rt_web_candidate_roots");
-        abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_gc_candidate_root_scan_fn", 0);
+        elephc_memoir::gc_candidates::emit_enable_application(emitter, "__rt_web_candidate_roots");
     }
     abi::emit_call_label(emitter, "__rt_gc_request_start");
 
@@ -263,12 +264,8 @@ fn emit_root_rescan(
 fn emit_output_buffer_reset(emitter: &mut Emitter) {
     emitter.comment("discard output buffers left open by the previous request");
     elephc_memoir::buffers::output::emit_reset_depth(emitter);
-    for symbol in [
-        "_ob_in_handler",
-        "_ob_flushing",
-        "_ob_implicit_flush",
-    ] {
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    for field in [ControlField::InHandler, ControlField::Flushing, ControlField::ImplicitFlush] {
+        output::emit_clear_control(emitter, field);
     }
 }
 
@@ -293,9 +290,8 @@ fn emit_print_r_capture_reset(emitter: &mut Emitter) {
 /// reset that follows.
 fn emit_transient_pointer_reset(emitter: &mut Emitter) {
     emitter.comment("clear transient request-owned pointers abandoned by the previous request");
+    elephc_memoir::buffers::stream_context_owners::emit_clear_ambient_slots(emitter);
     for symbol in [
-        "_stream_context_options",
-        "_stream_notification_callback",
         "_exc_value",
         "_exc_handler_top",
         "_exc_call_frame_top",

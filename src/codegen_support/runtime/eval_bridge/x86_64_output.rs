@@ -9,6 +9,7 @@
 //! - String-byte views borrow string payloads while Rust copies them, avoiding allocating casts.
 
 use super::*;
+use elephc_memoir::buffers::output::{self, ControlField, SlotField};
 
 /// Emits x86_64 output-buffer, string-byte, and lifetime wrappers.
 pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
@@ -41,15 +42,15 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_ob_end_clean");                               // discard, pop, and free the top buffer
 
     label_c_global(emitter, "__elephc_eval_ob_contents");
-    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction("jz __elephc_eval_ob_contents_none_x86");               // no active buffer — report failure to Rust
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");       // materialize the buffer-pointer slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::Pointer);
     emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer base pointer
     emitter.instruction("mov QWORD PTR [rdi], rax");                            // store the buffer pointer through the caller's out_ptr
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_lens");       // materialize the used-bytes slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::Length);
     emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer's used byte count
     emitter.instruction("mov QWORD PTR [rsi], rax");                            // store the byte count through the caller's out_len
     emitter.instruction("mov eax, 1");                                          // report success to Rust
@@ -59,14 +60,14 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_ob_stats");
-    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("cmp rdi, r10");                                        // is the requested slot index within the stack?
     emitter.instruction("jae __elephc_eval_ob_stats_none_x86");                 // out-of-range (or negative) index — report failure
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_lens");       // materialize the used-bytes slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::Length);
     emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's used byte count
     emitter.instruction("mov QWORD PTR [rsi], rax");                            // store it through the caller's out_used
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_caps");       // materialize the capacity slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::Capacity);
     emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's capacity
     emitter.instruction("mov QWORD PTR [rdx], rax");                            // store it through the caller's out_size
     emitter.instruction("mov eax, 1");                                          // report success to Rust
@@ -76,7 +77,7 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_ob_implicit_flush");
-    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_implicit_flush"); // materialize the stored implicit-flush flag address
+    output::emit_control_address(emitter, "r9", ControlField::ImplicitFlush);
     emitter.instruction("mov QWORD PTR [r9], rdi");                             // store the (inert) implicit-flush flag
     emitter.instruction("ret");                                                 // return to Rust
 

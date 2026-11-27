@@ -9,9 +9,9 @@
 //! - Each protected step preserves previous exceptions while buffer depth and ownership are restored.
 //! - FINAL operations retire the buffer before the latest pending exception is rethrown.
 
-use elephc_memoir::buffers::output;
+use elephc_memoir::buffers::output::{self, ControlField, SlotField};
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 
 const SCOPE: Scope = Scope { arm: 48, x86: 16 };
@@ -35,20 +35,20 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // retain whether surviving bytes must be written
     emitter.instruction("stp xzr, xzr, [sp, #24]");                             // initialize replacement state without owned storage
     emitter.instruction("stp xzr, xzr, [sp, #40]");                             // initialize replacement length and pending exception
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_ob_in_handler", 0);
+    output::emit_load_control(emitter, "x9", ControlField::InHandler);
     emitter.instruction("str x9, [sp, #56]");                                   // preserve the caller's output guard
     emitter.instruction("mov x0, sp");                                          // pass the operation record through the unary boundary
     SCOPE.call_local(emitter, "__rt_ob_apply_request", true);
     emitter.instruction("ldr x10, [sp, #56]");                                  // recover the guard even when the callback escaped
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_in_handler", 0);
+    output::emit_store_control(emitter, "x10", ControlField::InHandler);
     emitter.instruction("ldr x10, [sp]");                                       // recover the processed slot
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");
+    output::emit_slot_field_address(emitter, "x11", SlotField::Flags);
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // retain permissions and earlier status bits
     emitter.instruction("orr x12, x12, #4096");                                 // record that this buffer has been started
     emitter.instruction("tbnz x12, #13, __rt_ob_process_status");               // disabled handlers stay disabled without further processing
     emitter.instruction("ldr x9, [sp, #48]");                                   // inspect whether the handler raised an exception
     emitter.instruction("cbnz x9, __rt_ob_process_disabled");                   // failed handlers subsequently pass bytes through
-    abi::emit_symbol_address(emitter, "x13", "_ob_handler_stubs");
+    output::emit_slot_field_address(emitter, "x13", SlotField::HandlerStub);
     emitter.instruction("ldr x9, [x13, x10, lsl #3]");                          // distinguish a user handler from the default buffer
     emitter.instruction("cbz x9, __rt_ob_process_processed");                   // the default handler processes bytes without a replacement
     emitter.instruction("ldr x9, [sp, #24]");                                   // inspect the user handler's replacement decision
@@ -62,12 +62,12 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x11, x10, lsl #3]");                         // publish actual handler state
     emitter.instruction("ldr x9, [sp, #16]");                                   // inspect whether this operation forwards surviving bytes
     emitter.instruction("cbz x9, __rt_ob_process_release");                     // clean operations discard the contents
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_level", 0);
+    output::emit_store_depth(emitter, "x10");
     emitter.instruction("mov x0, sp");                                          // pass raw or replacement bytes through the protected parent write
     SCOPE.call_local(emitter, "__rt_ob_write_request", true);
     emitter.instruction("ldr x10, [sp]");                                       // recover the child slot after a possible parent exception
     emitter.instruction("add x10, x10, #1");                                    // restore depth before retiring child ownership
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_level", 0);
+    output::emit_store_depth(emitter, "x10");
     emitter.label("__rt_ob_process_release");
     emitter.instruction("ldr x9, [sp, #24]");                                   // inspect replacement ownership
     emitter.instruction("cbz x9, __rt_ob_process_truncate");                    // pass-through results own no replacement
@@ -102,21 +102,21 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 32], 0");                         // initialize replacement bytes
     emitter.instruction("mov QWORD PTR [rsp + 40], 0");                         // initialize replacement length
     emitter.instruction("mov QWORD PTR [rsp + 48], 0");                         // begin with no pending exception
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_ob_in_handler", 0);
+    output::emit_load_control(emitter, "r9", ControlField::InHandler);
     emitter.instruction("mov QWORD PTR [rsp + 56], r9");                        // retain the incoming output guard
     emitter.instruction("mov rdi, rsp");                                        // pass writable request storage through the protected callback
     SCOPE.call_local(emitter, "__rt_ob_apply_request", true);
     emitter.instruction("mov r9, QWORD PTR [rsp + 56]");                        // recover the guard on successful and exceptional returns
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_ob_in_handler", 0);
+    output::emit_store_control(emitter, "r9", ControlField::InHandler);
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // recover the processed slot
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");
+    output::emit_slot_field_address(emitter, "r11", SlotField::Flags);
     emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // retain permissions and previous status
     emitter.instruction("or rdx, 4096");                                        // publish started state for user and default buffers
     emitter.instruction("test rdx, 8192");                                      // inspect whether a previous operation disabled this handler
     emitter.instruction("jnz __rt_ob_process_status");                          // leave disabled handlers unprocessed
     emitter.instruction("cmp QWORD PTR [rsp + 48], 0");                         // inspect this callback's pending failure
     emitter.instruction("jne __rt_ob_process_disabled");                        // thrown handlers become pass-through buffers
-    abi::emit_symbol_address(emitter, "r8", "_ob_handler_stubs");
+    output::emit_slot_field_address(emitter, "r8", SlotField::HandlerStub);
     emitter.instruction("cmp QWORD PTR [r8 + r10*8], 0");                       // distinguish the default handler
     emitter.instruction("je __rt_ob_process_processed");                        // default buffers successfully process raw bytes
     emitter.instruction("cmp QWORD PTR [rsp + 24], 0");                         // inspect a user handler's replacement decision
@@ -130,12 +130,12 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + r10*8], rdx");                    // publish final handler status
     emitter.instruction("cmp QWORD PTR [rsp + 16], 0");                         // inspect the requested output action
     emitter.instruction("je __rt_ob_process_release");                          // cleaning discards every surviving byte
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_level", 0);
+    output::emit_store_depth(emitter, "r10");
     emitter.instruction("mov rdi, rsp");                                        // pass the chosen bytes to the protected parent sink
     SCOPE.call_local(emitter, "__rt_ob_write_request", true);
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // restore the child depth even if its parent handler threw
     emitter.instruction("add r10, 1");                                          // include the still-owned child slot
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_level", 0);
+    output::emit_store_depth(emitter, "r10");
     emitter.label("__rt_ob_process_release");
     emitter.instruction("cmp QWORD PTR [rsp + 24], 0");                         // inspect replacement ownership
     emitter.instruction("je __rt_ob_process_truncate");                         // raw pass-through bytes remain buffer-owned

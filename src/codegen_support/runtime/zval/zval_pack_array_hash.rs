@@ -17,6 +17,7 @@
 //! - Emits both ARM64 and x86_64 variants gated on `emitter.target.arch`.
 
 use crate::codegen_support::emit::Emitter;
+use elephc_memoir::hash_layout::{self, HeaderField};
 use elephc_memoir::interop::zval::array_storage::{
     emit_array_backing,
     ArrayStorage, emit_adopt_child_words, emit_array_header, emit_retire_child_envelope,
@@ -44,7 +45,7 @@ pub fn emit_zval_pack_array_hash(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the elephc hash pointer
-    emitter.instruction("ldr x1, [x0]");                                        // count = hash header[0] (live entry count)
+    hash_layout::emit_load_header_field(emitter, "x1", "x0", HeaderField::Count);
     emitter.instruction("str x1, [sp, #8]");                                    // save the count (= nNumOfElements)
 
     emit_array_backing(emitter, ArrayStorage::Hash);
@@ -156,7 +157,7 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 112");                                        // reserve hash/count/nTableSize/nTableMask/base/arData/bucket_idx/cursor/key_lo/key_hi/zval/nIndex/h/key slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc hash pointer
-    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // count = hash header[0] (live entry count)
+    hash_layout::emit_load_header_field(emitter, "rcx", "rax", HeaderField::Count);
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the count (= nNumOfElements)
 
     emit_array_backing(emitter, ArrayStorage::Hash);

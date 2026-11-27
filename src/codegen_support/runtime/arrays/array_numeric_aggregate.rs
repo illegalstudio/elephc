@@ -10,9 +10,8 @@
 //! - PHP 8.3 warnings do not change the legacy fallback for strings and resources.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels};
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 144;
 const HANDLER: usize = FRAME - 16;
@@ -213,7 +212,7 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
             elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
             elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x9", "x9");
             emitter.instruction(&format!("cbnz x9, {generic}"));                // only int-shaped slots take the fast path
-            emitter.instruction("ldr x9, [x0, #16]");                           // load the element size
+            elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x9");
             emitter.instruction("cmp x9, #8");                                  // int slots are one 8-byte word
             emitter.instruction(&format!("b.ne {generic}"));                    // widened slots keep the generic fold
             emitter.instruction("ldr x2, [x0]");                                // exclusive end = array length
@@ -229,7 +228,7 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
             elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
             elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10d");
             emitter.instruction(&format!("jnz {generic}"));                     // only int-shaped slots take the fast path
-            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the element size
+            elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rax", "r10");
             emitter.instruction("cmp r10, 8");                                  // int slots are one 8-byte word
             emitter.instruction(&format!("jne {generic}"));                     // widened slots keep the generic fold
             emitter.instruction("mov rdi, rax");                                // pass the packed array
@@ -352,22 +351,16 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
 
 /// Installs a resumable owner boundary before allocation or warning dispatch.
 fn install_boundary(emitter: &mut Emitter, prefix: &str) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-    abi::store_at_offset(emitter, result, PREVIOUS);
-    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // preserve the snapshot and partial number when a warning handler throws
-    abi::emit_branch_if_int_result_nonzero(emitter, &format!("{prefix}_caught"));
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        &format!("{prefix}_caught"),
+    );
 }
 
 /// Restores the enclosing exception handler and diagnostic depth.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears one root without clobbering a loaded owner or exception-chain argument.

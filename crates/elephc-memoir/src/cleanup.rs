@@ -114,6 +114,7 @@ impl Scope {
 }
 
 mod callback;
+pub mod boundary;
 pub mod invoke;
 pub mod previous;
 

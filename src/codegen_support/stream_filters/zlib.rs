@@ -20,7 +20,7 @@
 //!   `zalloc`/`zfree` NULL so zlib uses its own allocator. The struct itself is
 //!   intentionally not freed on close — a small, documented v1 leak.
 
-use elephc_memoir::buffers::stream_state;
+use elephc_memoir::buffers::{stream_state, stream_tables};
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
@@ -170,7 +170,7 @@ pub(crate) fn emit_arm64(
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the z_stream pointer
     abi::emit_symbol_address(emitter, "x9", "_zstream_handles");
     emitter.instruction("str x10, [x9, x0, lsl #3]");                           // store the z_stream handle for this descriptor
-    abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "x9");
     emitter.instruction("mov w11, #4");                                         // write-filter id 4 = zlib.deflate
     emitter.instruction("strb w11, [x9, x0]");                                  // record the zlib write filter for this descriptor
 
@@ -330,7 +330,7 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer
     abi::emit_symbol_address(emitter, "r9", "_zstream_handles"); // z_stream handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], r10");                     // store the z_stream handle for this descriptor
-    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters"); // write-filter table base
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "r9");
     emitter.instruction("mov BYTE PTR [r9 + rdi], 4");                          // write-filter id 4 = zlib.deflate
 
     // -- publish the helper addresses so __rt_fwrite / fclose can call them --

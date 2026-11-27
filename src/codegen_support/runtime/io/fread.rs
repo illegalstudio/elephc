@@ -12,7 +12,7 @@
 //!   heap storage instead of running past the 64 KiB concat scratch into the stream-handle,
 //!   exception and heap globals that follow it in BSS.
 
-use elephc_memoir::buffers::stream_scratch;
+use elephc_memoir::buffers::{stream_scratch, stream_tables};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
@@ -68,7 +68,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_fread_dest_scratch");                        // non-positive requests write nothing, so keep the current scratch tail
     emitter.instruction("cmp x0, #256");                                        // only registered descriptors can carry a read filter
     emitter.instruction("b.hs __rt_fread_size_ready");                          // invalid or untracked descriptors use the raw read length
-    abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
+    stream_tables::READ_FILTERS.emit_address(emitter, "x9");
     emitter.instruction("ldrb w9, [x9, x0]");                                   // inspect the current read filter before reserving
     emitter.instruction("cmp w9, #6");                                          // is this the Base64 expansion filter?
     emitter.instruction("b.eq __rt_fread_expand_size");                         // reserve additional space for padded output
@@ -155,7 +155,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- apply an attached read filter to the bytes just read --
     emitter.instruction("cbz x2, __rt_fread_ret");                              // EOF and transient empty reads have no bucket to filter
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
+    stream_tables::READ_FILTERS.emit_address(emitter, "x9");
     emitter.instruction("ldrb w3, [x9, x0]");                                   // read filter id for this descriptor
     emitter.instruction("cbz w3, __rt_fread_ret");                              // skip when no read filter is attached
     emitter.instruction("cmp w3, #128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
@@ -205,7 +205,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_fread_dest_scratch_x86");                      // non-positive requests write nothing, so keep the current scratch tail
     emitter.instruction("cmp rdi, 256");                                        // only registered descriptors can carry a read filter
     emitter.instruction("jae __rt_fread_size_ready_x86");                       // invalid or untracked descriptors use the raw read length
-    abi::emit_symbol_address(emitter, "r10", "_stream_read_filters");
+    stream_tables::READ_FILTERS.emit_address(emitter, "r10");
     emitter.instruction("movzx ecx, BYTE PTR [r10 + rdi]");                     // inspect the current read filter before reserving
     emitter.instruction("cmp ecx, 6");                                          // is this the Base64 expansion filter?
     emitter.instruction("je __rt_fread_expand_size_x86");                       // reserve additional space for padded output
@@ -259,7 +259,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the reserved start pointer in the x86_64 elephc string-pointer result register
     emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed reads
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
-    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
+    stream_tables::READ_FILTERS.emit_address(emitter, "r11");
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor
     emitter.instruction("test rcx, rcx");                                       // is a read filter attached to this stream?
     emitter.instruction("jz __rt_fread_ret_x86");                               // skip when no read filter is attached

@@ -13,8 +13,9 @@
 use super::{ElephcEvalContext, EvalPcntlSignalHandler};
 use crate::errors::EvalStatus;
 use crate::value::RuntimeCellHandle;
+use elephc_memoir::runtime_leases::RuntimeAddressLeaseRegistry;
 use elephc_memoir::runtime_owners::RuntimeAddressOwner;
-use std::{cell::RefCell, collections::{HashMap, HashSet}};
+use std::{cell::RefCell, collections::HashMap};
 use std::sync::{Mutex, OnceLock};
 
 /// One process-global eval handler plus the context that owns its callable metadata.
@@ -91,11 +92,7 @@ impl Clone for EvalPcntlContextLease {
             return Self::for_live_dynamic_object(self.context);
         }
         let counted = if let Ok(mut state) = pcntl_runtime().lock() {
-            *state
-                .active_contexts
-                .entry(self.context as usize)
-                .or_default() += 1;
-            true
+            state.context_leases.try_acquire(self.context as usize)
         } else {
             false
         };
@@ -121,10 +118,10 @@ mod lease_tests {
         let address = context as usize;
         {
             let mut state = pcntl_runtime().lock().unwrap();
-            state.active_contexts.insert(address, 1);
+            assert!(state.context_leases.try_acquire(address));
         }
         assert!(unsafe { crate::ffi::context::__elephc_eval_context_free(context) }.is_null());
-        assert!(pcntl_runtime().lock().unwrap().detached_contexts.contains(&address));
+        assert!(pcntl_runtime().lock().unwrap().context_leases.is_detached(address));
         let lease = EvalPcntlContextLease { context, counted: true };
         let mut caller = ElephcEvalContext::new();
         assert_eq!(lease.clone().finish(&mut caller), Ok(()));
@@ -142,8 +139,8 @@ mod lease_tests {
         assert_eq!(retired, Some(thrown));
         assert!(caller.pcntl_foreign_callables.is_empty());
         let state = pcntl_runtime().lock().unwrap();
-        assert!(!state.active_contexts.contains_key(&address));
-        assert!(!state.detached_contexts.contains(&address));
+        assert!(!state.context_leases.is_active(address));
+        assert!(!state.context_leases.is_detached(address));
     }
 
     /// Copying a view owned by a dynamic object never makes it a counted signal-handler lease.
@@ -155,10 +152,10 @@ mod lease_tests {
         let copied = lease.clone();
         assert!(!lease.counted && !copied.counted);
         assert_eq!(copied.context_ptr(), pointer);
-        assert!(!pcntl_runtime().lock().unwrap().active_contexts.contains_key(&(pointer as usize)));
+        assert!(!pcntl_runtime().lock().unwrap().context_leases.is_active(pointer as usize));
         drop(copied);
         drop(lease);
-        assert!(!pcntl_runtime().lock().unwrap().active_contexts.contains_key(&(pointer as usize)));
+        assert!(!pcntl_runtime().lock().unwrap().context_leases.is_active(pointer as usize));
     }
 }
 
@@ -183,8 +180,7 @@ struct StoredSignalEntry {
 #[derive(Default)]
 struct PcntlRuntimeState {
     handlers: HashMap<i32, StoredSignalEntry>,
-    detached_contexts: HashSet<usize>,
-    active_contexts: HashMap<usize, usize>,
+    context_leases: RuntimeAddressLeaseRegistry,
     async_signals: bool,
     dispatching: bool,
     fiber_dispatching: bool,
@@ -210,7 +206,9 @@ pub(crate) fn begin_handler_dispatch(signal: i32) -> Option<EvalPcntlSignalEntry
     let context = stored.context;
     let entry = stored_to_borrowed_entry(stored)?;
     if context != 0 {
-        *state.active_contexts.entry(context).or_default() += 1;
+        if !state.context_leases.try_acquire(context) {
+            return None;
+        }
     }
     Some(entry)
 }
@@ -234,7 +232,9 @@ pub(crate) fn begin_callable_use(
                 && entry.context != current_context
         })?
         .context;
-    *state.active_contexts.entry(context).or_default() += 1;
+    if !state.context_leases.try_acquire(context) {
+        return None;
+    }
     Some(EvalPcntlContextLease {
         context: context as *mut ElephcEvalContext,
         counted: true,
@@ -291,14 +291,8 @@ pub(crate) fn defer_context_free(context: *mut ElephcEvalContext) -> bool {
     let Ok(mut state) = pcntl_runtime().lock() else {
         return false;
     };
-    if state.handlers.values().any(|entry| entry.context == context)
-        || state.active_contexts.contains_key(&context)
-    {
-        state.detached_contexts.insert(context);
-        true
-    } else {
-        false
-    }
+    let referenced = state.handlers.values().any(|entry| entry.context == context);
+    state.context_leases.defer_if_referenced(context, referenced)
 }
 
 /// Claims a detached context after replacement removed its last signal-handler reference.
@@ -310,12 +304,8 @@ pub(crate) fn take_collectable_context(context: *mut ElephcEvalContext) -> bool 
     let Ok(mut state) = pcntl_runtime().lock() else {
         return false;
     };
-    if state.handlers.values().any(|entry| entry.context == context)
-        || state.active_contexts.contains_key(&context)
-    {
-        return false;
-    }
-    state.detached_contexts.remove(&context)
+    let referenced = state.handlers.values().any(|entry| entry.context == context);
+    state.context_leases.take_if_unreferenced(context, referenced)
 }
 
 /// Unpins an invoked handler context and claims it when no registration still references it.
@@ -327,18 +317,8 @@ pub(crate) fn end_handler_dispatch(context: *mut ElephcEvalContext) -> bool {
     let Ok(mut state) = pcntl_runtime().lock() else {
         return false;
     };
-    let Some(active) = state.active_contexts.get_mut(&context) else {
-        return false;
-    };
-    if *active > 1 {
-        *active -= 1;
-        return false;
-    }
-    state.active_contexts.remove(&context);
-    if state.handlers.values().any(|entry| entry.context == context) {
-        return false;
-    }
-    state.detached_contexts.remove(&context)
+    let referenced = state.handlers.values().any(|entry| entry.context == context);
+    state.context_leases.release_and_take_if_unreferenced(context, referenced)
 }
 
 /// Queries or changes automatic eval signal dispatch and returns its previous state.

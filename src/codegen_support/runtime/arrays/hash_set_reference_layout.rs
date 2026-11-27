@@ -10,6 +10,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels::NULL_SENTINEL};
 use crate::codegen_support::callable_invoker_args::{INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE};
+use elephc_memoir::hash_layout::{self, EntryField};
 
 /// Routes a shared hash's shape12 marker to its validating writer before cloning any storage.
 pub(super) fn emit_shared_tagged_reference_selection(emitter: &mut Emitter) {
@@ -23,10 +24,10 @@ pub(super) fn emit_shared_tagged_reference_selection(emitter: &mut Emitter) {
             elephc_memoir::values::hash_ensure_unique::emit_branch_if_at_most_one_logical_owner(emitter, done);
             abi::emit_call_label(emitter, "__rt_hash_get");
             emitter.instruction(&format!("cbz x4, {done}"));                    // an absent key cannot write through a marker
-            emitter.instruction("ldr x9, [x4, #40]");                           // inspect the original entry rather than its dereferenced value
+            hash_layout::emit_load_entry_field(emitter, "x9", "x4", EntryField::ValueTag);
             emitter.instruction("cmp x9, #7");                                  // invoker markers inhabit boxed Mixed hash entries
             emitter.instruction(&format!("b.ne {done}"));                       // preserve ordinary value and managed-reference updates
-            emitter.instruction("ldr x14, [x4, #24]");                          // keep the marker box in the existing tagged writer's input register
+            hash_layout::emit_load_entry_field(emitter, "x14", "x4", EntryField::ValueLow);
             emitter.instruction(&format!("cbz x14, {done}"));                   // empty Mixed slots do not expose caller storage
             emitter.instruction("ldr x9, [x14]");                               // inspect the private descriptor marker tag
             emitter.instruction(&format!("cmp x9, #{INVOKER_ARG_REF_CELL_TAG}")); // ordinary boxes do not alias a caller slot
@@ -48,9 +49,10 @@ pub(super) fn emit_shared_tagged_reference_selection(emitter: &mut Emitter) {
             abi::emit_call_label(emitter, "__rt_hash_get");
             emitter.instruction("test r8, r8");                                 // an absent key cannot write through a marker
             emitter.instruction(&format!("jz {done}"));                         // preserve ordinary insertion into the hash
-            emitter.instruction("cmp QWORD PTR [r8 + 40], 7");                  // inspect the original entry rather than its dereferenced value
+            hash_layout::emit_load_entry_field(emitter, "r10", "r8", EntryField::ValueTag);
+            emitter.instruction("cmp r10, 7");                                  // inspect the original entry rather than its dereferenced value
             emitter.instruction(&format!("jne {done}"));                        // preserve ordinary value and managed-reference updates
-            emitter.instruction("mov r14, QWORD PTR [r8 + 24]");                // keep the marker box in the existing tagged writer's input register
+            hash_layout::emit_load_entry_field(emitter, "r14", "r8", EntryField::ValueLow);
             emitter.instruction("test r14, r14");                               // empty Mixed slots do not expose caller storage
             emitter.instruction(&format!("jz {done}"));                         // leave their ownership with the ordinary setter
             emitter.instruction(&format!("cmp QWORD PTR [r14], {INVOKER_ARG_REF_CELL_TAG}")); // ordinary boxes do not alias a caller slot

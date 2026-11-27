@@ -20,7 +20,7 @@
 //!   On miss, leaves `*out_int_addr` untouched and returns 0 so callers
 //!   can pre-load a default.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// `__rt_get_int_context_option`:
 /// Input:  AArch64 x0 = wrapper_ptr, x1 = wrapper_len,
@@ -59,7 +59,7 @@ pub fn emit_get_int_context_option(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #32]");                                   // save out_int_addr
 
     // Load top-level options hash; bail when null.
-    abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
+    elephc_memoir::buffers::stream_context_owners::emit_options_address(emitter, "x9");
     emitter.instruction("ldr x0, [x9]");                                        // top hash pointer (may be null)
     emitter.instruction("cbz x0, __rt_gico_miss");                              // branch when the checked value is zero or equal
 
@@ -118,7 +118,7 @@ fn emit_get_int_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save out_int_addr
 
     // Load top-level options hash.
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_context_options", 0); // prepare SysV call argument
+    elephc_memoir::buffers::stream_context_owners::emit_load_options(emitter, "rdi");
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gico_miss_x86");                               // branch when the checked value is zero or equal
 

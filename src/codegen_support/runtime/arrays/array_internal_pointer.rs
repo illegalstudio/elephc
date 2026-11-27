@@ -32,6 +32,7 @@ pub(super) use elephc_memoir::values::boxed_array::{
     emit_normalize_array_aarch64 as emit_normalize_aarch64,
     emit_normalize_array_x86_64 as emit_normalize_x86_64,
 };
+use elephc_memoir::hash_layout;
 use elephc_memoir::values::hash_iter::{emit_hash_ordinal_aarch64, emit_hash_ordinal_x86_64};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -155,8 +156,7 @@ pub fn emit_array_ptr_key(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_from_value");                             // box the integer key and return it to the caller
     emitter.label("__rt_aptr_key_hash");
     emit_hash_ordinal_aarch64(emitter, "__rt_aptr_key", "__rt_aptr_key_null");
-    emitter.instruction("ldr x9, [x10, #16]");                                  // x9 = key_len (-1 marks an integer key)
-    emitter.instruction("ldr x13, [x10, #8]");                                  // x13 = key payload (integer value or string pointer)
+    hash_layout::emit_entry_key(emitter, "x10", "x13", "x9");
     emitter.instruction("cmn x9, #1");                                          // is the entry keyed by an integer?
     emitter.instruction("b.eq __rt_aptr_key_int");                              // integer keys box with tag 0
     emitter.instruction("mov x0, #1");                                          // value_tag = 1 (string)
@@ -196,8 +196,7 @@ fn emit_array_ptr_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the integer key and return it to the caller
     emitter.label("__rt_aptr_key_hash");
     emit_hash_ordinal_x86_64(emitter, "__rt_aptr_key", "__rt_aptr_key_null");
-    emitter.instruction("mov r8, QWORD PTR [r10 + 16]");                        // r8 = key_len (-1 marks an integer key)
-    emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // r9 = key payload (integer value or string pointer)
+    hash_layout::emit_entry_key(emitter, "r10", "r9", "r8");
     emitter.instruction("cmp r8, -1");                                          // is the entry keyed by an integer?
     emitter.instruction("je __rt_aptr_key_int");                                // integer keys box with tag 0
     emitter.instruction("mov rdi, r9");                                         // value_lo = key string pointer
@@ -245,9 +244,7 @@ pub fn emit_array_ptr_value(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_get_mixed_key");                          // reuse the ordinary indexed read path and return its box
     emitter.label("__rt_aptr_val_hash");
     emit_hash_ordinal_aarch64(emitter, "__rt_aptr_val", "__rt_aptr_val_false");
-    emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
-    emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
-    emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
+    hash_layout::emit_entry_value(emitter, "x10", "x14", "x9", "x13");
     emitter.instruction("cmp x14, #7");                                         // is the payload already a boxed Mixed cell?
     emitter.instruction("b.eq __rt_aptr_val_hash_boxed");                       // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov x0, x14");                                         // value_tag = the entry's runtime tag
@@ -285,9 +282,7 @@ fn emit_array_ptr_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_get_mixed_key");                        // reuse the ordinary indexed read path and return its box
     emitter.label("__rt_aptr_val_hash");
     emit_hash_ordinal_x86_64(emitter, "__rt_aptr_val", "__rt_aptr_val_false");
-    emitter.instruction("mov r8, QWORD PTR [r10 + 24]");                        // r8 = value_lo from the hash entry
-    emitter.instruction("mov r9, QWORD PTR [r10 + 32]");                        // r9 = value_hi from the hash entry
-    emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry
+    hash_layout::emit_entry_value(emitter, "r10", "rax", "r8", "r9");
     emitter.instruction("cmp rax, 7");                                          // is the payload already a boxed Mixed cell?
     emitter.instruction("je __rt_aptr_val_hash_boxed");                         // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov rdi, r8");                                         // value_lo = the entry's low payload word

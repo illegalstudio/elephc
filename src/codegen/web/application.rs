@@ -22,21 +22,18 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     roots::emit(emitter, module, data);
     let visited = emitter.target.extern_symbol("__elephc_web_gc_visited");
     emitter.label_global(&visited);
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_gc_candidates_visited", 0);
-    let proof_count = if emitter.target.arch == Arch::AArch64 { "x9" } else { "r10" };
-    abi::emit_load_symbol_to_reg(emitter, proof_count, "_gc_proofs_visited", 0);
-    emitter.instruction(if emitter.target.arch == Arch::AArch64 { "add x0, x0, x9" } else { "add rax, r10" }); // include cache construction and current-path validation in measured GC work
+    elephc_memoir::gc_candidates::emit_load_application_work(emitter);
     abi::emit_return(emitter);
     let cost = emitter.target.extern_symbol("__elephc_web_gc_rebuild_cost");
     emitter.label_global(&cost);
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_gc_proofs_cost", 0);
+    elephc_memoir::gc_candidates::emit_load_rebuild_cost(emitter);
     abi::emit_return(emitter);
     let cache = emitter.target.extern_symbol("elephc_web_application_cache_roots");
     emitter.label_global(&cache);
     abi::emit_frame_prologue(emitter, 16);
     abi::emit_call_label(emitter, "__rt_gc_proofs_refresh");
     abi::emit_call_label(emitter, "__rt_gc_clear_candidate_anchors");
-    abi::emit_store_zero_to_symbol(emitter, "_gc_candidates_gathering", 0);
+    elephc_memoir::gc_candidates::emit_finish_host_refresh(emitter);
     abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
     resources::emit(emitter);
@@ -60,7 +57,7 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     ] {
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }
-    abi::emit_store_imm_to_symbol(emitter, "_gc_enabled", 0, 1);
+    elephc_memoir::gc_control::emit_enable_automatic_collection(emitter);
     if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
         abi::emit_call_label(emitter, "__rt_mbstring_request_reset");
     }

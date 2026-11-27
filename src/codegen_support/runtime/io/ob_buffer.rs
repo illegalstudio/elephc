@@ -95,7 +95,7 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the chunk size
     emitter.instruction("str x3, [sp, #24]");                                   // save the flags word
     // -- PHP forbids starting a buffer from inside a running handler --
-    abi::emit_symbol_address(emitter, "x9", "_ob_in_handler");                  // materialize the in-handler flag address
+    output::emit_control_address(emitter, "x9", output::ControlField::InHandler);
     emitter.instruction("ldr x9, [x9]");                                        // load the in-handler flag
     emitter.instruction("cbz x9, __rt_ob_start_allowed");                       // not inside a handler — proceed
     abi::emit_symbol_address(emitter, "x1", "_ob_fatal_in_handler");            // load the nested-handler fatal message
@@ -111,7 +111,7 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // copy the display name into an owned heap string
     emitter.instruction("stp x1, x2, [sp, #32]");                               // save the owned name pair
     // -- refuse past the nesting limit with PHP's failed-create notice --
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction(&format!("cmp x10, #{}", OB_MAX_LEVELS));               // is the nesting limit reached?
     emitter.instruction("b.lt __rt_ob_start_capacity");                         // room available — size the buffer
@@ -167,7 +167,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the chunk size
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the flags word
     // -- PHP forbids starting a buffer from inside a running handler --
-    abi::emit_symbol_address(emitter, "r10", "_ob_in_handler");                 // materialize the in-handler flag address
+    output::emit_control_address(emitter, "r10", output::ControlField::InHandler);
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the in-handler flag
     emitter.instruction("test r10, r10");                                       // is a user output handler running?
     emitter.instruction("jz __rt_ob_start_allowed_x86");                        // not inside a handler — proceed
@@ -187,7 +187,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the owned name pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the owned name length
     // -- refuse past the nesting limit with PHP's failed-create notice --
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction(&format!("cmp r10, {}", OB_MAX_LEVELS));                // is the nesting limit reached?
     emitter.instruction("jl __rt_ob_start_capacity_x86");                       // room available — size the buffer
@@ -266,7 +266,7 @@ pub fn emit_ob_append(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save the source byte length
     output::emit_append_bytes(emitter);
     // -- PHP chunk-size auto-flush: reaching the threshold flushes the buffer --
-    abi::emit_symbol_address(emitter, "x11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
+    output::emit_slot_field_address(emitter, "x11", output::SlotField::ChunkSize);
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's chunk size
     emitter.instruction("cbz x12, __rt_ob_append_done");                        // chunking disabled — done
     emitter.instruction("cmp x13, x12");                                        // did the buffer reach the chunk threshold?
@@ -294,7 +294,7 @@ fn emit_ob_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source byte length
     output::emit_append_bytes(emitter);
     // -- PHP chunk-size auto-flush: reaching the threshold flushes the buffer --
-    abi::emit_symbol_address(emitter, "r11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
+    output::emit_slot_field_address(emitter, "r11", output::SlotField::ChunkSize);
     emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // load the slot's chunk size
     emitter.instruction("test rdx, rdx");                                       // is chunking enabled for this buffer?
     emitter.instruction("jz __rt_ob_append_done_x86");                          // chunking disabled — done
@@ -326,7 +326,7 @@ pub fn emit_ob_queries(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ob_length / ob_level ---");
     emitter.label_global("__rt_ob_length");
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction("cbz x10, __rt_ob_length_none");                        // no active buffer — return the -1 sentinel
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
@@ -338,7 +338,7 @@ pub fn emit_ob_queries(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_ob_level");
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x0, [x9]");                                        // return the current nesting depth
     emitter.instruction("ret");                                                 // return the level
 }
@@ -348,7 +348,7 @@ fn emit_ob_queries_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ob_length / ob_level ---");
     emitter.label_global("__rt_ob_length");
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction("jz __rt_ob_length_none_x86");                          // no active buffer — return the -1 sentinel
@@ -361,7 +361,7 @@ fn emit_ob_queries_x86_64(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_ob_level");
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // return the current nesting depth
     emitter.instruction("ret");                                                 // return the level
 }
@@ -393,12 +393,12 @@ fn emit_gated_op(
     emitter.instruction("sub sp, sp, #32");                                     // allocate the gated-op frame
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the gated-op frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction(&format!("cbz x10, {fail}"));                           // no active buffer — refuse
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
     emitter.instruction("str x10, [sp, #0]");                                   // save the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "x11", output::SlotField::Flags);
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's flags word
     emitter.instruction(&format!("tst x12, #{}", required_flag));               // does the buffer allow this operation?
     emitter.instruction(&format!("b.eq {gated}"));                              // flag missing — refuse with the gated notice
@@ -449,13 +449,13 @@ fn emit_gated_op_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the gated-op frame pointer
     emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the top index
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction(&format!("jz {fail}"));                                 // no active buffer — refuse
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "r11", output::SlotField::Flags);
     emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the slot's flags word
     emitter.instruction(&format!("test rcx, {}", required_flag));               // does the buffer allow this operation?
     emitter.instruction(&format!("jz {gated}"));                                // flag missing — refuse with the gated notice
@@ -560,12 +560,12 @@ fn emit_get_pop_op(
     emitter.instruction("sub sp, sp, #80");                                     // allocate the get-pop frame
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish the get-pop frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction(&format!("cbz x10, {fail}"));                           // no active buffer ; refuse
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
     emitter.instruction("str x10, [sp, #0]");                                   // save the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "x11", output::SlotField::Flags);
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's flags word
     emitter.instruction(&format!("tst x12, #{}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
     emitter.instruction(&format!("b.eq {gated}"));                              // not removable ; refuse with the gated notice
@@ -628,13 +628,13 @@ fn emit_get_pop_op_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the get-pop frame pointer
     emitter.instruction("sub rsp, 64");                                         // reserve the get-pop local slots (16-aligned)
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction(&format!("jz {fail}"));                                 // no active buffer ; refuse
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "r11", output::SlotField::Flags);
     emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the slot's flags word
     emitter.instruction(&format!("test rcx, {}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
     emitter.instruction(&format!("jz {gated}"));                                // not removable ; refuse with the gated notice
@@ -715,13 +715,13 @@ pub fn emit_ob_flush_all(emitter: &mut Emitter) {
     emitter.label_global("__rt_ob_flush_all");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the flush_all frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_ob_flushing");                    // materialize the re-entry guard address
+    output::emit_control_address(emitter, "x9", output::ControlField::Flushing);
     emitter.instruction("ldr x10, [x9]");                                       // load the re-entry guard
     emitter.instruction("cbnz x10, __rt_ob_flush_all_done");                    // already draining — nested exits are a no-op
     emitter.instruction("mov x10, #1");                                         // mark the drain as active
     emitter.instruction("str x10, [x9]");                                       // publish the re-entry guard
     emitter.label("__rt_ob_flush_all_loop");
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction("cbz x10, __rt_ob_flush_all_done");                     // stack drained — done
     emitter.instruction("sub x0, x10, #1");                                     // drain the top slot next
@@ -741,13 +741,13 @@ fn emit_ob_flush_all_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_ob_flush_all");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the flush_all frame pointer
-    abi::emit_symbol_address(emitter, "r9", "_ob_flushing");                    // materialize the re-entry guard address
+    output::emit_control_address(emitter, "r9", output::ControlField::Flushing);
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the re-entry guard
     emitter.instruction("test r10, r10");                                       // is a drain already running?
     emitter.instruction("jnz __rt_ob_flush_all_done_x86");                      // already draining — nested exits are a no-op
     emitter.instruction("mov QWORD PTR [r9], 1");                               // publish the re-entry guard
     emitter.label("__rt_ob_flush_all_loop_x86");
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is anything still buffered?
     emitter.instruction("jz __rt_ob_flush_all_done_x86");                       // stack drained — done

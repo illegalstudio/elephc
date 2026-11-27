@@ -368,7 +368,7 @@ pub(crate) fn lower_stream_context_get_options(
     let done_label = ctx.next_label("scgo_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            elephc_memoir::buffers::stream_context_owners::emit_options_address(ctx.emitter, "x9");
             ctx.emitter.instruction("ldr x0, [x9]");                            // load the persisted stream-context options pointer
             ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));       // allocate an empty hash when no context options exist
             abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -380,7 +380,7 @@ pub(crate) fn lower_stream_context_get_options(
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            elephc_memoir::buffers::stream_context_owners::emit_options_address(ctx.emitter, "r9");
             ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // load the persisted stream-context options pointer
             ctx.emitter.instruction("test rax, rax");                           // test whether a context options pointer exists
             ctx.emitter.instruction(&format!("jz {}", empty_label));            // allocate an empty hash when no context options exist

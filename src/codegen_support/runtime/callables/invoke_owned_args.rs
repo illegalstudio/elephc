@@ -13,9 +13,8 @@
 //! - Slots are cleared before release so a cleanup throw cannot release an owner twice.
 
 use crate::codegen_support::{abi, callable_descriptor, emit::Emitter, platform::Arch};
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 128;
 const OWNER_RECORD: usize = 112;
@@ -51,16 +50,12 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     // -- preserve inputs and install a boundary before entering the descriptor invoker --
     clear_slot(emitter, RESULT);
     clear_slot(emitter, PENDING);
-    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-    abi::store_at_offset(emitter, result, PREVIOUS);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    let boundary = CleanupBoundary::new(FrameOffset::new(HANDLER_OFFSET));
+    boundary.emit_park_exception(emitter, FrameOffset::new(PREVIOUS));
     abi::emit_temporary_stack_address(emitter, result, 0);
     abi::emit_link_call_operand_custom_cleanup_at_stack(emitter, result, OWNER_CLEANUP,
         OWNER_VISITOR, FRAME_SIZE - 16 - OWNER_RECORD);
-    save_handler_state(emitter);
-    abi::emit_frame_slot_address(emitter, descriptor_arg, HANDLER_OFFSET - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // catch descriptor or cleanup throws without discarding the owned slots
-    abi::emit_branch_if_int_result_nonzero(emitter, caught);
+    boundary.emit_install(emitter, caught);
     abi::load_at_offset(emitter, descriptor_arg, DESCRIPTOR);
     abi::load_at_offset(emitter, array_arg, ARGUMENTS);
     abi::load_at_offset(
@@ -85,7 +80,7 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, PENDING);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     clear_slot(emitter, PENDING);
-    restore_handler_state(emitter);
+    boundary.emit_restore(emitter);
     abi::emit_unlink_call_operand_owner_in_frame(emitter, OWNER_RECORD);
     abi::emit_frame_restore(emitter, FRAME_SIZE);
     abi::emit_jump(emitter, "__rt_throw_current");
@@ -93,7 +88,7 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     emitter.label(returned);
     abi::load_at_offset(emitter, result, PREVIOUS);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
-    restore_handler_state(emitter);
+    boundary.emit_restore(emitter);
     abi::load_at_offset(emitter, result, RESULT);
     abi::emit_unlink_call_operand_owner_in_frame(emitter, OWNER_RECORD);
     abi::emit_frame_restore(emitter, FRAME_SIZE);
@@ -135,20 +130,6 @@ fn emit_owned_args_entry(emitter: &mut Emitter, label: &str, owns_descriptor: bo
     } else {
         clear_slot(emitter, OWNED_DESCRIPTOR);
     }
-}
-
-/// Saves the enclosing handler, activation boundary, and diagnostics before publishing this record.
-fn save_handler_state(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER_OFFSET);
-    abi::emit_frame_slot_address(emitter, result, HANDLER_OFFSET);
-    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
-}
-
-/// Restores the caller's exception-handler chain and diagnostic suppression depth.
-fn restore_handler_state(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER_OFFSET);
 }
 
 /// Releases a boxed owner after clearing its slot, leaving reentrant cleanup idempotent.

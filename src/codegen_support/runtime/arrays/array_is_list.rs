@@ -39,20 +39,20 @@ pub fn emit_array_is_list(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_array_is_list_zero");                        // any other kind is not a PHP array
     emitter.comment("-- walk the hash insertion-order chain checking keys 0,1,2,... --");
     emitter.instruction("mov x10, #0");                                         // expected next integer key starts at 0
-    emitter.instruction("ldr x11, [x0, #24]");                                  // x11 = head slot index from the hash header
+    hash_layout::emit_load_header_field(emitter, "x11", "x0", hash_layout::HeaderField::Head);
     emitter.label("__rt_array_is_list_loop");
     emitter.instruction("cmn x11, #1");                                         // has the insertion chain reached its end (slot == -1)?
     emitter.instruction("b.eq __rt_array_is_list_one");                         // all keys matched 0..n-1 in order, including the empty hash
     emitter.instruction("mov x12, #64");                                        // hash entry stride in bytes
     hash_layout::emit_entry_address(emitter, "x12", "x0", "x11");
-    emitter.instruction("ldr x13, [x12, #16]");                                 // x13 = key_len (-1 marks an integer key)
+    hash_layout::emit_load_entry_field(emitter, "x13", "x12", hash_layout::EntryField::KeyHigh);
     emitter.instruction("cmn x13, #1");                                         // is this entry keyed by an integer?
     emitter.instruction("b.ne __rt_array_is_list_zero");                        // a string key cannot appear in a list
-    emitter.instruction("ldr x14, [x12, #8]");                                  // x14 = integer key payload
+    hash_layout::emit_load_entry_field(emitter, "x14", "x12", hash_layout::EntryField::KeyLow);
     emitter.instruction("cmp x14, x10");                                        // does the key equal the expected position?
     emitter.instruction("b.ne __rt_array_is_list_zero");                        // a gap or reorder breaks list shape
     emitter.instruction("add x10, x10, #1");                                    // advance the expected position
-    emitter.instruction("ldr x11, [x12, #56]");                                 // x11 = next slot index in insertion order
+    hash_layout::emit_load_entry_field(emitter, "x11", "x12", hash_layout::EntryField::Next);
     emitter.instruction("b __rt_array_is_list_loop");                           // continue checking the next entry
     emitter.label("__rt_array_is_list_mixed");
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed mixed value tag
@@ -89,19 +89,19 @@ fn emit_array_is_list_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_array_is_list_zero");                         // any other kind is not a PHP array
     emitter.comment("-- walk the hash insertion-order chain checking keys 0,1,2,... --");
     emitter.instruction("xor r10, r10");                                        // expected next integer key starts at 0
-    emitter.instruction("mov r11, QWORD PTR [rdi + 24]");                       // r11 = head slot index from the hash header
+    hash_layout::emit_load_header_field(emitter, "r11", "rdi", hash_layout::HeaderField::Head);
     emitter.label("__rt_array_is_list_loop");
     emitter.instruction("cmp r11, -1");                                         // has the insertion chain reached its end?
     emitter.instruction("je __rt_array_is_list_one");                           // all keys matched 0..n-1 in order, including the empty hash
     hash_layout::emit_entry_address(emitter, "rcx", "rdi", "r11");
-    emitter.instruction("mov r8, QWORD PTR [rcx + 16]");                        // r8 = key_len (-1 marks an integer key)
+    hash_layout::emit_load_entry_field(emitter, "r8", "rcx", hash_layout::EntryField::KeyHigh);
     emitter.instruction("cmp r8, -1");                                          // is this entry keyed by an integer?
     emitter.instruction("jne __rt_array_is_list_zero");                         // a string key cannot appear in a list
-    emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // r9 = integer key payload
+    hash_layout::emit_load_entry_field(emitter, "r9", "rcx", hash_layout::EntryField::KeyLow);
     emitter.instruction("cmp r9, r10");                                         // does the key equal the expected position?
     emitter.instruction("jne __rt_array_is_list_zero");                         // a gap or reorder breaks list shape
     emitter.instruction("add r10, 1");                                          // advance the expected position
-    emitter.instruction("mov r11, QWORD PTR [rcx + 56]");                       // r11 = next slot index in insertion order
+    hash_layout::emit_load_entry_field(emitter, "r11", "rcx", hash_layout::EntryField::Next);
     emitter.instruction("jmp __rt_array_is_list_loop");                         // continue checking the next entry
     emitter.label("__rt_array_is_list_mixed");
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the boxed mixed value tag

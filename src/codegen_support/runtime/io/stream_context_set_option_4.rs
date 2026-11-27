@@ -22,7 +22,7 @@
 //! - On a top-level hash relocation, `_stream_context_options` is
 //!   updated to the new pointer.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// `__rt_stream_context_set_option_4`:
 /// Input:  AArch64 x0=wrapper_ptr x1=wrapper_len x2=opt_ptr x3=opt_len
@@ -64,13 +64,13 @@ pub fn emit_stream_context_set_option_4(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #40]");                                   // save val_len
 
     // -- ensure _stream_context_options has a top-level hash --
-    abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
+    elephc_memoir::buffers::stream_context_owners::emit_options_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // x10 = current top hash (may be null)
     emitter.instruction("cbnz x10, __rt_scso4_top_ok");                         // already initialised → skip allocation
     emitter.instruction("mov x0, #4");                                          // initial capacity for the wrapper-keyed top hash
     emitter.instruction("mov x1, #7");                                          // value tag = Mixed (the top hash holds Mixed-boxed sub-hashes)
     emitter.instruction("bl __rt_hash_new");                                    // call runtime helper
-    abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
+    elephc_memoir::buffers::stream_context_owners::emit_options_address(emitter, "x9");
     emitter.instruction("str x0, [x9]");                                        // publish the fresh top hash
     emitter.instruction("bl __rt_incref");                                      // retain — the global slot owns it
     emitter.instruction("mov x10, x0");                                         // move runtime value between registers
@@ -117,7 +117,7 @@ pub fn emit_stream_context_set_option_4(emitter: &mut Emitter) {
     emitter.instruction("mov x4, #0");                                          // value_hi unused for refcounted heap pointers
     emitter.instruction("mov x5, #5");                                          // value tag = assoc array
     emitter.instruction("bl __rt_hash_set");                                    // x0 = possibly-grown top hash
-    abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
+    elephc_memoir::buffers::stream_context_owners::emit_options_address(emitter, "x9");
     emitter.instruction("str x0, [x9]");                                        // publish any new top pointer
 
     emitter.instruction("mov x0, #1");                                          // PHP true
@@ -152,13 +152,13 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save val_len
 
     // -- ensure top-level hash exists --
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_stream_context_options", 0); // current top hash (may be null)
+    elephc_memoir::buffers::stream_context_owners::emit_load_options(emitter, "rax");
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jnz __rt_scso4_top_ok_x86");                           // branch when the checked value is nonzero or different
     emitter.instruction("mov edi, 4");                                          // initial capacity
     emitter.instruction("mov esi, 7");                                          // value tag = Mixed
     emitter.instruction("call __rt_hash_new");                                  // call runtime helper
-    abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_context_options", 0); // store runtime value
+    elephc_memoir::buffers::stream_context_owners::emit_store_options(emitter, "rax");
     emitter.comment("rax already holds the fresh top hash __rt_incref reads from its input register"); // no SysV rdi shuffle: the incref helper is not a SysV callee
     emitter.instruction("call __rt_incref");                                    // retain the just-created top hash for the global slot
     emitter.label("__rt_scso4_top_ok_x86");
@@ -201,7 +201,7 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r8, r8");                                          // clear register value
     emitter.instruction("mov r9, 5");                                           // value tag = assoc array
     emitter.instruction("call __rt_hash_set");                                  // rax = updated top
-    abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_context_options", 0); // store runtime value
+    elephc_memoir::buffers::stream_context_owners::emit_store_options(emitter, "rax");
 
     emitter.instruction("mov eax, 1");                                          // PHP true
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame

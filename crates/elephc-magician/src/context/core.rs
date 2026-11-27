@@ -12,6 +12,7 @@ use crate::errors::EvalStatus;
 use elephc_memoir::runtime_owners::{
     RuntimeOwnerHistory, RuntimeOwnerMap, RuntimeOwnerRecordMap, RuntimeOwnerSlot,
 };
+use elephc_memoir::runtime_leases::RuntimeLeaseCounter;
 
 /// One installed eval user error handler and its accepted level mask.
 #[derive(Clone, Copy)]
@@ -36,7 +37,7 @@ pub enum EvalPcntlSignalHandler {
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
-    pub(super) abi_owner_count: usize,
+    pub(super) abi_owners: RuntimeLeaseCounter,
     pub(super) teardown_active: bool,
     pub(super) native_catalog_generation: u64,
     pub(super) native_catalog_ready: bool,
@@ -155,7 +156,7 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
-            abi_owner_count: 1,
+            abi_owners: RuntimeLeaseCounter::new(1),
             teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
@@ -262,7 +263,7 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
-            abi_owner_count: 1,
+            abi_owners: RuntimeLeaseCounter::new(1),
             teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
@@ -371,25 +372,17 @@ impl ElephcEvalContext {
 
     /// Adds one opaque ABI owner that can keep this heap context alive past its frame.
     pub(crate) fn retain_abi_owner(&mut self) -> Result<(), EvalStatus> {
-        self.abi_owner_count = self
-            .abi_owner_count
-            .checked_add(1)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        Ok(())
+        self.abi_owners.try_retain().then_some(()).ok_or(EvalStatus::RuntimeFatal)
     }
 
     /// Reports whether a deferred context acquired a new opaque ABI callback owner.
     pub(crate) fn has_abi_owners(&self) -> bool {
-        self.abi_owner_count != 0
+        self.abi_owners.has_owners()
     }
 
     /// Drops one opaque ABI owner and reports whether the heap context can be destroyed.
     pub(crate) fn release_abi_owner(&mut self) -> bool {
-        if self.abi_owner_count == 0 {
-            return false;
-        }
-        self.abi_owner_count -= 1;
-        self.abi_owner_count == 0
+        self.abi_owners.release()
     }
 
     /// Returns the strict-types mode of the eval fragment currently executing.

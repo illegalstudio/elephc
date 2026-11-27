@@ -11,6 +11,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::guards;
+use elephc_memoir::buffers::stream_tables;
 
 /// `__rt_stream_filter_attach_user`: end-to-end attach helper for a user
 /// filter. Resolves the filter name into an id, instantiates the
@@ -113,14 +114,14 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #0]");                                    // reload fd
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload mode
     emitter.instruction("ldr x6, [sp, #24]");                                   // reload resolved id (u8 in the low byte)
-    abi::emit_symbol_address(emitter, "x10", "_user_filter_instances");
+    stream_tables::USER_FILTER_INSTANCES.emit_address(emitter, "x10");
 
     // mode & 1 → read direction
     emitter.instruction("tst x5, #1");                                          // STREAM_FILTER_READ bit set?
     emitter.instruction("b.eq __rt_sfau_skip_read");                            // skip read-direction state otherwise
     emitter.instruction("add x11, x4, x4");                                     // fd*2 , read slot
     emitter.instruction("str x0, [x10, x11, lsl #3]");                          // _user_filter_instances[fd*2] = obj
-    abi::emit_symbol_address(emitter, "x12", "_stream_read_filters");
+    stream_tables::READ_FILTERS.emit_address(emitter, "x12");
     emitter.instruction("strb w6, [x12, x4]");                                  // _stream_read_filters[fd] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_read");
 
@@ -130,7 +131,7 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("add x11, x4, x4");                                     // fd*2
     emitter.instruction("add x11, x11, #1");                                    // fd*2 + 1 , write slot
     emitter.instruction("str x0, [x10, x11, lsl #3]");                          // _user_filter_instances[fd*2 + 1] = obj
-    abi::emit_symbol_address(emitter, "x12", "_stream_write_filters");
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "x12");
     emitter.instruction("strb w6, [x12, x4]");                                  // _stream_write_filters[fd] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_write");
 
@@ -253,7 +254,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload mode
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload resolved id (u8 in the low byte)
-    abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");          // instances table base
+    stream_tables::USER_FILTER_INSTANCES.emit_address(emitter, "r9");
 
     // mode & 1 → read direction
     emitter.instruction("test rsi, 1");                                         // STREAM_FILTER_READ bit set?
@@ -261,7 +262,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rdi");                                        // fd
     emitter.instruction("add r10, r10");                                        // fd*2 , read slot
     emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2] = obj
-    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // load runtime data address
+    stream_tables::READ_FILTERS.emit_address(emitter, "r11");
     emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_read_filters[fd] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_read_x86");
 
@@ -272,7 +273,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, r10");                                        // fd*2
     emitter.instruction("add r10, 1");                                          // fd*2 + 1 , write slot
     emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2 + 1] = obj
-    abi::emit_symbol_address(emitter, "r11", "_stream_write_filters");          // load runtime data address
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "r11");
     emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_write_filters[fd] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_write_x86");
 

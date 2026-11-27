@@ -21,6 +21,7 @@
 //!   string keys and refcounted values are retained, string values are re-persisted, scalars are
 //!   copied inline. A renumbered integer key needs no ownership at all.
 
+use elephc_memoir::hash_layout::{self, HeaderField};
 use elephc_memoir::values::hash_payload::HashPayloadSlots;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -87,7 +88,7 @@ pub fn emit_hash_slice(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #16");                                         // x9 = minimum destination bucket count
     emitter.instruction("cmp x0, x9");                                          // compare the derived capacity against the runtime minimum
     emitter.instruction("csel x0, x9, x0, lt");                                 // clamp small windows up to the minimum bucket count
-    emitter.instruction("ldr x1, [x19, #16]");                                  // x1 = source runtime value_type tag; the window holds the same values
+    hash_layout::emit_load_header_field(emitter, "x1", "x19", HeaderField::ValueType);
     emitter.instruction("bl __rt_hash_new");                                    // allocate the destination hash table
     emitter.instruction("mov x20, x0");                                         // x20 = destination hash pointer, updated after every insertion
     emitter.instruction("str xzr, [sp, #0]");                                   // iterator cursor = 0 (start from header.head)
@@ -229,7 +230,7 @@ fn emit_hash_slice_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_hash_slice_cap_ready_x86");                   // keep a capacity that already clears the minimum
     emitter.instruction("mov rdi, 16");                                         // clamp small windows up to the minimum bucket count
     emitter.label("__rt_hash_slice_cap_ready_x86");
-    emitter.instruction("mov rsi, QWORD PTR [r12 + 16]");                       // rsi = source runtime value_type tag; the window holds the same values
+    hash_layout::emit_load_header_field(emitter, "rsi", "r12", HeaderField::ValueType);
     emitter.instruction("call __rt_hash_new");                                  // allocate the destination hash table
     emitter.instruction("mov r13, rax");                                        // keep the destination hash pointer in a callee-saved register across the walk
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the destination pointer in the spill area for the return path

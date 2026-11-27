@@ -14,6 +14,7 @@ use crate::codegen::context::FunctionContext;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, RuntimeCallTarget, UnaryStringRuntime};
 use crate::types::PhpType;
+use elephc_memoir::hash_layout;
 
 use super::receiver_place::ReceiverPlace;
 use super::{expect_operand, store_if_result};
@@ -631,7 +632,7 @@ fn lower_hash_entry_bind_reference(
             ctx.load_value_to_reg(hash, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("cbz x4, {done}"));                // a missing entry has no reference storage to bind
-            ctx.emitter.instruction("add x0, x4, #24");                         // address the entry's low value word
+            hash_layout::emit_value_address_from_entry(ctx.emitter, "x0", "x4");
             ctx.load_value_to_reg(cell, "x1")?;
             abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");
         }
@@ -641,7 +642,7 @@ fn lower_hash_entry_bind_reference(
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("test r8, r8"));                   // did the lookup find a matching entry?
             ctx.emitter.instruction(&format!("jz {done}"));                     // a missing entry has no reference storage to bind
-            ctx.emitter.instruction("lea rdi, [r8 + 24]");                      // address the entry's low value word
+            hash_layout::emit_value_address_from_entry(ctx.emitter, "rdi", "r8");
             ctx.load_value_to_reg(cell, "rsi")?;
             abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");
         }

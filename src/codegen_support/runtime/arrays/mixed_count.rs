@@ -19,6 +19,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use elephc_memoir::values::container_header;
 
 /// Emits the `__rt_mixed_count` runtime helper for `count()` on a boxed Mixed receiver.
 /// Dispatches to the target-specific implementation.
@@ -67,7 +68,7 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_count_payload");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed payload pointer (array or hash)
     emit_branch_if_null_container(emitter, "x9", "x10", "__rt_mixed_count_zero");
-    emitter.instruction("ldr x0, [x9]");                                        // count lives at offset 0 of both array and hash headers
+    container_header::emit_load_count(emitter, "x0", "x9");
     emitter.instruction("ret");                                                 // return count in x0
 
     emitter.label("__rt_mixed_count_object");
@@ -162,7 +163,7 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_count_payload");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed payload pointer
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_count_zero");
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // count lives at offset 0 of both array and hash headers
+    container_header::emit_load_count(emitter, "rax", "r10");
     emitter.instruction("ret");                                                 // return count in rax
 
     emitter.label("__rt_mixed_count_object");

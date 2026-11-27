@@ -75,7 +75,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_array_next_wide");
     emitter.instruction("mov x13, #16");                                        // select the two-word physical slot size
     emitter.label("__rt_mbstring_array_next_stride");
-    emitter.instruction("ldr x10, [x0, #16]");                                  // read the authoritative physical slot width
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x10");
     emitter.instruction("cmp x10, x13");                                        // require type metadata and slot width to agree
     emitter.instruction("b.ne __rt_mbstring_array_next_error");                 // reject malformed storage before reading an element
     emitter.instruction("ldr x11, [sp, #16]");                                  // recover the key output descriptor
@@ -196,7 +196,8 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_array_next_wide");
     emitter.instruction("mov r8, 16");                                          // select the two-word physical slot size
     emitter.label("__rt_mbstring_array_next_stride");
-    emitter.instruction("cmp r8, QWORD PTR [rdi + 16]");                        // require type metadata and slot width to agree
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rdi", "rcx");
+    emitter.instruction("cmp r8, rcx");                                         // require type metadata and slot width to agree
     emitter.instruction("jne __rt_mbstring_array_next_error");                  // reject malformed storage before reading an element
     emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");                       // recover the key output descriptor
     emitter.instruction("mov QWORD PTR [rcx], 0");                              // publish the integer key tag

@@ -251,7 +251,7 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save optional callback environment pointer for captured-closure wrappers
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the indexed-array header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the source array length across the destination-array allocation call
-    emitter.instruction("mov r11, QWORD PTR [rsi + 16]");                       // load the source element stride so the loop can distinguish scalar and string inputs
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rsi", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the source element stride across the destination-array allocation call
     emitter.instruction("mov rdi, r10");                                        // pass the source array length as the destination capacity to __rt_array_new
     emitter.instruction("mov rsi, 16");                                         // request 16-byte destination slots because array_map_str always returns strings

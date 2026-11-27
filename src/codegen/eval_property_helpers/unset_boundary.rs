@@ -9,9 +9,8 @@
 //! - Native jumps stay below Rust frames, and enclosing exception and diagnostic state is restored.
 
 use super::*;
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 96;
 const HANDLER: usize = FRAME - 16;
@@ -24,7 +23,7 @@ const THROWN: usize = 72;
 pub(super) fn emit(module: &Module, emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
+    let boundary = CleanupBoundary::new(FrameOffset::new(HANDLER));
     label_c_global(module, emitter, "__elephc_eval_value_typed_property_unset_v2");
     // -- preserve inputs before installing the native jump target below the Rust caller --
     abi::emit_frame_prologue(emitter, FRAME);
@@ -33,15 +32,11 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter) {
     }
     abi::load_at_offset(emitter, scratch, OUTPUT);
     abi::emit_store_zero_to_address(emitter, scratch, 0);
-    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-    abi::store_at_offset(emitter, result, PREVIOUS);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
-    abi::emit_frame_slot_address(emitter, arg0, HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // keep destructor exceptions below the Rust interpreter's frames
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_eval_unset_caught");
+    boundary.emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        "__rt_eval_unset_caught",
+    );
     for index in 0..5 {
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), (index + 1) * 8);
     }
@@ -58,7 +53,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, result, 0);
     abi::store_at_offset(emitter, result, RESULT);
     emitter.label("__rt_eval_unset_finish");
-    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
+    boundary.emit_restore(emitter);
     abi::load_at_offset(emitter, result, PREVIOUS);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     abi::load_at_offset(emitter, result, THROWN);

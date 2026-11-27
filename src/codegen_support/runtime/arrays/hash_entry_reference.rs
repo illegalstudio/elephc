@@ -19,6 +19,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::hash_layout::{self, EntryField};
 
 #[cfg(test)]
 use elephc_memoir::hash_entry_references::REFERENCE_CELL_VALUE_TAG;
@@ -121,9 +122,8 @@ fn emit_iter_resync(emitter: &mut Emitter) {
             emitter.instruction("cbz x0, __rt_hash_iter_resync_missing");       // neither owned anchor survived in the live table
             emitter.label("__rt_hash_iter_resync_found");
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the live table base
-            emitter.instruction("ldr x9, [x9, #40]");                           // locate the separately allocated entry storage
-            emitter.instruction("sub x0, x4, x9");                              // byte offset of the anchor inside entry storage
-            emitter.instruction("lsr x0, x0, #6");                              // 64 bytes per entry gives the slot index
+            hash_layout::emit_entries(emitter, "x9", "x9");
+            hash_layout::emit_entry_index(emitter, "x0", "x4", "x9");
             emitter.instruction("add x0, x0, #1");                              // encode the resumed cursor as slot index plus one
             emitter.instruction("ldp x29, x30, [sp], #48");                     // restore frame pointer and release anchor spills
             emitter.instruction("ret");                                         // return the resumed cursor to the iterator
@@ -157,10 +157,8 @@ fn emit_iter_resync(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_hash_iter_resync_missing");            // neither owned anchor survived in the live table
             emitter.label("__rt_hash_iter_resync_found");
             emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                // reload the live table base
-            emitter.instruction("mov rcx, QWORD PTR [rcx + 40]");               // locate the separately allocated entry storage
-            emitter.instruction("mov rax, r8");                                 // the probe returned the matching entry address
-            emitter.instruction("sub rax, rcx");                                // byte offset of the anchor inside entry storage
-            emitter.instruction("shr rax, 6");                                  // 64 bytes per entry gives the slot index
+            hash_layout::emit_entries(emitter, "rcx", "rcx");
+            hash_layout::emit_entry_index(emitter, "rax", "r8", "rcx");
             emitter.instruction("add rax, 1");                                  // encode the resumed cursor as slot index plus one
             emitter.instruction("add rsp, 32");                                 // release table and fallback-key spills
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer
@@ -199,7 +197,7 @@ fn emit_iter_resync_successor(emitter: &mut Emitter) {
             emitter.instruction("mov x29, sp");                                 // establish the successor-resync frame
             emitter.instruction("bl __rt_hash_get");                            // locate the anchor entry in the live table
             emitter.instruction("cbz x0, __rt_hash_iter_resync_successor_missing"); // a vanished anchor has no successor
-            emitter.instruction("ldr x9, [x4, #56]");                           // load the anchor's insertion-order successor slot
+            hash_layout::emit_load_entry_field(emitter, "x9", "x4", EntryField::Next);
             emitter.instruction("cmn x9, #1");                                  // did the anchor remain the tail?
             emitter.instruction("b.eq __rt_hash_iter_resync_successor_missing"); // no appended successor to resume from
             emitter.instruction("add x0, x9, #1");                              // encode the successor cursor as slot index plus one
@@ -216,7 +214,7 @@ fn emit_iter_resync_successor(emitter: &mut Emitter) {
             emitter.instruction("call __rt_hash_get");                          // locate the anchor entry in the live table
             emitter.instruction("test rax, rax");                               // did the live table still contain the anchor key?
             emitter.instruction("jz __rt_hash_iter_resync_successor_missing");  // a vanished anchor has no successor
-            emitter.instruction("mov r9, QWORD PTR [r8 + 56]");                 // load the anchor's insertion-order successor slot
+            hash_layout::emit_load_entry_field(emitter, "r9", "r8", EntryField::Next);
             emitter.instruction("cmp r9, -1");                                  // did the anchor remain the tail?
             emitter.instruction("je __rt_hash_iter_resync_successor_missing");  // no appended successor to resume from
             emitter.instruction("mov rax, r9");                                 // copy the successor slot before encoding the cursor

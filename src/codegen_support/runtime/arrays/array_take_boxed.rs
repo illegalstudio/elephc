@@ -36,7 +36,7 @@ fn emit_take(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, 16);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count after payload separation
+            hash_layout::emit_load_header_field(emitter, "x9", "x0", hash_layout::HeaderField::Count);
             emitter.instruction("cbz x9, __rt_array_take_empty");               // an empty array returns an owned null cell
             abi::load_at_offset(emitter, "x9", 48);
             hash_layout::emit_order_edge(emitter, "x10", "x0", true);
@@ -51,7 +51,8 @@ fn emit_take(emitter: &mut Emitter) {
             super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_take_deref_done", "x0", "x1", "x2");
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [rax], 0");                      // inspect the live entry count after payload separation
+            hash_layout::emit_load_header_field(emitter, "r10", "rax", hash_layout::HeaderField::Count);
+            emitter.instruction("test r10, r10");                               // inspect the live entry count after payload separation
             emitter.instruction("je __rt_array_take_empty");                    // an empty array returns an owned null cell
             abi::load_at_offset(emitter, "r10", 48);
             hash_layout::emit_order_edge(emitter, "r11", "rax", true);
@@ -143,7 +144,7 @@ fn emit_hash_pop(emitter: &mut Emitter) {
     );
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count before selecting the tail
+            hash_layout::emit_load_header_field(emitter, "x9", "x0", hash_layout::HeaderField::Count);
             emitter.instruction("cbz x9, __rt_hash_pop_boxed_empty");           // an empty associative array returns owned null
             hash_layout::emit_order_edge(emitter, "x10", "x0", true);
             hash_layout::emit_consume_entry_address(emitter, "x0", "x10");
@@ -160,7 +161,8 @@ fn emit_hash_pop(emitter: &mut Emitter) {
             );
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [rdi], 0");                      // inspect the live entry count before selecting the tail
+            hash_layout::emit_load_header_field(emitter, "r10", "rdi", hash_layout::HeaderField::Count);
+            emitter.instruction("test r10, r10");                               // inspect the live entry count before selecting the tail
             emitter.instruction("je __rt_hash_pop_boxed_empty");                // an empty associative array returns owned null
             hash_layout::emit_order_edge(emitter, "r11", "rdi", true);
             hash_layout::emit_consume_entry_address(emitter, "rdi", "r11");
@@ -233,7 +235,7 @@ fn emit_hash_shift(emitter: &mut Emitter) {
     );
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count before selecting the head
+            hash_layout::emit_load_header_field(emitter, "x9", "x0", hash_layout::HeaderField::Count);
             emitter.instruction("cbz x9, __rt_hash_shift_boxed_empty");         // an empty associative array returns owned null
             hash_layout::emit_order_edge(emitter, "x10", "x0", false);
             hash_layout::emit_consume_entry_address(emitter, "x0", "x10");
@@ -250,7 +252,8 @@ fn emit_hash_shift(emitter: &mut Emitter) {
             );
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [rdi], 0");                      // inspect the live entry count before selecting the head
+            hash_layout::emit_load_header_field(emitter, "r10", "rdi", hash_layout::HeaderField::Count);
+            emitter.instruction("test r10, r10");                               // inspect the live entry count before selecting the head
             emitter.instruction("je __rt_hash_shift_boxed_empty");              // an empty associative array returns owned null
             hash_layout::emit_order_edge(emitter, "r11", "rdi", false);
             hash_layout::emit_consume_entry_address(emitter, "rdi", "r11");
@@ -311,16 +314,16 @@ fn emit_hash_shift(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(emitter, "x9", 8);                              // reload the table the head was removed from
-            emitter.instruction("ldr x0, [x9, #8]");                            // reuse its capacity as the rebuild hint
-            emitter.instruction("ldr x1, [x9, #16]");                           // preserve the table-wide value type
+            hash_layout::emit_load_header_field(emitter, "x0", "x9", hash_layout::HeaderField::Capacity);
+            hash_layout::emit_load_header_field(emitter, "x1", "x9", hash_layout::HeaderField::ValueType);
             abi::emit_call_label(emitter, "__rt_hash_new");
             abi::load_at_offset(emitter, "x1", 8);                              // spread the head-less table into the fresh hash
             abi::emit_call_label(emitter, "__rt_hash_spread");
         }
         Arch::X86_64 => {
             abi::load_at_offset(emitter, "r10", 8);                             // reload the table the head was removed from
-            emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                // reuse its capacity as the rebuild hint
-            emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");               // preserve the table-wide value type
+            hash_layout::emit_load_header_field(emitter, "rdi", "r10", hash_layout::HeaderField::Capacity);
+            hash_layout::emit_load_header_field(emitter, "rsi", "r10", hash_layout::HeaderField::ValueType);
             abi::emit_call_label(emitter, "__rt_hash_new");
             abi::emit_reg_move(emitter, "rdi", "rax");                          // the spread reads its destination in rdi
             abi::load_at_offset(emitter, "rsi", 8);                             // spread the head-less table into the fresh hash

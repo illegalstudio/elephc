@@ -1741,7 +1741,9 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     // -- PHP prints `&` only while the reference cell has another owner --
     emitter.instruction("cmp x5, #11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("b.ne __rt_vd_hash_value_ready");                       // ordinary entries carry a value directly
-    emitter.instruction("ldr w9, [x3, #-12]");                                  // load the reference cell's owner count
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "x3", ("x9", "w9"), ("x10", "w10"), ("x10", "x11"), "__rt_vd_hash_reference",
+    );
     emitter.instruction("cmp w9, #1");                                          // is the cell shared with a live alias?
     emitter.instruction("b.ls __rt_vd_hash_value_ready");                       // a singleton reference prints as its value
     emitter.instruction("mov x9, #1");                                          // request the `&` marker on this value line
@@ -1833,7 +1835,9 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     // -- PHP prints `&` only while the reference cell has another owner --
     emitter.instruction("cmp r9, 11");                                          // does this entry belong to a PHP reference set?
     emitter.instruction("jne __rt_vd_hash_value_ready_x86");                    // ordinary entries carry a value directly
-    emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");                      // load the reference cell's owner count
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "rcx", ("r10", "r10d"), ("r11", "r11d"), ("r11", "rax"), "__rt_vd_hash_reference_x86",
+    );
     emitter.instruction("cmp r10d, 1");                                         // is the cell shared with a live alias?
     emitter.instruction("jbe __rt_vd_hash_value_ready_x86");                    // a singleton reference prints as its value
     emitter.instruction("mov QWORD PTR [rbp - 80], 1");                         // request the `&` marker on this value line

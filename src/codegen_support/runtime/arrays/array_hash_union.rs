@@ -11,6 +11,7 @@
 use elephc_memoir::values::packed_slots;
 
 use elephc_memoir::values::hash_payload;
+use elephc_memoir::hash_layout::{self, HeaderField};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -41,7 +42,7 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the left indexed-array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the right associative-array pointer
     emitter.instruction("ldr x9, [x0]");                                        // load the left indexed-array length
-    emitter.instruction("ldr x10, [x1]");                                       // load the right associative-array entry count
+    hash_layout::emit_load_header_field(emitter, "x10", "x1", HeaderField::Count);
     emitter.instruction("str x9, [sp, #32]");                                   // save the left indexed-array length for the numeric-key loop
     emitter.instruction("add x11, x9, x10");                                    // estimate result entry count before applying duplicate-key filtering
     emitter.instruction("lsl x11, x11, #1");                                    // double the estimate to keep hash load factor below the growth threshold
@@ -171,7 +172,7 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the left indexed-array pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the right associative-array pointer
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the left indexed-array length
-    emitter.instruction("mov r11, QWORD PTR [rsi]");                            // load the right associative-array entry count
+    hash_layout::emit_load_header_field(emitter, "r11", "rsi", HeaderField::Count);
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the left indexed-array length for the numeric-key loop
     emitter.instruction("lea rdi, [r10 + r11]");                                // estimate result entry count before duplicate-key filtering
     emitter.instruction("shl rdi, 1");                                          // double the estimate to keep hash load factor below the growth threshold

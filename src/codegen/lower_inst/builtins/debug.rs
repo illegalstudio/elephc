@@ -35,6 +35,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
+use elephc_memoir::values::container_header;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
@@ -692,14 +693,7 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
     emit_write_literal(ctx, b"array(");
     abi::emit_pop_reg(ctx.emitter, result_reg);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [x0]");                            // load the array or hash element count from the heap header
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the array or hash element count from the heap header
-        }
-    }
+    container_header::emit_load_count(ctx.emitter, result_reg, result_reg);
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     emit_write_current_string(ctx);
     emit_write_literal(ctx, b") {\n");

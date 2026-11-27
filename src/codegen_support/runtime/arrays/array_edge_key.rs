@@ -55,17 +55,17 @@ pub fn emit_array_edge_key(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_from_value");                             // box the integer key and return it to the caller
     emitter.label("__rt_array_edge_key_hash");
     emitter.instruction("cbz x1, __rt_array_edge_key_hash_head");               // which == 0 selects the insertion-order head
-    emitter.instruction("ldr x11, [x0, #32]");                                  // x11 = tail slot index
+    hash_layout::emit_load_header_field(emitter, "x11", "x0", hash_layout::HeaderField::Tail);
     emitter.instruction("b __rt_array_edge_key_hash_slot");                     // load the selected entry
     emitter.label("__rt_array_edge_key_hash_head");
-    emitter.instruction("ldr x11, [x0, #24]");                                  // x11 = head slot index
+    hash_layout::emit_load_header_field(emitter, "x11", "x0", hash_layout::HeaderField::Head);
     emitter.label("__rt_array_edge_key_hash_slot");
     emitter.instruction("cmn x11, #1");                                         // is the selected slot empty (index == -1)?
     emitter.instruction("b.eq __rt_array_edge_key_null");                       // empty hashes have no key
     emitter.instruction("mov x12, #64");                                        // hash entry stride in bytes
     hash_layout::emit_entry_address(emitter, "x12", "x0", "x11");
-    emitter.instruction("ldr x13, [x12, #16]");                                 // x13 = key_len (-1 marks an integer key)
-    emitter.instruction("ldr x14, [x12, #8]");                                  // x14 = key payload (integer value or string pointer)
+    hash_layout::emit_load_entry_field(emitter, "x13", "x12", hash_layout::EntryField::KeyHigh);
+    hash_layout::emit_load_entry_field(emitter, "x14", "x12", hash_layout::EntryField::KeyLow);
     emitter.instruction("cmn x13, #1");                                         // is the entry keyed by an integer?
     emitter.instruction("b.eq __rt_array_edge_key_int");                        // integer keys box with tag 0
     emitter.instruction("mov x0, #1");                                          // value_tag = 1 (string)
@@ -129,16 +129,16 @@ fn emit_array_edge_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_edge_key_hash");
     emitter.instruction("test rsi, rsi");                                       // which == 0 selects the insertion-order head?
     emitter.instruction("je __rt_array_edge_key_hash_head");                    // load the head slot
-    emitter.instruction("mov r11, QWORD PTR [rdi + 32]");                       // r11 = tail slot index
+    hash_layout::emit_load_header_field(emitter, "r11", "rdi", hash_layout::HeaderField::Tail);
     emitter.instruction("jmp __rt_array_edge_key_hash_slot");                   // load the selected entry
     emitter.label("__rt_array_edge_key_hash_head");
-    emitter.instruction("mov r11, QWORD PTR [rdi + 24]");                       // r11 = head slot index
+    hash_layout::emit_load_header_field(emitter, "r11", "rdi", hash_layout::HeaderField::Head);
     emitter.label("__rt_array_edge_key_hash_slot");
     emitter.instruction("cmp r11, -1");                                         // is the selected slot empty (index == -1)?
     emitter.instruction("je __rt_array_edge_key_null");                         // empty hashes have no key
     hash_layout::emit_entry_address(emitter, "rcx", "rdi", "r11");
-    emitter.instruction("mov r8, QWORD PTR [rcx + 16]");                        // r8 = key_len (-1 marks an integer key)
-    emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // r9 = key payload (integer value or string pointer)
+    hash_layout::emit_load_entry_field(emitter, "r8", "rcx", hash_layout::EntryField::KeyHigh);
+    hash_layout::emit_load_entry_field(emitter, "r9", "rcx", hash_layout::EntryField::KeyLow);
     emitter.instruction("cmp r8, -1");                                          // is the entry keyed by an integer?
     emitter.instruction("je __rt_array_edge_key_int");                          // integer keys box with tag 0
     emitter.instruction("mov rdi, r9");                                         // value_lo = key string pointer

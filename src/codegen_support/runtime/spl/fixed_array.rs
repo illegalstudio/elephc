@@ -12,6 +12,7 @@
 use elephc_memoir::values::throwable_storage;
 use elephc_memoir::values::packed_mixed_copy::PackedMixedCopy;
 use crate::codegen_support::abi;
+use elephc_memoir::hash_layout::{self, HeaderField};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use elephc_memoir::values::spl_storage;
@@ -471,7 +472,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload preserveKeys flag
     emitter.instruction("cbnz x9, __rt_spl_fixed_copy_from_hash_preserve");     // preserve numeric keys when requested
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload source hash
-    emitter.instruction("ldr x1, [x9]");                                        // packed hash import size equals live entry count
+    hash_layout::emit_load_header_field(emitter, "x1", "x9", HeaderField::Count);
     emitter.instruction("str x1, [sp, #24]");                                   // save destination size
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for resize
     emitter.instruction("bl __rt_spl_fixed_set_size");                          // resize receiver for packed hash import
@@ -1011,7 +1012,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // should numeric keys be preserved?
     emitter.instruction("jne __rt_spl_fixed_copy_from_hash_preserve_x86");      // preserve numeric keys when requested
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload source hash
-    emitter.instruction("mov rsi, QWORD PTR [r9]");                             // packed hash import size equals live entry count
+    hash_layout::emit_load_header_field(emitter, "rsi", "r9", HeaderField::Count);
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save destination size
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for resize
     emitter.instruction("call __rt_spl_fixed_set_size");                        // resize receiver for packed hash import

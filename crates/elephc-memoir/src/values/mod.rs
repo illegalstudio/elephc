@@ -42,6 +42,7 @@ pub mod boxed_offset_row;
 pub mod array_to_mixed;
 pub mod array_to_pointer_words;
 pub mod array_header;
+pub mod container_header;
 pub mod hash_to_mixed;
 pub mod array_to_hash;
 pub mod array_set_refcounted;

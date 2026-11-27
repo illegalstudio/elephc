@@ -9,6 +9,8 @@
 
 use super::*;
 use elephc_memoir::ValueTag;
+use elephc_memoir::hash_layout::{self, HeaderField};
+use elephc_memoir::values::container_header;
 use elephc_memoir::values::owned_payload::emit_owned_pointer_from_slot;
 
 /// Emits AArch64 array and object-property iteration eval wrappers.
@@ -314,7 +316,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
         "x10",
         "__elephc_eval_value_array_len_zero",
     );
-    emitter.instruction("ldr x0, [x9]");                                        // load the runtime container element count
+    container_header::emit_load_count(emitter, "x0", "x9");
     emitter.instruction("ret");                                                 // return the element count to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_property_len");
@@ -343,7 +345,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
         emitter, "x9", "x12", "x9",
     );
     emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null property hashes are treated as empty objects
-    emitter.instruction("ldr x0, [x9]");                                        // load the hash entry count
+    hash_layout::emit_load_header_field(emitter, "x0", "x9", HeaderField::Count);
     emitter.instruction("ret");                                                 // return the public property count to Rust
     emitter.label("__elephc_eval_value_object_property_len_zero");
     emitter.instruction("mov x0, #0");                                          // report zero JSON-visible object properties

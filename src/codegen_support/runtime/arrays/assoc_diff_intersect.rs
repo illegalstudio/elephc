@@ -8,6 +8,7 @@
 //! Key details:
 //! - Values compare by PHP string cast: `(string)a === (string)b`. Temporary Mixed boxes are released to avoid leaks.
 
+use elephc_memoir::hash_layout::{self, HeaderField};
 use elephc_memoir::values::hash_payload::{self, StringSlotStore};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -36,8 +37,8 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save hash2 pointer
     emitter.instruction("str x2, [sp, #24]");                                   // save mode (0 = diff, 1 = intersect)
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash1 pointer
-    emitter.instruction("ldr x0, [x9, #8]");                                    // x0 = hash1 capacity for the result hash
-    emitter.instruction("ldr x1, [x9, #16]");                                   // x1 = hash1 value_type summary
+    hash_layout::emit_load_header_field(emitter, "x0", "x9", HeaderField::Capacity);
+    hash_layout::emit_load_header_field(emitter, "x1", "x9", HeaderField::ValueType);
     emitter.instruction("bl __rt_hash_new");                                    // create the result hash table, x0 = result
     emitter.instruction("str x0, [sp, #16]");                                   // save the result hash pointer
     emitter.instruction("str xzr, [sp, #32]");                                  // iterator cursor = 0 (start from hash1 head)
@@ -141,8 +142,8 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save hash2 pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save mode (0 = diff, 1 = intersect)
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload hash1 pointer
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // rdi = hash1 capacity for the result hash
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // rsi = hash1 value_type summary
+    hash_layout::emit_load_header_field(emitter, "rdi", "r10", HeaderField::Capacity);
+    hash_layout::emit_load_header_field(emitter, "rsi", "r10", HeaderField::ValueType);
     emitter.instruction("call __rt_hash_new");                                  // create the result hash table, rax = result
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // iterator cursor = 0 (start from hash1 head)

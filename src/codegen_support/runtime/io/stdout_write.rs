@@ -20,6 +20,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::buffers::output::{self, ControlField};
 
 /// Emits the `__rt_stdout_write` runtime helper.
 ///
@@ -61,7 +62,7 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     // -- user output-handler guard: PHP discards output produced inside an
     //    ob_start() handler; drop the bytes while _ob_in_handler is set. --
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_in_handler");  // materialize the address of the in-handler flag
+    output::emit_control_address(emitter, "x9", ControlField::InHandler);
     emitter.instruction("ldr x9, [x9]");                                        // load the in-handler flag
     emitter.instruction("cbnz x9, __rt_stdout_write_done");                     // inside a handler - discard the bytes entirely
 
@@ -69,7 +70,7 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
     //    bytes to the top output buffer instead of writing to the terminal. The
     //    flush helpers temporarily decrement _ob_level before re-entering this
     //    routine so parent-buffer routing keeps working. --
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the output-buffer stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x9, [x9]");                                        // load the output-buffer stack depth
     emitter.instruction("cbz x9, __rt_stdout_write_ob_inactive");               // no active output buffer - fall through to the web/syscall path
     emitter.instruction("bl __rt_ob_append");                                   // append the bytes (ptr=x0, len=x1) to the top output buffer
@@ -131,14 +132,14 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     // -- user output-handler guard: PHP discards output produced inside an
     //    ob_start() handler; drop the bytes while _ob_in_handler is set. --
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_in_handler"); // materialize the address of the in-handler flag
+    output::emit_control_address(emitter, "r11", ControlField::InHandler);
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the in-handler flag
     emitter.instruction("test r11, r11");                                       // is a user output handler running?
     emitter.instruction("jnz __rt_stdout_write_done");                          // inside a handler - discard the bytes entirely
 
     // -- output-buffering capture: while the ob_* stack is non-empty, append the
     //    bytes to the top output buffer instead of writing to the terminal. --
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_level");      // materialize the address of the output-buffer stack depth
+    output::emit_depth_address(emitter, "r11");
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the output-buffer stack depth
     emitter.instruction("test r11, r11");                                       // is any output buffer active?
     emitter.instruction("jz __rt_stdout_write_ob_inactive");                    // no active output buffer - fall through to the web/syscall path

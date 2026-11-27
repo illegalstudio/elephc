@@ -73,6 +73,7 @@ use super::super::objects::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// Byte width of one `_class_vd_desc_*` property row.
 const VD_DESC_ROW_BYTES: u64 = 48;
@@ -198,7 +199,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     // -- PHP's `(n)` also counts every dynamic property the body appends --
     emitter.instruction("ldr x9, [x1]");                                        // reload the class id after marker probes reused its scratch register
     emit_load_dump_dyn_hash(emitter, "x1", "x9", "x12", "x13", "__rt_vd_obj_count_ret");
-    emitter.instruction("ldr x12, [x12]");                                      // load the dynamic-property hash entry count
+    hash_layout::emit_load_header_field(emitter, "x12", "x12", HeaderField::Count);
     emitter.instruction("add x5, x5, x12");                                     // count every dynamic property too
     emitter.label("__rt_vd_obj_count_ret");
     emitter.instruction("mov x0, x5");                                          // return the initialized property count
@@ -207,7 +208,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.label("__rt_vd_obj_count_incomplete");
     emitter.instruction(&format!("ldr x9, [x1, #{PROPERTY_HASH}]"));            // opaque property hash
     emitter.instruction("cbz x9, __rt_vd_obj_count_incomplete_one");            // no properties still has the synthetic name
-    emitter.instruction("ldr x0, [x9]");                                        // property hash entry count
+    hash_layout::emit_load_header_field(emitter, "x0", "x9", HeaderField::Count);
     emitter.instruction("add x0, x0, #1");                                      // plus __PHP_Incomplete_Class_Name
     emitter.instruction("ret");                                                 // return the complete count
     emitter.label("__rt_vd_obj_count_incomplete_one");
@@ -264,7 +265,8 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     // -- PHP's `(n)` also counts every dynamic property the body appends --
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // reload the class id after marker probes reused its scratch register
     emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_vd_obj_count_ret_x86");
-    emitter.instruction("add rax, QWORD PTR [r10]");                            // count every dynamic property too
+    hash_layout::emit_load_header_field(emitter, "r11", "r10", HeaderField::Count);
+    emitter.instruction("add rax, r11");                                        // count every dynamic property too
     emitter.label("__rt_vd_obj_count_ret_x86");
     emitter.instruction("ret");                                                 // return the initialized property count in rax
 
@@ -272,7 +274,7 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {PROPERTY_HASH}]")); // opaque property hash
     emitter.instruction("test rax, rax");                                       // no properties?
     emitter.instruction("jz __rt_vd_obj_count_incomplete_one_x86");             // the synthetic name row still exists
-    emitter.instruction("mov rax, QWORD PTR [rax]");                            // property hash entry count
+    hash_layout::emit_load_header_field(emitter, "rax", "rax", HeaderField::Count);
     emitter.instruction("add rax, 1");                                          // plus __PHP_Incomplete_Class_Name
     emitter.instruction("ret");                                                 // return the complete count
     emitter.label("__rt_vd_obj_count_incomplete_one_x86");

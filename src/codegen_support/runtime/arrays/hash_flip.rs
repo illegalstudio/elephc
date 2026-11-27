@@ -22,6 +22,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
+use elephc_memoir::hash_layout::{self, HeaderField};
 use crate::codegen_support::platform::Arch;
 
 /// The `array_flip()` warning text for a value PHP refuses to use as an array key.
@@ -84,7 +85,7 @@ pub fn emit_hash_flip(emitter: &mut Emitter) {
     emitter.instruction("mov x19, x0");                                         // x19 = source hash pointer, live across every helper call
 
     // -- allocate the destination table with headroom for every flipped entry --
-    emitter.instruction("ldr x0, [x19]");                                       // x0 = source entry count
+    hash_layout::emit_load_header_field(emitter, "x0", "x19", HeaderField::Count);
     emitter.instruction("lsl x0, x0, #1");                                      // double the entry count to give the destination insertion headroom
     emitter.instruction("mov x9, #16");                                         // x9 = minimum destination bucket count
     emitter.instruction("cmp x0, x9");                                          // compare the derived capacity against the runtime minimum
@@ -211,7 +212,7 @@ fn emit_hash_flip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source hash pointer across every helper call
 
     // -- allocate the destination table with headroom for every flipped entry --
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = source entry count
+    hash_layout::emit_load_header_field(emitter, "rax", "rdi", HeaderField::Count);
     emitter.instruction("shl rax, 1");                                          // double the entry count to give the destination insertion headroom
     emitter.instruction("cmp rax, 16");                                         // compare the derived capacity against the runtime minimum
     emitter.instruction("jge __rt_hash_flip_capacity_x86");                     // keep the doubled count when it already meets the minimum

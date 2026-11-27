@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use elephc_memoir::buffers::stream_tables;
 
 /// Lowers `fclose(stream)` after validating and unboxing the stream handle.
 pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -72,9 +73,9 @@ fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_user_filter_close_fd");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
+            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "x9");
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear any read filter before the descriptor can be reused
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
+            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "x9");
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear any write filter before the descriptor can be reused
             ctx.emitter.label(&native_close_label);
             ctx.emitter.syscall(6);
@@ -86,9 +87,9 @@ fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov x0, #1");                              // return true when the stream close succeeded
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
+            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "r9");
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any read filter before the descriptor can be reused
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
+            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "r9");
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any write filter before the descriptor can be reused
             ctx.emitter.label(&native_close_label);
             ctx.emitter.instruction("mov rdi, rax");                            // pass the stream fd to libc close()

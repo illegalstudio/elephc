@@ -19,8 +19,8 @@
 //! - A glob failure returns -1; the caller's `box_socket_result` lowers
 //!   that to PHP false.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use elephc_memoir::interop::glob_storage;
+use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::{buffers::stream_tables, interop::glob_storage};
 
 /// opendir_glob: open a synthetic dir stream over a glob match list.
 /// Input:  AArch64 x1 = address pointer (including "glob://"), x2 = address length
@@ -79,7 +79,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("b.gt __rt_opendir_glob_reject_fd");                    // can't register this fd
 
     // -- register the struct in _glob_handles[fd] --
-    abi::emit_symbol_address(emitter, "x9", "_glob_handles");
+    stream_tables::GLOB_HANDLES.emit_address(emitter, "x9");
     emitter.instruction("ldr x10, [sp, #40]");                                  // struct pointer
     emitter.instruction("str x10, [x9, x0, lsl #3]");                           // _glob_handles[fd] = struct ptr
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -143,7 +143,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_opendir_glob_reject_fd_x86");                  // can't register this fd
 
     // -- register the struct in _glob_handles[fd] --
-    abi::emit_symbol_address(emitter, "r9", "_glob_handles");                   // base of the fd → struct pointer table
+    stream_tables::GLOB_HANDLES.emit_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // struct pointer
     emitter.instruction("mov QWORD PTR [r9 + rax * 8], r10");                   // _glob_handles[fd] = struct ptr
     emitter.instruction("add rsp, 48");                                         // release the frame

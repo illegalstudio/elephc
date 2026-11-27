@@ -209,7 +209,7 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
     // -- look up the cached instance: _user_filter_instances[fd*2 + dir] --
     emitter.instruction("add x4, x0, x0");                                      // fd*2
     emitter.instruction("add x4, x4, x3");                                      // fd*2 + dir
-    abi::emit_symbol_address(emitter, "x5", "_user_filter_instances");
+    stream_tables::USER_FILTER_INSTANCES.emit_address(emitter, "x5");
     emitter.instruction("ldr x0, [x5, x4, lsl #3]");                            // obj = instances[slot] (loaded into the method's $this register)
     emitter.instruction("cbz x0, __rt_aufs_passthrough");                       // no instance attached → pass the buffer through unchanged
 
@@ -262,7 +262,7 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, rdi");                                         // fd
     emitter.instruction("add r9, r9");                                          // fd*2
     emitter.instruction("add r9, rcx");                                         // fd*2 + dir
-    abi::emit_symbol_address(emitter, "r10", "_user_filter_instances");         // load runtime data address
+    stream_tables::USER_FILTER_INSTANCES.emit_address(emitter, "r10");
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = instances[slot] (loaded into the method's $this register)
     emitter.instruction("test rdi, rdi");                                       // any instance attached?
     emitter.instruction("jz __rt_aufs_passthrough_x86");                        // no instance → pass the buffer through unchanged

@@ -53,7 +53,7 @@ pub fn emit_array_slice_to_hash(emitter: &mut Emitter) {
     emitter.instruction("lsr x10, x10, #8");                                    // shift the packed value_type into the low bits
     emitter.instruction("and x10, x10, #0x7f");                                 // isolate the indexed-array value_type (also the Mixed tag)
     emitter.instruction("str x10, [sp, #32]");                                  // save the value_type / runtime tag
-    emitter.instruction("ldr x11, [x0, #16]");                                  // load the element size (stride) from the header
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x11");
     emitter.instruction("str x11, [sp, #40]");                                  // save the element stride
     emitter.instruction("mov x1, x10");                                         // value_type for the new hash header
     emitter.instruction("cmp x2, #8");                                          // is the window below the minimum hash capacity?
@@ -129,7 +129,7 @@ fn emit_array_slice_to_hash_linux_x86_64(emitter: &mut Emitter) {
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rdi");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the value_type / runtime tag
-    emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // load the element size (stride) from the header
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rdi", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the element stride
     emitter.instruction("mov rsi, r10");                                        // value_type for the new hash header
     emitter.instruction("mov rdi, rdx");                                        // capacity hint = clamped window length

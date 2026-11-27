@@ -52,14 +52,9 @@ pub(in crate::codegen) use scope_probe::emit_scope_is_callable_probe;
 pub(in crate::codegen) use shared_selector::{emit_pending_callable_selectors, SharedCallableSelectorKey};
 use shared_selector::SelectorPolicy;
 
-use elephc_memoir::callables::storage::{MIXED_METHOD_TAG_OFFSET, MIXED_METHOD_PAYLOAD_OFFSET, MIXED_RECEIVER_TAG_OFFSET, MIXED_RECEIVER_PAYLOAD_OFFSET, MIXED_SELECTOR_BYTES};
-const MIXED_VALUE_PAYLOAD_OFFSET: usize = 16;
-const MIXED_VALUE_BYTES: usize = 32;
+use elephc_memoir::callables::storage::{MIXED_METHOD_TAG_OFFSET, MIXED_METHOD_PAYLOAD_OFFSET, MIXED_RECEIVER_TAG_OFFSET, MIXED_RECEIVER_PAYLOAD_OFFSET, MIXED_SELECTOR_BYTES, MIXED_VALUE_BYTES, MIXED_VALUE_PAYLOAD_OFFSET, STRING_CLASS_OFFSET, STRING_METHOD_OFFSET, STRING_SELECTOR_BYTES};
 const MIXED_TAG_STRING: i64 = 1;
 const MIXED_TAG_OBJECT: i64 = 6;
-const STRING_METHOD_OFFSET: usize = 0;
-const STRING_CLASS_OFFSET: usize = 16;
-const STRING_SELECTOR_BYTES: usize = 32;
 const MIXED_TAG_CALLABLE: i64 = 10;
 /// Runtime Mixed tag for a boxed indexed (list) array; payload-low holds the array pointer.
 const MIXED_TAG_INDEXED_ARRAY: i64 = 4;

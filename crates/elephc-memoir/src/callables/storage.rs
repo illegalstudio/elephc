@@ -18,6 +18,17 @@ pub const CAPTURE_BYTES: usize = 16;
 /// Shift from runtime capture index to its byte displacement.
 pub const CAPTURE_SHIFT: u32 = CAPTURE_BYTES.trailing_zeros();
 
+/// Payload offset inside one stack-staged Mixed value.
+pub const MIXED_VALUE_PAYLOAD_OFFSET: usize = 16;
+/// Bytes reserved for one stack-staged Mixed value.
+pub const MIXED_VALUE_BYTES: usize = 32;
+/// Method string pair offset inside a string callable selector.
+pub const STRING_METHOD_OFFSET: usize = 0;
+/// Class string pair offset inside a string callable selector.
+pub const STRING_CLASS_OFFSET: usize = 16;
+/// Bytes reserved for a string callable selector.
+pub const STRING_SELECTOR_BYTES: usize = 32;
+
 /// Returns the offset of a selected capture pair.
 pub const fn capture_offset(index: usize) -> usize {
     HEADER_BYTES + index * CAPTURE_BYTES

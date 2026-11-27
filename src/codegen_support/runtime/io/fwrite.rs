@@ -17,6 +17,7 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 use elephc_memoir::buffers::stream_scratch::CAPACITY as FILTER_BUF_SIZE;
+use elephc_memoir::buffers::stream_tables;
 
 /// fwrite: write a payload to a descriptor, applying a write filter if present.
 /// Input:  AArch64 x0 = fd, x1 = pointer, x2 = length
@@ -61,7 +62,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
-    abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "x9");
     emitter.instruction("ldrb w3, [x9, x0]");                                   // write filter id for this descriptor
     emitter.instruction("cbz w3, __rt_fwrite_direct");                          // no filter: write the payload directly
     emitter.instruction("cmp w3, #128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
@@ -205,7 +206,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
-    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "r9");
     emitter.instruction("movzx ecx, BYTE PTR [r9 + rdi]");                      // write filter id for this descriptor
     emitter.instruction("test rcx, rcx");                                       // is a write filter attached?
     emitter.instruction("jz __rt_fwrite_direct_x86");                           // no filter: write the payload directly

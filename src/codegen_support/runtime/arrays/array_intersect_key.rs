@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// Emits the `__rt_array_intersect_key` runtime helper.
 ///
@@ -61,9 +62,9 @@ pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save hash2 pointer
 
     // -- create result hash table with same capacity as hash1 --
-    emitter.instruction("ldr x0, [x0, #8]");                                    // x0 = hash1 capacity
+    hash_layout::emit_load_header_field(emitter, "x0", "x0", HeaderField::Capacity);
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash1 pointer
-    emitter.instruction("ldr x1, [x9, #16]");                                   // x1 = hash1 value_type
+    hash_layout::emit_load_header_field(emitter, "x1", "x9", HeaderField::ValueType);
     emitter.instruction("bl __rt_hash_new");                                    // create result hash table, x0 = result ptr
     emitter.instruction("str x0, [sp, #16]");                                   // save result hash table pointer
 
@@ -162,9 +163,9 @@ fn emit_array_intersect_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 80");                                         // reserve local storage for hash1, hash2, result, iterator cursor, and a non-overlapping temporary entry scratch area
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source associative-array pointer across the intersect-key helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the mask associative-array pointer across the intersect-key helper calls
-    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the source associative-array capacity to seed the filtered result hash table
+    hash_layout::emit_load_header_field(emitter, "rdi", "rdi", HeaderField::Capacity);
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source associative-array pointer for the packed value-type load
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load the source associative-array value_type for the filtered result hash table
+    hash_layout::emit_load_header_field(emitter, "rsi", "r10", HeaderField::ValueType);
     emitter.instruction("call __rt_hash_new");                                  // allocate the filtered result associative-array with matching capacity and value_type
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the filtered result associative-array pointer across iteration
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the insertion-order iterator cursor to the hash-header head sentinel

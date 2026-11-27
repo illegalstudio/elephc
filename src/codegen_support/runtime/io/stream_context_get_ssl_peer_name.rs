@@ -52,7 +52,7 @@ pub fn emit_get_ssl_peer_name(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save out_len_addr
 
     // -- load the top-level options hash; bail when null --
-    abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
+    elephc_memoir::buffers::stream_context_owners::emit_options_address(emitter, "x9");
     emitter.instruction("ldr x0, [x9]");                                        // load runtime value
     emitter.instruction("cbz x0, __rt_gspn_miss");                              // no context options at all
 
@@ -101,7 +101,7 @@ fn emit_get_ssl_peer_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save out_len_addr
 
     // -- load top-level options hash --
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_context_options", 0); // prepare SysV call argument
+    elephc_memoir::buffers::stream_context_owners::emit_load_options(emitter, "rdi");
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gspn_miss_x86");                               // branch when the checked value is zero or equal
 

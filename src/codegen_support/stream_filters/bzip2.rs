@@ -28,7 +28,7 @@
 //!   struct itself is intentionally not freed on close (small documented leak,
 //!   matching the zlib filter).
 
-use elephc_memoir::buffers::stream_state;
+use elephc_memoir::buffers::{stream_state, stream_tables};
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
@@ -193,7 +193,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the bz_stream pointer
     abi::emit_symbol_address(emitter, "x9", "_bzstream_handles");
     emitter.instruction("str x10, [x9, x0, lsl #3]");                           // store the bz_stream handle for this descriptor
-    abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "x9");
     emitter.instruction("mov w11, #10");                                        // write-filter id 10 = bzip2.compress
     emitter.instruction("strb w11, [x9, x0]");                                  // record the bzip2 write filter for this descriptor
 
@@ -347,7 +347,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the bz_stream pointer
     abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], r10");                     // store the bz_stream handle for this descriptor
-    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters"); // write-filter table base
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "r9");
     emitter.instruction("mov BYTE PTR [r9 + rdi], 10");                         // write-filter id 10 = bzip2.compress
 
     // -- publish the helper addresses so __rt_fwrite / fclose can call them --

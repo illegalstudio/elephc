@@ -19,6 +19,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::values::container_header;
 
 /// Emits PHP's `array_slice`/`array_splice` `$offset`/`$length` normalization.
 ///
@@ -52,7 +53,7 @@ pub fn emit_slice_bounds(emitter: &mut Emitter, prefix: &str) {
     }
 
     emitter.comment("-- normalize the PHP slice window: offset, then length --");
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = logical length of the source array, indexed or hash
+    container_header::emit_load_count(emitter, "x9", "x0");
     emitter.instruction("cmp x1, #0");                                          // does the caller count the offset backwards from the end?
     emitter.instruction(&format!("b.ge {}_off_fwd", prefix));                   // forward offsets only need the upper clamp
     emitter.instruction("add x1, x9, x1");                                      // offset = length + offset for backward offsets
@@ -86,7 +87,7 @@ pub fn emit_slice_bounds(emitter: &mut Emitter, prefix: &str) {
 /// branch-based clamps differ. See [`emit_slice_bounds`] for the full ABI and semantics.
 fn emit_slice_bounds_x86_64(emitter: &mut Emitter, prefix: &str) {
     emitter.comment("-- normalize the PHP slice window: offset, then length --");
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // r10 = logical length of the source array, indexed or hash
+    container_header::emit_load_count(emitter, "r10", "rdi");
     emitter.instruction("cmp rsi, 0");                                          // does the caller count the offset backwards from the end?
     emitter.instruction(&format!("jge {}_off_fwd_x86", prefix));                // forward offsets only need the upper clamp
     emitter.instruction("add rsi, r10");                                        // offset = length + offset for backward offsets

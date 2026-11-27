@@ -22,9 +22,18 @@ and hydrated-property owner transfers, non-owning observer caches, hash-entry
 reference promotion and borrowed payload views, temporary/fixed-frame owner record
 publication, exact chain unlink, consuming container boxing, Mixed symbol publication,
 external record publication, contained foreign-owner release and conditional
-helper-owner retirement.
+helper-owner retirement. Memoir also owns associative-array header and entry
+geometry, including field access, entry addressing and borrowed value-slot
+addresses. The logical-count word shared by indexed arrays and hashes, plus
+the indexed-array element stride, are exposed through Memoir layout helpers so
+consumers do not repeat physical offsets. Hash algorithms and PHP key/value
+policy remain compiler-owned.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
-declarations. The compiler enables Memoir's `codegen` feature to emit the
+declarations. Output-buffer slots and control words, stream-context owner slots,
+fixed stream side tables and the active serializer stream are addressed only
+through Memoir facades. The compiler continues to choose output behavior,
+stream operations and serialization semantics. The compiler enables Memoir's
+`codegen` feature to emit the
 assembly `__rt_*` helpers. Magician enables `runtime` for the eval buffer registry,
 cell retirement observers, allocation-bound weak metadata, stable owner slots,
 detached-batch cleanup, owned object edges and output handlers. The Rust code is
@@ -39,9 +48,12 @@ storage cleanup releases copied strings/arrays and leaves borrowed native
 object/resource payloads untouched. The compiler supplies the scalar-tag eligibility
 policy and an optional type-source association callback after Mixed promotion;
 static retirement receives its weak-source unbind callback, and guard layout and
-scoped-list symbols come from the compiler. Exception-handler installation,
-failed-constructor destructor policy, parser completion and diagnostic selection
-remain compiler-owned.
+scoped-list symbols come from the compiler. Frame-local cleanup boundaries use
+Memoir to park the current Throwable, publish the native handler record and
+restore the enclosing handler and diagnostic depth. The compiler still selects
+the caught label, frame placement and cleanup policy. Other exception-handler
+installation, failed-constructor destructor policy, parser completion and
+diagnostic selection remain compiler-owned.
 The compiler also selects the surviving activation during unwinding. Memoir walks
 the supplied cleanup chain and detaches each abandoned record before its callback
 can release user objects or reenter the runtime.
@@ -142,6 +154,11 @@ frame cells, refcount transitions, and the main and active stack floors. It
 owns the layout of the weak observer table and range checks used before a
 compiler adapter reads managed storage. The compiler supplies PHP decisions
 and the operating system's stack bounds.
+
+Host-side lifetimes that do not expose PHP values use Memoir runtime leases as
+well. Magician's opaque ABI owner count and PCNTL active/detached context registry
+share overflow-safe retain/release and deferred-reclamation mechanics, while
+Magician retains signal registration and teardown policy.
 
 Memoir source changes also participate in runtime-object cache identity.
 

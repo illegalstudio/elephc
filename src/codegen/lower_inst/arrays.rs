@@ -9,7 +9,7 @@
 //! - Runtime append helpers may grow arrays and return a new heap pointer, so
 //!   the backend writes that pointer back to the source SSA slot and local slot.
 
-use elephc_memoir::values::packed_slots;
+use elephc_memoir::{hash_layout, values::packed_slots};
 
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
@@ -831,7 +831,7 @@ fn lower_hash_elem_ref_cell_aarch64(
     }
 
     ctx.emitter.label(&found);
-    ctx.emitter.instruction("add x0, x4, #24");                                 // address the entry's low value word for reference promotion
+    hash_layout::emit_value_address_from_entry(ctx.emitter, "x0", "x4");
     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
     ctx.emitter.label(&done);
     Ok(())
@@ -882,7 +882,7 @@ fn lower_hash_elem_ref_cell_x86_64(
     }
 
     ctx.emitter.label(&found);
-    ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // address the entry's low value word for reference promotion
+    hash_layout::emit_value_address_from_entry(ctx.emitter, "rdi", "r8");
     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
     ctx.emitter.label(&done);
     Ok(())
@@ -1039,7 +1039,7 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction(&format!("cbz x4, {missing_label}"));               // handle a missing key according to address-of versus foreach semantics
-    ctx.emitter.instruction("add x0, x4, #24");                                 // pass the matched hash entry's value-low address
+    hash_layout::emit_value_address_from_entry(ctx.emitter, "x0", "x4");
     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
     abi::emit_pop_reg(ctx.emitter, "x9");
     ctx.emitter.instruction(&format!("b {done_label}"));                        // return the managed tag-11 reference cell
@@ -1065,7 +1065,7 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
         super::hashes::materialize_hash_key_aarch64_after_first(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "x0");
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-        ctx.emitter.instruction("add x0, x4, #24");                             // address the newly inserted entry payload
+        hash_layout::emit_value_address_from_entry(ctx.emitter, "x0", "x4");
         abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
         abi::emit_pop_reg(ctx.emitter, "x9");
         ctx.emitter.instruction(&format!("b {done_label}"));                    // return the new managed entry cell
@@ -1122,7 +1122,7 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction("test r8, r8");                                     // a missing key cannot supply a managed entry cell
     ctx.emitter.instruction(&format!("jz {missing_label}"));                    // handle a missing key according to address-of versus foreach semantics
-    ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // pass the matched hash entry's value-low address
+    hash_layout::emit_value_address_from_entry(ctx.emitter, "rdi", "r8");
     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
     abi::emit_pop_reg(ctx.emitter, "r10");
     ctx.emitter.instruction(&format!("jmp {done_label}"));                      // return the managed tag-11 reference cell
@@ -1148,7 +1148,7 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
         super::hashes::materialize_hash_key_x86_64_after_first(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "rdi");
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-        ctx.emitter.instruction("lea rdi, [r8 + 24]");                          // address the newly inserted entry payload
+        hash_layout::emit_value_address_from_entry(ctx.emitter, "rdi", "r8");
         abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
         abi::emit_pop_reg(ctx.emitter, "r10");
         ctx.emitter.instruction(&format!("jmp {done_label}"));                  // return the new managed entry cell
@@ -1205,7 +1205,7 @@ fn lower_load_array_elem_ref_cell_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction(&format!("cbz x4, {null_label}"));                  // a missing key has no entry that can own a reference cell
-    ctx.emitter.instruction("add x0, x4, #24");                                 // pass the matching entry's value-low address
+    hash_layout::emit_value_address_from_entry(ctx.emitter, "x0", "x4");
     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
     ctx.emitter.instruction(&format!("b {done_label}"));                        // return the managed reference-cell pointer
 
@@ -1260,7 +1260,7 @@ fn lower_load_array_elem_ref_cell_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction("test r8, r8");                                     // a missing key has no entry that can own a reference cell
     ctx.emitter.instruction(&format!("jz {null_label}"));                       // return null rather than dereferencing a missing entry
-    ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // pass the matching entry's value-low address
+    hash_layout::emit_value_address_from_entry(ctx.emitter, "rdi", "r8");
     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
     ctx.emitter.instruction(&format!("jmp {done_label}"));                      // return the managed reference-cell pointer
 

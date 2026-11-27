@@ -17,6 +17,7 @@ use crate::codegen::context::FunctionContext;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 use super::super::super::{expect_operand, store_if_result};
 
@@ -387,7 +388,7 @@ fn lower_assoc_array_keys_aarch64(
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, "x0");
     let elem_size = INDEXED_KEY_ELEMENT_SIZE;
-    ctx.emitter.instruction("ldr x0, [x0]");                                    // load the associative-array entry count to size the keys result exactly
+    hash_layout::emit_load_header_field(ctx.emitter, "x0", "x0", HeaderField::Count);
     ctx.emitter.instruction(&format!("mov x1, #{}", elem_size));                // choose the indexed-array element size for the key payload representation
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
     crate::codegen::emit_array_value_type_stamp(ctx.emitter, "x0", result_elem_ty);
@@ -421,7 +422,7 @@ fn lower_assoc_array_keys_x86_64(
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, "rax");
     let elem_size = INDEXED_KEY_ELEMENT_SIZE;
-    ctx.emitter.instruction("mov rdi, QWORD PTR [rax]");                        // load the associative-array entry count to size the keys result exactly
+    hash_layout::emit_load_header_field(ctx.emitter, "rdi", "rax", HeaderField::Count);
     ctx.emitter.instruction(&format!("mov rsi, {}", elem_size));                // choose the indexed-array element size for the key payload representation
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
     crate::codegen::emit_array_value_type_stamp(ctx.emitter, "rax", result_elem_ty);

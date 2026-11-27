@@ -6,6 +6,7 @@ from scripts.audit_memoir_boundary import (
     MIGRATED_OWNER_FIELDS,
     MIGRATED_SOURCE_CONTRACTS,
     audit_archive_symbols,
+    audit_centralized_memory_access,
     audit_metadata,
     audit_migrated_owner_fields,
     audit_migrated_source_contract,
@@ -289,6 +290,18 @@ class MigratedSourceContractTests(unittest.TestCase):
             "consumer.rs", 'emit("__rt_heap_alloc"); emit("_heap_max");', contract)
         self.assertEqual([finding.code for finding in findings],
                          ["consumer-policy", "consumer-policy"])
+
+    def test_direct_runtime_storage_access_is_rejected(self):
+        """Keep physical output and stream symbols behind Memoir's typed facade."""
+        source = 'abi::emit_symbol_address(emitter, "x9", "_ob_level");'
+        findings = audit_centralized_memory_access("consumer.rs", source)
+        self.assertEqual([finding.code for finding in findings],
+                         ["physical-memory-access"])
+
+    def test_runtime_symbol_mentions_without_physical_access_are_allowed(self):
+        """Allow assertions and documentation to name the emitted storage contract."""
+        source = 'assert!(assembly.contains("_ob_level")); // _ser_stream remains internal'
+        self.assertEqual(audit_centralized_memory_access("consumer.rs", source), [])
 
     def test_repository_contracts_cover_all_eight_migration_groups(self):
         """Guard the owner, descriptor, Throwable, argument, header, symbol, global and tail groups."""

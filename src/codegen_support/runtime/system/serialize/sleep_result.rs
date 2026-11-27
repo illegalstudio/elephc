@@ -29,8 +29,7 @@ const VALUE_TAG: usize = 64;
 const BODY_START: usize = 72;
 const WRITTEN: usize = 80;
 
-const OUTPUT_STREAM: StreamScope<'static> = StreamScope {
-    active: super::stream::ACTIVE_STREAM,
+const OUTPUT_STREAM: StreamScope = StreamScope {
     saved: FrameOffset::new(CONCAT),
 };
 

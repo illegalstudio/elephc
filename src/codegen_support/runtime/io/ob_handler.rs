@@ -30,7 +30,10 @@
 //!   the handler's first run and sets `_ob_in_handler` around the call so
 //!   handler-produced output is discarded and nested `ob_start()` is fatal.
 
-use elephc_memoir::callables::argument_storage;
+use elephc_memoir::{
+    buffers::output::{self, ControlField, SlotField},
+    callables::argument_storage,
+};
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -58,16 +61,16 @@ pub fn emit_ob_apply_handler(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish the apply-handler frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the buffer slot index
     emitter.instruction("str x1, [sp, #8]");                                    // save the base phase bits
-    abi::emit_symbol_address(emitter, "x9", "_ob_handler_stubs");               // materialize the handler-stub slot array
+    output::emit_slot_field_address(emitter, "x9", SlotField::HandlerStub);
     emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // load the slot's handler stub
     emitter.instruction("cbz x10, __rt_ob_apply_none");                         // default handler — report pass-through
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");
+    output::emit_slot_field_address(emitter, "x11", SlotField::Flags);
     emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // inspect the handler's stored lifecycle state
     emitter.instruction("tbnz x12, #13, __rt_ob_apply_none");                   // disabled handlers do not run again
     emitter.instruction("orr x12, x12, #4096");                                 // publish STARTED before invoking PHP
     emitter.instruction("str x12, [x11, x0, lsl #3]");                          // retain actual status independently of phase computation
     // -- first-run START bit + started flag --
-    abi::emit_symbol_address(emitter, "x11", "_ob_started");                    // materialize the started-flag slot array
+    output::emit_slot_field_address(emitter, "x11", SlotField::Started);
     emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's started flag
     emitter.instruction("cbnz x12, __rt_ob_apply_started");                     // already started — keep the base phase
     emitter.instruction("ldr x12, [sp, #8]");                                   // reload the base phase bits
@@ -77,23 +80,23 @@ pub fn emit_ob_apply_handler(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x11, x0, lsl #3]");                          // publish the started flag
     emitter.label("__rt_ob_apply_started");
     // -- marshal stub arguments: env, buffer ptr, buffer len, phase --
-    abi::emit_symbol_address(emitter, "x11", "_ob_handler_envs");               // materialize the handler-env slot array
+    output::emit_slot_field_address(emitter, "x11", SlotField::HandlerEnvironment);
     emitter.instruction("ldr x9, [x11, x0, lsl #3]");                           // load the slot's handler env word
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
+    output::emit_slot_field_address(emitter, "x11", SlotField::Pointer);
     emitter.instruction("ldr x1, [x11, x0, lsl #3]");                           // pass the raw buffer base pointer
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
+    output::emit_slot_field_address(emitter, "x11", SlotField::Length);
     emitter.instruction("ldr x2, [x11, x0, lsl #3]");                           // pass the raw buffer byte count
     emitter.instruction("ldr x3, [sp, #8]");                                    // pass the final phase bits
     emitter.instruction("mov x0, x9");                                          // pass the handler env word
     // -- run the handler with its output discarded --
-    abi::emit_symbol_address(emitter, "x9", "_ob_in_handler");                  // materialize the in-handler flag address
+    output::emit_control_address(emitter, "x9", ControlField::InHandler);
     emitter.instruction("mov x11, #1");                                         // handler is about to run
     emitter.instruction("str x11, [x9]");                                       // set the in-handler flag (discard handler output)
     emitter.instruction("blr x10");                                             // invoke the handler stub → replacement triple
     emitter.instruction("str x0, [sp, #16]");                                   // save the replaced flag across the flag clear
     emitter.instruction("str x1, [sp, #24]");                                   // save the replacement string pointer
     emitter.instruction("str x2, [sp, #32]");                                   // save the replacement string length
-    abi::emit_symbol_address(emitter, "x9", "_ob_in_handler");                  // materialize the in-handler flag address
+    output::emit_control_address(emitter, "x9", ControlField::InHandler);
     emitter.instruction("str xzr, [x9]");                                       // clear the in-handler flag
     emitter.instruction("ldr x0, [sp, #16]");                                   // return the replaced flag
     emitter.instruction("ldr x1, [sp, #24]");                                   // return the replacement string pointer
@@ -118,16 +121,16 @@ fn emit_ob_apply_handler_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve the apply-handler local slots (16-aligned)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the buffer slot index
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the base phase bits
-    abi::emit_symbol_address(emitter, "r9", "_ob_handler_stubs");               // materialize the handler-stub slot array
+    output::emit_slot_field_address(emitter, "r9", SlotField::HandlerStub);
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // load the slot's handler stub
     emitter.instruction("test r10, r10");                                       // does this buffer have a user handler?
     emitter.instruction("jz __rt_ob_apply_none_x86");                           // default handler — report pass-through
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");
+    output::emit_slot_field_address(emitter, "r11", SlotField::Flags);
     emitter.instruction("test QWORD PTR [r11 + rdi*8], 8192");                  // inspect whether a previous invocation disabled the handler
     emitter.instruction("jnz __rt_ob_apply_none_x86");                          // disabled handlers permanently pass raw bytes through
     emitter.instruction("or QWORD PTR [r11 + rdi*8], 4096");                    // publish STARTED before calling PHP
     // -- first-run START bit + started flag --
-    abi::emit_symbol_address(emitter, "r11", "_ob_started");                    // materialize the started-flag slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::Started);
     emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's started flag
     emitter.instruction("test rax, rax");                                       // has the handler run before?
     emitter.instruction("jnz __rt_ob_apply_started_x86");                       // already started — keep the base phase
@@ -135,22 +138,22 @@ fn emit_ob_apply_handler_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + rdi*8], 1");                      // publish the started flag
     emitter.label("__rt_ob_apply_started_x86");
     // -- marshal stub arguments: env, buffer ptr, buffer len, phase --
-    abi::emit_symbol_address(emitter, "r11", "_ob_handler_envs");               // materialize the handler-env slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::HandlerEnvironment);
     emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's handler env word
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::Pointer);
     emitter.instruction("mov rsi, QWORD PTR [r11 + rdi*8]");                    // pass the raw buffer base pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
+    output::emit_slot_field_address(emitter, "r11", SlotField::Length);
     emitter.instruction("mov rdx, QWORD PTR [r11 + rdi*8]");                    // pass the raw buffer byte count
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // pass the final phase bits
     emitter.instruction("mov rdi, rax");                                        // pass the handler env word
     // -- run the handler with its output discarded --
-    abi::emit_symbol_address(emitter, "r9", "_ob_in_handler");                  // materialize the in-handler flag address
+    output::emit_control_address(emitter, "r9", ControlField::InHandler);
     emitter.instruction("mov QWORD PTR [r9], 1");                               // set the in-handler flag (discard handler output)
     emitter.instruction("call r10");                                            // invoke the handler stub → replacement triple
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the replaced flag across the flag clear
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the replacement string pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the replacement string length
-    abi::emit_symbol_address(emitter, "r9", "_ob_in_handler");                  // materialize the in-handler flag address
+    output::emit_control_address(emitter, "r9", ControlField::InHandler);
     emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the in-handler flag
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the replaced flag
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // return the replacement string pointer
@@ -444,9 +447,9 @@ pub fn emit_ob_notice_named(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #0]");                                    // save the buffer slot index
     emitter.instruction("bl __rt_stdout_write");                                // write the notice prefix
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the buffer slot index
-    abi::emit_symbol_address(emitter, "x10", "_ob_name_ptrs");                  // materialize the handler-name pointer array
+    output::emit_slot_field_address(emitter, "x10", SlotField::NamePointer);
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the handler display-name pointer
-    abi::emit_symbol_address(emitter, "x10", "_ob_name_lens");                  // materialize the handler-name length array
+    output::emit_slot_field_address(emitter, "x10", SlotField::NameLength);
     emitter.instruction("ldr x1, [x10, x9, lsl #3]");                           // load the handler display-name length
     emitter.instruction("bl __rt_stdout_write");                                // write the handler display name
     abi::emit_symbol_address(emitter, "x0", "_ob_ntc_g_open");                  // load the " (" separator
@@ -476,9 +479,9 @@ fn emit_ob_notice_named_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdx");                        // save the buffer slot index
     emitter.instruction("call __rt_stdout_write");                              // write the notice prefix
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the buffer slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
+    output::emit_slot_field_address(emitter, "r11", SlotField::NamePointer);
     emitter.instruction("mov rdi, QWORD PTR [r11 + r10*8]");                    // load the handler display-name pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_name_lens");                  // materialize the handler-name length array
+    output::emit_slot_field_address(emitter, "r11", SlotField::NameLength);
     emitter.instruction("mov rsi, QWORD PTR [r11 + r10*8]");                    // load the handler display-name length
     emitter.instruction("call __rt_stdout_write");                              // write the handler display name
     abi::emit_symbol_address(emitter, "rdi", "_ob_ntc_g_open");                 // load the " (" separator

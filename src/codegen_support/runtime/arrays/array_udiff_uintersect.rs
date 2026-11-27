@@ -12,10 +12,9 @@
 //! - A resumable native exception boundary owns all intermediate cells.
 
 use crate::codegen_support::{abi, arrays, emit::Emitter, platform::Arch, value_boxing};
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::types::PhpType;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 224;
 const HANDLER: usize = FRAME - 16;
@@ -247,22 +246,16 @@ fn box_unboxed_value(emitter: &mut Emitter) {
 
 /// Registers a native handler before acquiring snapshots or constructing the result.
 fn install_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-    abi::store_at_offset(emitter, result, PREVIOUS);
-    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // preserve every comparator owner across callback and cleanup throws
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_udiff_uintersect_caught");
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        "__rt_array_udiff_uintersect_caught",
+    );
 }
 
 /// Restores the enclosing handler and warning-suppression depth after all temporary owners retire.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears a frame slot without clobbering the current owner or any of the first four C arguments.

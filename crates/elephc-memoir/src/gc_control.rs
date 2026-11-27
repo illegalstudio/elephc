@@ -15,6 +15,11 @@ use crate::Emitter;
 use crate::Arch;
 use crate::layout::REFERENCE_CELL_HEAP_KIND;
 
+/// Enables automatic collection at a new application request boundary.
+pub fn emit_enable_automatic_collection(emitter: &mut impl Emitter) {
+    abi::emit_store_imm_to_symbol(emitter, "_gc_enabled", 0, 1);
+}
+
 
 /// Emits target-aware GC enable, disable, query, and automatic-collection wrappers.
 pub fn emit_gc_control(emitter: &mut impl Emitter) {

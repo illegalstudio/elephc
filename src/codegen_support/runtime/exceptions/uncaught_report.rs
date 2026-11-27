@@ -78,7 +78,10 @@
 //!   restores its own saved registers on exit. x86_64 realigns `rsp` once at the entry because the
 //!   tail jump may arrive 8-off.
 
-use elephc_memoir::activation_records::FRAME_READER;
+use elephc_memoir::{
+    activation_records::FRAME_READER,
+    buffers::output::{self, ControlField},
+};
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{DEBUGINFO_FATAL_MSG, DEBUGINFO_WARNING_PREFIX};
 use crate::codegen_support::{abi, emit::Emitter};
@@ -147,7 +150,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     // nothing at all on stdout. Nothing is live yet at the entry, so the call costs no spill.
     emitter.instruction("mov x10, #0");                                         // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "x10", "_print_r_mode", 0);          // an escaping exception abandons a print_r(..., true) capture: the report must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "x10", ControlField::InHandler);
     emitter.instruction("bl __rt_ob_flush_all");                                // drain every open output buffer before the report is written
 
     abi::emit_load_symbol_to_reg(emitter, "x10", "_uncaught_report_mode", 0);
@@ -439,7 +442,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.label_global("__rt_debuginfo_fatal");
     emitter.instruction("mov x10, #0");                                         // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "x10", "_print_r_mode", 0);          // the fatal abandons a print_r(..., true) capture: it must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "x10", ControlField::InHandler);
     emitter.instruction("sub sp, sp, #16");                                     // reserve the linkage frame
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address for the helper calls
     emitter.instruction("mov x29, sp");                                         // establish the frame pointer
@@ -524,7 +527,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and rsp, -16");                                        // realign the stack for the C-ABI flush; this helper never returns
     emitter.instruction("xor r10d, r10d");                                      // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "r10", "_print_r_mode", 0);          // an escaping exception abandons a print_r(..., true) capture: the report must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "r10", ControlField::InHandler);
     emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the report is written
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_uncaught_report_mode", 0);
@@ -832,7 +835,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and rsp, -16");                                        // realign the stack for the C-ABI flush; this helper never returns
     emitter.instruction("xor r10d, r10d");                                      // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "r10", "_print_r_mode", 0);          // the fatal abandons a print_r(..., true) capture: it must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "r10", ControlField::InHandler);
     emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the fatal is written
     emitter.instruction("call __rt_debuginfo_fatal_text");                      // the fatal line with its location
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)

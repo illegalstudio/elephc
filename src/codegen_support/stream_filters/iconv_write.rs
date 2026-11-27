@@ -41,6 +41,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::{Arch, Platform};
 
 use elephc_memoir::buffers::stream_scratch::CAPACITY as ICONV_SCRATCH;
+use elephc_memoir::buffers::stream_tables;
 
 /// `iconvctl()` request that sets a descriptor's transliteration (GNU libiconv numbering,
 /// which Apple's iconv keeps).
@@ -246,7 +247,7 @@ fn emit_arm64<F>(
         emitter.instruction(&format!("mov w10, #{option_bits}"));               // this filter's option bits (1 = //TRANSLIT, 2 = //IGNORE)
         emitter.instruction("strb w10, [x9, x1]");                              // record them for this descriptor
     }
-    abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "x9");
     emitter.instruction("mov w10, #12");                                        // write-filter id 12 = convert.iconv write
     emitter.instruction("strb w10, [x9, x1]");                                  // record the iconv write filter for this descriptor
     abi::emit_symbol_address(emitter, "x10", fwrite_label);
@@ -370,7 +371,7 @@ fn emit_x86_64<F>(
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     abi::emit_symbol_address(emitter, "r9", "_iconv_handles"); // iconv handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], rax");                     // store the iconv_t for this descriptor
-    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters"); // write-filter table base
+    stream_tables::WRITE_FILTERS.emit_address(emitter, "r9");
     emitter.instruction("mov BYTE PTR [r9 + rdi], 12");                         // write-filter id 12 = convert.iconv write
     emitter.instruction(&format!("lea r10, [rip + {}]", fwrite_label));         // address of the iconv write helper
     abi::emit_symbol_address(emitter, "r9", "_iconv_fwrite_fn"); // _iconv_fwrite_fn slot

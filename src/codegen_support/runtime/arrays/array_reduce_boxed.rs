@@ -11,10 +11,9 @@
 //! - A native exception boundary owns every intermediate, including a pending callback result.
 
 use crate::codegen_support::{abi, arrays, emit::Emitter, platform::Arch, value_boxing};
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::types::PhpType;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 160;
 const HANDLER: usize = FRAME - 16;
@@ -161,22 +160,16 @@ fn prepare_callback_arguments(emitter: &mut Emitter) {
 
 /// Publishes a local handler before snapshot or carry ownership can require unwinding.
 fn install_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-    abi::store_at_offset(emitter, result, PREVIOUS);
-    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // keep intermediate owners reachable when a callback or destructor throws
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_reduce_boxed_caught");
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        "__rt_array_reduce_boxed_caught",
+    );
 }
 
 /// Restores the caller's handler and diagnostic depth after all reduction owners are retired.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears an owner without clobbering either exception-chain or outgoing callback arguments.

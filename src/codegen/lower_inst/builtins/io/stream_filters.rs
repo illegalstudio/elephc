@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use elephc_memoir::buffers::stream_tables;
 
 /// Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper.
 pub(crate) fn lower_stream_filter_register(
@@ -450,16 +451,16 @@ pub(crate) fn lower_stream_filter_remove(
     abi::emit_call_label(ctx.emitter, "__rt_user_filter_release_fd");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
+            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "x9");
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the read-direction filter slot for this descriptor
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
+            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "x9");
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the write-direction filter slot for this descriptor
             ctx.emitter.instruction("mov x0, #1");                              // return true after removing the filter state
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
+            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "r9");
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the read-direction filter slot for this descriptor
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
+            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "r9");
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the write-direction filter slot for this descriptor
             ctx.emitter.instruction("mov eax, 1");                              // return true after removing the filter state
         }

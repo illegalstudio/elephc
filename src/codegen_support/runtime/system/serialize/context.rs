@@ -39,8 +39,7 @@ const REGISTRY: StackRegistrySnapshot<'static> = StackRegistrySnapshot {
     label_prefix: "__rt_serialize_context",
 };
 
-const OUTPUT_STREAM: StreamScope<'static> = StreamScope {
-    active: super::stream::ACTIVE_STREAM,
+const OUTPUT_STREAM: StreamScope = StreamScope {
     saved: FrameOffset::new(OUTER),
 };
 

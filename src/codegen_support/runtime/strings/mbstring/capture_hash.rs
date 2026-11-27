@@ -11,6 +11,7 @@
 //! - Reference adapters select or promote each destination before entering this hash-only writer.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout;
 
 #[cfg(test)]
 pub(super) mod tests;
@@ -105,14 +106,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label(&format!("{NAME}_write"));
     if arm {
         emitter.instruction("ldp x9, x10, [sp, #24]");                          // recover the new owned capture payload
-        emitter.instruction("stp x9, x10, [x4, #24]");                          // complete the selected array's current entry after destruction
-        emitter.instruction("ldr x9, [sp, #40]");                               // recover the capture's concrete string or bool tag
-        emitter.instruction("str x9, [x4, #40]");                               // publish the final value type without changing key identity
+        emitter.instruction("ldr x11, [sp, #40]");                              // recover the capture's concrete string or bool tag
+        hash_layout::emit_store_entry_value(emitter, "x4", "x11", "x9", "x10");
     } else {
-        for offset in [24, 32, 40] {
-            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {offset}]")); // recover one owned capture word
-            emitter.instruction(&format!("mov QWORD PTR [r8 + {offset}], r10")); // finish the selected entry without ordinary COW
-        }
+        emitter.instruction("mov r10, QWORD PTR [rsp + 24]");                   // recover the new owned capture low word
+        emitter.instruction("mov r11, QWORD PTR [rsp + 32]");                   // recover the new owned capture high word
+        emitter.instruction("mov r9, QWORD PTR [rsp + 40]");                    // recover the capture's concrete string or bool tag
+        hash_layout::emit_store_entry_value(emitter, "r8", "r9", "r10", "r11");
     }
     jump(emitter, "finish");
     emitter.label(&format!("{NAME}_insert"));
@@ -169,9 +169,19 @@ fn persist(emitter: &mut Emitter, offset: usize) {
 fn insert(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     emitter.instruction(if arm { "ldr x0, [sp]" } else { "mov rdi, QWORD PTR [rsp]" }); // reload the stable destination header
-    emitter.instruction(if arm { "ldr x9, [x0]" } else { "mov r10, QWORD PTR [rdi]" }); // read the current count after any destructor growth
+    hash_layout::emit_load_header_field(
+        emitter,
+        if arm { "x9" } else { "r10" },
+        if arm { "x0" } else { "rdi" },
+        hash_layout::HeaderField::Count,
+    );
     emitter.instruction(if arm { "lsl x9, x9, #2" } else { "shl r10, 2" });     // scale occupied slots for the load-factor comparison
-    emitter.instruction(if arm { "ldr x10, [x0, #8]" } else { "mov r11, QWORD PTR [rdi + 8]" }); // read the current capacity
+    hash_layout::emit_load_header_field(
+        emitter,
+        if arm { "x10" } else { "r11" },
+        if arm { "x0" } else { "rdi" },
+        hash_layout::HeaderField::Capacity,
+    );
     emitter.instruction(if arm { "add x10, x10, x10, lsl #1" } else { "imul r11, r11, 3" }); // calculate the three-quarter capacity threshold
     emitter.instruction(if arm { "cmp x9, x10" } else { "cmp r10, r11" });      // test whether insertion needs more storage
     branch(emitter, "lo", "jb", "capacity_ready");

@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// hash_count: get the number of entries in a hash table.
 /// Input:  `x0`/`rdi` = hash table pointer.
@@ -24,8 +25,7 @@ pub fn emit_hash_count(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_count ---");
     emitter.label_global("__rt_hash_count");
 
-    // -- load count from header offset 0 --
-    emitter.instruction("ldr x0, [x0]");                                        // x0 = count from hash table header
+    hash_layout::emit_load_header_field(emitter, "x0", "x0", HeaderField::Count);
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -35,7 +35,6 @@ fn emit_hash_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_count ---");
     emitter.label_global("__rt_hash_count");
 
-    // -- load count from header offset 0 --
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the hash table entry count from the header
+    hash_layout::emit_load_header_field(emitter, "rax", "rdi", HeaderField::Count);
     emitter.instruction("ret");                                                 // return count to caller
 }

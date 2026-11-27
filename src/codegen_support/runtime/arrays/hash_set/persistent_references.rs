@@ -36,7 +36,7 @@ pub(super) fn emit_write(emitter: &mut Emitter) {
             emitter.instruction("ldr x5, [sp]");                                // recover the unique destination table
             emitter.instruction("ldr x9, [sp, #48]");                           // recover the destination bucket index
             hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-            emitter.instruction("ldr x0, [x12, #24]");                          // retain the destination wrapper in its bucket
+            hash_layout::emit_load_entry_field(emitter, "x0", "x12", hash_layout::EntryField::ValueLow);
             emitter.instruction("ldr x1, [sp, #24]");                           // lend the prepared value to the shared publication helper
             elephc_memoir::reference_cells::mixed_payload::emit_replace_persistent_owner(emitter, "[sp, #40]");
             emitter.instruction("b __rt_hash_set_done");                        // return the unchanged wrapper-bearing table
@@ -54,7 +54,7 @@ pub(super) fn emit_write(emitter: &mut Emitter) {
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // recover the unique destination table
             emitter.instruction("mov r11, QWORD PTR [rbp - 56]");               // recover the destination bucket index
             hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-            emitter.instruction("mov rax, QWORD PTR [r12 + 24]");               // retain the destination wrapper in its bucket
+            hash_layout::emit_load_entry_field(emitter, "rax", "r12", hash_layout::EntryField::ValueLow);
             emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");               // lend the prepared value to the shared publication helper
             elephc_memoir::reference_cells::mixed_payload::emit_replace_persistent_owner(emitter, "[rbp - 32]");
             emitter.instruction("jmp __rt_hash_set_reference_done_x");          // return the unchanged wrapper-bearing table

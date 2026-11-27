@@ -54,8 +54,8 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish the frame pointer
 
     emitter.instruction("str x0, [sp, #0]");                                    // save the source hash
-    emitter.instruction("ldr x9, [x0]");                                        // entry count, used as the capacity hint
-    emitter.instruction("ldr x10, [x0, #16]");                                  // the hash header's value_type
+    hash_layout::emit_load_header_field(emitter, "x9", "x0", HeaderField::Count);
+    hash_layout::emit_load_header_field(emitter, "x10", "x0", HeaderField::ValueType);
     emitter.instruction("str x10, [sp, #72]");                                  // save it: the seen-key shape depends on it
     emitter.instruction("cmp x9, #8");                                          // below the minimum useful capacity?
     emitter.instruction("b.ge __rt_h2h_uniq_cap_ok");                           // use the count as the hint
@@ -162,8 +162,8 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 96");                                         // reserve the walk state, keeping rsp aligned
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source hash
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // entry count, used as the capacity hint
-    emitter.instruction("mov r10, QWORD PTR [rdi + 16]");                       // the hash header's value_type
+    hash_layout::emit_load_header_field(emitter, "rax", "rdi", HeaderField::Count);
+    hash_layout::emit_load_header_field(emitter, "r10", "rdi", HeaderField::ValueType);
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // save it: the seen-key shape depends on it
     emitter.instruction("cmp rax, 8");                                          // below the minimum useful capacity?
     emitter.instruction("jge __rt_h2h_uniq_cap_ok_x");                          // use the count as the hint
@@ -256,3 +256,4 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller's frame pointer
     emitter.instruction("ret");                                                 // return the owned unique hash to the caller
 }
+use elephc_memoir::hash_layout::{self, HeaderField};

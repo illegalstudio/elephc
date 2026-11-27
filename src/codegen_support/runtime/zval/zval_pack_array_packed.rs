@@ -45,7 +45,7 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the elephc array pointer
     emitter.instruction("ldr x1, [x0]");                                        // load the element count
     emitter.instruction("str x1, [sp, #8]");                                    // save the length
-    emitter.instruction("ldr x1, [x0, #16]");                                   // load the element size
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x1");
     emitter.instruction("str x1, [sp, #16]");                                   // save the elem_size
     elephc_memoir::values::array_header::emit_load_value_type_tag(
         emitter, "x0", "x1",
@@ -189,7 +189,7 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the element count
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the length
-    emitter.instruction("mov rcx, QWORD PTR [rax + 16]");                       // load the element size
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rax", "rcx");
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the elem_size
     elephc_memoir::values::array_header::emit_load_value_type_tag(
         emitter, "rax", "rcx",

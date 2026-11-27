@@ -14,15 +14,12 @@
 //! - Opaque descriptor kinds fail closed because their reference escapes cannot be audited.
 
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::codegen_support::{
     abi, arrays, callable_descriptor, emit::Emitter, platform::Arch, value_boxing,
 };
 use crate::types::PhpType;
-
-use elephc_memoir::FrameOffset;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 use elephc_memoir::reference_cells::unmanaged_borrows;
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 96;
@@ -412,26 +409,16 @@ fn release_callback_result(emitter: &mut Emitter) {
 
 /// Installs a native handler before acquiring the source root or invoking callbacks.
 fn install_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-    abi::store_at_offset(emitter, result, PREVIOUS);
-    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
-    abi::emit_frame_slot_address(
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
-        HANDLER - TRY_HANDLER_JMP_BUF_OFFSET,
+        FrameOffset::new(PREVIOUS),
+        "__rt_array_walk_boxed_caught",
     );
-    emitter.save_exception_handler();                                           // keep descriptor and source owners reachable across callback and cleanup throws
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_walk_boxed_caught");
 }
 
 /// Restores the caller's handler and diagnostic depth after ownership cleanup.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears an owner slot without clobbering the result register.

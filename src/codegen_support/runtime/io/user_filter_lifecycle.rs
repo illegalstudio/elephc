@@ -15,6 +15,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::guards;
+use elephc_memoir::buffers::stream_tables;
 
 /// Emits close and refused-creation rollback entries that consume every selected table owner.
 pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
@@ -33,7 +34,7 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, arg, frame, 0);
     abi::emit_store_to_address(emitter, selected, frame, 24);
     emitter.instruction(if arm { "add x10, x0, x0" } else { "lea r10, [rdi + rdi]" }); // derive the read-direction table index
-    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "_user_filter_instances");
+    stream_tables::USER_FILTER_INSTANCES.emit_address(emitter, if arm { "x9" } else { "r9" });
     for direction in 0..2 {
         let detach = format!("__rt_user_filter_detach_{direction}");
         let saved = format!("__rt_user_filter_saved_{direction}");
@@ -52,7 +53,8 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         emitter.instruction(if arm { "cmp x0, #0" } else { "test rax, rax" });  // preserve builtin filter IDs in slots without user objects
         emitter.instruction(&format!("{} {saved}", if arm { "b.eq" } else { "jz" })); // empty user slots have no filter ID to retire
         abi::emit_load_from_address(emitter, if arm { "x12" } else { "r8" }, frame, 0);
-        abi::emit_symbol_address(emitter, if arm { "x11" } else { "r11" }, if direction == 0 { "_stream_read_filters" } else { "_stream_write_filters" });
+        let filter_table = if direction == 0 { stream_tables::READ_FILTERS } else { stream_tables::WRITE_FILTERS };
+        filter_table.emit_address(emitter, if arm { "x11" } else { "r11" });
         emitter.instruction(if arm { "strb wzr, [x11, x12]" } else { "mov BYTE PTR [r11 + r8], 0" }); // retire the matching user-filter ID with its instance
         emitter.label(&saved);
         abi::emit_store_to_address(emitter, result, frame, 8 + direction * 8);
@@ -136,7 +138,7 @@ fn emit_close_fd_guard(emitter: &mut Emitter) {
     emitter.label_global("__rt_user_filter_close_fd");
     // -- ordinary descriptors need no exception guard when no filter object can run PHP --
     emitter.instruction(if arm { "add x10, x0, x0" } else { "lea r10, [rdi + rdi]" }); // select both user-filter direction entries
-    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "_user_filter_instances");
+    stream_tables::USER_FILTER_INSTANCES.emit_address(emitter, if arm { "x9" } else { "r9" });
     if arm {
         emitter.instruction("add x9, x9, x10, lsl #3");                         // derive the adjacent read/write instance pair
         emitter.instruction("ldp x11, x12, [x9]");                              // inspect both owners without consuming them
@@ -167,8 +169,8 @@ fn emit_close_fd_guard(emitter: &mut Emitter) {
         emitter, arg, if arm { "x1" } else { "rax" }, if arm { "x9" } else { "r9" }, -1,
     );
     emitter.instruction(if arm { "mov x0, x1" } else { "mov rdi, rax" });       // transfer the descriptor into the native close ABI
-    for symbol in ["_stream_read_filters", "_stream_write_filters"] {
-        abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, symbol);
+    for table in [stream_tables::READ_FILTERS, stream_tables::WRITE_FILTERS] {
+        table.emit_address(emitter, if arm { "x9" } else { "r9" });
         emitter.instruction(if arm { "strb wzr, [x9, x0]" } else { "mov BYTE PTR [r9 + rdi], 0" }); // prevent filter IDs surviving descriptor reuse
     }
     if arm {

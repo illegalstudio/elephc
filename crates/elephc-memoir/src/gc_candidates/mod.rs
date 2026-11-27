@@ -16,6 +16,31 @@ mod roots;
 pub mod proofs;
 pub mod scans;
 
+/// Loads candidate discovery plus proof-cache validation work into the integer result register.
+pub fn emit_load_application_work(e: &mut impl Emitter) {
+    load(e, "x0", "rax", "_gc_candidates_visited");
+    load(e, "x9", "r10", "_gc_proofs_visited");
+    op(e, "add x0, x0, x9", "add rax, r10", "combine candidate and proof-cache work");
+}
+
+/// Loads the work charged to the most recent proof-cache rebuild.
+pub fn emit_load_rebuild_cost(e: &mut impl Emitter) {
+    load(e, "x0", "rax", "_gc_proofs_cost");
+}
+
+/// Clears the gathering mode after a host-requested cache refresh.
+pub fn emit_finish_host_refresh(e: &mut impl Emitter) {
+    abi::emit_store_zero_to_symbol(e, "_gc_candidates_gathering", 0);
+}
+
+/// Enables application candidate tracking and publishes its program-root scanner.
+pub fn emit_enable_application(e: &mut impl Emitter, root_scan: &str) {
+    abi::emit_store_imm_to_symbol(e, "_gc_candidates_enabled", 0, 1);
+    let result = abi::int_result_reg(e);
+    abi::emit_symbol_address(e, result, root_scan);
+    abi::emit_store_reg_to_symbol(e, result, "_gc_candidate_root_scan_fn", 0);
+}
+
 /// Selects the reviewed instruction for the target's runtime pointer ABI.
 pub fn op(e: &mut impl Emitter, arm: &str, x86: &str, intent: &str) {
     let instruction = if e.arch() == Arch::AArch64 { arm } else { x86 };

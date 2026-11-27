@@ -14,7 +14,7 @@
 //!   retire only the caller's lease, leaving any captured lease intact.
 //! - Constructor-promoted borrowed properties still use the separate persistent-cell fallback.
 
-use elephc_memoir::values::packed_slots;
+use elephc_memoir::{hash_layout::{self, EntryField, HeaderField}, values::packed_slots};
 
 use super::*;
 
@@ -1160,17 +1160,17 @@ fn emit_hash_entries_writeback_guard(ctx: &mut FunctionContext<'_>, tag: u8) {
     let done = ctx.next_label("ref_writeback_hash_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // load the hash capacity bounding the slot walk
+            hash_layout::emit_load_header_field(ctx.emitter, "x9", "x0", HeaderField::Capacity);
             ctx.emitter.instruction("mov x10, #0");                             // start at slot 0
             ctx.emitter.label(&lp);
             ctx.emitter.instruction("cmp x10, x9");                             // has every slot been inspected?
             ctx.emitter.instruction(&format!("b.hs {done}"));                   // yes: every value has the declared kind
-            ctx.emitter.instruction("ldr x11, [x0, #40]");                      // load the hash's separate entry storage
-            ctx.emitter.instruction("add x11, x11, x10, lsl #6");               // address this 64-byte entry
-            ctx.emitter.instruction("ldr x12, [x11]");                          // load the slot's occupied marker
+            hash_layout::emit_entries(ctx.emitter, "x11", "x0");
+            hash_layout::emit_consume_index_entry_address(ctx.emitter, "x11", "x10");
+            hash_layout::emit_load_entry_field(ctx.emitter, "x12", "x11", EntryField::Occupied);
             ctx.emitter.instruction("cmp x12, #1");                             // only live entries hold values
             ctx.emitter.instruction(&format!("b.ne {next}"));                   // skip empty slots and tombstones
-            ctx.emitter.instruction("ldr x12, [x11, #40]");                     // load the live entry's value tag
+            hash_layout::emit_load_entry_field(ctx.emitter, "x12", "x11", EntryField::ValueTag);
             ctx.emitter.instruction(&format!("cmp x12, #{tag}"));               // does the value have the declared kind?
             ctx.emitter.instruction(&format!("b.ne {fail}"));                   // no: the typed variable cannot read it
             ctx.emitter.label(&next);
@@ -1178,17 +1178,18 @@ fn emit_hash_entries_writeback_guard(ctx: &mut FunctionContext<'_>, tag: u8) {
             ctx.emitter.instruction(&format!("b {lp}"));                        // inspect it
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");            // load the hash capacity bounding the slot walk
+            hash_layout::emit_load_header_field(ctx.emitter, "r10", "rax", HeaderField::Capacity);
             ctx.emitter.instruction("xor r11d, r11d");                          // start at slot 0
             ctx.emitter.label(&lp);
             ctx.emitter.instruction("cmp r11, r10");                            // has every slot been inspected?
             ctx.emitter.instruction(&format!("jae {done}"));                    // yes: every value has the declared kind
-            ctx.emitter.instruction("mov r8, r11");                             // copy the slot index
-            ctx.emitter.instruction("shl r8, 6");                               // scale it to a 64-byte entry offset
-            ctx.emitter.instruction("add r8, QWORD PTR [rax + 40]");            // address the entry in the hash's separate storage
-            ctx.emitter.instruction("cmp QWORD PTR [r8], 1");                   // only live entries hold values
+            hash_layout::emit_entries(ctx.emitter, "r8", "rax");
+            hash_layout::emit_consume_index_entry_address(ctx.emitter, "r8", "r11");
+            hash_layout::emit_load_entry_field(ctx.emitter, "r9", "r8", EntryField::Occupied);
+            ctx.emitter.instruction("cmp r9, 1");                               // only live entries hold values
             ctx.emitter.instruction(&format!("jne {next}"));                    // skip empty slots and tombstones
-            ctx.emitter.instruction(&format!("cmp QWORD PTR [r8 + 40], {tag}")); // does the value have the declared kind?
+            hash_layout::emit_load_entry_field(ctx.emitter, "r9", "r8", EntryField::ValueTag);
+            ctx.emitter.instruction(&format!("cmp r9, {tag}"));                 // does the value have the declared kind?
             ctx.emitter.instruction(&format!("jne {fail}"));                    // no: the typed variable cannot read it
             ctx.emitter.label(&next);
             ctx.emitter.instruction("add r11, 1");                              // advance to the next slot

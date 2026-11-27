@@ -30,6 +30,7 @@
 
 use elephc_memoir::values::serialize_registry;
 use elephc_memoir::values::incomplete_object::{CLASS_ID, NAME_LEN, NAME_PTR, PROPERTY_HASH};
+use elephc_memoir::strings::scoped_stream;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -350,9 +351,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_serialize_float_finite");
     // The formatter writes at `_concat_off`, so commit "d:" and point that offset past the
     // stream first (or at its opening offset once the stream lives on the heap).
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x0, [x9]");                                        // active stream descriptor
-    emitter.instruction("str x11, [x0, #8]");                                   // commit "d:" to the stream
+    scoped_stream::emit_load_active(emitter, "x0");
+    scoped_stream::emit_store_cursor(emitter, "x11", "x0");
     emitter.instruction("bl __rt_strbuf_sync");                                 // the formatter must not write over the stream
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the raw float bit pattern
     emitter.instruction("fmov d0, x9");                                         // move the bits into the FP argument register
@@ -371,14 +371,12 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     // -- finalize: commit the scalar bytes and return the slice pointer/length --
     emitter.label("__rt_serialize_done");
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the final write pointer
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("str x11, [x9, #8]");                                   // commit the written bytes to the stream
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_store_cursor(emitter, "x11", "x9");
     emitter.label("__rt_serialize_result");
     emitter.instruction("bl __rt_ser_tell");                                    // x0 = stream length after this value
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("ldr x9, [x9]");                                        // current stream start (it may have moved)
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_load_start(emitter, "x9", "x9");
     emitter.instruction("ldr x10, [sp, #0]");                                   // this value's start offset
     emitter.instruction("add x1, x9, x10");                                     // result pointer = serialized-slice start
     emitter.instruction("sub x2, x0, x10");                                     // result length = end offset - start offset
@@ -413,9 +411,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_serialize_uint_copy");                          // continue copying digits
     emitter.label("__rt_serialize_uint_done");
     emitter.instruction("add x11, x11, x2");                                    // advance the write pointer past the digits
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("str x11, [x9, #8]");                                   // commit the digits to the stream
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_store_cursor(emitter, "x11", "x9");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the digit-helper frame
     emitter.instruction("ret");                                                 // return with digits appended
@@ -595,9 +592,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     //    of the body [body_start, tail_start), for a count only known once the body is written. Leaf. --
     emitter.label_global("__rt_ser_hoist_tail");
     emitter.instruction("sub sp, sp, #32");                                     // scratch copy of the tail bytes
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("ldr x10, [x9, #8]");                                   // the tail ends at the stream cursor
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_load_cursor(emitter, "x10", "x9");
     emitter.instruction("ldr x9, [x9]");                                        // stream start: offsets are relative to it
     emitter.instruction("sub x10, x10, x9");                                    // tail end as a stream offset
     emitter.instruction("sub x11, x10, x1");                                    // tail length
@@ -1014,9 +1010,7 @@ fn emit_framed_append_literal_aarch64(emitter: &mut Emitter, bytes: &[u8], what:
 /// scratch, so the active stream pointer is parked at `[sp + slot]` and `_concat_off` is moved
 /// past a scratch-backed stream first. Clobbers x0 and x9-x13.
 fn emit_hook_guard_enter_aarch64(emitter: &mut Emitter, slot: usize) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x0, [x9]");                                        // active stream descriptor
+    scoped_stream::emit_load_active(emitter, "x0");
     emitter.instruction(&format!("str x0, [sp, #{}]", slot));                   // park it across the hook
     emitter.instruction("bl __rt_strbuf_sync");                                 // hook scratch must start past the stream bytes
 }
@@ -1024,10 +1018,8 @@ fn emit_hook_guard_enter_aarch64(emitter: &mut Emitter, slot: usize) {
 /// Emits the AArch64 exit of a user-hook call: reinstates the parked stream pointer.
 /// Clobbers x9 and x10 only.
 fn emit_hook_guard_exit_aarch64(emitter: &mut Emitter, slot: usize) {
-    use crate::codegen_support::abi::emit_symbol_address;
     emitter.instruction(&format!("ldr x10, [sp, #{}]", slot));                  // reload the parked stream descriptor
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("str x10, [x9]");                                       // reinstate it as the active stream
+    scoped_stream::emit_store_active(emitter, "x10");
 }
 
 /// Emits the AArch64 digit-copy run shared by the integer and string-length paths.
@@ -1307,8 +1299,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // The formatter writes at `_concat_off`, so commit "d:" and point that offset past the
     // stream first (or at its opening offset once the stream lives on the heap).
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the cursor past "d:"
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_ser_stream", 0);
-    emitter.instruction("mov QWORD PTR [rdi + 8], r11");                        // commit "d:" to the stream
+    scoped_stream::emit_load_active(emitter, "rdi");
+    scoped_stream::emit_store_cursor(emitter, "r11", "rdi");
     emitter.instruction("call __rt_strbuf_sync");                               // the formatter must not write over the stream
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the raw float bit pattern
     emitter.instruction("movq xmm0, r9");                                       // move the bits into the FP argument register
@@ -1326,14 +1318,14 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // -- finalize: commit the scalar bytes and return the slice pointer/length --
     emitter.label("__rt_serialize_done");
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the final write pointer
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_ser_stream", 0);
-    emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // commit the written bytes to the stream
+    scoped_stream::emit_load_active(emitter, "r10");
+    scoped_stream::emit_store_cursor(emitter, "r11", "r10");
     emitter.label("__rt_serialize_result");
     emitter.instruction("call __rt_ser_tell");                                  // rax = stream length after this value
     emitter.instruction("mov rdx, rax");                                        // end offset
     emitter.instruction("sub rdx, QWORD PTR [rbp - 8]");                        // result length = end offset - start offset
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_ser_stream", 0);
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // current stream start (it may have moved)
+    scoped_stream::emit_load_active(emitter, "r10");
+    scoped_stream::emit_load_start(emitter, "rax", "r10");
     emitter.instruction("add rax, QWORD PTR [rbp - 8]");                        // result pointer = serialized-slice start
     emitter.instruction("add rsp, 48");                                         // deallocate the serialize scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -1366,8 +1358,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_serialize_uint_copy");                        // continue copying digits
     emitter.label("__rt_serialize_uint_done");
     emitter.instruction("add r11, r8");                                         // advance the write pointer past the digits
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_ser_stream", 0);
-    emitter.instruction("mov QWORD PTR [r9 + 8], r11");                         // commit the digits to the stream
+    scoped_stream::emit_load_active(emitter, "r9");
+    scoped_stream::emit_store_cursor(emitter, "r11", "r9");
     emitter.instruction("add rsp, 32");                                         // deallocate the digit-helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with digits appended
@@ -1544,9 +1536,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     //    of the body [body_start, tail_start), for a count only known once the body is written. Leaf. --
     emitter.label_global("__rt_ser_hoist_tail");
     emitter.instruction("sub rsp, 32");                                         // scratch copy of the tail bytes
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_ser_stream", 0);
-    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                         // the tail ends at the stream cursor
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // stream start: offsets are relative to it
+    scoped_stream::emit_load_active(emitter, "r9");
+    scoped_stream::emit_load_cursor(emitter, "r10", "r9");
+    scoped_stream::emit_load_start(emitter, "r9", "r9");
     emitter.instruction("sub r10, r9");                                         // tail end as a stream offset
     emitter.instruction("mov r11, r10");                                        // copy the tail end for the length
     emitter.instruction("sub r11, rsi");                                        // tail length
@@ -1967,7 +1959,7 @@ fn emit_framed_append_literal_x86_64(emitter: &mut Emitter, bytes: &[u8], what: 
 /// [`emit_hook_guard_enter_aarch64`]. Parks `_ser_stream` at `[rbp - slot]`. Clobbers rdi and
 /// r8-r11.
 fn emit_hook_guard_enter_x86_64(emitter: &mut Emitter, slot: usize) {
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_ser_stream", 0);
+    scoped_stream::emit_load_active(emitter, "rdi");
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rdi", slot));       // park the active stream across the hook
     emitter.instruction("call __rt_strbuf_sync");                               // hook scratch must start past the stream bytes
 }
@@ -1976,7 +1968,7 @@ fn emit_hook_guard_enter_x86_64(emitter: &mut Emitter, slot: usize) {
 /// Clobbers r10 only.
 fn emit_hook_guard_exit_x86_64(emitter: &mut Emitter, slot: usize) {
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", slot));       // reload the parked stream descriptor
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ser_stream", 0);
+    scoped_stream::emit_store_active(emitter, "r10");
 }
 
 /// Emits the x86_64 digit-copy run shared by the integer and string-length paths.

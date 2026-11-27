@@ -23,6 +23,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// Emits the inline "load this object's dumpable dynamic-property hash" sequence.
 ///
@@ -131,7 +132,7 @@ pub(crate) fn emit_obj_dyn_prop_at(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the requested ordinal
             emitter.instruction("cmp x9, #0");                                  // reject a negative ordinal
             emitter.instruction("b.lt __rt_obj_dyn_prop_at_none");              // negative ordinals name no entry
-            emitter.instruction("ldr x10, [x0]");                               // load the live entry count from the hash header
+            hash_layout::emit_load_header_field(emitter, "x10", "x0", HeaderField::Count);
             emitter.instruction("cmp x9, x10");                                 // is the ordinal within the entry count?
             emitter.instruction("b.hs __rt_obj_dyn_prop_at_none");              // past the last entry → not found
             emitter.instruction("str xzr, [sp, #8]");                           // iterator cursor = start of insertion order
@@ -168,7 +169,8 @@ pub(crate) fn emit_obj_dyn_prop_at(emitter: &mut Emitter) {
             emitter.instruction("mov r10, QWORD PTR [rbp - 24]");               // reload the requested ordinal
             emitter.instruction("cmp r10, 0");                                  // reject a negative ordinal
             emitter.instruction("jl __rt_obj_dyn_prop_at_none_x86");            // negative ordinals name no entry
-            emitter.instruction("cmp r10, QWORD PTR [rax]");                    // is the ordinal within the entry count?
+            hash_layout::emit_load_header_field(emitter, "r11", "rax", HeaderField::Count);
+            emitter.instruction("cmp r10, r11");                                // is the ordinal within the entry count?
             emitter.instruction("jae __rt_obj_dyn_prop_at_none_x86");           // past the last entry → not found
             emitter.instruction("mov QWORD PTR [rbp - 16], 0");                 // iterator cursor = start of insertion order
             emitter.label("__rt_obj_dyn_prop_at_loop_x86");

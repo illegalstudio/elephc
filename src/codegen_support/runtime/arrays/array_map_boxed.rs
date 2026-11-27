@@ -11,8 +11,11 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use elephc_memoir::{
+    FrameOffset,
+    cleanup::boundary::CleanupBoundary,
+    hash_layout::{self, EntryField},
 };
 
 const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 160;
@@ -157,13 +160,13 @@ fn initialize_cursor(emitter: &mut Emitter) {
             emitter.instruction("cmp x0, #4");                                  // packed sources use a numeric slot cursor
             emitter.instruction("mov x0, #0");                                  // begin with index zero for a packed source
             emitter.instruction("b.eq __rt_array_map_boxed_cursor");            // keep that index instead of reading a hash header
-            emitter.instruction("ldr x0, [x10, #24]");                          // hashes start at their first live bucket
+            hash_layout::emit_order_edge(emitter, "x0", "x10", false);
         }
         Arch::X86_64 => {
             emitter.instruction("cmp rax, 4");                                  // discriminate the source header layout
             emitter.instruction("mov eax, 0");                                  // seed the packed cursor without changing comparison flags
             emitter.instruction("je __rt_array_map_boxed_cursor");              // preserve zero for packed sources
-            emitter.instruction("mov rax, QWORD PTR [r10 + 24]");               // begin at the insertion-order head for a hash
+            hash_layout::emit_order_edge(emitter, "rax", "r10", false);
         }
     }
     emitter.label("__rt_array_map_boxed_cursor");
@@ -187,7 +190,7 @@ fn read_aarch64_entry(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, "x9", KEY_HI);
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x0", "x11");
     elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
-    emitter.instruction("ldr x12, [x11, #16]");                                 // read the physical slot width
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x11", "x12");
     emitter.instruction("madd x11, x10, x12, x11");                             // address the current element before its header offset
     emitter.instruction("ldr x1, [x11, #24]");                                  // borrow its low payload word
     emitter.instruction("mov x2, #0");                                          // scalar and pointer slots have no high word
@@ -197,15 +200,14 @@ fn read_aarch64_entry(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_map_boxed_value");                        // box or retain the argument before invocation
     emitter.label("__rt_array_map_boxed_hash");
     emitter.instruction("tbnz x10, #63, __rt_array_map_boxed_cleanup");         // minus one ends the live insertion-order chain
-    emitter.instruction("ldr x11, [x11, #40]");                                 // locate the separately allocated hash entries
-    emitter.instruction("add x11, x11, x10, lsl #6");                           // each source hash bucket has sixty-four bytes
-    emitter.instruction("ldr x9, [x11, #56]");                                  // follow the next live bucket rather than a tombstone
+    hash_layout::emit_entries(emitter, "x11", "x11");
+    hash_layout::emit_consume_index_entry_address(emitter, "x11", "x10");
+    hash_layout::emit_load_entry_field(emitter, "x9", "x11", EntryField::Next);
     abi::store_at_offset(emitter, "x9", CURSOR);
-    emitter.instruction("ldp x9, x10, [x11, #8]");                              // borrow the source key while the snapshot owns its bytes
+    hash_layout::emit_entry_key(emitter, "x11", "x9", "x10");
     abi::store_at_offset(emitter, "x9", KEY_LO);
     abi::store_at_offset(emitter, "x10", KEY_HI);
-    emitter.instruction("ldr x0, [x11, #40]");                                  // per-entry value tags govern heterogeneous hashes
-    emitter.instruction("ldp x1, x2, [x11, #24]");                              // borrow both value words
+    hash_layout::emit_entry_value(emitter, "x11", "x0", "x1", "x2");
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_map_boxed_deref_done", "x0", "x1", "x2");
 }
 
@@ -225,7 +227,7 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, "r9", KEY_HI);
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "rdx", "r11");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rdx", "rdx");
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 16]");                       // read the actual eight- or sixteen-byte stride
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "r11", "rcx");
     emitter.instruction("imul r10, rcx");                                       // convert the logical index to a payload offset
     emitter.instruction("add r11, r10");                                        // locate the current packed entry
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low value word
@@ -237,18 +239,15 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     emitter.label("__rt_array_map_boxed_hash");
     emitter.instruction("test r10, r10");                                       // inspect the insertion-order end sentinel
     emitter.instruction("js __rt_array_map_boxed_cleanup");                     // no more live source buckets remain
-    emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
-    emitter.instruction("shl r10, 6");                                          // each hash bucket occupies sixty-four bytes
-    emitter.instruction("add r11, r10");                                        // locate the selected entry in the separate storage
-    emitter.instruction("mov r9, QWORD PTR [r11 + 56]");                        // follow the next live insertion-order link
+    hash_layout::emit_entries(emitter, "r11", "r11");
+    hash_layout::emit_consume_index_entry_address(emitter, "r11", "r10");
+    hash_layout::emit_load_entry_field(emitter, "r9", "r11", EntryField::Next);
     abi::store_at_offset(emitter, "r9", CURSOR);
-    emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // preserve the key's low word
+    hash_layout::emit_load_entry_field(emitter, "r9", "r11", EntryField::KeyLow);
     abi::store_at_offset(emitter, "r9", KEY_LO);
-    emitter.instruction("mov r9, QWORD PTR [r11 + 16]");                        // preserve its string length or integer marker
+    hash_layout::emit_load_entry_field(emitter, "r9", "r11", EntryField::KeyHigh);
     abi::store_at_offset(emitter, "r9", KEY_HI);
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 40]");                       // heterogeneous entries carry their own value tag
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // borrow the high payload word
+    hash_layout::emit_entry_value(emitter, "r11", "rdx", "rdi", "rsi");
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_map_boxed_deref_done", "rdx", "rdi", "rsi");
 }
 
@@ -342,22 +341,16 @@ fn insert_mapped_value(emitter: &mut Emitter) {
 
 /// Saves the caller's state and installs a local handler while all map-owned slots remain reachable.
 fn install_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-    abi::store_at_offset(emitter, result, PREVIOUS);
-    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // preserve map-owned inputs and partial results when a callback throws
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_map_boxed_caught");
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        "__rt_array_map_boxed_caught",
+    );
 }
 
 /// Restores the caller's handler chain and diagnostic depth after successful or failed mapping.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears a helper-owned slot without destroying a loaded value or outgoing hash arguments.

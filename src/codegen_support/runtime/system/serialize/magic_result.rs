@@ -23,8 +23,7 @@ const NAMES: usize = 40;
 const NAME_STRING: usize = 48;
 const PREFIX_START: usize = 56;
 
-const OUTPUT_STREAM: StreamScope<'static> = StreamScope {
-    active: super::stream::ACTIVE_STREAM,
+const OUTPUT_STREAM: StreamScope = StreamScope {
     saved: FrameOffset::new(CONCAT_END),
 };
 

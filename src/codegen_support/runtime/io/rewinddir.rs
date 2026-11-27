@@ -11,7 +11,7 @@
 //! - A descriptor with no recorded `DIR*` is a no-op.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use elephc_memoir::interop::glob_storage;
+use elephc_memoir::{buffers::stream_tables, interop::glob_storage};
 
 /// rewinddir: rewind a directory stream to its first entry.
 /// Input:  AArch64 x0 = directory descriptor / x86_64 rdi = directory descriptor
@@ -30,7 +30,7 @@ pub fn emit_rewinddir(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
-    abi::emit_symbol_address(emitter, "x9", "_glob_handles");
+    stream_tables::GLOB_HANDLES.emit_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // glob_state* = _glob_handles[fd]
     emitter.instruction("cbz x10, __rt_rewinddir_libc");                        // no glob handle: fall through to libc rewinddir
     glob_storage::emit_rewind(emitter, "x10");
@@ -60,7 +60,7 @@ fn emit_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
-    abi::emit_symbol_address(emitter, "r9", "_glob_handles");                   // base of the fd → glob_state pointer table
+    stream_tables::GLOB_HANDLES.emit_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // glob_state* = _glob_handles[fd]
     emitter.instruction("test r10, r10");                                       // glob handle present?
     emitter.instruction("jz __rt_rewinddir_libc_x86");                          // no glob handle: fall through to libc rewinddir

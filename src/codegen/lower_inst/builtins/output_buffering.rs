@@ -28,6 +28,7 @@ use crate::codegen_support::runtime::{
 };
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
+use elephc_memoir::buffers::output::{self, ControlField};
 
 use super::super::callables::runtime_string_descriptor_cases;
 use super::super::super::context::FunctionContext;
@@ -500,11 +501,10 @@ pub(crate) fn lower_ob_implicit_flush(
         }
         None => abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1),
     }
-    abi::emit_store_reg_to_symbol(
+    output::emit_store_control(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        "_ob_implicit_flush",
-        0,
+        ControlField::ImplicitFlush,
     );
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     store_if_result(ctx, inst)

@@ -25,7 +25,7 @@
 //! - `__rt_hash_set_owned_refusal` keeps ordinary COW and retires only the separate helper
 //!   owner when a mixed-key storeback refuses a nullable-reference assignment.
 
-use elephc_memoir::values::hash_bucket;
+use elephc_memoir::{hash_layout::EntryField, values::hash_bucket};
 
 use crate::codegen_support::abi;
 use crate::codegen_support::callable_invoker_args::{INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE};
@@ -106,10 +106,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #48]");                                   // recover the previously selected slot index
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("cbz x0, __rt_hash_set_write_value");                   // replace the borrowing entry without releasing its old value twice
-    emitter.instruction("ldr x13, [x12, #40]");                                 // load the overwritten entry's per-entry value_tag
+    hash_layout::emit_load_entry_field(emitter, "x13", "x12", EntryField::ValueTag);
     emitter.instruction("cmp x13, #7");                                         // can this Mixed entry contain an invoker reference marker?
     emitter.instruction("b.ne __rt_hash_set_check_reference");                  // concrete entries cannot contain the boxed marker shape
-    emitter.instruction("ldr x14, [x12, #24]");                                 // load the existing boxed Mixed payload
+    hash_layout::emit_load_entry_field(emitter, "x14", "x12", EntryField::ValueLow);
     emitter.instruction("cbz x14, __rt_hash_set_check_reference");              // a null Mixed handle is an ordinary overwrite
     emitter.instruction("ldr x15, [x14]");                                      // inspect the boxed Mixed runtime tag
     emitter.instruction(&format!("cmp x15, #{}", INVOKER_ARG_REF_CELL_TAG));    // does this box alias caller storage for a ref argument?
@@ -157,7 +157,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload the hash table after optional boxing
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the current probe index
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-    emitter.instruction("ldr x14, [x12, #24]");                                 // reload the boxed invoker marker
+    hash_layout::emit_load_entry_field(emitter, "x14", "x12", EntryField::ValueLow);
     elephc_memoir::layout::emit_load_mixed_low(emitter, "x14", "x14");
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "x14", "x13", "x15", "__rt_hash_set_invoker_phpref_payload",
@@ -242,7 +242,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after the boxing helper
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after the boxing helper
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-    emitter.instruction("ldr x9, [x12, #24]");                                  // load the managed reference cell this entry owns
+    hash_layout::emit_load_entry_field(emitter, "x9", "x12", EntryField::ValueLow);
     emitter.instruction("ldr x13, [sp, #24]");                                  // load the boxed replacement payload
     elephc_memoir::reference_cells::emit_replace_boxed_child(emitter, "x9", "x13", "x10");
     emitter.instruction("b __rt_hash_set_done");                                // value_lo, value_hi and value_tag keep describing the cell
@@ -287,7 +287,7 @@ fn emit_hash_set_value_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload key_hi for the entry probe
     emitter.instruction("bl __rt_hash_get");                                    // x0 = found, x4 = matching entry address
     emitter.instruction("cbz x0, __rt_hash_set_value_forward");                 // a missing key is an ordinary insert
-    emitter.instruction("ldr x9, [x4, #40]");                                   // load the existing entry's runtime value tag
+    hash_layout::emit_load_entry_field(emitter, "x9", "x4", EntryField::ValueTag);
     persistent_references::emit_value_detach_probe(emitter);
     hash_bucket::emit_detach_reference_owner(emitter);
     emitter.label("__rt_hash_set_value_forward");
@@ -368,10 +368,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_write_guard_claim");                    // avoid releasing an owner already consumed by an outer construction write
     emitter.instruction("test rax, rax");                                       // determine whether this update owns its previous value
     emitter.instruction("jz __rt_hash_set_write_value_x");                      // retain the callee-saved selected entry while skipping duplicate release
-    emitter.instruction("mov r13, QWORD PTR [r12 + 40]");                       // load the overwritten entry's runtime value tag before replacing it
+    hash_layout::emit_load_entry_field(emitter, "r13", "r12", EntryField::ValueTag);
     emitter.instruction("cmp r13, 7");                                          // can this Mixed entry contain an invoker reference marker?
     emitter.instruction("jne __rt_hash_set_check_reference_x");                 // concrete entries cannot contain the boxed marker shape
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // load the existing boxed Mixed payload
+    hash_layout::emit_load_entry_field(emitter, "r14", "r12", EntryField::ValueLow);
     emitter.instruction("test r14, r14");                                       // guard the boxed marker dereference
     emitter.instruction("jz __rt_hash_set_check_reference_x");                  // a null Mixed handle is an ordinary overwrite
     let boxed_marker_compare = format!("cmp QWORD PTR [r14], {}", INVOKER_ARG_REF_CELL_TAG);
@@ -418,7 +418,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash table after optional boxing
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // reload the boxed invoker marker
+    hash_layout::emit_load_entry_field(emitter, "r14", "r12", EntryField::ValueLow);
     elephc_memoir::layout::emit_load_mixed_low(emitter, "r14", "r14");
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "r14", "r10", "r11", "__rt_hash_set_invoker_phpref_payload_x",
@@ -502,7 +502,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the boxing helper
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("mov r10, QWORD PTR [r12 + 24]");                       // load the managed reference cell this entry owns
+    hash_layout::emit_load_entry_field(emitter, "r10", "r12", EntryField::ValueLow);
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the boxed replacement payload
     elephc_memoir::reference_cells::emit_replace_boxed_child(emitter, "r10", "r13", "r11");
     emitter.label("__rt_hash_set_reference_done_x");

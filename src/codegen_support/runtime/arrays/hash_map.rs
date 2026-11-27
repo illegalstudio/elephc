@@ -27,6 +27,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// Where `__rt_hash_map` finds the callback result, and who owns it.
 ///
@@ -100,7 +101,7 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #32]");                                   // save the destination value_type tag for every insertion
 
     // -- allocate the destination table with headroom for every mapped entry --
-    emitter.instruction("ldr x0, [x19]");                                       // x0 = source entry count
+    hash_layout::emit_load_header_field(emitter, "x0", "x19", HeaderField::Count);
     emitter.instruction("lsl x0, x0, #1");                                      // double the entry count to give the destination insertion headroom
     emitter.instruction("mov x9, #16");                                         // x9 = minimum destination bucket count
     emitter.instruction("cmp x0, x9");                                          // compare the derived capacity against the runtime minimum
@@ -213,7 +214,7 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], r8");                        // preserve the destination value_type tag for every insertion
 
     // -- allocate the destination table with headroom for every mapped entry --
-    emitter.instruction("mov rax, QWORD PTR [rsi]");                            // rax = source entry count
+    hash_layout::emit_load_header_field(emitter, "rax", "rsi", HeaderField::Count);
     emitter.instruction("shl rax, 1");                                          // double the entry count to give the destination insertion headroom
     emitter.instruction("cmp rax, 16");                                         // compare the derived capacity against the runtime minimum
     emitter.instruction("jge __rt_hash_map_capacity_x86");                      // keep the doubled count when it already meets the minimum

@@ -10,6 +10,8 @@
 //! - Each result value owns a retained cell or a freshly boxed payload. Source links never change.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout::{self, EntryField};
+use elephc_memoir::values::container_header;
 
 /// Emits boxed reversal for both native ABIs, preserving the source's keys, cursor, and owners.
 pub fn emit_array_reverse_boxed(emitter: &mut Emitter) {
@@ -34,14 +36,14 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_array_reverse_boxed_invalid");               // reject without allocating a partial result
     emitter.instruction("str x1, [sp, #8]");                                    // preserve the borrowed source throughout result construction
     emitter.instruction("str x0, [sp, #16]");                                   // retain the layout discriminator
-    emitter.instruction("ldr x9, [x1]");                                        // packed arrays and hashes both begin with their live count
+    container_header::emit_load_count(emitter, "x9", "x1");
     emitter.instruction("cmp x0, #4");                                          // choose an index or a hash insertion-order cursor
     emitter.instruction("b.eq __rt_array_reverse_boxed_cursor");                // packed iteration begins one past its last slot
-    emitter.instruction("ldr x9, [x1, #32]");                                   // hashes begin at the last live entry, not the final bucket
+    hash_layout::emit_order_edge(emitter, "x9", "x1", true);
     emitter.label("__rt_array_reverse_boxed_cursor");
     emitter.instruction("str x9, [sp, #24]");                                   // initialize the descending source cursor
     emitter.instruction("str xzr, [sp, #40]");                                  // result integer keys start at zero
-    emitter.instruction("ldr x0, [x1]");                                        // size the initial result from the source count
+    container_header::emit_load_count(emitter, "x0", "x1");
     emitter.instruction("mov x9, #8");                                          // avoid a zero-capacity result for empty arrays
     emitter.instruction("cmp x0, x9");                                          // choose at least the minimum hash capacity
     emitter.instruction("csel x0, x0, x9, ge");                                 // retain larger capacity hints
@@ -75,14 +77,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_reverse_boxed_hash");
     emitter.instruction("tbnz x10, #63, __rt_array_reverse_boxed_done");        // minus one terminates the insertion-order chain
-    emitter.instruction("ldr x11, [x11, #40]");                                 // locate the separately allocated hash entries
-    emitter.instruction("add x11, x11, x10, lsl #6");                           // locate the live sixty-four-byte bucket
-    emitter.instruction("ldr x9, [x11, #48]");                                  // follow the previous live entry, skipping tombstones
+    hash_layout::emit_entries(emitter, "x11", "x11");
+    hash_layout::emit_consume_index_entry_address(emitter, "x11", "x10");
+    hash_layout::emit_load_entry_field(emitter, "x9", "x11", EntryField::Previous);
     emitter.instruction("str x9, [sp, #24]");                                   // preserve traversal across allocations
-    emitter.instruction("ldp x9, x10, [x11, #8]");                              // borrow the normalized integer or string key
+    hash_layout::emit_entry_key(emitter, "x11", "x9", "x10");
     emitter.instruction("stp x9, x10, [sp, #48]");                              // keep both key words while boxing the value
-    emitter.instruction("ldr x0, [x11, #40]");                                  // each hash entry is authoritative for its value tag
-    emitter.instruction("ldp x1, x2, [x11, #24]");                              // preserve both source payload words
+    hash_layout::emit_entry_value(emitter, "x11", "x0", "x1", "x2");
     emitter.instruction("cmp x0, #11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("b.eq __rt_array_reverse_boxed_reference");             // retain the shared cell instead of copying its value
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_reverse_boxed_deref_done", "x0", "x1", "x2");
@@ -160,14 +161,14 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_array_reverse_boxed_invalid");                 // reject before allocating a partial result
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve the borrowed source throughout construction
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // retain the layout discriminator
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // both source layouts begin with their live count
+    container_header::emit_load_count(emitter, "r10", "rdi");
     emitter.instruction("cmp rax, 4");                                          // choose a packed index or an insertion-order cursor
     emitter.instruction("je __rt_array_reverse_boxed_cursor");                  // packed iteration begins one past its final slot
-    emitter.instruction("mov r10, QWORD PTR [rdi + 32]");                       // hashes begin at the last live entry
+    hash_layout::emit_order_edge(emitter, "r10", "rdi", true);
     emitter.label("__rt_array_reverse_boxed_cursor");
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // initialize the descending source cursor
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // result integer keys begin at zero
-    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // size the initial result from the live count
+    container_header::emit_load_count(emitter, "rdi", "rdi");
     emitter.instruction("mov r10, 8");                                          // empty results still need usable hash capacity
     emitter.instruction("cmp rdi, r10");                                        // choose at least the minimum capacity
     emitter.instruction("cmovl rdi, r10");                                      // retain larger capacity hints
@@ -202,18 +203,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_reverse_boxed_hash");
     emitter.instruction("test r10, r10");                                       // minus one terminates the insertion-order chain
     emitter.instruction("js __rt_array_reverse_boxed_done");                    // no live source entries remain
-    emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
-    emitter.instruction("shl r10, 6");                                          // each bucket occupies sixty-four bytes
-    emitter.instruction("add r11, r10");                                        // locate the entry in the separate storage
-    emitter.instruction("mov r10, QWORD PTR [r11 + 48]");                       // follow the previous live entry, skipping tombstones
+    hash_layout::emit_entries(emitter, "r11", "r11");
+    hash_layout::emit_consume_index_entry_address(emitter, "r11", "r10");
+    hash_layout::emit_load_entry_field(emitter, "r10", "r11", EntryField::Previous);
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve traversal across allocations
-    emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // borrow the key's integer value or string pointer
+    hash_layout::emit_load_entry_field(emitter, "r10", "r11", EntryField::KeyLow);
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve the low key word across boxing
-    emitter.instruction("mov r10, QWORD PTR [r11 + 16]");                       // read the integer marker or string length
+    hash_layout::emit_load_entry_field(emitter, "r10", "r11", EntryField::KeyHigh);
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // preserve the source key kind
-    emitter.instruction("mov rax, QWORD PTR [r11 + 40]");                       // each entry supplies its actual runtime value tag
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // preserve the high payload word
+    hash_layout::emit_entry_value(emitter, "r11", "rax", "rdi", "rsi");
     emitter.instruction("cmp rax, 11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("je __rt_array_reverse_boxed_reference");               // retain the shared cell instead of copying its value
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_reverse_boxed_deref_done", "rax", "rdi", "rsi");
@@ -246,7 +244,6 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_reverse_boxed_loop");                   // continue with the unchanged source
 
     emitter.label("__rt_array_reverse_boxed_reference");
-    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // read the managed reference cell's refcount
     emitter.instruction("mov rax, rdi");                                        // pass the borrowed cell to the singleton-aware clone
     emitter.instruction("call __rt_reference_cell_clone");                      // separate an unaliased cell, share a live reference
     emitter.instruction("mov rcx, rax");                                        // transfer the cloned or shared cell as the entry value

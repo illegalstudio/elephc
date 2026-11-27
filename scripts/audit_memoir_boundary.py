@@ -16,6 +16,17 @@ MAGICIAN = "elephc-magician"
 BANNED_TYPES = {"PhpType", "BuiltinId", "RuntimeFnId"}
 BANNED_MODULES = {"codegen", "codegen_support", "types", "ir", "ir_lower", "pipeline"}
 BANNED_ATTRIBUTES = {"link", "no_mangle", "export_name", "crate_type", "proc_macro"}
+CENTRALIZED_MEMORY_SYMBOLS = {
+    "_ob_ptrs", "_ob_lens", "_ob_caps", "_ob_handler_stubs", "_ob_handler_envs",
+    "_ob_name_ptrs", "_ob_name_lens", "_ob_chunk_sizes", "_ob_flags", "_ob_started",
+    "_ob_level", "_ob_in_handler", "_ob_flushing", "_ob_implicit_flush",
+    "_stream_context_options", "_stream_context_notification", "_stream_read_filters",
+    "_stream_write_filters", "_glob_handles", "_user_filter_instances", "_ser_stream",
+}
+DIRECT_MEMORY_PRIMITIVES = (
+    "emit_symbol_address(", "emit_load_symbol_to_reg(", "emit_store_reg_to_symbol(",
+    "emit_store_zero_to_symbol(", ".instruction(",
+)
 MIGRATED_OWNER_FIELDS = {
     "enum_cases": "RuntimeOwnerMap",
     "enum_case_values": "RuntimeOwnerMap",
@@ -30,10 +41,20 @@ MIGRATED_OWNER_FIELDS = {
 }
 MIGRATED_SOURCE_CONTRACTS = {
     "crates/elephc-magician/src/context/core.rs": {
-        "required": ("pending_throw: RuntimeOwnerSlot",),
+        "required": (
+            "pending_throw: RuntimeOwnerSlot",
+            "abi_owners: RuntimeLeaseCounter",
+            "RuntimeLeaseCounter::new(1)",
+        ),
+        "forbidden": ("abi_owner_count",),
     },
     "crates/elephc-magician/src/context/pcntl_runtime.rs": {
-        "required": ("callback: Option<RuntimeAddressOwner>",),
+        "required": (
+            "callback: Option<RuntimeAddressOwner>",
+            "context_leases: RuntimeAddressLeaseRegistry",
+            "context_leases.release_and_take_if_unreferenced(",
+        ),
+        "forbidden": ("active_contexts", "detached_contexts"),
     },
     "crates/elephc-magician/src/scope.rs": {
         "required": (
@@ -551,6 +572,119 @@ MIGRATED_SOURCE_CONTRACTS = {
     "src/codegen_support/runtime/eval_bridge/x86_64_arrays.rs": {
         "required": ("values::object_storage::emit_load_trailing_word(",),
     },
+    "src/codegen/lower_inst/arrays.rs": {
+        "required": ("hash_layout::emit_value_address_from_entry(",),
+        "forbidden": ("add x0, x4, #24", "lea rdi, [r8 + 24]"),
+    },
+    "src/codegen/lower_inst/runtime_calls.rs": {
+        "required": ("hash_layout::emit_value_address_from_entry(",),
+        "forbidden": ("add x0, x4, #24", "lea rdi, [r8 + 24]"),
+    },
+    "src/codegen_support/runtime/strings/mbstring/capture_hash.rs": {
+        "required": (
+            "hash_layout::emit_store_entry_value(",
+            "hash_layout::emit_load_header_field(",
+        ),
+        "forbidden": (
+            "[x4, #24]", "[x4, #40]", "[r8 + 24]", "[r8 + 32]", "[r8 + 40]",
+            'instruction(if arm { "ldr x9, [x0]" }',
+            'instruction(if arm { "ldr x10, [x0, #8]" }',
+        ),
+    },
+    "src/codegen_support/runtime/arrays/array_internal_pointer.rs": {
+        "required": (
+            "hash_layout::emit_entry_key(",
+            "hash_layout::emit_entry_value(",
+        ),
+        "forbidden": ("[x10, #16]", "[x10, #24]", "[r10 + 16]", "[r10 + 24]"),
+    },
+    "src/codegen_support/runtime/arrays/hash_may_have_cyclic_values.rs": {
+        "required": (
+            "hash_layout::emit_load_header_field(",
+            "hash_layout::emit_load_entry_field(",
+        ),
+        "forbidden": ("[rax + 8]", "[x0, #8]", "[r12 + 40]", "[x12, #40]"),
+    },
+    "src/codegen_support/runtime/arrays/hash_spread.rs": {
+        "required": (
+            "hash_layout::emit_load_header_field(",
+            "hash_layout::emit_load_entry_field(",
+        ),
+        "forbidden": ("[x0, #8]", "[x10, #16]", "[r10 + 8]", "[rcx + 16]"),
+    },
+    "src/codegen_support/runtime/arrays/array_take_boxed.rs": {
+        "required": (
+            "hash_layout::emit_load_header_field(",
+            "hash_layout::emit_entry_value(",
+        ),
+        "forbidden": ("QWORD PTR [rax], 0", "QWORD PTR [rdi], 0"),
+    },
+    "src/codegen_support/runtime/arrays/array_reverse_boxed.rs": {
+        "required": (
+            "container_header::emit_load_count(",
+            "hash_layout::emit_order_edge(",
+        ),
+        "forbidden": (
+            'instruction("mov r10, QWORD PTR [rdi]")',
+            'instruction("mov rdi, QWORD PTR [rdi]")',
+            'instruction("ldr x9, [x1]")',
+            'instruction("ldr x0, [x1]")',
+        ),
+    },
+    "src/codegen_support/runtime/arrays/mixed_count.rs": {
+        "required": ("container_header::emit_load_count(",),
+        "forbidden": (
+            'instruction("ldr x0, [x9]")',
+            'instruction("mov rax, QWORD PTR [r10]")',
+        ),
+    },
+    "src/codegen_support/runtime/arrays/mixed_is_empty.rs": {
+        "required": ("container_header::emit_load_count(",),
+        "forbidden": (
+            'instruction("ldr x10, [x10]")',
+            'instruction("mov rax, QWORD PTR [rdi]")',
+        ),
+    },
+    "src/codegen_support/runtime/zval/zval_pack_array_packed.rs": {
+        "required": ("array_header::emit_load_element_stride(",),
+        "forbidden": ("[x0, #16]", "[rax + 16]"),
+    },
+    "src/codegen_support/runtime/strings/mbstring/snapshot.rs": {
+        "required": ("array_header::emit_load_element_stride(",),
+        "forbidden": ("[x0, #16]", "[rdi + 16]"),
+    },
+    "src/codegen_support/runtime/arrays/array_walk_boxed.rs": {
+        "required": ("CleanupBoundary::new(",),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen_support/runtime/arrays/array_udiff_uintersect.rs": {
+        "required": ("CleanupBoundary::new(",),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen_support/runtime/arrays/array_reduce_boxed.rs": {
+        "required": ("CleanupBoundary::new(",),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen_support/runtime/arrays/array_predicate_boxed.rs": {
+        "required": ("CleanupBoundary::new(",),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen_support/runtime/arrays/array_numeric_aggregate.rs": {
+        "required": ("CleanupBoundary::new(",),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen_support/runtime/arrays/array_map_boxed.rs": {
+        "required": ("CleanupBoundary::new(",),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen_support/runtime/callables/invoke_owned_args.rs": {
+        "required": ("CleanupBoundary::new(", "boundary.emit_park_exception("),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen/eval_property_helpers/unset_boundary.rs": {
+        "required": ("CleanupBoundary::new(", "boundary.emit_install_with_previous("),
+        "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
 }
 
 
@@ -828,6 +962,22 @@ def audit_migrated_source_contract(
     return findings
 
 
+def audit_centralized_memory_access(location: str, source: str) -> list[Finding]:
+    """Reject direct access to physical runtime storage now owned by Memoir."""
+    findings = []
+    for line_number, line in enumerate(source.splitlines(), 1):
+        if not any(primitive in line for primitive in DIRECT_MEMORY_PRIMITIVES):
+            continue
+        for symbol in CENTRALIZED_MEMORY_SYMBOLS:
+            if f'"{symbol}"' in line:
+                findings.append(Finding(
+                    "physical-memory-access",
+                    f"{location}:{line_number}",
+                    f"runtime storage {symbol} must be addressed through Memoir",
+                ))
+    return findings
+
+
 def audit_archive_symbols(location: str, symbols: str) -> list[Finding]:
     """Require the eval registry and reject compiler emitter definitions in Magician."""
     memoir_symbols = [line for line in symbols.splitlines() if "elephc_memoir" in line]
@@ -887,6 +1037,10 @@ def main() -> int:
                 continue
             findings.extend(audit_migrated_source_contract(
                 location, path.read_text(), contract))
+        for source_root in (root / "src", root / "crates/elephc-magician/src"):
+            for path in sorted(source_root.rglob("*.rs")):
+                findings.extend(audit_centralized_memory_access(
+                    path.relative_to(root).as_posix(), path.read_text()))
         for archive in args.magician_archive:
             findings.extend(audit_magician_archive(archive))
     except subprocess.CalledProcessError as error:

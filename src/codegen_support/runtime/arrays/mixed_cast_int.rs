@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
+use elephc_memoir::values::container_header;
 
 /// Emits the `__rt_mixed_cast_int` runtime helper for casting a boxed Mixed cell to int.
 ///
@@ -76,7 +77,7 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_from_array");
     emitter.instruction("cbz x1, __rt_mixed_cast_int_zero");                    // null container pointers cast like empty containers
-    emitter.instruction("ldr x0, [x1]");                                        // load the current container element count from the header
+    container_header::emit_load_count(emitter, "x0", "x1");
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the container size as the cast result
 
     emitter.label("__rt_mixed_cast_int_zero");
@@ -150,7 +151,7 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_int_from_array_linux_x86_64");
     emitter.instruction("test rdi, rdi");                                       // null container pointers cast like empty containers
     emitter.instruction("je __rt_mixed_cast_int_zero_linux_x86_64");            // skip the header load when the container pointer is null
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the current container element count from the header
+    container_header::emit_load_count(emitter, "rax", "rdi");
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the container size as the cast result
 
     emitter.label("__rt_mixed_cast_int_zero_linux_x86_64");

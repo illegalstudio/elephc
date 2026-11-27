@@ -36,6 +36,8 @@ pub mod runtime_bytes;
 #[cfg(feature = "runtime")]
 pub mod runtime_invoker_slots;
 #[cfg(feature = "runtime")]
+pub mod runtime_leases;
+#[cfg(feature = "runtime")]
 #[allow(unsafe_code)]
 pub mod runtime_owner_frame;
 #[cfg(feature = "runtime")]
