@@ -703,6 +703,48 @@ echo pairs($a), "\n";
     );
 }
 
+/// Verifies a sort of the original local still keeps keys when another name aliases it.
+///
+/// `unset` of that alias must leave the sorted list intact, and a later same-typed binding
+/// of the unset name must not be retagged as the promoted hash.
+#[test]
+fn test_aliased_packed_list_sort_keeps_both_names() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1, 2];
+$r = &$a;
+asort($a);
+foreach ($a as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+foreach ($r as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$b = [3, 1, 2];
+$s = &$b;
+krsort($b);
+foreach ($b as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$c = [3, 1, 2];
+$t = &$c;
+unset($t);
+$t = [9, 8];
+asort($c);
+foreach ($t as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+foreach ($c as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$d = [3, 1, 2];
+$u = &$d;
+unset($u);
+krsort($d);
+echo isset($u) ? "yes" : "no", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1=1 2=2 0=3 \n1=1 2=2 0=3 \n2=2 1=1 0=3 \n0=9 1=8 \n1=1 2=2 0=3 \nno\n"
+    );
+}
+
 /// Verifies `krsort` through a reference sorts the packed list and leaves an earlier copy intact.
 #[test]
 fn test_krsort_reference_to_packed_list() {

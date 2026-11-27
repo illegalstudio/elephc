@@ -3868,6 +3868,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.unmark_ref_bound_local(name);
         self.clear_reference_marker_array_local(name);
         if detaches_reference {
+            // `$r = &$a; unset($r);` ends the alias. Leaving `$r` in the group makes a later
+            // key-preserving sort retype the abandoned name to the promoted hash.
+            self.ref_alias_groups.detach(name);
             // UnsetLocal clears promotion state, but its null sentinel is not an inert raw
             // string pointer. Zero the old storage without widening the capture's payload ABI.
             self.emit_void(

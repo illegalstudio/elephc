@@ -1197,7 +1197,10 @@ fn lower_indexed_array_ref_arg_to_hash(
         value: elem_ty,
     };
     let array = ctx.load_local(name, Some(arg.span));
-    ctx.prepare_mutated_local_owner_for_backend_retire(name, array, assoc_ty.clone(), Some(arg.span));
+    // Keep the raw pointer slot. Widening `Array` storage to `AssocArray` boxes the local as
+    // Mixed for the whole frame, including the store that created the list, and a later sort
+    // of that name reads the cell as a hash header and faults. The logical type still becomes
+    // the int-keyed hash so later loads use associative lowering.
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array.value],
@@ -1206,7 +1209,7 @@ fn lower_indexed_array_ref_arg_to_hash(
         Op::ArrayToHash.default_effects(),
         Some(arg.span),
     );
-    ctx.store_prepared_mutated_local(name, hash, assoc_ty.clone(), Some(arg.span));
+    ctx.store_retyped_container_local(name, hash, assoc_ty.clone(), Some(arg.span));
     // `$r = &$a; krsort($r)` writes the hash through the shared cell. `$a` would otherwise
     // keep its packed logical type and read that hash as a list.
     ctx.retype_ref_alias_group(name, assoc_ty);

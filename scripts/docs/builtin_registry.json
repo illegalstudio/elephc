@@ -25432,7 +25432,7 @@
     "module": "standard",
     "name": "arsort",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_packed_keys",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -25691,7 +25691,7 @@
     "module": "standard",
     "name": "asort",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_packed_keys",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -91182,7 +91182,7 @@
     "module": "standard",
     "name": "ksort",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_packed_keys",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -113898,7 +113898,7 @@
     "module": "standard",
     "name": "natcasesort",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_packed_keys",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -114036,7 +114036,7 @@
     "module": "standard",
     "name": "natsort",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_packed_keys",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -156165,7 +156165,7 @@
     "module": "standard",
     "name": "uksort",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_packed_keys",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
