@@ -66,7 +66,7 @@ pub(crate) const GET_REQUEST: i64 = 0xa0;
 pub(crate) const GET_NEXT_REQUEST: i64 = 0xa1;
 
 /// Parses `host` or `host:port`.
-fn endpoint(host: &str) -> Result<(String, u16), String> {
+pub(crate) fn endpoint(host: &str) -> Result<(String, u16), String> {
     if host.starts_with('[') {
         if let Some(end) = host.find(']') {
             let name = &host[1..end];

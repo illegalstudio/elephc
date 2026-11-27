@@ -23,7 +23,7 @@ autotests = false
 # libelephc_mbstring.a (shared multibyte encoding and Unicode engine),
 # libelephc_phar.a (runtime phar:// archive reads), libelephc_zip.a
 # (in-memory ZipArchive), libelephc_sodium.a (ext/sodium secretbox/SHAKE/IPcrypt/KEM),
-# libelephc_snmp.a (ext/snmp v1/v2c UDP client),
+# libelephc_snmp.a (ext/snmp v1/v2c/v3 UDP client),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
 # libelephc_web.a (--web prefork HTTP server), libelephc_pcntl.a (process

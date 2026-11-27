@@ -240,3 +240,33 @@ $snmp->close();
         "elephc snmp\none\n.1.3.6.1.2.1.1.1.0=one\n.1.3.6.1.2.1.1.2.0=two\nelephc snmp\n"
     );
 }
+
+/// The PHP 8.6 `Snmp\*` enums, output setters and `SNMP` instance flags exist.
+#[test]
+fn test_snmp_php86_output_api() {
+    let out = compile_and_run(
+        r#"<?php
+snmp_set_quick_print(true);
+echo snmp_get_quick_print() ? "quick" : "no", "\n";
+snmp_set_enum_print(true);
+snmp_set_oid_output_format(\Snmp\OidOutput::Numeric);
+snmp_set_oid_numeric_print(\Snmp\OidOutput::Numeric);
+snmp_set_output_option(\Snmp\Output::HexText, true);
+snmp_set_output_option(\Snmp\Output::NumericIndex, true);
+snmp_set_string_output_format(\Snmp\StringOutput::Hex);
+snmp_init_mib(null);
+snmp_set_mib_option(\Snmp\Mib::AllowUnderscores, true);
+snmp_set_valueretrieval(1);
+echo snmp_get_valueretrieval(), "\n";
+
+$snmp = new SNMP(SNMP::VERSION_1, "127.0.0.1:1", "public", 1000000, 0);
+$snmp->numeric_index = true;
+$snmp->print_hex_text = true;
+var_dump($snmp->setOidOutputFormat(\Snmp\OidOutput::Numeric));
+var_dump($snmp->setStringOutputFormat(\Snmp\StringOutput::Hex));
+echo $snmp->getErrno(), ":", $snmp->getError() === "" ? "empty" : "bad", "\n";
+$snmp->close();
+"#,
+    );
+    assert_eq!(out, "quick\n1\nbool(true)\nbool(true)\n0:empty\n");
+}

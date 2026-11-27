@@ -15,6 +15,8 @@ use crate::parser::ast::Program;
 
 /// The `ext/snmp` PHP source and bridge externs.
 const SNMP_PRELUDE_SRC: &str = include_str!("snmp_prelude/snmp.php");
+/// The PHP 8.6 `Snmp\*` enums.
+const SNMP_ENUM_SRC: &str = include_str!("snmp_prelude/enums.php");
 
 /// Returns whether `usage` reaches the SNMP surface.
 fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
@@ -42,6 +44,10 @@ pub fn inject_if_used(
     let tokens = crate::lexer::tokenize(SNMP_PRELUDE_SRC).expect("SNMP prelude must tokenize");
     let mut declarations =
         crate::parser::parse_internal(&tokens).expect("SNMP prelude must parse");
+    let enum_tokens = crate::lexer::tokenize(SNMP_ENUM_SRC).expect("SNMP enums must tokenize");
+    declarations.extend(
+        crate::parser::parse_internal(&enum_tokens).expect("SNMP enums must parse"),
+    );
     inventory.record_program("snmp", &declarations);
     declarations.append(&mut program);
     declarations

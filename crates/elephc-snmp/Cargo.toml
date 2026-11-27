@@ -12,3 +12,5 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+async-snmp = "0.19"
+tokio = { version = "1", features = ["rt", "net", "time"] }

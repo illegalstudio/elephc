@@ -20,22 +20,31 @@ use std::sync::{Mutex, OnceLock};
 
 mod ber;
 mod client;
+mod v3;
 
 use client::{Response, Value};
 
 /// One open SNMP session.
 #[derive(Clone, Debug)]
 struct Session {
-    /// SNMP version (0 = v1, 1 = v2c).
+    /// SNMP version (0 = v1, 1 = v2c, 3 = v3).
     version: i64,
     /// Host and optional port.
     host: String,
-    /// Community string bytes.
+    /// Community string bytes, or the v3 security name.
     community: Vec<u8>,
     /// Per-attempt timeout in milliseconds.
     timeout_ms: u64,
     /// Extra attempts after the first.
     retries: i64,
+    /// Optional v3 auth protocol/password.
+    auth: Option<(String, Vec<u8>)>,
+    /// Optional v3 privacy protocol/password.
+    privacy: Option<(String, Vec<u8>)>,
+    /// Optional v3 context name.
+    context_name: Vec<u8>,
+    /// Optional v3 context engine ID.
+    context_engine: Vec<u8>,
 }
 
 static SESSIONS: OnceLock<Mutex<HashMap<i64, Session>>> = OnceLock::new();
@@ -121,6 +130,10 @@ pub unsafe extern "C" fn elephc_snmp_open(
                     community: community.to_vec(),
                     timeout_ms: u64::try_from(timeout_ms.max(1)).unwrap_or(1_000),
                     retries,
+                    auth: None,
+                    privacy: None,
+                    context_name: Vec::new(),
+                    context_engine: Vec::new(),
                 },
             );
         id
@@ -136,6 +149,100 @@ pub extern "C" fn elephc_snmp_close(session: i64) {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(&session);
     }));
+}
+
+/// C ABI: sets the SNMPv3 auth protocol/password; returns 0 or -1.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_set_auth(
+    session: i64,
+    protocol: *const u8,
+    protocol_len: usize,
+    password: *const u8,
+    password_len: usize,
+) -> i64 {
+    guarded(-1, || {
+        let (Some(protocol), Some(password)) = (
+            bytes(protocol, protocol_len),
+            bytes(password, password_len),
+        ) else {
+            return -1;
+        };
+        let Ok(protocol) = std::str::from_utf8(protocol) else {
+            return -1;
+        };
+        let mut sessions = sessions()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(session) = sessions.get_mut(&session) else {
+            return -1;
+        };
+        session.auth = Some((protocol.to_string(), password.to_vec()));
+        0
+    })
+}
+
+/// C ABI: sets the SNMPv3 privacy protocol/password; returns 0 or -1.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_set_priv(
+    session: i64,
+    protocol: *const u8,
+    protocol_len: usize,
+    password: *const u8,
+    password_len: usize,
+) -> i64 {
+    guarded(-1, || {
+        let (Some(protocol), Some(password)) = (
+            bytes(protocol, protocol_len),
+            bytes(password, password_len),
+        ) else {
+            return -1;
+        };
+        let Ok(protocol) = std::str::from_utf8(protocol) else {
+            return -1;
+        };
+        let mut sessions = sessions()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(session) = sessions.get_mut(&session) else {
+            return -1;
+        };
+        session.privacy = Some((protocol.to_string(), password.to_vec()));
+        0
+    })
+}
+
+/// C ABI: sets the SNMPv3 context name/engine ID; returns 0 or -1.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_set_context(
+    session: i64,
+    name: *const u8,
+    name_len: usize,
+    engine: *const u8,
+    engine_len: usize,
+) -> i64 {
+    guarded(-1, || {
+        let (Some(name), Some(engine)) = (bytes(name, name_len), bytes(engine, engine_len)) else {
+            return -1;
+        };
+        let mut sessions = sessions()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(session) = sessions.get_mut(&session) else {
+            return -1;
+        };
+        session.context_name = name.to_vec();
+        session.context_engine = engine.to_vec();
+        0
+    })
 }
 
 /// C ABI: sends a GetRequest/GetNextRequest; returns a response handle or -1.
@@ -165,15 +272,20 @@ pub unsafe extern "C" fn elephc_snmp_request(
         let Some(session) = session else {
             return -1;
         };
-        let Ok(response) = client::request(
-            session.version,
-            &session.host,
-            &session.community,
-            oid,
-            pdu,
-            session.timeout_ms,
-            session.retries,
-        ) else {
+        let response = if session.version == 3 {
+            v3::request(&session, oid, pdu)
+        } else {
+            client::request(
+                session.version,
+                &session.host,
+                &session.community,
+                oid,
+                pdu,
+                session.timeout_ms,
+                session.retries,
+            )
+        };
+        let Ok(response) = response else {
             return -1;
         };
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
