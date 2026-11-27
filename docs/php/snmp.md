@@ -66,10 +66,12 @@ and quick modes; plain mode never includes units.
 of the line, and `Snmp\Mib::Replace` replaces already-registered objects when a
 MIB is read again.
 
-Imported textual conventions that are not defined by a loaded MIB fall back to
-the raw numeric instance suffix; `DisplayString`, `SnmpAdminString`,
-`MacAddress`, `PhysAddress`, `INTEGER`, `BITS`, `IpAddress` and
-`OBJECT IDENTIFIER` index columns are recognised directly.
+`TEXTUAL-CONVENTION` definitions in a loaded MIB are parsed, so their base
+syntax and `DISPLAY-HINT` drive index rendering and string formatting.
+Standard conventions (`DisplayString`, `SnmpAdminString`, `MacAddress`,
+`PhysAddress`, `InterfaceIndex`, `InetAddress`, …) are seeded. A convention
+imported from a MIB that was never loaded falls back to the raw numeric
+instance suffix; load that module with `snmp_read_mib()` to resolve it.
 
 Calling an undeclared name fails at compile time rather than pretending to
 work.

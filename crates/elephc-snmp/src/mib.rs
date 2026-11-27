@@ -101,6 +101,10 @@ struct Registry {
     qualified: HashMap<String, String>,
     /// MIB search directories.
     dirs: Vec<String>,
+    /// Lowercase `TEXTUAL-CONVENTION` name -> base SYNTAX token.
+    types: HashMap<String, String>,
+    /// Lowercase type name -> whether it declares a DISPLAY-HINT.
+    hinted_types: HashMap<String, bool>,
 }
 
 /// Returns the process-wide registry.
@@ -187,6 +191,22 @@ fn seed(registry: &mut Registry) {
             format!("{}::{}", module.to_ascii_lowercase(), name.to_ascii_lowercase()),
             oid.to_string(),
         );
+    }
+    for (name, base, hinted) in [
+        ("DisplayString", "OCTET", true),
+        ("SnmpAdminString", "OCTET", true),
+        ("MacAddress", "OCTET", true),
+        ("PhysAddress", "OCTET", true),
+        ("InterfaceIndex", "INTEGER", false),
+        ("InterfaceIndexOrZero", "INTEGER", false),
+        ("InetAddressType", "INTEGER", false),
+        ("InetAddress", "OCTET", false),
+        ("InetPortNumber", "INTEGER", false),
+    ] {
+        registry.types.insert(name.to_ascii_lowercase(), base.to_string());
+        registry
+            .hinted_types
+            .insert(name.to_ascii_lowercase(), hinted);
     }
 }
 
@@ -377,6 +397,34 @@ fn parse_syntax(tokens: &[String]) -> Option<String> {
     tokens.get(position + 1).cloned()
 }
 
+/// Reports whether a SYNTAX token or its textual-convention base has a DISPLAY-HINT.
+fn syntax_is_hinted(registry: &Registry, syntax: &str) -> bool {
+    if registry
+        .hinted_types
+        .get(&syntax.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let mut resolved = syntax.to_string();
+    for _ in 0..8 {
+        let Some(base) = registry
+            .types
+            .get(&resolved.to_ascii_lowercase())
+            .cloned()
+        else {
+            break;
+        };
+        resolved = base;
+    }
+    registry
+        .hinted_types
+        .get(&resolved.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(false)
+}
+
 /// Returns the `UNITS "..."` clause value.
 fn parse_units(tokens: &[String]) -> Option<String> {
     let position = tokens.iter().position(|token| token == "UNITS")?;
@@ -411,11 +459,23 @@ fn parse_index_names(tokens: &[String]) -> Vec<(String, bool)> {
     names
 }
 
-/// Maps a SYNTAX token to its table-index encoding.
-fn index_kind(syntax: Option<&str>) -> IndexKind {
+/// Maps a SYNTAX token to its table-index encoding, following textual conventions.
+fn index_kind(registry: &Registry, syntax: Option<&str>) -> IndexKind {
     let Some(syntax) = syntax else {
         return IndexKind::Unknown;
     };
+    let mut resolved = syntax.to_string();
+    for _ in 0..8 {
+        let Some(base) = registry
+            .types
+            .get(&resolved.to_ascii_lowercase())
+            .cloned()
+        else {
+            break;
+        };
+        resolved = base;
+    }
+    let syntax = resolved.as_str();
     if syntax.eq_ignore_ascii_case("IpAddress") {
         return IndexKind::IpAddress;
     }
@@ -530,6 +590,24 @@ fn load_file(path: &str) -> bool {
         let Some(position) = tokens.iter().position(|token| token == "::=") else {
             continue;
         };
+        if tokens.get(position + 1).map(String::as_str) == Some("TEXTUAL-CONVENTION") {
+            let Some(syntax) = parse_syntax(&tokens) else {
+                continue;
+            };
+            let mut registry = registry()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if registry.names.is_empty() {
+                seed(&mut registry);
+            }
+            let key = name.to_ascii_lowercase();
+            registry.types.insert(key.clone(), syntax);
+            registry.hinted_types.insert(
+                key,
+                tokens.iter().any(|token| token == "DISPLAY-HINT"),
+            );
+            continue;
+        }
         if tokens.get(position + 1).map(String::as_str) != Some("{") {
             continue;
         }
@@ -573,11 +651,20 @@ fn load_file(path: &str) -> bool {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut updates = Vec::new();
+        let mut hinted_oids = Vec::new();
         for oid in &loaded {
-            let index_names = match registry.oids.get(oid) {
-                Some(entry) if !entry.index_names.is_empty() => entry.index_names.clone(),
-                _ => continue,
+            let (index_names, syntax) = match registry.oids.get(oid) {
+                Some(entry) => (entry.index_names.clone(), entry.syntax.clone()),
+                None => continue,
             };
+            if let Some(syntax) = syntax.as_deref() {
+                if syntax_is_hinted(&registry, syntax) {
+                    hinted_oids.push(oid.clone());
+                }
+            }
+            if index_names.is_empty() {
+                continue;
+            }
             let mut columns = Vec::new();
             let mut resolved = true;
             for (index_name, implied) in index_names {
@@ -590,7 +677,7 @@ fn load_file(path: &str) -> bool {
                     break;
                 };
                 columns.push(IndexColumn {
-                    kind: index_kind(index_entry.syntax.as_deref()),
+                    kind: index_kind(&registry, index_entry.syntax.as_deref()),
                     implied,
                 });
             }
@@ -601,6 +688,11 @@ fn load_file(path: &str) -> bool {
         for (oid, columns) in updates {
             if let Some(entry) = registry.oids.get_mut(&oid) {
                 entry.index_columns = columns;
+            }
+        }
+        for oid in hinted_oids {
+            if let Some(entry) = registry.oids.get_mut(&oid) {
+                entry.hinted = true;
             }
         }
     }
@@ -994,6 +1086,11 @@ mod tests {
             &path,
             r#"
 ELEPHC-UNIT-MIB DEFINITIONS ::= BEGIN
+ElephcName ::= TEXTUAL-CONVENTION
+    DISPLAY-HINT "255a"
+    STATUS current
+    DESCRIPTION "name"
+    SYNTAX OCTET STRING (SIZE (1..32))
 elephcUnit OBJECT IDENTIFIER ::= { enterprises 424243 }
 elephcUnitTable OBJECT-TYPE
     SYNTAX SEQUENCE OF ElephcUnitEntry
@@ -1008,7 +1105,7 @@ elephcUnitEntry OBJECT-TYPE
     ::= { elephcUnitTable 1 }
 ElephcUnitEntry ::= SEQUENCE { elephcUnitName DisplayString, elephcUnitValue Integer32 }
 elephcUnitName OBJECT-TYPE
-    SYNTAX DisplayString
+    SYNTAX ElephcName
     MAX-ACCESS not-accessible
     STATUS current
     ::= { elephcUnitEntry 1 }
@@ -1029,6 +1126,7 @@ END
             Some(instance)
         );
         assert_eq!(units(instance).as_deref(), Some("Bytes"));
+        assert!(string_hint(".1.3.6.1.4.1.424243.1.1.1.5.97.108.112.104.97"));
         assert_eq!(
             render_with_options(instance, 2, false, false).as_deref(),
             Some("ELEPHC-UNIT-MIB::elephcUnitValue.\"alpha\"")
