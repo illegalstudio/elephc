@@ -17,21 +17,22 @@ use crate::types::PhpType;
 use crate::ir_passes::numeric_domain::{self, NumericInputs};
 
 /// Collects reviewed numeric operations, sharing complete origin proofs across all queries.
-pub(super) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
+pub(in crate::ir_passes) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
     let mut numeric = NumericInputs::new(function);
     let mut slots: HashSet<LocalSlotId> = HashSet::new();
-    for inst in &function.instructions {
-        if inst.op != Op::LoadLocal || inst.result_type != IrType::Heap(IrHeapKind::Mixed) {
+    for local in &function.locals {
+        if local.ir_type != IrType::Heap(IrHeapKind::Mixed) {
             continue;
         }
-        if let (Some(Immediate::LocalSlot(slot)), Some(value)) = (&inst.immediate, inst.result) {
-            if !slots.contains(slot) && numeric.prove(&[value]) {
-                slots.insert(*slot);
-            }
+        if numeric.prove_local(local.id) {
+            slots.insert(local.id);
         }
     }
-    function.instructions.iter().enumerate().filter_map(|(index, inst)| {
+    let mut preserving: HashSet<_> = function.instructions.iter().enumerate().filter_map(|(index, inst)| {
         let preserves = match inst.op {
+            Op::LoadLocal => {
+                matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))
+            }
             Op::StoreLocal | Op::ReleaseLocalSlot => {
                 matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))
             }
@@ -46,7 +47,18 @@ pub(super) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
             _ => false,
         };
         preserves.then_some(InstId::from_raw(index as u32))
-    }).collect()
+    }).collect();
+    for scope in super::super::transient_owner_scopes::collect(function) {
+        let Some(source) = function.instruction(scope.store)
+            .and_then(|store| store.operands.first().copied())
+        else {
+            continue;
+        };
+        if numeric.prove(&[source]) {
+            preserving.extend(scope.operations());
+        }
+    }
+    preserving
 }
 
 /// Admits only numeric casts whose storage path cannot emit PHP coercion diagnostics.

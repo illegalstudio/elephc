@@ -10,6 +10,9 @@
 
 use crate::types::PhpType;
 
+/// Internal class marker for an already-unboxed object whose exact layout is runtime-selected.
+pub(crate) const RUNTIME_OBJECT_VIEW_CLASS: &str = "__elephc_runtime_object_view";
+
 /// Storage-level type of an EIR value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IrType {

@@ -321,7 +321,9 @@ fn test_property_buffer_accesses_of_two_indexes_share_one_descriptor() {
 fn test_property_buffer_reads_in_one_loop_iteration_share_one_record() {
     let ir = function_ir(TABLE_SOURCE, true, "Table::countMatching");
     assert_eq!(buffer_property_reads(&ir), 1, "{ir}");
-    assert_eq!(ir.matches("= buffer_get ").count(), 1, "{ir}");
+    assert_eq!(ir.matches("= buffer_resolve ").count(), 1, "{ir}");
+    assert_eq!(ir.matches("= buffer_get_resolved ").count(), 1, "{ir}");
+    assert!(!ir.contains("= buffer_get "), "{ir}");
 }
 
 /// A store to the property through another reference to the same object makes the second read

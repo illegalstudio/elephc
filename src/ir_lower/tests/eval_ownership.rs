@@ -314,8 +314,8 @@ echo assignAfterOpaqueEval('return null; // ' . $argc);
         inst.op == Op::StoreLocal && inst.immediate == slot
     }).expect("first future-local store");
     assert!(eval < store, "{target}: the local is first assigned after eval");
-    assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
-        inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
+    assert_eq!(function.instructions[eval + 1..=store].iter().filter(|inst| {
+        (inst.op == Op::ReleaseLocalSlot || inst.replaces_local_owner()) && inst.immediate == slot
     }).count(), 1, "{target}: retire the owner runtime eval may have restored before the first store");
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));

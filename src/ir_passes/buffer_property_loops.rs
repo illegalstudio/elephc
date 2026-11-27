@@ -35,11 +35,12 @@ pub(super) fn hoist_property_reads(function: &mut Function) -> bool {
         let loops = compute_loops(function, &dominance);
         if loops.is_empty() { return changed; }
         let predecessors = super::cfg::predecessors(function);
+        let numeric = super::buffer_access::numeric::preserving_instructions(function);
         let mut order: Vec<_> = loops.loops().iter().collect();
         order.sort_by_key(|loop_ref| loop_ref.depth);
         let moved = order.into_iter().any(|loop_ref| {
             super::guarded_buffer_prefix::hoist(function, loop_ref)
-                || hoist_one(function, loop_ref, &predecessors)
+                || hoist_one(function, loop_ref, &predecessors, &numeric)
         });
         if !moved { return changed; }
         changed = true;
@@ -49,22 +50,31 @@ pub(super) fn hoist_property_reads(function: &mut Function) -> bool {
 }
 
 /// Relocates the first buffer read of a clean loop header or its unconditional body entry.
-fn hoist_one(function: &mut Function, loop_ref: &NaturalLoop, predecessors: &[Vec<BlockId>]) -> bool {
+fn hoist_one(
+    function: &mut Function,
+    loop_ref: &NaturalLoop,
+    predecessors: &[Vec<BlockId>],
+    numeric: &HashSet<InstId>,
+) -> bool {
     let Some(preheader) = loop_ref.preheader else { return false; };
-    if !loop_ref.blocks.iter().all(|&block| {
+    let stable = loop_ref.blocks.iter().all(|&block| {
         function.blocks[block.as_raw() as usize].instructions.iter().all(|&id| {
-            keeps_reads_stable(function, &function.instructions[id.as_raw() as usize])
+            numeric.contains(&id)
+                || keeps_reads_stable(function, &function.instructions[id.as_raw() as usize])
         })
-    }) { return false; }
+    });
+    if !stable { return false; }
     // Guard relocation also moves statement resets, so it needs the same buffer-preserving
     // region as property relocation; effectful loops must keep their per-iteration boundaries.
-    if hoist_receiver_guard(function, loop_ref, preheader, predecessors) { return true; }
+    if hoist_receiver_guard(function, loop_ref, preheader, predecessors, numeric) { return true; }
     let header = loop_ref.header;
     let header_insts = function.blocks[header.as_raw() as usize].instructions.clone();
     if let Some((position, &read)) = header_insts.iter().enumerate().find(|(_, id)| {
         is_buffer_property_read(function, &function.instructions[id.as_raw() as usize])
     }) {
-        if header_insts[..position].iter().all(|&id| can_duplicate(function, id))
+        if header_insts[..position]
+            .iter()
+            .all(|&id| numeric.contains(&id) || can_duplicate(function, id))
             && feeds_access(function, loop_ref, read)
             && (reads_the_method_receiver(function, &function.instructions[read.as_raw() as usize])
                 || invariant_receiver(function, loop_ref, function.instructions[read.as_raw() as usize].operands[0]))
@@ -82,14 +92,21 @@ fn hoist_one(function: &mut Function, loop_ref: &NaturalLoop, predecessors: &[Ve
     let Some((position, &read)) = body_insts.iter().enumerate().find(|(_, id)| {
         is_buffer_property_read(function, &function.instructions[id.as_raw() as usize])
     }) else { return false; };
-    if !header_insts.iter().all(|&id| can_duplicate(function, id))
-        || !body_insts[..position].iter().all(|&id| can_duplicate(function, id))
-        || !feeds_access(function, loop_ref, read)
-        || !(reads_the_method_receiver(function, &function.instructions[read.as_raw() as usize])
-            || invariant_receiver(function, loop_ref, function.instructions[read.as_raw() as usize].operands[0]))
-        || header_values_escape(function, loop_ref)
+    let header_ok = header_insts
+        .iter()
+        .all(|&id| numeric.contains(&id) || can_duplicate(function, id));
+    let prefix_ok = body_insts[..position]
+        .iter()
+        .all(|&id| numeric.contains(&id) || can_duplicate(function, id));
+    let feeds = feeds_access(function, loop_ref, read);
+    let receiver = reads_the_method_receiver(function, &function.instructions[read.as_raw() as usize])
+        || invariant_receiver(function, loop_ref, function.instructions[read.as_raw() as usize].operands[0]);
+    let escapes = header_values_escape(function, loop_ref);
+    if !header_ok || !prefix_ok || !feeds || !receiver || escapes
     { return false; }
-    let Some((guarded, replacements)) = guard_entry(function, loop_ref, preheader, body) else { return false; };
+    let Some((guarded, replacements)) = guard_entry(function, loop_ref, preheader, body) else {
+        return false;
+    };
     move_read(function, body, read, guarded, replacements);
     true
 }
@@ -278,7 +295,13 @@ pub(super) fn repair_definitions(function: &mut Function) {
 
 /// Moves an inlined accessor's invariant null check ahead of the loop, behind its zero-trip
 /// condition. The original throwing edge stays before the property read, with its own message.
-fn hoist_receiver_guard(function: &mut Function, loop_ref: &NaturalLoop, preheader: BlockId, predecessors: &[Vec<BlockId>]) -> bool {
+fn hoist_receiver_guard(
+    function: &mut Function,
+    loop_ref: &NaturalLoop,
+    preheader: BlockId,
+    predecessors: &[Vec<BlockId>],
+    numeric: &HashSet<InstId>,
+) -> bool {
     let Some(body) = body_entry(function, loop_ref) else { return false; };
     // An inner loop header can also be the outer loop's body entry. Reusing that block would
     // redirect its back edges to the outer header with the original entry arguments.
@@ -300,20 +323,24 @@ fn hoist_receiver_guard(function: &mut Function, loop_ref: &NaturalLoop, prehead
     let Some(ValueDef::Instruction { block: condition_block, inst: condition, .. }) = function.value(cond).map(|v| v.def)
         else { return false; };
     let test = &function.instructions[condition.as_raw() as usize];
-    if condition_block != body || test.op != Op::IsNull || then_target != failure
-        || !test.operands.first().is_some_and(|&receiver| invariant_receiver(function, loop_ref, receiver))
-        || !block.instructions.iter().all(|&id| {
+    let condition_ok = condition_block == body && test.op == Op::IsNull && then_target == failure;
+    let receiver_ok = test.operands.first().is_some_and(|&receiver| invariant_receiver(function, loop_ref, receiver));
+    let block_ok = block.instructions.iter().all(|&id| {
             let inst = &function.instructions[id.as_raw() as usize];
-            id == condition || matches!(inst.op, Op::Nop | Op::ConcatReset)
+            id == condition || numeric.contains(&id) || matches!(inst.op, Op::Nop | Op::ConcatReset)
                 || (can_load_receiver(function, id)
                     && inst.result.is_some_and(|receiver| invariant_receiver(function, loop_ref, receiver)))
-        })
-        || !function.blocks[success.as_raw() as usize].instructions.iter().any(|id| {
+        });
+    let success_has_read = function.blocks[success.as_raw() as usize].instructions.iter().any(|id| {
             is_buffer_property_read(function, &function.instructions[id.as_raw() as usize])
                 && feeds_access(function, loop_ref, *id)
-        })
-        || !function.blocks[loop_ref.header.as_raw() as usize].instructions.iter().all(|&id| can_duplicate(function, id))
-        || header_values_escape(function, loop_ref)
+        });
+    let header_ok = function.blocks[loop_ref.header.as_raw() as usize]
+            .instructions
+            .iter()
+            .all(|&id| numeric.contains(&id) || can_duplicate(function, id));
+    let escapes = header_values_escape(function, loop_ref);
+    if !condition_ok || !receiver_ok || !block_ok || !success_has_read || !header_ok || escapes
     { return false; }
     let Some((guarded, _)) = guard_entry(function, loop_ref, preheader, body) else { return false; };
     // Reuse the old body as the new preheader. Back edges now bypass the invariant check.

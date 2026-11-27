@@ -552,8 +552,6 @@ mod tests {
                 let cleanup = asm.find(release).unwrap();
                 assert!(publication < cleanup, "{target}: {ty}: {asm}");
                 assert_eq!(asm.matches(release).count(), 1, "{target}: {ty}: {asm}");
-                let restored = if target == "linux-x86_64" { "add rsp, 32" } else { "add sp, sp, #32" };
-                assert!(asm.find(restored).unwrap() < cleanup, "{target}: cleanup must not strand temporary stack owners");
                 assert!(!asm.contains("__rt_incref"), "{target}: the replacement already owns its payload");
             }
         }

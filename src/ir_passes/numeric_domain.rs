@@ -99,6 +99,41 @@ impl<'a> NumericInputs<'a> {
         self.query(values, true)
     }
 
+    /// Proves one physical Mixed local numeric even when its logical loads are already scalar.
+    pub(crate) fn prove_local(&mut self, slot: LocalSlotId) -> bool {
+        self.working.clear();
+        self.locals.working.clear();
+        if !self.enabled {
+            return false;
+        }
+        let mut slots = HashSet::new();
+        let safe = numeric_local(
+            self.function,
+            slot,
+            &mut slots,
+            &mut self.locals,
+            &self.proven,
+            &self.rejected,
+            &mut self.working,
+        );
+        if safe {
+            self.proven.extend(
+                self.working
+                    .iter()
+                    .filter_map(|(&value, &safe)| safe.then_some(value)),
+            );
+            self.locals.proven.extend(self.locals.working.drain());
+        }
+        self.rejected.extend(
+            self.working
+                .iter()
+                .filter_map(|(&value, &safe)| (!safe).then_some(value)),
+        );
+        self.working.clear();
+        self.locals.working.clear();
+        safe
+    }
+
     /// Avoids retaining a second value set when the caller needs only one query.
     fn query(&mut self, values: &[ValueId], retain: bool) -> bool {
         self.working.clear();
@@ -169,43 +204,78 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
         }
         Op::LoadLocal => {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
-            let Some(local) = function.locals.get(slot.as_raw() as usize) else { return false; };
-            if local.kind != LocalKind::PhpLocal || (slot.as_raw() as usize) < function.params.len() {
-                return false;
-            }
-            if locals.rejected.contains(&slot) { return false; }
-            // Active and working slots are optimistic cycle facts, private to this query.
-            if locals.proven.contains(&slot) || locals.working.contains(&slot) || slots.contains(&slot) {
-                return true;
-            }
-            #[cfg(test)]
-            SLOT_VALIDATIONS.with(|checks| checks.set(checks.get() + 1));
-            if locals.escaping.get_or_insert_with(|| crate::ir_passes::address_escaping_slots(function)).contains(&slot) {
-                locals.rejected.insert(slot);
-                return false;
-            }
-            let access = &locals.accesses.get_or_insert_with(|| local_accesses(function))[slot.as_raw() as usize];
-            if access.forbidden {
-                locals.rejected.insert(slot);
-                return false;
-            }
-            let writers = access.writers.clone();
-            slots.insert(slot);
-            let safe = !writers.is_empty() && writers.iter().all(|&value| {
-                numeric(function, value, slots, locals, proven, rejected, known)
-            }) && initialized(&locals.accesses.as_ref().unwrap()[slot.as_raw() as usize], locals.dominance.get_or_insert_with(|| {
-                crate::ir_passes::compute_dominance(function)
-            }));
-            slots.remove(&slot);
-            if safe { locals.working.insert(slot); }
-            else {
-                // Failure with optimistic cycle assumptions is definitive for this immutable function.
-                locals.rejected.insert(slot);
-            }
-            safe
+            numeric_local(function, slot, slots, locals, proven, rejected, known)
         }
         _ => false,
     }
+}
+
+/// Proves the complete writer and initialization graph of one private physical Mixed local.
+fn numeric_local(
+    function: &Function,
+    slot: LocalSlotId,
+    slots: &mut HashSet<LocalSlotId>,
+    locals: &mut NumericLocals,
+    proven: &HashSet<ValueId>,
+    rejected: &HashSet<ValueId>,
+    known: &mut HashMap<ValueId, bool>,
+) -> bool {
+    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
+        return false;
+    };
+    if local.kind != LocalKind::PhpLocal
+        || (slot.as_raw() as usize) < function.params.len()
+        || local.ir_type != IrType::Heap(IrHeapKind::Mixed)
+        || !matches!(
+            local.php_type.codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Mixed
+        )
+    {
+        return false;
+    }
+    if locals.rejected.contains(&slot) {
+        return false;
+    }
+    // Active and working slots are optimistic cycle facts, private to this query.
+    if locals.proven.contains(&slot) || locals.working.contains(&slot) || slots.contains(&slot) {
+        return true;
+    }
+    #[cfg(test)]
+    SLOT_VALIDATIONS.with(|checks| checks.set(checks.get() + 1));
+    if locals
+        .escaping
+        .get_or_insert_with(|| crate::ir_passes::address_escaping_slots(function))
+        .contains(&slot)
+    {
+        locals.rejected.insert(slot);
+        return false;
+    }
+    let access =
+        &locals.accesses.get_or_insert_with(|| local_accesses(function))[slot.as_raw() as usize];
+    if access.forbidden {
+        locals.rejected.insert(slot);
+        return false;
+    }
+    let writers = access.writers.clone();
+    slots.insert(slot);
+    let safe = !writers.is_empty()
+        && writers
+            .iter()
+            .all(|&value| numeric(function, value, slots, locals, proven, rejected, known))
+        && initialized(
+            &locals.accesses.as_ref().unwrap()[slot.as_raw() as usize],
+            locals
+                .dominance
+                .get_or_insert_with(|| crate::ir_passes::compute_dominance(function)),
+        );
+    slots.remove(&slot);
+    if safe {
+        locals.working.insert(slot);
+    } else {
+        // Failure with optimistic cycle assumptions is definitive for this immutable function.
+        locals.rejected.insert(slot);
+    }
+    safe
 }
 
 /// Requires a dominating store before every read, including reads feeding another slot's writer.

@@ -102,6 +102,7 @@ mod regalloc;
 pub(crate) mod rematerialize;
 mod rewrite;
 mod tail_call;
+mod transient_owner_scopes;
 
 #[cfg(test)]
 mod tests;

@@ -442,8 +442,11 @@ impl Proof<'_> {
         if (slot.as_raw() as usize) < self.function.params.len()
             || (local.kind != LocalKind::PhpLocal && !scoped)
             || self.function.no_epilogue_cleanup_slots.contains(&slot)
-            || local.php_type.codegen_repr() != PhpType::Mixed
             || local.ir_type != IrType::Heap(IrHeapKind::Mixed)
+            || !matches!(
+                local.php_type.codegen_repr(),
+                PhpType::Int | PhpType::Float | PhpType::Mixed
+            )
         {
             return false;
         }
@@ -524,7 +527,10 @@ impl Proof<'_> {
         stored && published && retired && depth == 0
     }
 
-    /// Allows fresh numeric seed cells and producers that cannot feed any other local.
+    /// Allows fresh numeric seed cells and producers with at most one ordinary destination.
+    ///
+    /// Block-scoped owner temporaries may mirror that destination while an assignment publishes
+    /// it. Each temporary still passes `scoped_operand`, so its pointer cannot escape the block.
     fn slot_writer(&self, mut value: ValueId, slot: LocalSlotId) -> bool {
         for _ in 0..self.function.values.len() {
             let Some(metadata) = self.function.value(value) else {
@@ -563,7 +569,11 @@ impl Proof<'_> {
                     return (!tagged_producer(inst) || self.numeric_inputs(&inst.operands))
                         && self.value_uses(value, id, &mut HashSet::new(), &mut stores)
                         && stores.contains(&slot)
-                        && stores.iter().all(|&other| other == slot || self.scoped_temp(other));
+                        && stores
+                            .iter()
+                            .filter(|&&other| !self.scoped_temp(other))
+                            .count()
+                            <= 1;
                 }
                 _ => return false,
             }

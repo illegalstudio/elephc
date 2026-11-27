@@ -219,6 +219,7 @@ pub(super) fn slots_of(function: &Function, id: InstId) -> Vec<LocalSlotId> {
 /// Finds the locals worth rewriting.
 fn analyze(function: &Function) -> Vec<Plan> {
     let index = index(function);
+    let transient_owners = super::transient_owner_scopes::collect(function);
     let dominance = super::dominance::compute_dominance(function);
     let loops = compute_loops(function, &dominance);
     if loops.is_empty() {
@@ -242,7 +243,7 @@ fn analyze(function: &Function) -> Vec<Plan> {
         let mut sites = Vec::new();
         let mut modeled: HashSet<InstId> = HashSet::new();
         for id in &references[&slot] {
-            let Some(site) = match_site(function, &index, slot, *id) else {
+            let Some(site) = match_site(function, &index, &transient_owners, slot, *id) else {
                 continue;
             };
             modeled.insert(site.load);
@@ -293,7 +294,13 @@ fn analyze(function: &Function) -> Vec<Plan> {
 /// and clones of the result, a release of the slot, the store, and releases of the result. Everything
 /// from the arithmetic to the last of them sits in one block. Other instructions in that
 /// span may only be releases of unrelated values, which run after the update either way.
-fn match_site(function: &Function, index: &Index, slot: LocalSlotId, store: InstId) -> Option<Site> {
+fn match_site(
+    function: &Function,
+    index: &Index,
+    transient_owners: &[super::transient_owner_scopes::TransientOwnerScope],
+    slot: LocalSlotId,
+    store: InstId,
+) -> Option<Site> {
     let store_inst = function.instruction(store)?;
     if store_inst.op != Op::StoreLocal || store_inst.immediate != Some(Immediate::LocalSlot(slot)) {
         return None;
@@ -330,6 +337,14 @@ fn match_site(function: &Function, index: &Index, slot: LocalSlotId, store: Inst
     };
     let binop_inst = function.instruction(binop)?;
     let binop_at = index.position[&binop].1;
+    let binop_result = binop_inst.result?;
+    for scope in transient_owners.iter().filter(|scope| scope.block == block) {
+        let Some(owner_chain) = scope.forwarding_chain_to(function, binop_result) else {
+            continue;
+        };
+        members.extend(owner_chain);
+        members.extend(scope.operations());
+    }
     let is_local_load = |value: ValueId| local_load(function, slot, value);
     let (op, load, other, local_on_left) = match (binop_inst.op, &binop_inst.immediate) {
         (Op::StrIncDec, Some(Immediate::I64(step @ (1 | -1)))) => {

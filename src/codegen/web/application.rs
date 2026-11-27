@@ -172,8 +172,10 @@ mod tests {
                 link_libs: vec![],
             });
             module.data.global_names.push("probe".into());
+            let mut data = DataSection::new();
+            data.add_comm(ir_global_symbol("probe"), 8);
             let mut emitter = Emitter::new(target);
-            emit(&mut emitter, &module, &DataSection::new());
+            emit(&mut emitter, &module, &data);
             let assembly = emitter.output();
             let entry = assembly.find(&format!("{}:\n", target.extern_symbol("elephc_web_application_shutdown_cleanup"))).unwrap();
             let shutdown = &assembly[entry..];

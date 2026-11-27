@@ -22,20 +22,36 @@ pub(crate) use write_select::lower_property_reference_receiver;
 pub(crate) use write_select::defer_native_property_write_receiver;
 pub(super) use write_select::lower_property_write_prelude;
 
-/// Borrows guarded XML storage, narrowing opaque object metadata while preserving boxed unions.
+/// Borrows guarded XML storage, unboxing runtime-checked values for the native method ABI.
 pub(crate) fn borrow_native_xml_property_receiver(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
 ) -> LoweredValue {
     let object_type = ctx.builder.value_php_type(object.value);
-    let ty = if object_type.codegen_repr() == PhpType::Mixed {
-        PhpType::Mixed
-    } else if is_opaque_property_object(ctx, &object_type) {
-        PhpType::Object("SimpleXMLElement".into())
+    let native_type = PhpType::Object("SimpleXMLElement".into());
+    let receiver = if object_type.codegen_repr() == PhpType::Mixed {
+        ctx.emit_value(
+            Op::MixedUnbox,
+            vec![object.value],
+            None,
+            native_type.clone(),
+            Op::mixed_unbox_effects(&native_type),
+            Some(span),
+        )
     } else {
-        object_type
+        let ty = if is_opaque_property_object(ctx, &object_type) {
+            native_type
+        } else {
+            object_type
+        };
+        ctx.emit_value(
+            Op::Borrow,
+            vec![object.value],
+            None,
+            ty,
+            Op::Borrow.default_effects(),
+            Some(span),
+        )
     };
-    let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
-        Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
     receiver
 }

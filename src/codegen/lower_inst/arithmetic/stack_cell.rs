@@ -18,7 +18,7 @@
 use elephc_memoir::{FrameOffset, values::stack_cell::{CellTag, emit_scalar_cell}};
 use crate::codegen::{abi, platform::Arch, Result};
 use crate::codegen::context::FunctionContext;
-use crate::ir::{Instruction, MinMaxRule, MixedNumericOp, Op};
+use crate::ir::{Instruction, IrHeapKind, IrType, MinMaxRule, MixedNumericOp, Op};
 use crate::types::PhpType;
 use super::{expect_operand, load_integer_operand, store_if_result};
 use super::super::numeric_payloads;
@@ -291,14 +291,36 @@ pub(in crate::codegen::lower_inst) fn lower_increment(ctx: &mut FunctionContext<
 
 /// Publishes a raw integer or float seed through its slot's frame cell instead of a heap box.
 ///
-/// The slot's previous occupant was already retired by the preceding `release_local_slot`;
-/// the scalar is loaded before the cell is rewritten, so a slot that still points at this
-/// cell is simply republished with the new payload.
-pub(in crate::codegen::lower_inst) fn store_seed(ctx: &mut FunctionContext<'_>, slot: crate::ir::LocalSlotId, value: crate::ir::ValueId, cell: usize) -> Result<()> {
+/// The scalar is loaded before the cell is rewritten. An atomic owner store snapshots the
+/// displaced physical `Mixed` owner, publishes the complete stack-cell pointer, then retires
+/// the snapshot. This also handles a previous pointer to the same frame cell, whose release is
+/// a managed-heap no-op, without relying on the local's narrower logical PHP type.
+pub(in crate::codegen::lower_inst) fn store_seed(
+    ctx: &mut FunctionContext<'_>,
+    slot: crate::ir::LocalSlotId,
+    value: crate::ir::ValueId,
+    cell: usize,
+    replace_owner: bool,
+) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     write_scalar(ctx, value, cell)?;
     let offset = ctx.local_offset(slot)?;
-    abi::store_at_offset(ctx.emitter, result, offset);
+    if replace_owner
+        && ctx.local_ir_type(slot)? == IrType::Heap(IrHeapKind::Mixed)
+    {
+        elephc_memoir::symbol_owners::emit_publish_owner(
+            ctx.emitter,
+            |emitter, previous| abi::load_at_offset(emitter, previous, offset),
+            |emitter| abi::store_at_offset(emitter, result, offset),
+        );
+        super::super::local_stores::retire_displaced_local_owner(
+            ctx,
+            slot,
+            &PhpType::Mixed,
+        )?;
+    } else {
+        abi::store_at_offset(ctx.emitter, result, offset);
+    }
     Ok(())
 }
 

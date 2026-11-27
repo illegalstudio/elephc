@@ -167,22 +167,12 @@ impl IrPass for BoundedMixedCounter {
             let Some(proof) = CounterProof::new(function, slot, self, data) else {
                 continue;
             };
-            let mut trial = function.clone();
-            proof.scalarize(&mut trial, slot);
-            if crate::ir::validate_function(&trial).is_err() {
-                continue;
-            }
-            super::mem2reg::Mem2Reg.run(&mut trial, data);
-            // Promotion checks definite assignment and implicit aliases. A remaining
-            // addressable load/store cannot inherit an integer domain just from its label.
-            if trial.instructions.iter().any(|inst| {
-                matches!(inst.op, Op::LoadLocal | Op::StoreLocal)
-                    && inst.immediate == Some(Immediate::LocalSlot(slot))
-            }) {
-                continue;
-            }
-            super::integer_range::IntegerRange.run(&mut trial, data);
-            if proof.proven_unchecked(&trial) && crate::ir::validate_function(&trial).is_ok() {
+            if let Some(trial) = storage::proven_trial(
+                function,
+                &HashSet::from([slot]),
+                &proof,
+                data,
+            ) {
                 *function = trial;
                 changed = true;
             }
@@ -314,6 +304,18 @@ impl CounterProof {
                     }
                     Op::StoreLocal if matches!(inst.immediate,
                         Some(Immediate::LocalSlot(slot)) if slots.contains(&slot)) => {}
+                    Op::StoreLocal => {
+                        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                            return None;
+                        };
+                        let Some(scope) = super::transient_owner_scopes::for_store(function, id) else {
+                            return None;
+                        };
+                        if scope.slot != slot {
+                            return None;
+                        }
+                        proof.releases.extend(scope.operations());
+                    }
                     Op::StrIncDec if matches!(inst.immediate, Some(Immediate::I64(1 | -1))) => {
                         proof.updates.insert(id);
                         pending.push(inst.result?);
@@ -322,6 +324,10 @@ impl CounterProof {
                         proof.updates.insert(id);
                         pending.push(inst.result?);
                     }
+                    // Checked arithmetic borrows raw integer operands and produces its own
+                    // independent Mixed result. Unless it is the recognized recurrence above,
+                    // scalarizing the counter does not change that result's overflow behavior.
+                    Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {}
                     Op::PhpRelCmp => {
                         proof.comparisons.insert(id);
                     }
@@ -345,11 +351,24 @@ impl CounterProof {
                     | Op::IShl
                     | Op::IShrA
                     | Op::INeg
-                    | Op::IBitNot => {}
+                    | Op::IBitNot
+                    | Op::ICheckedNumericChainToInt => {}
+                    // A proven integer converts to the same PHP decimal spelling whether its
+                    // frame slot is scalar or boxed. Cold diagnostics may keep this conversion
+                    // even when the hot recurrence is otherwise entirely numeric.
+                    Op::IToStr => {}
                     // A proven integer remains the same PHP array key after scalarization, and
                     // the typed index path is strictly cheaper than a boxed-key lookup.
                     Op::ArrayGet | Op::ArrayGetSilent
                         if inst.operands.get(1) == Some(&value) => {}
+                    // Typed buffer instructions already consume raw integer indexes and integer
+                    // element payloads. Scalarizing their source slot does not change the
+                    // descriptor operand or the checked bounds path.
+                    Op::BufferGet | Op::BufferGetResolved
+                        if inst.operands.get(1) == Some(&value) => {}
+                    Op::BufferSet | Op::BufferSetResolved
+                        if inst.operands.get(1) == Some(&value)
+                            || inst.operands.get(2) == Some(&value) => {}
                     // Numeric helpers borrow their inputs. The unchanged opcode accepts
                     // a raw integer after the recurrence's complete range proof succeeds.
                     Op::MixedNumericBinop if matches!(inst.immediate,
@@ -502,13 +521,39 @@ impl CounterProof {
         let Some(result) = producer.result else {
             return false;
         };
+        let owner_scopes: Vec<_> = super::transient_owner_scopes::collect(function)
+            .into_iter()
+            .filter_map(|scope| {
+                let chain = scope.forwarding_chain_to(function, result)?;
+                Some((scope, chain))
+            })
+            .collect();
+        let owner_scope_stores: HashSet<_> =
+            owner_scopes.iter().map(|(scope, _)| scope.store).collect();
+        let owner_chain_insts: HashSet<_> = owner_scopes
+            .iter()
+            .flat_map(|(_, chain)| chain.iter().copied())
+            .collect();
+        wrapper_insts.extend(owner_chain_insts.iter().copied());
+        let owner_chain_values: Vec<_> = owner_chain_insts
+            .iter()
+            .filter_map(|id| function.instruction(*id).and_then(|inst| inst.result))
+            .collect();
         let terminators: Vec<_> = function
             .blocks
             .iter()
             .filter_map(|block| block.terminator.as_ref())
             .collect();
-        let mut releases = Vec::new();
-        for owner in wrappers.iter().copied().chain([result]) {
+        let mut releases: Vec<_> = owner_scopes
+            .iter()
+            .flat_map(|(scope, _)| scope.operations())
+            .collect();
+        for owner in wrappers
+            .iter()
+            .copied()
+            .chain([result])
+            .chain(owner_chain_values.iter().copied())
+        {
             if terminators.iter().any(|term| term.used_values().contains(&owner)) {
                 return false;
             }
@@ -522,6 +567,7 @@ impl CounterProof {
                         if owner == stored
                             && matches!(user.immediate,
                                 Some(Immediate::LocalSlot(target)) if slots.contains(&target)) => {}
+                    Op::StoreLocal if owner_scope_stores.contains(&id) => {}
                     _ if wrapper_insts.contains(&id) => {}
                     _ => return false,
                 }
@@ -530,6 +576,7 @@ impl CounterProof {
         self.seeds.insert(producer_id);
         self.seeded_slots.insert(slot);
         self.scalar_values.extend(wrappers);
+        self.scalar_values.extend(owner_chain_values);
         self.releases.extend(releases);
         true
     }
@@ -557,6 +604,17 @@ impl CounterProof {
         for slot in slots {
             function.locals[slot.as_raw() as usize].ir_type = IrType::I64;
             function.locals[slot.as_raw() as usize].php_type = PhpType::Int;
+        }
+        // Atomic owner replacement is encoded on StoreLocal while its destination is a
+        // lifetime-tracked heap slot. This private proof trial has just made the destination
+        // scalar, so the same store no longer retires an owner and must regain ordinary effects.
+        for inst in &mut function.instructions {
+            if inst.replaces_local_owner()
+                && matches!(inst.immediate,
+                    Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))
+            {
+                inst.effects = Op::StoreLocal.default_effects();
+            }
         }
         for &value in &self.scalar_values {
             let metadata = &mut function.values[value.as_raw() as usize];

@@ -865,7 +865,7 @@ fn overwriting_string_local_emits_release() {
     assert!(text.contains("release"), "expected release in {text}");
 }
 
-/// Verifies a borrowed string result is retained before its aliased source slot is released.
+/// Verifies a borrowed string result is retained before its aliased source slot is replaced.
 #[test]
 fn self_reassignment_acquires_borrowed_string_before_releasing_slot() {
     let module = super::lower_source(
@@ -884,15 +884,16 @@ echo normalize("  hi  ");
         .expect("expected typed trim runtime call");
     let assignment = &function[builtin..];
     let acquire = assignment.find("acquire").expect("expected retained trim result");
-    let release = assignment
-        .find("release")
-        .expect("expected previous slot release");
+    let store_line = assignment
+        .lines()
+        .find(|line| line.contains("store_local") && line.contains("refcount_op"))
+        .expect("expected atomic replacement local store");
     let store = assignment
-        .find("store_local")
-        .expect("expected replacement local store");
+        .find(store_line)
+        .expect("replacement store belongs to the assignment");
     assert!(
-        acquire < release && release < store,
-        "expected acquire before old-slot release and store in {function}"
+        acquire < store && store_line.contains("refcount_op"),
+        "expected acquire before atomic old-slot replacement in {function}"
     );
 }
 

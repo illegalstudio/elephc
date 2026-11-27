@@ -27,7 +27,8 @@ eval($source);
     let slot = main.locals.iter().find(|local| local.name.as_deref() == Some("flag")).unwrap();
     assert_eq!(slot.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{name}");
     assert!(main.instructions.iter().any(|inst|
-        inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot.id))),
+        (inst.op == Op::ReleaseLocalSlot || inst.replaces_local_owner())
+            && inst.immediate == Some(Immediate::LocalSlot(slot.id))),
         "{name}: unset must retire the earlier boxed boolean");
     let concrete = module.functions.iter().find(|function| function.name == "concreteScalarOverwrite").unwrap();
     assert!(!concrete.instructions.iter().any(|inst|

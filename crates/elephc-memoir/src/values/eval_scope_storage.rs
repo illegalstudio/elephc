@@ -7,6 +7,7 @@
 //! Key details:
 //! - Name bytes are borrowed static data.
 //! - Owned cells retire before their nodes. Scope flags and lookup stay with the caller.
+//! - Suspended-frame collection visits the exact non-null owned cell fields without mutation.
 
 use crate::{Arch, Emitter};
 
@@ -16,10 +17,12 @@ pub fn emit_lifecycle(emitter: &mut impl Emitter, owned_flag: i64) {
         Arch::AArch64 => {
             emit_aarch64_eval_scope_new(emitter);
             emit_aarch64_eval_scope_free(emitter, owned_flag);
+            emit_aarch64_eval_scope_owner_visitor(emitter, owned_flag);
         }
         Arch::X86_64 => {
             emit_x86_64_eval_scope_new(emitter);
             emit_x86_64_eval_scope_free(emitter, owned_flag);
+            emit_x86_64_eval_scope_owner_visitor(emitter, owned_flag);
         }
     }
 }
@@ -83,6 +86,42 @@ fn emit_aarch64_eval_scope_free(emitter: &mut impl Emitter, owned_flag: i64) {
     emitter.instruction("add sp, sp, #48");                                     // release the scope-free frame
     emitter.label("__elephc_eval_scope_free_done");
     emitter.instruction("ret");                                                 // return after the scope is fully released
+}
+
+/// Emits the ARM64 pure visitor for exact cell fields owned by a scope-only eval map.
+fn emit_aarch64_eval_scope_owner_visitor(emitter: &mut impl Emitter, owned_flag: i64) {
+    label_c_global(emitter, "__elephc_eval_scope_visit_owners_v1");
+    emitter.instruction("cbz x0, __elephc_eval_scope_visit_owners_v1_done");    // a null scope has no owner fields
+    emitter.instruction("cbz x1, __elephc_eval_scope_visit_owners_v1_done");    // a null callback requests no traversal
+    emitter.instruction("sub sp, sp, #48");                                     // reserve an aligned frame for stable scan state
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // preserve frame pointer and return address across callbacks
+    emitter.instruction("stp x19, x20, [sp, #16]");                             // preserve current entry and callback registers
+    emitter.instruction("stp x21, x22, [sp, #32]");                             // preserve callback context and alignment padding
+    emitter.instruction("mov x29, sp");                                         // establish a stable callback frame
+    emitter.instruction("ldr x19, [x0]");                                       // load the first scope entry
+    emitter.instruction("mov x20, x1");                                         // keep the visitor callback across its own calls
+    emitter.instruction("mov x21, x2");                                         // keep the opaque visitor context unchanged
+    emitter.label("__elephc_eval_scope_visit_owners_v1_loop");
+    emitter.instruction("cbz x19, __elephc_eval_scope_visit_owners_v1_exit");   // finish after the final entry
+    emitter.instruction("ldr x9, [x19, #32]");                                  // load entry ownership flags
+    emitter.instruction(&format!("tst x9, #{}", owned_flag));                   // borrowed entries add no collector edge
+    emitter.instruction("b.eq __elephc_eval_scope_visit_owners_v1_next");       // skip borrowed storage
+    emitter.instruction("ldr x9, [x19, #24]");                                  // read the owned cell without retaining it
+    emitter.instruction("cbz x9, __elephc_eval_scope_visit_owners_v1_next");    // vacant owner fields contribute no edge
+    emitter.instruction("add x0, x19, #24");                                    // pass the exact address of entry->cell
+    emitter.instruction("mov x1, #0");                                          // ordinary Mixed owner fields use tag zero
+    emitter.instruction("mov x2, x21");                                         // forward the opaque visitor context
+    emitter.instruction("blr x20");                                             // record the owner without running PHP
+    emitter.label("__elephc_eval_scope_visit_owners_v1_next");
+    emitter.instruction("ldr x19, [x19]");                                      // advance through the immutable entry list
+    emitter.instruction("b __elephc_eval_scope_visit_owners_v1_loop");          // inspect the next scope entry
+    emitter.label("__elephc_eval_scope_visit_owners_v1_exit");
+    emitter.instruction("ldp x21, x22, [sp, #32]");                             // restore callback context registers
+    emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore scan registers
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the visitor frame
+    emitter.label("__elephc_eval_scope_visit_owners_v1_done");
+    emitter.instruction("ret");                                                 // return without mutating scope ownership
 }
 
 /// Allocates and publishes a node using the ARM64 setter frame.
@@ -150,6 +189,48 @@ fn emit_x86_64_eval_scope_free(emitter: &mut impl Emitter, owned_flag: i64) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.label("__elephc_eval_scope_free_done");
     emitter.instruction("ret");                                                 // return after the scope is fully released
+}
+
+/// Emits the x86_64 pure visitor for exact cell fields owned by a scope-only eval map.
+fn emit_x86_64_eval_scope_owner_visitor(emitter: &mut impl Emitter, owned_flag: i64) {
+    label_c_global(emitter, "__elephc_eval_scope_visit_owners_v1");
+    emitter.instruction("test rdi, rdi");                                       // a null scope has no owner fields
+    emitter.instruction("jz __elephc_eval_scope_visit_owners_v1_done");         // return before building a frame
+    emitter.instruction("test rsi, rsi");                                       // a null callback requests no traversal
+    emitter.instruction("jz __elephc_eval_scope_visit_owners_v1_done");         // leave the scope untouched
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable aligned callback frame
+    emitter.instruction("sub rsp, 32");                                         // reserve callee-saved scan state
+    emitter.instruction("mov QWORD PTR [rbp - 8], r12");                        // preserve the current-entry register
+    emitter.instruction("mov QWORD PTR [rbp - 16], r13");                       // preserve the callback register
+    emitter.instruction("mov QWORD PTR [rbp - 24], r14");                       // preserve the callback context register
+    emitter.instruction("mov r12, QWORD PTR [rdi]");                            // load the first scope entry
+    emitter.instruction("mov r13, rsi");                                        // keep the callback across its own calls
+    emitter.instruction("mov r14, rdx");                                        // keep the opaque visitor context unchanged
+    emitter.label("__elephc_eval_scope_visit_owners_v1_loop");
+    emitter.instruction("test r12, r12");                                       // has the scan reached the list tail?
+    emitter.instruction("jz __elephc_eval_scope_visit_owners_v1_exit");         // finish after the final entry
+    emitter.instruction("mov rax, QWORD PTR [r12 + 32]");                       // load entry ownership flags
+    emitter.instruction(&format!("test rax, {}", owned_flag));                  // borrowed entries add no collector edge
+    emitter.instruction("jz __elephc_eval_scope_visit_owners_v1_next");         // skip borrowed storage
+    emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // read the owned cell without retaining it
+    emitter.instruction("test rax, rax");                                       // vacant owner fields contribute no edge
+    emitter.instruction("jz __elephc_eval_scope_visit_owners_v1_next");         // skip the null cell
+    emitter.instruction("lea rdi, [r12 + 24]");                                 // pass the exact address of entry->cell
+    emitter.instruction("xor esi, esi");                                        // ordinary Mixed owner fields use tag zero
+    emitter.instruction("mov rdx, r14");                                        // forward the opaque visitor context
+    emitter.instruction("call r13");                                            // record the owner without running PHP
+    emitter.label("__elephc_eval_scope_visit_owners_v1_next");
+    emitter.instruction("mov r12, QWORD PTR [r12]");                            // advance through the immutable entry list
+    emitter.instruction("jmp __elephc_eval_scope_visit_owners_v1_loop");        // inspect the next scope entry
+    emitter.label("__elephc_eval_scope_visit_owners_v1_exit");
+    emitter.instruction("mov r12, QWORD PTR [rbp - 8]");                        // restore the caller's scan register
+    emitter.instruction("mov r13, QWORD PTR [rbp - 16]");                       // restore the caller's callback register
+    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // restore the caller's context register
+    emitter.instruction("mov rsp, rbp");                                        // release visitor-local storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.label("__elephc_eval_scope_visit_owners_v1_done");
+    emitter.instruction("ret");                                                 // return without mutating scope ownership
 }
 
 /// Allocates and publishes a node using the x86_64 setter frame.

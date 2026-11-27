@@ -192,12 +192,15 @@ echo "ok";
 
     for ir_opt in [false, true] {
         let ir = emit_release_ir(source, ir_opt);
-        let cleanup = ir.lines().find(|line| {
-            line.contains("release_local_slot slot[2]") && line.contains("span: 5:5")
+        let replacement = ir.lines().find(|line| {
+            line.contains("store_local")
+                && line.contains("slot[2]")
+                && line.contains("refcount_op")
+                && line.contains("span: 5:5")
         });
         assert!(
-            cleanup.is_some(),
-            "assignment cleanup must retire the local slot with ir_opt={ir_opt}:\n{ir}"
+            replacement.is_some(),
+            "assignment must atomically replace the local owner with ir_opt={ir_opt}:\n{ir}"
         );
         assert!(
             ir.lines().any(|line| line.contains("php=mixed own=owned = invoker_ref_arg slot[2]")),

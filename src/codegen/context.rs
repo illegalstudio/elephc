@@ -508,6 +508,15 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
     }
 
+    /// Returns the physical EIR representation reserved for a local slot.
+    pub(super) fn local_ir_type(&self, slot: LocalSlotId) -> Result<crate::ir::IrType> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| metadata.ir_type)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
     /// Returns the type a local slot's value is boxed into `mixed` as.
     ///
     /// Like `mixed_box_type`, the slot's codegen type except for a `?ptr<T>` slot, which keeps

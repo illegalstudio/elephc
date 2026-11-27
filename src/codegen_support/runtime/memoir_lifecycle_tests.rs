@@ -13,6 +13,30 @@ use crate::codegen_support::{emit::Emitter, platform::Target};
 use crate::php_version::PhpVersion;
 use sha2::{Digest, Sha256};
 
+/// Scope-only eval exposes the same exact-owner visitor ABI as Magician on every target.
+#[test]
+fn scope_only_eval_visits_exact_owned_slots_on_every_target() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        eval_scope::emit_eval_scope_runtime(&mut emitter);
+        let assembly = emitter.output();
+        assert!(
+            assembly.contains(&target.extern_symbol("__elephc_eval_scope_visit_owners_v1")),
+            "{name}: missing visitor entry"
+        );
+        if target.arch == crate::codegen_support::platform::Arch::AArch64 {
+            assert!(assembly.contains("add x0, x19, #24"), "{name}: exact cell slot");
+            assert!(assembly.contains("blr x20"), "{name}: visitor callback");
+            assert!(assembly.contains("tst x9, #16"), "{name}: owned entries only");
+        } else {
+            assert!(assembly.contains("lea rdi, [r12 + 24]"), "{name}: exact cell slot");
+            assert!(assembly.contains("call r13"), "{name}: visitor callback");
+            assert!(assembly.contains("test rax, 16"), "{name}: owned entries only");
+        }
+    }
+}
+
 /// Verifies ownership assembly through the compiler's existing runtime entry points.
 #[test]
 fn memoir_lifecycles_preserve_native_assembly() {

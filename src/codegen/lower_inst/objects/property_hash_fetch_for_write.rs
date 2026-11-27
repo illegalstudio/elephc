@@ -141,7 +141,9 @@ fn property_hash_layout(ctx: &FunctionContext<'_>, object: ValueId) -> Result<(S
 fn emit_load_readable_property_hash(
     ctx: &mut FunctionContext<'_>, object: ValueId, object_register: &str, result_register: &str,
 ) -> Result<()> {
-    if !matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(class) if class.is_empty()) {
+    if !matches!(ctx.value_php_type(object)?, PhpType::Object(class)
+        if class.is_empty() || class == crate::ir::RUNTIME_OBJECT_VIEW_CLASS)
+    {
         let (_, offset) = property_hash_layout(ctx, object)?;
         abi::emit_load_from_address(ctx.emitter, result_register, object_register, offset);
         return Ok(());

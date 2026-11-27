@@ -362,7 +362,7 @@ function republishedKey(int $condition): void {
                     // the receiver before the nested store block), so compare emission order.
                     let fetch_position = fetch_id.as_raw() as usize;
                     assert!(function.instructions[..fetch_position].iter().any(|inst| {
-                        inst.op == Op::ReleaseLocalSlot
+                        (inst.op == Op::ReleaseLocalSlot || inst.replaces_local_owner())
                             && inst.immediate == Some(Immediate::LocalSlot(slot))
                     }), "{name}: {function_name} must clear the Mixed source slot before fetch");
                     witnessed = true;

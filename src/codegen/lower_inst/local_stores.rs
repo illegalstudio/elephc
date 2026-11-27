@@ -26,7 +26,13 @@ pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
             crate::codegen::stack_numeric::scalar_numeric(&metadata.ir_type, &metadata.php_type)
         });
         if seed && ctx.local_slot_is_raw(slot) {
-            return super::arithmetic::stack_cell::store_seed(ctx, slot, value, cell);
+            return super::arithmetic::stack_cell::store_seed(
+                ctx,
+                slot,
+                value,
+                cell,
+                inst.replaces_local_owner(),
+            );
         }
     }
     // Parking a call operand can happen after a sibling scratch string was evaluated.

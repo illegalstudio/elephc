@@ -31,6 +31,7 @@
 //!   `buffer_resolve` inserted right before that leader and become `buffer_*_resolved`, so a stale
 //!   handle still dies with the use-after-free fatal at the leader, as before.
 //! - Buffer `acquire`/`release` emit no code; a pair left with nothing but releases is dropped.
+//! - Proven numeric owner bookkeeping stays inside a clean region without weakening slot guards.
 //! - Foreign buffer reads qualify only when a checked access consumes their handle before any
 //!   observable operation or branch. A null receiver can warn and run an error handler, even with
 //!   a non-nullable static type, but that read returns handle zero and the access cannot return.
@@ -77,6 +78,8 @@ struct Facts {
     order: Vec<BlockId>,
     /// Arguments each incoming edge passes to every block parameter.
     incoming: HashMap<(BlockId, usize), Vec<ValueId>>,
+    /// Numeric instructions proven unable to invalidate buffers or dispatch user code.
+    numeric: HashSet<InstId>,
 }
 
 impl Facts {
@@ -97,6 +100,7 @@ impl Facts {
             stable_slots: stable_slots(function),
             order: reverse_postorder(function),
             incoming: incoming_arguments(function),
+            numeric: super::buffer_access::numeric::preserving_instructions(function),
             dominance,
             positions,
         }
@@ -536,7 +540,7 @@ fn region_is_clean(
     let all_clean = |instructions: &[InstId]| {
         instructions
             .iter()
-            .all(|&inst_id| instruction_is_clean(function, inst_id, watched))
+            .all(|&inst_id| instruction_is_clean(function, facts, inst_id, watched))
     };
     if start.0 == end.0 {
         return all_clean(&block_instructions(function, start.0)[start.1 + 1..end.1]);
@@ -560,9 +564,14 @@ fn region_is_clean(
 
 /// Returns whether one region instruction keeps reads stable and names none of the `watched`
 /// slots.
-fn instruction_is_clean(function: &Function, inst_id: InstId, watched: &[LocalSlotId]) -> bool {
+fn instruction_is_clean(
+    function: &Function,
+    facts: &Facts,
+    inst_id: InstId,
+    watched: &[LocalSlotId],
+) -> bool {
     let inst = &function.instructions[inst_id.as_raw() as usize];
-    keeps_reads_stable(function, inst)
+    (facts.numeric.contains(&inst_id) || keeps_reads_stable(function, inst))
         && (watched.is_empty()
             || !slots_named_as_storage(std::iter::once(inst))
                 .iter()

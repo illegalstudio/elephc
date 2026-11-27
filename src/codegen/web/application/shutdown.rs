@@ -40,15 +40,20 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     let end = emitter.target.extern_symbol("elephc_web_application_request_end");
     scope.call(emitter, &end, false);
     scope.call(emitter, "__rt_stream_registry_cleanup", false);
-    if crate::codegen::frame::module_binds_extern_callbacks(module) {
+    let releases_extern_callbacks = crate::codegen::frame::module_binds_extern_callbacks(module);
+    if releases_extern_callbacks {
         // Native registrations remain callable until every PHP/resource destructor has finished.
         scope.call(emitter, crate::codegen::frame::EXTERN_CALLBACK_RELEASE_LABEL, false);
-        scope.call(emitter, "__rt_web_inventory_prune", false);
     }
     if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
         scope.call(emitter, "__rt_mbstring_release_catalog", false);
     }
     emit_root_stabilization(emitter, module, data, scope, "final");
+    if releases_extern_callbacks {
+        // Releasing a callback can detach cycles whose destructors orphan resources. Collect
+        // first, then prune those resources while the protected shutdown scope is still active.
+        scope.call(emitter, "__rt_web_inventory_prune", false);
+    }
     // -- preserve a pending Throwable until the generated PHP catch can log it --
     scope.finish(emitter);
     abi::emit_load_symbol_to_reg(emitter, value, "_exc_value", 0);

@@ -288,10 +288,17 @@ unset($capability);
     let function = module.functions.iter().find(|function| function.name == "childSharingProbe").unwrap();
     let reads = function.instructions.iter().filter(|inst| inst.immediate == Some(Immediate::RuntimeCall(
         crate::ir::RuntimeCallTarget::PropertyHashRead)) && function.value(inst.operands[0])
-            .is_some_and(|value| value.php_type == PhpType::Object(String::new()))).collect::<Vec<_>>();
+            .is_some_and(|value| value.ir_type == crate::ir::IrType::Heap(crate::ir::IrHeapKind::Object)
+                && matches!(&value.php_type, PhpType::Object(class)
+                    if class == crate::ir::RUNTIME_OBJECT_VIEW_CLASS)))
+        .collect::<Vec<_>>();
     assert_eq!(reads.len(), 1, "{target}: all eligible dynamic hashes share one owned child read");
     let object = function.value(reads[0].operands[0]).unwrap();
-    assert_eq!(object.php_type, PhpType::Object(String::new()), "{target}: hash protocols require a raw object");
+    assert_eq!(object.ir_type, crate::ir::IrType::Heap(crate::ir::IrHeapKind::Object),
+        "{target}: hash protocols require a raw object");
+    assert!(matches!(&object.php_type, PhpType::Object(class)
+        if class == crate::ir::RUNTIME_OBJECT_VIEW_CLASS),
+        "{target}: shared hash reads must retain runtime-layout metadata");
     assert_eq!(object.ownership, crate::ir::Ownership::Borrowed);
     assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedUnbox && inst.result == Some(reads[0].operands[0])),
         "{target}: the boxed receiver must be physically extracted");
