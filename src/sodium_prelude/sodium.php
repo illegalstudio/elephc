@@ -131,6 +131,13 @@ const SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING = 3;
 const SODIUM_BASE64_VARIANT_URLSAFE = 5;
 const SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING = 7;
 
+const SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES = 32;
+const SODIUM_CRYPTO_CORE_RISTRETTO255_HASHBYTES = 64;
+const SODIUM_CRYPTO_CORE_RISTRETTO255_NONREDUCEDSCALARBYTES = 64;
+const SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES = 32;
+const SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_BYTES = 32;
+const SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES = 32;
+
 class SodiumException extends \Exception
 {
 }
@@ -225,6 +232,19 @@ extern "elephc_sodium" {
     function elephc_sodium_stream_xchacha20(int $length, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
     function elephc_sodium_stream_xchacha20_xor(string $message, int $messageLength, string $nonce, int $nonceLength, string $key, int $keyLength): ptr;
     function elephc_sodium_stream_xchacha20_xor_ic(string $message, int $messageLength, string $nonce, int $nonceLength, int $counter, string $key, int $keyLength): ptr;
+    function elephc_sodium_ristretto255_from_hash(string $input, int $inputLength): ptr;
+    function elephc_sodium_ristretto255_is_valid_point(string $input, int $inputLength): int;
+    function elephc_sodium_ristretto255_add(string $left, int $leftLength, string $right, int $rightLength): ptr;
+    function elephc_sodium_ristretto255_sub(string $left, int $leftLength, string $right, int $rightLength): ptr;
+    function elephc_sodium_ristretto255_scalar_reduce(string $input, int $inputLength): ptr;
+    function elephc_sodium_ristretto255_scalar_add(string $left, int $leftLength, string $right, int $rightLength): ptr;
+    function elephc_sodium_ristretto255_scalar_sub(string $left, int $leftLength, string $right, int $rightLength): ptr;
+    function elephc_sodium_ristretto255_scalar_mul(string $left, int $leftLength, string $right, int $rightLength): ptr;
+    function elephc_sodium_ristretto255_scalar_negate(string $input, int $inputLength): ptr;
+    function elephc_sodium_ristretto255_scalar_complement(string $input, int $inputLength): ptr;
+    function elephc_sodium_ristretto255_scalar_invert(string $input, int $inputLength): ptr;
+    function elephc_sodium_ristretto255_scalarmult(string $scalar, int $scalarLength, string $point, int $pointLength): ptr;
+    function elephc_sodium_ristretto255_scalarmult_base(string $scalar, int $scalarLength): ptr;
     function elephc_sodium_last_len(): int;
 }
 
@@ -2029,4 +2049,160 @@ function sodium_crypto_pwhash_str_needs_rehash(string $password, int $opslimit, 
         return $memory !== (int) ($memlimit / 1024) || $time !== $opslimit || $parallelism !== 1;
     }
     return true;
+}
+
+function sodium_crypto_core_ristretto255_from_hash(string $s): string
+{
+    if (\strlen($s) !== SODIUM_CRYPTO_CORE_RISTRETTO255_HASHBYTES) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_from_hash(): Argument #1 (\$s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_HASHBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_ristretto255_from_hash($s, \strlen($s));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_from_hash(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_is_valid_point(string $s): bool
+{
+    if (\strlen($s) !== SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_is_valid_point(): Argument #1 (\$s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long");
+    }
+    return \elephc_sodium_ristretto255_is_valid_point($s, \strlen($s)) === 1;
+}
+
+function sodium_crypto_core_ristretto255_add(string $p, string $q): string
+{
+    if (\strlen($p) !== SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_add(): Argument #1 (\$p) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long");
+    }
+    if (\strlen($q) !== SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_add(): Argument #2 (\$q) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long");
+    }
+    $pointer = \elephc_sodium_ristretto255_add($p, \strlen($p), $q, \strlen($q));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_sub(string $p, string $q): string
+{
+    if (\strlen($p) !== SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_sub(): Argument #1 (\$p) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long");
+    }
+    if (\strlen($q) !== SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_sub(): Argument #2 (\$q) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long");
+    }
+    $pointer = \elephc_sodium_ristretto255_sub($p, \strlen($p), $q, \strlen($q));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_scalar_reduce(string $s): string
+{
+    if (\strlen($s) !== SODIUM_CRYPTO_CORE_RISTRETTO255_NONREDUCEDSCALARBYTES) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_scalar_reduce(): Argument #1 (\$s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_NONREDUCEDSCALARBYTES bytes long");
+    }
+    $pointer = \elephc_sodium_ristretto255_scalar_reduce($s, \strlen($s));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_core_ristretto255_scalar_reduce(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_scalar_random(): string
+{
+    return \sodium_crypto_core_ristretto255_scalar_reduce(\random_bytes(SODIUM_CRYPTO_CORE_RISTRETTO255_NONREDUCEDSCALARBYTES));
+}
+
+function sodium_crypto_core_ristretto255_random(): string
+{
+    return \sodium_crypto_scalarmult_ristretto255_base(\sodium_crypto_core_ristretto255_scalar_random());
+}
+
+function sodium_crypto_core_ristretto255_scalar_add(string $x, string $y): string
+{
+    $pointer = \elephc_sodium_ristretto255_scalar_add($x, \strlen($x), $y, \strlen($y));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_scalar_sub(string $x, string $y): string
+{
+    $pointer = \elephc_sodium_ristretto255_scalar_sub($x, \strlen($x), $y, \strlen($y));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_scalar_mul(string $x, string $y): string
+{
+    $pointer = \elephc_sodium_ristretto255_scalar_mul($x, \strlen($x), $y, \strlen($y));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_scalar_negate(string $s): string
+{
+    $pointer = \elephc_sodium_ristretto255_scalar_negate($s, \strlen($s));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_scalar_complement(string $s): string
+{
+    $pointer = \elephc_sodium_ristretto255_scalar_complement($s, \strlen($s));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_core_ristretto255_scalar_invert(string $s): string
+{
+    $pointer = \elephc_sodium_ristretto255_scalar_invert($s, \strlen($s));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_scalarmult_ristretto255(string $n, string $p): string
+{
+    if (\strlen($n) !== SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES) {
+        throw new \SodiumException("sodium_crypto_scalarmult_ristretto255(): Argument #1 (\$n) must be SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES bytes long");
+    }
+    if (\strlen($p) !== SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_BYTES) {
+        throw new \SodiumException("sodium_crypto_scalarmult_ristretto255(): Argument #2 (\$p) must be SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_BYTES bytes long");
+    }
+    $pointer = \elephc_sodium_ristretto255_scalarmult($n, \strlen($n), $p, \strlen($p));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("Result is identity element");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_scalarmult_ristretto255_base(string $n): string
+{
+    if (\strlen($n) !== SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES) {
+        throw new \SodiumException("sodium_crypto_scalarmult_ristretto255_base(): Argument #1 (\$n) must be SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES bytes long");
+    }
+    if ($n === \str_repeat("\0", SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES)) {
+        throw new \SodiumException("sodium_crypto_scalarmult_ristretto255_base(): Argument #1 (\$n) must not be zero");
+    }
+    $pointer = \elephc_sodium_ristretto255_scalarmult_base($n, \strlen($n));
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("Result is identity element");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
 }

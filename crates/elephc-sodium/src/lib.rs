@@ -29,6 +29,7 @@ mod ipcrypt;
 mod kem;
 mod kx;
 mod pwhash;
+mod ristretto;
 mod secretstream;
 mod shake;
 mod sign;

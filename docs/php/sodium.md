@@ -26,6 +26,7 @@ supported target.
 | Stream | `sodium_crypto_stream()`, `_xor()`, `_keygen()`, `sodium_crypto_stream_xchacha20()`, `_xor()`, `_xor_ic()`, `_keygen()` | XSalsa20 and XChaCha20 keystreams. |
 | Scalarmult | `sodium_crypto_scalarmult()`, `_base()` | X25519 with libsodium's all-zero rejection. |
 | Shorthash | `sodium_crypto_shorthash()`, `_keygen()` | SipHash-2-4. |
+| Ristretto255 | `sodium_crypto_core_ristretto255_*`, `sodium_crypto_scalarmult_ristretto255*` | Point add/sub/hash/validity, scalar arithmetic/reduction, and scalar multiplication; the scalar complement follows libsodium's `1 - s` convention. |
 | Password hash helpers | `sodium_crypto_pwhash_str_needs_rehash()` | Argon2id parameter check; `$7$`/unknown hashes report `true`, matching PHP. |
 | Helpers | `sodium_compare()`, `sodium_memcmp()`, `sodium_add()`, `sodium_increment()`, `sodium_memzero()`, `sodium_pad()`, `sodium_unpad()`, `sodium_bin2hex()`, `sodium_hex2bin()`, `sodium_bin2base64()`, `sodium_base642bin()` | The four base64 variants, constant-time comparison, and PHP's `SodiumException` diagnostics. |
 | SHAKE one-shot | `sodium_crypto_xof_shake128()`, `sodium_crypto_xof_shake256()` | PHP 8.6; FIPS 202 output. |
@@ -58,8 +59,6 @@ diagnostics for the delivered functions.
 
 - `sodium_crypto_aead_aegis128l_*`, `sodium_crypto_aead_aegis256_*`, and their
   constants (PHP 8.6's AEGIS AEAD families).
-- The `sodium_crypto_core_ristretto255_*` and
-  `sodium_crypto_scalarmult_ristretto255*` groups.
 - `sodium_crypto_sign_ed25519_pk_to_curve25519` errors for non-canonical or
   low-order points beyond the current `SodiumException` path.
 

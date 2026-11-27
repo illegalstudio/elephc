@@ -640,3 +640,64 @@ var_dump(sodium_crypto_pwhash_str_needs_rehash($hash, 3, 67108864));
          bool(false)\nbool(true)\n"
     );
 }
+
+/// Ristretto255 points, scalars and base multiplication match libsodium.
+#[test]
+fn test_sodium_ristretto255_family() {
+    let out = compile_and_run(
+        r#"<?php
+$p = sodium_crypto_core_ristretto255_from_hash(str_repeat("h", 64));
+$q = sodium_crypto_core_ristretto255_from_hash(str_repeat("i", 64));
+echo bin2hex($p), "\n";
+echo bin2hex($q), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_add($p, $q)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_sub($p, $q)), "\n";
+$two = "\x02" . str_repeat("\x00", 31);
+$three = "\x03" . str_repeat("\x00", 31);
+echo bin2hex(sodium_crypto_scalarmult_ristretto255($two, $p)), "\n";
+echo bin2hex(sodium_crypto_scalarmult_ristretto255_base($two)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_scalar_add($two, $three)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_scalar_sub($two, $three)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_scalar_mul($two, $three)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_scalar_negate($two)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_scalar_complement($two)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_scalar_invert($two)), "\n";
+echo bin2hex(sodium_crypto_core_ristretto255_scalar_reduce(str_repeat("\xff", 64))), "\n";
+var_dump(sodium_crypto_core_ristretto255_is_valid_point(str_repeat("\x00", 32)));
+var_dump(sodium_crypto_core_ristretto255_is_valid_point($p));
+try {
+    sodium_crypto_scalarmult_ristretto255(str_repeat("\x00", 32), $p);
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_core_ristretto255_scalar_invert(str_repeat("\x00", 32));
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+echo strlen(sodium_crypto_core_ristretto255_random()), ":",
+    strlen(sodium_crypto_core_ristretto255_scalar_random()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "b2b46977c1b18ebd857e5b576d15dec8c0b351bc2be386a157a379917e460474\n\
+         ec0ccf947db85b60dda70d473180e84cbe7281dc945be3e6496a246bcb87da07\n\
+         c042147358a9d6005f909c6275934a5f0bc7806082f680111fbab12ae6045f5f\n\
+         907783cee074d1029e80b4c685accfd1a94f588ee1ca0d260f67bc9c96293226\n\
+         0418e8bb63134089fbbb74c7e2c33191b439fa180dce00518b2223fb4bbfb926\n\
+         6a493210f7499cd17fecb510ae0cea23a110e8d5b901f8acadd3095c73a3b919\n\
+         0500000000000000000000000000000000000000000000000000000000000000\n\
+         ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010\n\
+         0600000000000000000000000000000000000000000000000000000000000000\n\
+         ebd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010\n\
+         ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010\n\
+         f7e97a2e8d31092c6bce7b51ef7c6f0a00000000000000000000000000000008\n\
+         000f9c44e31106a447938568a71b0ed065bef517d273ecce3d9a307c1b419903\n\
+         bool(true)\n\
+         bool(true)\n\
+         Result is identity element\n\
+         internal error\n\
+         32:32\n"
+    );
+}
