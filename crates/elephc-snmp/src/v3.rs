@@ -78,6 +78,52 @@ fn convert_value(value: AsyncValue) -> Value {
     }
 }
 
+/// Converts ext/snmp's set type/value into an async-snmp value.
+fn set_value(value_type: &str, value: &[u8]) -> Result<AsyncValue, String> {
+    let text = || std::str::from_utf8(value).map_err(|_| "invalid SNMP set value".to_string());
+    match value_type {
+        "i" => Ok(AsyncValue::Integer(
+            text()?
+                .trim()
+                .parse::<i32>()
+                .map_err(|_| "invalid SNMP integer".to_string())?,
+        )),
+        "u" => Ok(AsyncValue::Gauge32(
+            text()?
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| "invalid SNMP unsigned integer".to_string())?,
+        )),
+        "t" => Ok(AsyncValue::TimeTicks(
+            text()?
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| "invalid SNMP timeticks".to_string())?,
+        )),
+        "s" | "d" => Ok(AsyncValue::from(value)),
+        "x" | "b" => Ok(AsyncValue::from(client::decode_hex(value)?.as_slice())),
+        "n" => Ok(AsyncValue::Null),
+        "o" => Ok(AsyncValue::ObjectIdentifier(
+            Oid::from_str(text()?).map_err(|error| error.to_string())?,
+        )),
+        "a" => {
+            let text = text()?.trim();
+            let parts: Vec<&str> = text.split('.').collect();
+            if parts.len() != 4 {
+                return Err("invalid SNMP IP address".to_string());
+            }
+            let mut bytes = [0u8; 4];
+            for (index, part) in parts.iter().enumerate() {
+                bytes[index] = part
+                    .parse::<u8>()
+                    .map_err(|_| "invalid SNMP IP address".to_string())?;
+            }
+            Ok(AsyncValue::IpAddress(bytes))
+        }
+        _ => Err(format!("unsupported SNMP set type: {value_type}")),
+    }
+}
+
 /// Builds the USM config from the session's security setters.
 fn usm_config(session: &Session) -> Result<UsmConfig, String> {
     let mut config = UsmConfig::new(session.community.clone());
@@ -131,6 +177,97 @@ pub(crate) fn request(
         } else {
             client.get(&oid).await.map_err(|error| error.to_string())?
         };
+        let mut varbinds = Vec::with_capacity(response.varbinds.len());
+        for varbind in response.varbinds {
+            varbinds.push(Varbind {
+                oid: format!(".{}", varbind.oid),
+                value: convert_value(varbind.value),
+            });
+        }
+        Ok(Response {
+            error_status: 0,
+            error_index: 0,
+            varbinds,
+        })
+    })
+}
+
+/// Performs one v3 SET request.
+pub(crate) fn request_set(
+    session: &Session,
+    oid: &str,
+    value_type: &str,
+    value: &[u8],
+) -> Result<Response, String> {
+    let (host, port) = client::endpoint(&session.host)?;
+    let config = usm_config(session)?;
+    let oid = Oid::from_str(oid).map_err(|error| error.to_string())?;
+    let value = set_value(value_type, value)?;
+    let timeout = Duration::from_millis(session.timeout_ms.max(1));
+    let retries = if session.retries < 0 { 5 } else { session.retries.max(0) };
+    let retry = Retry::fixed(u32::try_from(retries).unwrap_or(5), Duration::ZERO)
+        .map_err(|error| error.to_string())?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("create SNMPv3 runtime: {error}"))?;
+    runtime.block_on(async move {
+        let client = Client::builder((host.as_str(), port), config)
+            .request_timeout(timeout)
+            .retry(retry)
+            .connect()
+            .await
+            .map_err(|error| error.to_string())?;
+        let response = client
+            .set(&oid, value)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut varbinds = Vec::with_capacity(response.varbinds.len());
+        for varbind in response.varbinds {
+            varbinds.push(Varbind {
+                oid: format!(".{}", varbind.oid),
+                value: convert_value(varbind.value),
+            });
+        }
+        Ok(Response {
+            error_status: 0,
+            error_index: 0,
+            varbinds,
+        })
+    })
+}
+
+/// Performs one v3 GETBULK request.
+pub(crate) fn request_bulk(
+    session: &Session,
+    oid: &str,
+    non_repeaters: i64,
+    max_repetitions: i64,
+) -> Result<Response, String> {
+    let (host, port) = client::endpoint(&session.host)?;
+    let config = usm_config(session)?;
+    let oid = Oid::from_str(oid).map_err(|error| error.to_string())?;
+    let timeout = Duration::from_millis(session.timeout_ms.max(1));
+    let retries = if session.retries < 0 { 5 } else { session.retries.max(0) };
+    let retry = Retry::fixed(u32::try_from(retries).unwrap_or(5), Duration::ZERO)
+        .map_err(|error| error.to_string())?;
+    let non_repeaters = u32::try_from(non_repeaters.max(0)).unwrap_or(0);
+    let max_repetitions = u32::try_from(max_repetitions.max(1)).unwrap_or(1);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("create SNMPv3 runtime: {error}"))?;
+    runtime.block_on(async move {
+        let client = Client::builder((host.as_str(), port), config)
+            .request_timeout(timeout)
+            .retry(retry)
+            .connect()
+            .await
+            .map_err(|error| error.to_string())?;
+        let response = client
+            .get_bulk(&[oid], non_repeaters, max_repetitions)
+            .await
+            .map_err(|error| error.to_string())?;
         let mut varbinds = Vec::with_capacity(response.varbinds.len());
         for varbind in response.varbinds {
             varbinds.push(Varbind {

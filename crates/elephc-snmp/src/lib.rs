@@ -96,6 +96,28 @@ fn guarded<T: Copy>(fallback: T, f: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
+/// Clones the session with `id`, if it exists.
+fn session_snapshot(id: i64) -> Option<Session> {
+    sessions()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .cloned()
+}
+
+/// Stores a response in the response table, returning its handle or -1.
+fn store_response(response: Result<Response, String>) -> i64 {
+    let Ok(response) = response else {
+        return -1;
+    };
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    responses()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(id, response);
+    id
+}
+
 /// C ABI: opens an SNMP session, returning a handle or -1.
 ///
 /// # Safety
@@ -263,13 +285,7 @@ pub unsafe extern "C" fn elephc_snmp_request(
         let Ok(oid) = std::str::from_utf8(oid) else {
             return -1;
         };
-        let session = {
-            let sessions = sessions()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            sessions.get(&session).cloned()
-        };
-        let Some(session) = session else {
+        let Some(session) = session_snapshot(session) else {
             return -1;
         };
         let response = if session.version == 3 {
@@ -285,15 +301,94 @@ pub unsafe extern "C" fn elephc_snmp_request(
                 session.retries,
             )
         };
-        let Ok(response) = response else {
+        store_response(response)
+    })
+}
+
+/// C ABI: sends a SetRequest; returns a response handle or -1.
+///
+/// # Safety
+/// All pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_request_set(
+    session: i64,
+    oid: *const u8,
+    oid_len: usize,
+    value_type: *const u8,
+    value_type_len: usize,
+    value: *const u8,
+    value_len: usize,
+) -> i64 {
+    guarded(-1, || {
+        let (Some(oid), Some(value_type), Some(value)) = (
+            bytes(oid, oid_len),
+            bytes(value_type, value_type_len),
+            bytes(value, value_len),
+        ) else {
             return -1;
         };
-        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        responses()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, response);
-        id
+        let (Ok(oid), Ok(value_type)) = (std::str::from_utf8(oid), std::str::from_utf8(value_type))
+        else {
+            return -1;
+        };
+        let Some(session) = session_snapshot(session) else {
+            return -1;
+        };
+        let response = if session.version == 3 {
+            v3::request_set(&session, oid, value_type, value)
+        } else {
+            client::request_set(
+                session.version,
+                &session.host,
+                &session.community,
+                oid,
+                value_type,
+                value,
+                session.timeout_ms,
+                session.retries,
+            )
+        };
+        store_response(response)
+    })
+}
+
+/// C ABI: sends a GetBulkRequest; returns a response handle or -1.
+///
+/// # Safety
+/// `oid` must reference `oid_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_request_bulk(
+    session: i64,
+    oid: *const u8,
+    oid_len: usize,
+    non_repeaters: i64,
+    max_repetitions: i64,
+) -> i64 {
+    guarded(-1, || {
+        let Some(oid) = bytes(oid, oid_len) else {
+            return -1;
+        };
+        let Ok(oid) = std::str::from_utf8(oid) else {
+            return -1;
+        };
+        let Some(session) = session_snapshot(session) else {
+            return -1;
+        };
+        let response = if session.version == 3 {
+            v3::request_bulk(&session, oid, non_repeaters, max_repetitions)
+        } else {
+            client::request_bulk(
+                session.version,
+                &session.host,
+                &session.community,
+                oid,
+                non_repeaters,
+                max_repetitions,
+                session.timeout_ms,
+                session.retries,
+            )
+        };
+        store_response(response)
     })
 }
 

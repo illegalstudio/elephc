@@ -270,3 +270,121 @@ $snmp->close();
     );
     assert_eq!(out, "quick\n1\nbool(true)\nbool(true)\n0:empty\n");
 }
+
+/// Extracts the version and community TLV bodies from a request.
+fn request_header(request: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let (_, message, _) = read_tlv(request, 0);
+    let (_, version, offset) = read_tlv(&message, 0);
+    let (_, community, _) = read_tlv(&message, offset);
+    (version, community)
+}
+
+/// Reads a request's PDU tag, request id and varbind OIDs.
+fn request_details(request: &[u8]) -> (u8, i64, Vec<String>) {
+    let (_, message, _) = read_tlv(request, 0);
+    let (_, _, offset) = read_tlv(&message, 0);
+    let (_, _, offset) = read_tlv(&message, offset);
+    let (pdu_tag, pdu, _) = read_tlv(&message, offset);
+    let (_, request_id, offset) = read_tlv(&pdu, 0);
+    let (_, _, offset) = read_tlv(&pdu, offset);
+    let (_, _, offset) = read_tlv(&pdu, offset);
+    let (_, list, _) = read_tlv(&pdu, offset);
+    let mut varbinds = Vec::new();
+    let mut list_offset = 0;
+    while list_offset < list.len() {
+        let (_, varbind, next) = read_tlv(&list, list_offset);
+        let (_, oid_body, _) = read_tlv(&varbind, 0);
+        varbinds.push(decode_oid(&oid_body));
+        list_offset = next;
+    }
+    (pdu_tag, read_integer(&request_id), varbinds)
+}
+
+/// Builds a GetResponse containing several varbinds.
+fn multi_response(
+    version: &[u8],
+    community: &[u8],
+    request_id: i64,
+    varbinds: Vec<(String, u8, Vec<u8>)>,
+) -> Vec<u8> {
+    let mut list_body = Vec::new();
+    for (oid_text, tag, value) in varbinds {
+        list_body.extend(tlv(0x30, &[oid(&oid_text), tlv(tag, &value)].concat()));
+    }
+    let list = tlv(0x30, &list_body);
+    let pdu = tlv(
+        0xA2,
+        &[
+            integer(request_id),
+            integer(0),
+            integer(0),
+            list,
+        ]
+        .concat(),
+    );
+    tlv(0x30, &[tlv(0x02, version), tlv(0x04, community), pdu].concat())
+}
+
+/// snmp2_set, SNMP::set and GETBULK-based walk round-trip through a loopback agent.
+#[test]
+fn test_snmp_set_and_getbulk_walk() {
+    let server = UdpSocket::bind(("127.0.0.1", 0)).expect("bind SNMP set fixture");
+    let port = server.local_addr().unwrap().port();
+    let worker = thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        for _ in 0..4 {
+            let (size, peer) = server.recv_from(&mut buffer).expect("SNMP request");
+            let request = &buffer[..size];
+            let (version, community) = request_header(request);
+            let (pdu_tag, request_id, varbinds) = request_details(request);
+            let reply = if pdu_tag == 0xA3 {
+                let oid_text = varbinds.first().cloned().unwrap_or_default();
+                multi_response(
+                    &version,
+                    &community,
+                    request_id,
+                    vec![(oid_text, 0x04, b"ok".to_vec())],
+                )
+            } else {
+                let current = varbinds.first().cloned().unwrap_or_default();
+                let entries = if current == ".1.3.6.1.2.1.1" {
+                    vec![
+                        (".1.3.6.1.2.1.1.1.0".to_string(), 0x04, b"one".to_vec()),
+                        (".1.3.6.1.2.1.1.2.0".to_string(), 0x04, b"two".to_vec()),
+                    ]
+                } else if current == ".1.3.6.1.2.1.1.2.0" {
+                    vec![
+                        (".1.3.6.1.2.1.1.3.0".to_string(), 0x04, b"three".to_vec()),
+                        (".1.3.6.1.3.0".to_string(), 0x05, Vec::new()),
+                    ]
+                } else {
+                    vec![(".1.3.6.1.3.0".to_string(), 0x05, Vec::new())]
+                };
+                multi_response(&version, &community, request_id, entries)
+            };
+            server.send_to(&reply, peer).expect("SNMP response");
+        }
+    });
+
+    let source = r#"<?php
+$host = "127.0.0.1:__PORT__";
+var_dump(snmp2_set($host, "public", ".1.3.6.1.2.1.1.5.0", "s", "newname", 1000000, 1));
+$snmp = new SNMP(SNMP::VERSION_2C, $host, "public", 1000000, 1);
+var_dump($snmp->set(".1.3.6.1.2.1.1.5.0", "i", "42"));
+$walk = $snmp->walk(".1.3.6.1.2.1.1", false, 2, 0);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+var_dump($snmp->info["hostname"] === $host);
+echo $snmp->getErrno(), "\n";
+$snmp->close();
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let out = compile_and_run(&source);
+    worker.join().expect("SNMP set fixture thread");
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\n.1.3.6.1.2.1.1.1.0=one\n.1.3.6.1.2.1.1.2.0=two\n.1.3.6.1.2.1.1.3.0=three\nbool(true)\n0\n"
+    );
+}

@@ -1,6 +1,6 @@
 ---
 title: "SNMP"
-description: "PHP's ext/snmp surface in elephc: SNMP v1/v2c GET, GETNEXT and WALK over the pure-Rust elephc-snmp bridge."
+description: "PHP's ext/snmp surface in elephc: SNMP v1/v2c/v3 GET, GETNEXT, SET and GETBULK walks over the pure-Rust elephc-snmp bridge."
 sidebar:
   order: 25
 ---
@@ -14,10 +14,12 @@ system net-snmp library.
 
 | Area | Functions |
 |---|---|
-| Procedural v1 | `snmp_get()`, `snmp_getnext()`, `snmp_walk()` |
-| Procedural v2c | `snmp2_get()`, `snmp2_getnext()`, `snmp2_walk()` |
-| Class | `new SNMP(SNMP::VERSION_1 \| SNMP::VERSION_2C \| SNMP::VERSION_3, $host, $community, $timeout, $retries)` with `get()`, `getnext()`, `walk()`, `close()` |
-| SNMPv3 USM | `snmp3_get()`, `snmp3_getnext()`, `snmp3_walk()`, `SNMP::setSecurity()`, MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 auth, DES/AES-128/AES-192/AES-256 privacy (Blumenthal and Cisco/Reeder key extension) |
+| Procedural v1 | `snmp_get()`, `snmp_getnext()`, `snmp_walk()`, `snmpset()` |
+| Procedural v2c | `snmp2_get()`, `snmp2_getnext()`, `snmp2_walk()`, `snmp2_set()` |
+| Class | `new SNMP(SNMP::VERSION_1 \| SNMP::VERSION_2C \| SNMP::VERSION_3, $host, $community, $timeout, $retries)` with `get()`, `getnext()`, `walk()`, `set()`, `getErrno()`, `getError()`, `$info`, `close()` |
+| Walks | GETNEXT for v1 and GETBULK for v2c/v3, with `maxRepetitions` (default 20) and `nonRepeaters` |
+| SET types | `i` INTEGER, `u` Gauge32, `t` TimeTicks, `s`/`d` OCTET STRING, `x`/`b` hex OCTET STRING, `n` NULL, `o` OBJECT IDENTIFIER, `a` IpAddress |
+| SNMPv3 USM | `snmp3_get()`, `snmp3_getnext()`, `snmp3_walk()`, `snmp3_set()`, `SNMP::setSecurity()`, MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 auth, DES/AES-128/AES-192/AES-256 privacy (Blumenthal and Cisco/Reeder key extension) |
 | PHP 8.6 output API | `Snmp\Mib`, `Snmp\OidOutput`, `Snmp\Output`, `Snmp\StringOutput`; `snmp_init_mib()`, `snmp_set_mib_option()`, `snmp_set_output_option()`, `snmp_set_string_output_format()`, `snmp_set_oid_output_format()` and the `SNMP` instance flags |
 | Values | INTEGER, OCTET STRING, NULL, OID, IpAddress, Counter32/64, Gauge32, TimeTicks, Opaque, noSuchObject/noSuchInstance/endOfMibView |
 | Hosts | `host` or `host:port`, defaulting to UDP/161 |
@@ -25,24 +27,23 @@ system net-snmp library.
 
 `snmp_get()` also accepts an array of OIDs and returns the corresponding list
 of values. `snmp_walk()` returns an OID-keyed array with leading-dot numeric
-OIDs.
+OIDs; v2c/v3 walks use GETBULK and v1 falls back to GETNEXT. `SNMP::$info`
+reports the session hostname, timeout and retry count.
 
 ```php
 $host = "127.0.0.1:1161";
 echo snmp_get($host, "public", ".1.3.6.1.2.1.1.1.0"), "\n";
 $tree = snmp2_walk($host, "public", ".1.3.6.1.2.1.1");
+var_dump(snmp2_set($host, "public", ".1.3.6.1.2.1.1.5.0", "s", "new name"));
 ```
 
 ## Deferred surface
 
-- `SNMP::set()` and the SetRequest PDU.
 - MIB file parsing and name-based OID/table rendering: the PHP 8.6 enums and
-  setters are accepted and stored, but this bridge always emits numeric OIDs
+  setters are accepted and stored, but this bridge still emits numeric OIDs
   and raw typed values. `snmp_init_mib()` / `snmp_set_mib_option()` are
   therefore compatibility no-ops rather than a MIB compiler.
-- `snmp_read_mib()`, GetBulk/multi-varbind requests and the `SNMP::$info`
-  request counters.
-- `ext/soap` and its `keep_headers` option.
+- `snmp_read_mib()` and enum-label rendering from MIB files.
 
 Calling an undeclared name fails at compile time rather than pretending to
 work.

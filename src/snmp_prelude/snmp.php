@@ -25,6 +25,8 @@ extern "elephc_snmp" {
     function elephc_snmp_open(int $version, string $host, int $hostLength, string $community, int $communityLength, int $timeoutMs, int $retries): int;
     function elephc_snmp_close(int $session): void;
     function elephc_snmp_request(int $session, string $oid, int $oidLength, int $pdu): int;
+    function elephc_snmp_request_set(int $session, string $oid, int $oidLength, string $type, int $typeLength, string $value, int $valueLength): int;
+    function elephc_snmp_request_bulk(int $session, string $oid, int $oidLength, int $nonRepeaters, int $maxRepetitions): int;
     function elephc_snmp_response_count(int $response): int;
     function elephc_snmp_response_error_status(int $response): int;
     function elephc_snmp_response_error_index(int $response): int;
@@ -43,6 +45,14 @@ class SNMP
     public const int VERSION_1 = 0;
     public const int VERSION_2C = 1;
     public const int VERSION_3 = 3;
+    public const int ERRNO_NOERROR = 0;
+    public const int ERRNO_ANY = 126;
+    public const int ERRNO_GENERIC = 2;
+    public const int ERRNO_TIMEOUT = 4;
+    public const int ERRNO_ERROR_IN_REPLY = 8;
+    public const int ERRNO_OID_NOT_INCREASING = 16;
+    public const int ERRNO_OID_PARSING_ERROR = 32;
+    public const int ERRNO_MULTIPLE_SET_QUERIES = 64;
 
     public array $info = [];
     public ?int $max_oids = null;
@@ -62,6 +72,11 @@ class SNMP
     private int $__session = 0;
     private int $__version = 0;
     private int $__string_output = 0;
+    private string $__hostname = "";
+    private int $__timeout = 1000000;
+    private int $__retries = 5;
+    private int $__errno = 0;
+    private string $__error = "";
 
     public function __construct(int $version, string $hostname, string $community, int $timeout = -1, int $retries = -1)
     {
@@ -70,6 +85,14 @@ class SNMP
             throw new \SNMPException("Unsupported SNMP version");
         }
         $this->__version = $version;
+        $this->__hostname = $hostname;
+        $this->__timeout = $timeout < 0 ? 1000000 : $timeout;
+        $this->__retries = $retries < 0 ? 5 : $retries;
+        $this->info = [
+            "hostname" => $hostname,
+            "timeout" => $this->__timeout,
+            "retries" => $this->__retries,
+        ];
         $this->__session = __elephc_snmp_open($version, $hostname, $community, $timeout, $retries);
         if ($this->__session < 0) {
             throw new \SNMPException("Unable to open SNMP session");
@@ -131,32 +154,64 @@ class SNMP
 
     public function getErrno(): int
     {
-        return 0;
+        return $this->__errno;
     }
 
     public function getError(): string
     {
-        return "";
+        return $this->__error;
     }
 
     public function get(array|string $object_id, bool $preserveKeys = false)
     {
-        return __elephc_snmp_session_get($this->__session, $object_id, 0xA0);
+        $result = __elephc_snmp_session_get($this->__session, $object_id, 0xA0);
+        if ($result === false) {
+            $this->__errno = self::ERRNO_TIMEOUT;
+            $this->__error = "SNMP: No response from " . $this->__hostname;
+        }
+        return $result;
     }
 
     public function getnext(array|string $object_id)
     {
-        return __elephc_snmp_session_get($this->__session, $object_id, 0xA1);
+        $result = __elephc_snmp_session_get($this->__session, $object_id, 0xA1);
+        if ($result === false) {
+            $this->__errno = self::ERRNO_TIMEOUT;
+            $this->__error = "SNMP: No response from " . $this->__hostname;
+        }
+        return $result;
     }
 
     public function walk(array|string $object_id, bool $suffixAsKey = false, int $maxRepetitions = -1, int $nonRepeaters = -1): array|false
     {
-        return __elephc_snmp_session_walk($this->__session, $object_id);
+        if ($this->__version === self::VERSION_1) {
+            $result = __elephc_snmp_session_walk($this->__session, $object_id);
+        } else {
+            $repetitions = $maxRepetitions < 0 ? 20 : $maxRepetitions;
+            if ($repetitions < 1) {
+                $repetitions = 1;
+            }
+            $nonRepeating = $nonRepeaters < 0 ? 0 : $nonRepeaters;
+            $result = __elephc_snmp_session_bulk_walk($this->__session, $object_id, $repetitions, $nonRepeating);
+        }
+        if ($result === false) {
+            $this->__errno = self::ERRNO_TIMEOUT;
+            $this->__error = "SNMP: No response from " . $this->__hostname;
+        }
+        return $result;
     }
 
     public function set(array|string $object_id, array|string $type, array|string $value): bool
     {
-        return false;
+        $result = __elephc_snmp_session_set($this->__session, $object_id, $type, $value);
+        if (!$result) {
+            $this->__errno = self::ERRNO_ERROR_IN_REPLY;
+            $this->__error = "SNMP: Error in packet";
+        } else {
+            $this->__errno = self::ERRNO_NOERROR;
+            $this->__error = "";
+        }
+        return $result;
     }
 
     public function close(): bool
@@ -232,6 +287,51 @@ function snmp3_getnext(
     int $retries = -1
 ) {
     return __elephc_snmp3_get($hostname, $security_name, $security_level, $auth_protocol, $auth_passphrase, $privacy_protocol, $privacy_passphrase, $object_id, 0xA1, $timeout, $retries);
+}
+
+function snmpset(string $hostname, string $community, array|string $object_id, array|string $type, array|string $value, int $timeout = -1, int $retries = -1): bool
+{
+    $session = __elephc_snmp_open(SNMP_VERSION_1, $hostname, $community, $timeout, $retries);
+    if ($session < 0) {
+        return false;
+    }
+    $result = __elephc_snmp_session_set($session, $object_id, $type, $value);
+    \elephc_snmp_close($session);
+    return $result;
+}
+
+function snmp2_set(string $hostname, string $community, array|string $object_id, array|string $type, array|string $value, int $timeout = -1, int $retries = -1): bool
+{
+    $session = __elephc_snmp_open(SNMP_VERSION_2C, $hostname, $community, $timeout, $retries);
+    if ($session < 0) {
+        return false;
+    }
+    $result = __elephc_snmp_session_set($session, $object_id, $type, $value);
+    \elephc_snmp_close($session);
+    return $result;
+}
+
+function snmp3_set(
+    string $hostname,
+    string $security_name,
+    string $security_level,
+    string $auth_protocol,
+    string $auth_passphrase,
+    string $privacy_protocol,
+    string $privacy_passphrase,
+    array|string $object_id,
+    array|string $type,
+    array|string $value,
+    int $timeout = -1,
+    int $retries = -1
+): bool {
+    $session = __elephc_snmp3_open($hostname, $security_name, $security_level, $auth_protocol, $auth_passphrase, $privacy_protocol, $privacy_passphrase, $timeout, $retries);
+    if ($session < 0) {
+        return false;
+    }
+    $result = __elephc_snmp_session_set($session, $object_id, $type, $value);
+    \elephc_snmp_close($session);
+    return $result;
 }
 
 function snmp3_walk(
@@ -435,6 +535,73 @@ function __elephc_snmp_walk(int $version, string $hostname, string $community, a
     }
     \elephc_snmp_close($session);
     return $result;
+}
+
+function __elephc_snmp_session_bulk_walk(int $session, array|string $object_id, int $max_repetitions, int $non_repeaters): array|false
+{
+    $root = "." . \ltrim($object_id, ".");
+    $result = [];
+    $current = $root;
+    for ($iteration = 0; $iteration < 4096; $iteration++) {
+        $response = \elephc_snmp_request_bulk($session, $current, \strlen($current), $non_repeaters, $max_repetitions);
+        if ($response < 0) {
+            break;
+        }
+        $status = \elephc_snmp_response_error_status($response);
+        $count = \elephc_snmp_response_count($response);
+        if ($status !== 0 || $count < 1) {
+            \elephc_snmp_response_free($response);
+            break;
+        }
+        $done = false;
+        for ($index = 0; $index < $count; $index++) {
+            $oid = __elephc_snmp_text(\elephc_snmp_response_oid($response, $index));
+            if ($oid === false) {
+                $done = true;
+                break;
+            }
+            if (\strpos($oid, $root) !== 0 || \array_key_exists($oid, $result)) {
+                $done = true;
+                break;
+            }
+            $result[$oid] = __elephc_snmp_value($response, $index);
+            $current = $oid;
+        }
+        \elephc_snmp_response_free($response);
+        if ($done) {
+            break;
+        }
+    }
+    return $result;
+}
+
+function __elephc_snmp_session_set(int $session, array|string $object_id, array|string $type, array|string $value): bool
+{
+    if (\is_array($object_id)) {
+        $types = \is_array($type) ? $type : [$type];
+        $values = \is_array($value) ? $value : [$value];
+        $index = 0;
+        foreach ($object_id as $oid) {
+            $entry_type = (string) ($types[$index] ?? ($types[0] ?? "s"));
+            $entry_value = (string) ($values[$index] ?? ($values[0] ?? ""));
+            if (!__elephc_snmp_session_set($session, $oid, $entry_type, $entry_value)) {
+                return false;
+            }
+            $index++;
+        }
+        return true;
+    }
+    $oid_text = (string) $object_id;
+    $type_text = (string) $type;
+    $value_text = (string) $value;
+    $response = \elephc_snmp_request_set($session, $oid_text, \strlen($oid_text), $type_text, \strlen($type_text), $value_text, \strlen($value_text));
+    if ($response < 0) {
+        return false;
+    }
+    $status = \elephc_snmp_response_error_status($response);
+    $count = \elephc_snmp_response_count($response);
+    \elephc_snmp_response_free($response);
+    return $status === 0 && $count > 0;
 }
 
 function __elephc_snmp_session_walk(int $session, array|string $object_id): array|false
