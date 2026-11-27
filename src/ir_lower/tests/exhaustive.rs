@@ -614,14 +614,14 @@ fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
     let ops: Vec<&str> = text
         .lines()
         .filter_map(|line| {
-            ["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"]
+            ["hash_new", "hash_set_value", "array_to_hash", "hash_spread", "runtime_call"]
                 .into_iter()
                 .find(|op| line.contains(op))
         })
         .collect();
     assert_eq!(
         ops,
-        vec!["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"],
+        vec!["hash_new", "hash_set_value", "array_to_hash", "hash_spread", "runtime_call"],
         "unexpected mixed-literal EIR: {text}"
     );
 
@@ -640,7 +640,7 @@ fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
         line.strip_prefix(&format!("store_local {acquired} "))
             .and_then(|rest| rest.split_whitespace().next())
     }));
-    for op in ["hash_set", "hash_spread", "runtime_call"] {
+    for op in ["hash_set_value", "hash_spread", "runtime_call"] {
         let receiver = text.lines().find_map(|line| {
             let line = line.trim();
             line.strip_prefix(&format!("{op} "))
