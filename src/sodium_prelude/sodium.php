@@ -35,6 +35,35 @@ const SODIUM_CRYPTO_KEM_MLKEM768_CIPHERTEXTBYTES = 1088;
 const SODIUM_CRYPTO_KEM_MLKEM768_SHAREDSECRETBYTES = 32;
 const SODIUM_CRYPTO_KEM_MLKEM768_SEEDBYTES = 64;
 const SODIUM_CRYPTO_KEM_MLKEM768_KEYPAIRBYTES = 3584;
+const SODIUM_CRYPTO_PWHASH_ALG_ARGON2I13 = 1;
+const SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13 = 2;
+const SODIUM_CRYPTO_PWHASH_ALG_DEFAULT = 2;
+const SODIUM_CRYPTO_PWHASH_SALTBYTES = 16;
+const SODIUM_CRYPTO_PWHASH_STRBYTES = 128;
+const SODIUM_CRYPTO_PWHASH_STRPREFIX = '$argon2id$';
+const SODIUM_CRYPTO_PWHASH_OPSLIMIT_MIN = 1;
+const SODIUM_CRYPTO_PWHASH_MEMLIMIT_MIN = 8192;
+const SODIUM_CRYPTO_PWHASH_OPSLIMIT_INTERACTIVE = 2;
+const SODIUM_CRYPTO_PWHASH_MEMLIMIT_INTERACTIVE = 67108864;
+const SODIUM_CRYPTO_PWHASH_OPSLIMIT_MODERATE = 3;
+const SODIUM_CRYPTO_PWHASH_MEMLIMIT_MODERATE = 268435456;
+const SODIUM_CRYPTO_PWHASH_OPSLIMIT_SENSITIVE = 4;
+const SODIUM_CRYPTO_PWHASH_MEMLIMIT_SENSITIVE = 1073741824;
+const SODIUM_CRYPTO_PWHASH_BYTES_MIN = 16;
+const SODIUM_CRYPTO_PWHASH_BYTES_MAX = 4294967295;
+const SODIUM_CRYPTO_PWHASH_PASSWD_MIN = 0;
+const SODIUM_CRYPTO_PWHASH_PASSWD_MAX = 4294967295;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES = 32;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_BYTES_MIN = 16;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_BYTES_MAX = 4294967295;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_STRBYTES = 102;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_STRPREFIX = '$7$';
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_MIN = 32768;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_MIN = 16777216;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_INTERACTIVE = 524288;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_INTERACTIVE = 16777216;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_SENSITIVE = 33554432;
+const SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_SENSITIVE = 1073741824;
 
 class SodiumException extends \Exception
 {
@@ -81,6 +110,12 @@ extern "elephc_sodium" {
     function elephc_sodium_kem_mlkem768_seed_keypair(string $seed, int $seedLength): ptr;
     function elephc_sodium_kem_mlkem768_enc(string $publicKey, int $publicKeyLength): ptr;
     function elephc_sodium_kem_mlkem768_dec(string $ciphertext, int $ciphertextLength, string $secretKey, int $secretKeyLength): ptr;
+    function elephc_sodium_pwhash(int $length, string $password, int $passwordLength, string $salt, int $saltLength, int $opslimit, int $memlimit, int $algorithm): ptr;
+    function elephc_sodium_pwhash_str(string $password, int $passwordLength, string $salt, int $saltLength, int $opslimit, int $memlimit, int $algorithm): ptr;
+    function elephc_sodium_pwhash_str_verify(string $password, int $passwordLength, string $hash, int $hashLength): int;
+    function elephc_sodium_pwhash_scryptsalsa208sha256(int $length, string $password, int $passwordLength, string $salt, int $saltLength, int $opslimit, int $memlimit): ptr;
+    function elephc_sodium_pwhash_scryptsalsa208sha256_str(string $password, int $passwordLength, string $salt, int $saltLength, int $opslimit, int $memlimit): ptr;
+    function elephc_sodium_pwhash_scryptsalsa208sha256_str_verify(string $password, int $passwordLength, string $hash, int $hashLength): int;
     function elephc_sodium_last_len(): int;
 }
 
@@ -704,4 +739,178 @@ function sodium_crypto_kem_mlkem768_dec(string $ciphertext, string $secret_key):
         throw new \SodiumException("sodium_crypto_kem_mlkem768_dec(): internal error");
     }
     return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_pwhash(int $length, string $password, string $salt, int $opslimit, int $memlimit, int $algorithm = SODIUM_CRYPTO_PWHASH_ALG_DEFAULT): string
+{
+    return __elephc_sodium_pwhash("sodium_crypto_pwhash", $length, $password, $salt, $opslimit, $memlimit, $algorithm);
+}
+
+function sodium_crypto_pwhash_argon2id(int $length, string $password, string $salt, int $opslimit, int $memlimit): string
+{
+    return __elephc_sodium_pwhash("sodium_crypto_pwhash_argon2id", $length, $password, $salt, $opslimit, $memlimit, SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13);
+}
+
+function sodium_crypto_pwhash_argon2i(int $length, string $password, string $salt, int $opslimit, int $memlimit): string
+{
+    return __elephc_sodium_pwhash("sodium_crypto_pwhash_argon2i", $length, $password, $salt, $opslimit, $memlimit, SODIUM_CRYPTO_PWHASH_ALG_ARGON2I13);
+}
+
+function sodium_crypto_pwhash_str(string $password, int $opslimit, int $memlimit): string
+{
+    return __elephc_sodium_pwhash_str("sodium_crypto_pwhash_str", $password, $opslimit, $memlimit, SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13);
+}
+
+function sodium_crypto_pwhash_argon2id_str(string $password, int $opslimit, int $memlimit): string
+{
+    return __elephc_sodium_pwhash_str("sodium_crypto_pwhash_argon2id_str", $password, $opslimit, $memlimit, SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13);
+}
+
+function sodium_crypto_pwhash_argon2i_str(string $password, int $opslimit, int $memlimit): string
+{
+    return __elephc_sodium_pwhash_str("sodium_crypto_pwhash_argon2i_str", $password, $opslimit, $memlimit, SODIUM_CRYPTO_PWHASH_ALG_ARGON2I13);
+}
+
+function sodium_crypto_pwhash_str_verify(string $hash, string $password): bool
+{
+    if (\strlen($password) >= 4294967295) {
+        throw new \SodiumException("sodium_crypto_pwhash_str_verify(): Argument #2 (\$password) is too long");
+    }
+    $result = \elephc_sodium_pwhash_str_verify($password, \strlen($password), $hash, \strlen($hash));
+    return $result === 1;
+}
+
+function sodium_crypto_pwhash_argon2id_str_verify(string $hash, string $password): bool
+{
+    if (\substr($hash, 0, 10) !== '$argon2id$') {
+        return false;
+    }
+    return \sodium_crypto_pwhash_str_verify($hash, $password);
+}
+
+function sodium_crypto_pwhash_argon2i_str_verify(string $hash, string $password): bool
+{
+    if (\substr($hash, 0, 9) !== '$argon2i$') {
+        return false;
+    }
+    return \sodium_crypto_pwhash_str_verify($hash, $password);
+}
+
+function __elephc_sodium_pwhash(string $name, int $length, string $password, string $salt, int $opslimit, int $memlimit, int $algorithm): string
+{
+    if ($length <= 0) {
+        throw new \ValueError($name . "(): Argument #1 (\$length) must be greater than 0");
+    }
+    if ($length >= 4294967295) {
+        throw new \ValueError($name . "(): Argument #1 (\$length) must be less than 4294967295 bytes");
+    }
+    if (\strlen($password) >= 4294967295) {
+        throw new \ValueError($name . "(): Argument #2 (\$password) must be less than 4294967295 bytes");
+    }
+    if ($opslimit <= 0) {
+        throw new \ValueError($name . "(): Argument #4 (\$opslimit) must be greater than 0");
+    }
+    if ($memlimit <= 0) {
+        throw new \ValueError($name . "(): Argument #5 (\$memlimit) must be greater than 0");
+    }
+    if ($algorithm !== SODIUM_CRYPTO_PWHASH_ALG_ARGON2I13 && $algorithm !== SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13) {
+        throw new \SodiumException("unsupported password hashing algorithm");
+    }
+    if (\strlen($salt) !== SODIUM_CRYPTO_PWHASH_SALTBYTES) {
+        throw new \ValueError($name . "(): Argument #3 (\$salt) must be SODIUM_CRYPTO_PWHASH_SALTBYTES bytes long");
+    }
+    if ($opslimit < SODIUM_CRYPTO_PWHASH_OPSLIMIT_MIN) {
+        throw new \ValueError($name . "(): Argument #4 (\$opslimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_OPSLIMIT_MIN);
+    }
+    if ($memlimit < SODIUM_CRYPTO_PWHASH_MEMLIMIT_MIN) {
+        throw new \ValueError($name . "(): Argument #5 (\$memlimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_MEMLIMIT_MIN);
+    }
+    $pointer = \elephc_sodium_pwhash($length, $password, \strlen($password), $salt, \strlen($salt), $opslimit, $memlimit, $algorithm);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException($name . "(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function __elephc_sodium_pwhash_str(string $name, string $password, int $opslimit, int $memlimit, int $algorithm): string
+{
+    if ($opslimit <= 0) {
+        throw new \ValueError($name . "(): Argument #2 (\$opslimit) must be greater than 0");
+    }
+    if ($memlimit <= 0) {
+        throw new \ValueError($name . "(): Argument #3 (\$memlimit) must be greater than 0");
+    }
+    if (\strlen($password) >= 4294967295) {
+        throw new \ValueError($name . "(): Argument #1 (\$password) must be less than 4294967295 bytes");
+    }
+    if ($opslimit < SODIUM_CRYPTO_PWHASH_OPSLIMIT_MIN) {
+        throw new \ValueError($name . "(): Argument #2 (\$opslimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_OPSLIMIT_MIN);
+    }
+    if ($memlimit < SODIUM_CRYPTO_PWHASH_MEMLIMIT_MIN) {
+        throw new \ValueError($name . "(): Argument #3 (\$memlimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_MEMLIMIT_MIN);
+    }
+    $salt = \random_bytes(SODIUM_CRYPTO_PWHASH_SALTBYTES);
+    $pointer = \elephc_sodium_pwhash_str($password, \strlen($password), $salt, \strlen($salt), $opslimit, $memlimit, $algorithm);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException($name . "(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_pwhash_scryptsalsa208sha256(int $length, string $password, string $salt, int $opslimit, int $memlimit): string
+{
+    if ($length <= 0 || $length > 0x1fffffffe0) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #1 (\$length) must be greater than 0");
+    }
+    if ($opslimit <= 0) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #4 (\$opslimit) must be greater than 0");
+    }
+    if ($memlimit <= 0) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #5 (\$memlimit) must be greater than 0");
+    }
+    if (\strlen($salt) !== SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #3 (\$salt) must be SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES bytes long");
+    }
+    if ($opslimit < SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_INTERACTIVE) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #4 (\$opslimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_INTERACTIVE);
+    }
+    if ($memlimit < SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_INTERACTIVE) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #5 (\$memlimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_INTERACTIVE);
+    }
+    $pointer = \elephc_sodium_pwhash_scryptsalsa208sha256($length, $password, \strlen($password), $salt, \strlen($salt), $opslimit, $memlimit);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_pwhash_scryptsalsa208sha256(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_pwhash_scryptsalsa208sha256_str(string $password, int $opslimit, int $memlimit): string
+{
+    if ($opslimit <= 0) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #2 (\$opslimit) must be greater than 0");
+    }
+    if ($memlimit <= 0) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #3 (\$memlimit) must be greater than 0");
+    }
+    if ($opslimit < SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_INTERACTIVE) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #2 (\$opslimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_INTERACTIVE);
+    }
+    if ($memlimit < SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_INTERACTIVE) {
+        throw new \ValueError("sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #3 (\$memlimit) must be greater than or equal to " . SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_INTERACTIVE);
+    }
+    $salt = \random_bytes(SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES);
+    $pointer = \elephc_sodium_pwhash_scryptsalsa208sha256_str($password, \strlen($password), $salt, \strlen($salt), $opslimit, $memlimit);
+    if (\__elephc_ptr_is_null($pointer)) {
+        throw new \SodiumException("sodium_crypto_pwhash_scryptsalsa208sha256_str(): internal error");
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_sodium_last_len());
+}
+
+function sodium_crypto_pwhash_scryptsalsa208sha256_str_verify(string $hash, string $password): bool
+{
+    if (\strlen($hash) !== SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_STRBYTES - 1) {
+        return false;
+    }
+    $result = \elephc_sodium_pwhash_scryptsalsa208sha256_str_verify($password, \strlen($password), $hash, \strlen($hash));
+    return $result === 1;
 }

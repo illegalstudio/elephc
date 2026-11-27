@@ -22,6 +22,7 @@ use std::ptr;
 mod aes;
 mod ipcrypt;
 mod kem;
+mod pwhash;
 mod shake;
 use shake::ShakeKind;
 
@@ -855,6 +856,164 @@ pub unsafe extern "C" fn elephc_sodium_kem_mlkem768_dec(
         kem::mlkem_dec(ciphertext, secret_key)
             .map(|shared| publish(&shared))
             .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: Argon2i/Argon2id password hashing with libsodium's parameter mapping.
+///
+/// # Safety
+/// Both string pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_pwhash(
+    output_len: usize,
+    password: *const u8,
+    password_len: usize,
+    salt: *const u8,
+    salt_len: usize,
+    opslimit: i64,
+    memlimit: i64,
+    algorithm: i64,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(password), Some(salt)) = (bytes(password, password_len), bytes(salt, salt_len))
+        else {
+            return ptr::null();
+        };
+        let (Ok(opslimit), Ok(memlimit)) = (u64::try_from(opslimit), u64::try_from(memlimit)) else {
+            return ptr::null();
+        };
+        pwhash::hash(output_len, password, salt, opslimit, memlimit, algorithm)
+            .map(|hash| publish(&hash))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: builds a PHC Argon2id password hash string.
+///
+/// # Safety
+/// Both string pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_pwhash_str(
+    password: *const u8,
+    password_len: usize,
+    salt: *const u8,
+    salt_len: usize,
+    opslimit: i64,
+    memlimit: i64,
+    algorithm: i64,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(password), Some(salt)) = (bytes(password, password_len), bytes(salt, salt_len))
+        else {
+            return ptr::null();
+        };
+        let (Ok(opslimit), Ok(memlimit)) = (u64::try_from(opslimit), u64::try_from(memlimit)) else {
+            return ptr::null();
+        };
+        pwhash::hash_str(password, salt, opslimit, memlimit, algorithm)
+            .map(|hash| publish(hash.as_bytes()))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: verifies a PHC Argon2 password hash, returning 1 or 0.
+///
+/// # Safety
+/// Both string pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_pwhash_str_verify(
+    password: *const u8,
+    password_len: usize,
+    hash: *const u8,
+    hash_len: usize,
+) -> i64 {
+    guarded(0, || {
+        let (Some(password), Some(hash)) = (bytes(password, password_len), bytes(hash, hash_len))
+        else {
+            return 0;
+        };
+        let Ok(hash) = std::str::from_utf8(hash) else {
+            return 0;
+        };
+        if pwhash::verify_str(password, hash) { 1 } else { 0 }
+    })
+}
+
+/// C ABI: scrypt-salsa20/poly1305 derivation with libsodium's parameter chooser.
+///
+/// # Safety
+/// Both string pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_pwhash_scryptsalsa208sha256(
+    output_len: usize,
+    password: *const u8,
+    password_len: usize,
+    salt: *const u8,
+    salt_len: usize,
+    opslimit: i64,
+    memlimit: i64,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(password), Some(salt)) = (bytes(password, password_len), bytes(salt, salt_len))
+        else {
+            return ptr::null();
+        };
+        let (Ok(opslimit), Ok(memlimit)) = (u64::try_from(opslimit), u64::try_from(memlimit)) else {
+            return ptr::null();
+        };
+        pwhash::scrypt_hash(output_len, password, salt, opslimit, memlimit)
+            .map(|hash| publish(&hash))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: builds a `$7$` scrypt string.
+///
+/// # Safety
+/// Both string pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_pwhash_scryptsalsa208sha256_str(
+    password: *const u8,
+    password_len: usize,
+    salt: *const u8,
+    salt_len: usize,
+    opslimit: i64,
+    memlimit: i64,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(password), Some(salt)) = (bytes(password, password_len), bytes(salt, salt_len))
+        else {
+            return ptr::null();
+        };
+        let (Ok(opslimit), Ok(memlimit)) = (u64::try_from(opslimit), u64::try_from(memlimit)) else {
+            return ptr::null();
+        };
+        pwhash::scrypt_hash_str(password, salt, opslimit, memlimit)
+            .map(|hash| publish(hash.as_bytes()))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: verifies a `$7$` scrypt string, returning 1 or 0.
+///
+/// # Safety
+/// Both string pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_pwhash_scryptsalsa208sha256_str_verify(
+    password: *const u8,
+    password_len: usize,
+    hash: *const u8,
+    hash_len: usize,
+) -> i64 {
+    guarded(0, || {
+        let (Some(password), Some(hash)) = (bytes(password, password_len), bytes(hash, hash_len))
+        else {
+            return 0;
+        };
+        let Ok(hash) = std::str::from_utf8(hash) else {
+            return 0;
+        };
+        if pwhash::scrypt_verify_str(password, hash) { 1 } else { 0 }
     })
 }
 

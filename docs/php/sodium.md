@@ -22,6 +22,7 @@ on every supported target.
 | TurboSHAKE | `sodium_crypto_xof_turboshake128/256()`, `_init/update/squeeze()` and the `SodiumCryptoXofTurboshake128State`/`Turboshake256State` classes | PHP 8.6; Keccak-p[1600,12] with streaming squeezes and domain separation. |
 | X-Wing KEM | `sodium_crypto_kem_keypair()`, `_seed_keypair()`, `_secretkey()`, `_publickey()`, `_enc()`, `_dec()` | PHP 8.6; hybrid ML-KEM-768 + X25519, libsodium's `secret || public` keypair layout. |
 | ML-KEM-768 KEM | `sodium_crypto_kem_mlkem768_keypair()`, `_seed_keypair()`, `_secretkey()`, `_publickey()`, `_enc()`, `_dec()` | PHP 8.6; FIPS 203, expanded 2400-byte secret-key encoding. |
+| Password hashing | `sodium_crypto_pwhash()`, `_str()`, `_str_verify()`, the Argon2i/Argon2id aliases, and `sodium_crypto_pwhash_scryptsalsa208sha256()`, `_str()`, `_str_verify()` | Argon2id/i and scrypt-salsa20/poly1305; PHC and `$7$` strings verify against PHP's installed ext/sodium. PHP 8.6 range errors raise `ValueError`. |
 
 The matching `SODIUM_CRYPTO_SECRETBOX_*` and `SODIUM_CRYPTO_XOF_SHAKE*` constants
 are declared as well.
@@ -39,11 +40,10 @@ diagnostics for the delivered functions.
 ## Deferred ext/sodium surface
 
 The remaining `ext/sodium` surface is the base families that predate PHP 8.6:
-`crypto_box`, `crypto_sign`, `crypto_generichash`, `crypto_pwhash`, `crypto_kdf`,
-`crypto_kx`, `crypto_auth`, `crypto_aead`, and the secretstream helpers. The
-PHP 8.6 `pwhash` ValueError rule is tracked with that work because the pwhash
-functions themselves are not declared yet. None of those names are declared, so
-a program that calls them fails at compile time rather than silently returning a
+`crypto_box`, `crypto_sign`, `crypto_generichash`, `crypto_kdf`, `crypto_kx`,
+`crypto_auth`, `crypto_aead`, the secretstream helpers, and the
+`pwhash_str_needs_rehash` family. None of those names are declared, so a
+program that calls them fails at compile time rather than silently returning a
 wrong value.
 
 ## Linking

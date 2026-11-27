@@ -313,3 +313,117 @@ SodiumException:sodium_crypto_kem_seed_keypair(): Argument #1 ($seed) must be SO
 SodiumException:sodium_crypto_kem_mlkem768_enc(): Argument #1 ($public_key) must be SODIUM_CRYPTO_KEM_MLKEM768_PUBLICKEYBYTES bytes long\n"
     );
 }
+
+/// Argon2id raw vectors, PHC string verification and PHP 8.6 ValueError text.
+#[test]
+fn test_sodium_pwhash_php86() {
+    let out = compile_and_run(
+        r#"<?php
+$password = hex2bin(
+    "a347ae92bce9f80f6f595a4480fc9c2fe7e7d7148d371e9487d75f5c23008ffae0"
+    . "65577a928febd9b1973a5a95073acdbeb6a030cfc0d79caa2dc5cd011cef02c08d"
+    . "a232d76d52dfbca38ca8dcbd665b17d1665f7cf5fe59772ec909733b24de97d6f5"
+    . "8d220b20c60d7c07ec1fd93c52c31020300c6c1facd77937a597c7a6"
+);
+$salt = hex2bin("5541fbc995d5c197ba290346d2c559de");
+if (!is_string($password) || !is_string($salt)) {
+    exit(1);
+}
+$hash = sodium_crypto_pwhash(155, $password, $salt, 5, 7256678,
+    SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13);
+echo bin2hex($hash)
+    === "18acec5d6507739f203d1f5d9f1d862f7c2cdac4f19d2bdff64487e60d969e3c"
+        . "ed615337b9eec6ac4461c6ca07f0939741e57c24d0005c7ea171a0ee1e734824"
+        . "9d135b38f222e4dad7b9a033ed83f5ca27277393e316582033c74affe2566a2b"
+        . "ea47f91f0fd9fe49ece7e1f79f3ad6e9b23e0277c8ecc4b313225748dd2a80f5"
+        . "679534a0700e246a79a49b3f74eb89ec6205fe1eeb941c73b1fcf1"
+    ? "vector" : "bad", "\n";
+
+$phc = sodium_crypto_pwhash_str("password", 2, 67108864);
+echo substr($phc, 0, 10), ":", strlen($phc) < SODIUM_CRYPTO_PWHASH_STRBYTES ? "len" : "bad", "\n";
+var_dump(sodium_crypto_pwhash_str_verify($phc, "password"));
+var_dump(sodium_crypto_pwhash_str_verify($phc, "wrong"));
+
+$argon2i = sodium_crypto_pwhash_argon2i_str("password", 2, 8192);
+echo substr($argon2i, 0, 9), ":",
+    sodium_crypto_pwhash_argon2i_str_verify($argon2i, "password") ? "ok" : "bad", "\n";
+
+try {
+    sodium_crypto_pwhash(0, "p", $salt, 2, 67108864);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_pwhash(32, "p", $salt, 0, 67108864);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_pwhash(32, "p", $salt, 1, 8191);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_pwhash_str("p", 0, 67108864);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "vector\n$argon2id$:len\nbool(true)\nbool(false)\n$argon2i$:ok\n\
+ValueError:sodium_crypto_pwhash(): Argument #1 ($length) must be greater than 0\n\
+ValueError:sodium_crypto_pwhash(): Argument #4 ($opslimit) must be greater than 0\n\
+ValueError:sodium_crypto_pwhash(): Argument #5 ($memlimit) must be greater than or equal to 8192\n\
+ValueError:sodium_crypto_pwhash_str(): Argument #2 ($opslimit) must be greater than 0\n"
+    );
+}
+
+/// scrypt-salsa20/poly1305 vector, `$7$` strings and PHP 8.6 ValueError text.
+#[test]
+fn test_sodium_scrypt_pwhash_php86() {
+    let out = compile_and_run(
+        r#"<?php
+$salt = str_repeat("S", SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES);
+$hash = sodium_crypto_pwhash_scryptsalsa208sha256(
+    32, "password", $salt, 524288, 16777216
+);
+echo bin2hex($hash)
+    === "7dda42b29bdce385ff353534b97cead6504a5f9fc9216d30d6e4635867e07e2c"
+    ? "vector" : "bad", "\n";
+
+$str = sodium_crypto_pwhash_scryptsalsa208sha256_str("password", 524288, 16777216);
+echo substr($str, 0, 3), ":", strlen($str), ":";
+var_dump(sodium_crypto_pwhash_scryptsalsa208sha256_str_verify($str, "password"));
+var_dump(sodium_crypto_pwhash_scryptsalsa208sha256_str_verify($str, "wrong"));
+
+try {
+    sodium_crypto_pwhash_scryptsalsa208sha256(
+        32, "p", $salt, 524287, 16777216
+    );
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_pwhash_scryptsalsa208sha256_str("p", 524288, 16777215);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_pwhash_scryptsalsa208sha256(
+        32, "p", str_repeat("S", 31), 524288, 16777216
+    );
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "vector\n$7$:101:bool(true)\nbool(false)\n\
+ValueError:sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #4 ($opslimit) must be greater than or equal to 524288\n\
+ValueError:sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #3 ($memlimit) must be greater than or equal to 16777216\n\
+ValueError:sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #3 ($salt) must be SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES bytes long\n"
+    );
+}
