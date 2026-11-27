@@ -402,7 +402,7 @@ fn test_snmp_mib_resolution_and_rendering() {
     let port = server.local_addr().unwrap().port();
     let worker = thread::spawn(move || {
         let mut buffer = [0u8; 4096];
-        for _ in 0..5 {
+        for _ in 0..8 {
             let (size, peer) = server.recv_from(&mut buffer).expect("SNMP request");
             let request = &buffer[..size];
             let (version, community) = request_header(request);
@@ -507,7 +507,7 @@ fn test_snmp_library_value_formatting() {
     let port = server.local_addr().unwrap().port();
     let worker = thread::spawn(move || {
         let mut buffer = [0u8; 4096];
-        for _ in 0..5 {
+        for _ in 0..8 {
             let (size, peer) = server.recv_from(&mut buffer).expect("SNMP request");
             let request = &buffer[..size];
             let (version, community) = request_header(request);
@@ -558,6 +558,23 @@ foreach ($walk as $oid => $value) {
     echo $oid, "=", $value, "\n";
 }
 snmp_set_output_option(\Snmp\Output::NumericTimeticks, false);
+snmp_set_string_output_format(\Snmp\StringOutput::Hex);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_string_output_format(\Snmp\StringOutput::Ascii);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_output_option(\Snmp\Output::HexText, true);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_output_option(\Snmp\Output::HexText, false);
+snmp_set_string_output_format(\Snmp\StringOutput::Guess);
 snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
 $walk = snmp2_walk($host, "public", $root, 1000000, 1);
 foreach ($walk as $oid => $value) {
@@ -602,6 +619,15 @@ foreach ($walk as $oid => $value) {
         ".1.3.6.1.4.1.99999.3.0=Timeticks: (101) 0:00:01.01",
         ".1.3.6.1.4.1.99999.3.0=101",
     );
+    let hex = library.replace(
+        ".1.3.6.1.4.1.99999.1.0=STRING: \"elephc\"",
+        ".1.3.6.1.4.1.99999.1.0=Hex-STRING: 65 6C 65 70 68 63",
+    );
+    let ascii = library.clone();
+    let hex_text = library.replace(
+        ".1.3.6.1.4.1.99999.1.0=STRING: \"elephc\"",
+        ".1.3.6.1.4.1.99999.1.0=Hex-STRING: 65 6C 65 70 68 63  [elephc]",
+    );
     let plain = "\
 .1.3.6.1.4.1.99999.1.0=elephc
 .1.3.6.1.4.1.99999.2.0=23
@@ -616,7 +642,7 @@ foreach ($walk as $oid => $value) {
 ";
     assert_eq!(
         out,
-        format!("{library}{quick}{numeric_ticks}{plain}4:STRING: \"elephc\"\n")
+        format!("{library}{quick}{numeric_ticks}{hex}{ascii}{hex_text}{plain}4:STRING: \"elephc\"\n")
     );
 }
 
