@@ -1,5 +1,5 @@
 //! Purpose:
-//! Parsed-PHP implementation of `DateTime::createFromFormat` and its immutable peer.
+//! AST-built implementation of `DateTime::createFromFormat` and its immutable peer.
 //!
 //! Called from:
 //! - DateTime declaration injection.
@@ -9,8 +9,9 @@
 
 use super::*;
 
-/// PHP source for the `createFromFormat` parser, used directly as the method body so the feature is
-/// self-contained (no separately-injected helper function to keep in sync with the class emission).
+/// Test-only transcribed oracle for the `createFromFormat` parser. Production builds the same
+/// statements as AST in `bodies::create_from_format()`, so the feature stays self-contained
+/// (no separately-injected helper function to keep in sync with the class emission).
 ///
 /// `__CFF_CLASS__` is substituted with the concrete class so each method constructs its own type.
 /// Field semantics mirror PHP: unspecified fields default to the current date/time, but once any
@@ -362,13 +363,18 @@ if ($is12 && $pm >= 0) {
     if ($pm === 1) { if ($H < 12) { $H = $H + 12; } }
     else { if ($H === 12) { $H = 0; } }
 }
+if ($timezone !== null) {
+    $__tzname = $timezone->getName();
+    $__fixed = $__tzname !== "UTC" && self::__elephc_abbr_offset($__tzname) !== -2147483648;
+    $__tzdisplay = self::__elephc_display_timezone($__tzname, $__fixed);
+}
 if ($hasU) {
     $ts = $U;
 } else if ($timezone === null) {
     $ts = __elephc_mktime_raw($H, $mi, $se, $mo, $da, $Y);
 } else {
     $saved = date_default_timezone_get();
-    date_default_timezone_set($timezone->getName());
+    date_default_timezone_set($__tzdisplay);
     $ts = __elephc_mktime_raw($H, $mi, $se, $mo, $da, $Y);
     date_default_timezone_set($saved);
 }
@@ -378,7 +384,7 @@ if ($hasU) {
 if ($parsedO !== "" || $parsedP !== "" || $parsedZ !== "" || $parsedT !== "" || $parsedE !== "") {
     $__saved = date_default_timezone_get();
     if ($timezone !== null) {
-        date_default_timezone_set($timezone->getName());
+        date_default_timezone_set($__tzdisplay);
     }
     $__ok = true;
     if ($__ok && $parsedO !== "" && date("O", $ts) !== $parsedO) { $__ok = false; }
@@ -396,7 +402,8 @@ if ($timezone !== null) {
     // `?DateTimeZone`, whose value reaches here boxed as Mixed, and setTimezone reads the
     // `name` property directly (which mis-reads a boxed receiver). getName() dispatches by
     // runtime class id, so it resolves correctly, mirroring the two-argument constructor.
-    $o->timezone_name = $timezone->getName();
+    $o->timezone_name = $__fixed ? strtoupper($__tzname) : $__tzname;
+    $o->__elephc_fixed_zone = $__fixed;
 }
 __CFF_CLASS__::$lastErrorCount = 0;
 return $o->setMicrosecond($umicro);
@@ -407,9 +414,10 @@ return $o->setMicrosecond($umicro);
 /// parsed wall-clock is interpreted in that zone (default zone switched around `mktime`, then
 /// restored) and it becomes the result's display zone, mirroring the constructor's zone handling.
 ///
-/// The body is the parsed `CREATE_FROM_FORMAT_SRC` parser with the class name substituted, so the
-/// method is self-contained and emitted together with the class (no externally-injected helper to
-/// gate). The return type is declared explicitly as `class|false` because synthetic builtin methods
+/// The body is built as AST by `bodies::create_from_format(class_name)` with the class name
+/// substituted (`CREATE_FROM_FORMAT_SRC` is its test-only transcribed oracle), so the method is
+/// self-contained and emitted together with the class (no externally-injected helper to gate).
+/// The return type is declared explicitly as `class|false` because synthetic builtin methods
 /// do not get body-driven return-type inference, and the union lets the method-dispatch path resolve
 /// `->format()` etc. on the success arm.
 pub(super) fn datetime_create_from_format(class_name: &str) -> ClassMethod {

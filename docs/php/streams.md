@@ -170,7 +170,9 @@ same way.
 
 By default elephc enforces PHP's `phar.require_hash=1`: opening an executable
 phar without a signature fails, and `new Phar(...)` on an unsigned existing archive
-throws `UnexpectedValueException` instead of presenting an empty object. This applies
+throws `UnexpectedValueException` instead of presenting an empty object. The
+message uses php-src's wording for a missing signature and for a keyless signature
+downgraded under a trusted `<archive>.pubkey`. This applies
 to native PHARs and to tar/zip archives that contain `.phar/stub.php`; a plain tar/zip
 data archive without a stub remains readable, matching PHP's `PharData` behavior.
 `new PharData(...)` accepts unsigned containers and only authenticates a signature

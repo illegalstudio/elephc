@@ -85,6 +85,12 @@ pub(super) fn php_src_tar_require_hash_rejects_unsigned_executable_phar() {
         parse_archive_path(&path).is_none(),
         "tar phar without a signature must be rejected by default"
     );
+    let message = archive_validation_error(path_bytes.as_bytes(), false)
+        .expect("tar rejection message");
+    assert_eq!(
+        message,
+        format!("tar-based phar \"{}\" does not have a signature", path.display())
+    );
 
     {
         let _policy = RequireHashGuard::relaxed();
@@ -124,6 +130,16 @@ pub(super) fn archive_validity_honors_is_data_and_require_hash() {
         archive_is_valid(path_bytes.as_bytes(), true),
         "PharData must accept the same unsigned archive"
     );
+    assert!(
+        archive_validation_error(path_bytes.as_bytes(), true).is_none(),
+        "PharData must not produce a rejection message for an unsigned archive"
+    );
+    let message = archive_validation_error(path_bytes.as_bytes(), false)
+        .expect("Phar rejection message");
+    assert_eq!(
+        message,
+        format!("phar \"{}\" does not have a signature", path.display())
+    );
     {
         let _policy = RequireHashGuard::relaxed();
         assert!(
@@ -140,6 +156,38 @@ pub(super) fn archive_validity_honors_is_data_and_require_hash() {
     remove_signed_fixture(&path);
 }
 
+/// A rejected-but-unreadable archive reports a rejection instead of an empty object.
+#[test]
+pub(super) fn archive_validation_error_reports_unreadable_archives() {
+    let path = temp_path("broken_archive", "phar.tar.gz");
+    // Valid gzip magic with no complete stream: reading/decompression fails.
+    std::fs::write(&path, [0x1f, 0x8b, 0x08, 0x00]).unwrap();
+    let path_bytes = path.to_string_lossy();
+    assert!(
+        !archive_is_valid(path_bytes.as_bytes(), false),
+        "a truncated gzip archive must fail the validity probe"
+    );
+    let message = archive_validation_error(path_bytes.as_bytes(), false)
+        .expect("unreadable archives must produce a rejection message");
+    assert_eq!(
+        message,
+        format!("phar \"{}\" is not a valid phar archive", path.display())
+    );
+    remove_signed_fixture(&path);
+}
+
+/// A non-UTF-8 path is rejected by the validity probe and must also produce a
+/// rejection message, otherwise the OOP constructor reads `None` as "valid".
+#[test]
+pub(super) fn archive_validation_error_rejects_non_utf8_paths() {
+    let path = [b'p', b'h', b'a', b'r', 0xff, 0xfe];
+    assert!(!archive_is_valid(&path, false));
+    assert!(
+        archive_validation_error(&path, false).is_some(),
+        "a non-UTF-8 path must report a rejection instead of None"
+    );
+}
+
 /// Mirrors php-src's native rule: an unsigned executable native phar is
 /// rejected while `phar.require_hash=1`, then MD5 signing makes it readable.
 #[test]
@@ -150,6 +198,12 @@ pub(super) fn php_src_native_require_hash_rejects_unsigned_phar() {
     assert!(
         parse_archive_path(&path).is_none(),
         "native phar without a signature must be rejected by default"
+    );
+    let message = archive_validation_error(path_bytes.as_bytes(), false)
+        .expect("native rejection message");
+    assert_eq!(
+        message,
+        format!("phar \"{}\" does not have a signature", path.display())
     );
 
     {
@@ -179,6 +233,15 @@ pub(super) fn php_src_zip_require_hash_rejects_unsigned_executable_phar() {
     assert!(
         parse_archive_path(&path).is_none(),
         "zip phar without a signature must be rejected by default"
+    );
+    let message = archive_validation_error(path_bytes.as_bytes(), false)
+        .expect("zip rejection message");
+    assert_eq!(
+        message,
+        format!(
+            "phar error: signature is missing in zip-based phar \"{}\"",
+            path.display()
+        )
     );
 
     {

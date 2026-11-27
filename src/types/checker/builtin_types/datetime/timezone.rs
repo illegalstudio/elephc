@@ -82,15 +82,19 @@ pub(super) fn datetime_zone_get_offset() -> ClassMethod {
 /// over the identifiers in `timezone_ids::TIMEZONE_IDENTIFIERS_ARRAY` (captured from PHP).
 ///
 /// The `$timezoneGroup`/`$countryCode` filter parameters are declared for signature parity (so
-/// reflection reports PHP's real signature), but the body returns the full unfiltered list: real
-/// calls are desugared by the name resolver to the injected `__elephc_list_identifiers()` free
-/// function (which performs the group/country filter), so this body only runs via reflection
-/// invocation, where filtering is best-effort.
+/// reflection reports PHP's real signature), but the body is only reached through reflection:
+/// real calls are desugared by the name resolver to the injected `__elephc_list_identifiers()`
+/// free function (which performs the group/country filter). The body still distinguishes the
+/// `ALL_WITH_BC` bit because `DateTime::__elephc_tz_identifier()` calls it to validate
+/// backwards-compatible identifiers without a second baked table.
 pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
     // Built straight from the identifier slice. This body used to be assembled as PHP text and
     // handed back to the tokenizer and parser — 419 string literals formatted into a `return [];`
     // only to be read back into the same array literal this builds directly.
-    let body = super::bodies::list_identifiers(super::timezone_ids::TIMEZONE_IDENTIFIERS);
+    let body = super::bodies::list_identifiers_grouped(
+        super::timezone_ids::TIMEZONE_IDENTIFIERS,
+        super::timezone_ids::TIMEZONE_IDENTIFIERS_WITH_BC,
+    );
     ClassMethod {
         type_params: Vec::new(),
         name: "listIdentifiers".to_string(),
@@ -119,7 +123,7 @@ pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body,
         span: dummy(),

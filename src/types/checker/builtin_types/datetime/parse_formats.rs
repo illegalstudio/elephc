@@ -1,5 +1,5 @@
 //! Purpose:
-//! Parsed-PHP adapter for `date_parse_from_format` component extraction.
+//! AST-built adapter for `date_parse_from_format` component extraction.
 //!
 //! Called from:
 //! - DateTime procedural helper method assembly.
@@ -192,7 +192,7 @@ return $r;
 /// Builds the internal static `__elephc_date_parse_from_format(string $format, string $datetime)`
 /// method on `DateTime` that backs the `date_parse_from_format()` procedural function (the
 /// name resolver desugars the call to this static method). Returns PHP's component array (`mixed`,
-/// since values are heterogeneous int|false). Self-contained parsed-source body, like
+/// since values are heterogeneous int|false). Self-contained AST-built body, like
 /// `createFromFormat`.
 pub(super) fn datetime_date_parse_from_format() -> ClassMethod {
     let body = super::bodies::date_parse_from_format();

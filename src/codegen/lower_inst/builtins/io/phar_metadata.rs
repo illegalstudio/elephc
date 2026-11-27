@@ -23,21 +23,21 @@ pub(crate) fn lower_elephc_phar_get_file_metadata(
     )
 }
 
-/// Lowers `__elephc_phar_archive_valid(path, is_data)` into the archive-validity bridge.
+/// Lowers `__elephc_phar_archive_error(path, is_data)` into the archive-validity bridge.
 ///
 /// The bridge takes `(path_ptr, path_len, is_data)` and returns 1 when the archive can
 /// be opened, so it reuses the same `(string, int) -> bool` shape as the compression
 /// setters.
-pub(crate) fn lower_elephc_phar_archive_valid(
+pub(crate) fn lower_elephc_phar_archive_error(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    publish_phar_archive_valid_function_pointer(ctx);
-    emit_phar_path_int_to_bool_bridge(
+    publish_phar_archive_error_function_pointer(ctx);
+    emit_phar_path_int_to_string_bridge(
         ctx,
         inst,
-        "__elephc_phar_archive_valid",
-        "_elephc_phar_archive_valid_fn",
+        "__elephc_phar_archive_error",
+        "_elephc_phar_archive_error_fn",
     )
 }
 

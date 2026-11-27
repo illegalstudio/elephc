@@ -5,7 +5,8 @@
 //! - DateTime and DateTimeImmutable declaration injection.
 //!
 //! Key details:
-//! - Concrete class names are substituted into self-contained parsed PHP bodies.
+//! - Concrete class names are substituted into self-contained AST-built method bodies; the
+//!   `*_SRC` strings are test-only transcribed oracles.
 
 use super::*;
 
@@ -60,8 +61,9 @@ return $d;
 
 /// Builds a cross-conversion factory (`createFromInterface` / `createFromImmutable` /
 /// `createFromMutable`) returning a fresh `target_class` that carries the source object's
-/// instant and timezone. Static; the body is the parsed `CREATE_FROM_OBJECT_SRC`. `$object`
-/// is typed `DateTimeInterface` (the common supertype) because the body only needs interface
+/// instant and timezone. Static; the body is built as AST by `bodies::create_from_object()`
+/// (`CREATE_FROM_OBJECT_SRC` is its test-only transcribed oracle). `$object` is typed
+/// `DateTimeInterface` (the common supertype) because the body only needs interface
 /// methods; the return type is declared explicitly as `target_class` since synthetic builtin
 /// methods do not get body-driven return-type inference.
 pub(super) fn datetime_create_from_object(method_name: &str, target_class: &str) -> ClassMethod {
@@ -106,8 +108,8 @@ return $d;
 /// Builds the static `createFromTimestamp($timestamp): static` factory for `class_name`. `$timestamp`
 /// is typed `mixed` (PHP accepts int or float). The whole-second part uses `floor()` (so negative
 /// fractional timestamps round toward -inf like PHP) and the remaining fraction becomes microseconds
-/// via `setMicrosecond()`. Self-contained parsed source; the return type is declared as `class_name`
-/// since synthetic builtin methods get no body-driven return inference.
+/// via `setMicrosecond()`. Self-contained AST-built body; the return type is declared as
+/// `class_name` since synthetic builtin methods get no body-driven return inference.
 pub(super) fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
     let body = super::bodies::create_from_timestamp(class_name);
     ClassMethod {
@@ -154,8 +156,9 @@ return $this->setTimestamp(__elephc_mktime_raw($h, $mi, $se, 1, $day, $year));
 "#;
 
 /// `setISODate(int $year, int $week, int $dayOfWeek = 1): static` — set the date from an ISO 8601
-/// week date, keeping the time-of-day. The body is the parsed `SET_ISODATE_SRC`; it returns what
-/// `setTimestamp()` returns, so the return type is declared late-static `static` like that setter.
+/// week date, keeping the time-of-day. The body is built as AST by `bodies::set_isodate()`
+/// (`SET_ISODATE_SRC` is its test-only transcribed oracle); it returns what `setTimestamp()`
+/// returns, so the return type is declared late-static `static` like that setter.
 pub(super) fn datetime_set_isodate() -> ClassMethod {
     let body = super::bodies::set_isodate();
     ClassMethod {

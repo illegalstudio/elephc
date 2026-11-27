@@ -80,11 +80,31 @@ pub(super) fn construct() -> Vec<Stmt> {
                 ]),
                 ),
                 s_prop_assign(e_this(), "timezone_name", e_call("date_default_timezone_get", vec![])),
+                // The default timezone is always a tz-database identifier, even when it is
+                // named `CET` or `GMT`.
+                s_prop_assign(e_this(), "__elephc_fixed_zone", e_bool(false)),
             ],
             vec![],
-            Some(restore_timezone("datetime", e_var("timezone"))),
+            Some(restore_timezone("datetime", e_var("timezone"), true)),
         ),
     ]
+}
+
+/// Builds the expression that classifies a `DateTimeZone` name as a fixed abbreviation.
+///
+/// `UTC` is a tz identifier despite being present in the abbreviation table; every other
+/// table hit (including `GMT`, `CET`, `MET`, `WET` and `EET`) is a fixed `timezone_type` 2
+/// abbreviation when it arrives through an explicit `DateTimeZone`.
+pub(super) fn zone_is_fixed(name: Expr) -> Expr {
+    e_binop(
+        e_binop(name.clone(), BinOp::StrictNotEq, e_str("UTC")),
+        BinOp::And,
+        e_binop(
+            e_self_call("__elephc_abbr_offset", vec![name]),
+            BinOp::StrictNotEq,
+            e_neg(e_int(2_147_483_648)),
+        ),
+    )
 }
 
 /// Emits the non-null-timezone restoration statements shared by the constructor
@@ -95,9 +115,32 @@ pub(super) fn construct() -> Vec<Stmt> {
 /// must run this sequence directly instead of calling the overridable
 /// `__construct()`, so a subclass constructor never runs (or repeats side
 /// effects) during hydration.
-pub(super) fn restore_timezone(datetime_var: &str, zone_expr: Expr) -> Vec<Stmt> {
+///
+/// `classify_fixed` is true for an explicit `DateTimeZone` argument, where an
+/// abbreviation such as `CET` is timelib's fixed zone type; type 3 hydration passes
+/// false so the same spelling stays a DST-aware identifier. The parsing zone is the
+/// libc-safe name from `__elephc_display_timezone()` (canonical IANA spelling for an
+/// identifier, fixed `Etc/GMT` zone for an abbreviation).
+pub(super) fn restore_timezone(
+    datetime_var: &str,
+    zone_expr: Expr,
+    classify_fixed: bool,
+) -> Vec<Stmt> {
+    let fixed = if classify_fixed {
+        zone_is_fixed(e_var("tzname"))
+    } else {
+        e_bool(false)
+    };
     vec![
         s_assign("tzname", e_method_call(zone_expr, "getName", vec![])),
+        s_assign("__fixed", fixed),
+        s_assign(
+            "__tzdisplay",
+            e_self_call(
+                "__elephc_display_timezone",
+                vec![e_var("tzname"), e_var("__fixed")],
+            ),
+        ),
         s_if(
             e_binop(e_var(datetime_var), BinOp::StrictEq, e_str("now")),
             vec![
@@ -106,7 +149,10 @@ pub(super) fn restore_timezone(datetime_var: &str, zone_expr: Expr) -> Vec<Stmt>
             vec![],
             Some(vec![
                 s_assign("saved", e_call("date_default_timezone_get", vec![])),
-                s_expr(e_call("date_default_timezone_set", vec![e_var("tzname")])),
+                s_expr(e_call(
+                    "date_default_timezone_set",
+                    vec![e_var("__tzdisplay")],
+                )),
                 s_assign("__ts", e_call("strtotime", vec![e_var(datetime_var)])),
                 s_if(
                     e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
@@ -121,7 +167,16 @@ pub(super) fn restore_timezone(datetime_var: &str, zone_expr: Expr) -> Vec<Stmt>
                 s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
             ]),
         ),
-        s_prop_assign(e_this(), "timezone_name", e_var("tzname")),
+        s_prop_assign(
+            e_this(),
+            "timezone_name",
+            e_ternary(
+                e_var("__fixed"),
+                e_call("strtoupper", vec![e_var("tzname")]),
+                e_var("tzname"),
+            ),
+        ),
+        s_prop_assign(e_this(), "__elephc_fixed_zone", e_var("__fixed")),
     ]
 }
 
@@ -132,7 +187,74 @@ pub(super) fn restore_timezone(datetime_var: &str, zone_expr: Expr) -> Vec<Stmt>
 /// public zone name keeps PHP's original sign; display-only consumers convert it
 /// through `__elephc_display_timezone()` because libc's `TZ=+02:00` means UTC-2.
 pub(super) fn restore_offset(datetime_var: &str, zone_var: &str) -> Vec<Stmt> {
+    let hour = || e_call("substr", vec![e_var(zone_var), e_int(1), e_int(2)]);
+    let minute = || e_call("substr", vec![e_var(zone_var), e_int(4), e_int(2)]);
+    let invalid_offset = e_binop(
+        e_binop(
+            e_binop(e_call("strlen", vec![e_var(zone_var)]), BinOp::StrictNotEq, e_int(6)),
+            BinOp::Or,
+            e_binop(
+                e_binop(e_index(e_var(zone_var), e_int(0)), BinOp::StrictNotEq, e_str("+")),
+                BinOp::And,
+                e_binop(e_index(e_var(zone_var), e_int(0)), BinOp::StrictNotEq, e_str("-")),
+            ),
+        ),
+        BinOp::Or,
+        e_binop(
+            e_binop(
+                e_index(e_var(zone_var), e_int(3)),
+                BinOp::StrictNotEq,
+                e_str(":"),
+            ),
+            BinOp::Or,
+            e_binop(
+                e_binop(
+                    e_binop(
+                        e_not(e_call("is_numeric", vec![hour()])),
+                        BinOp::Or,
+                        e_not(e_call("is_numeric", vec![minute()])),
+                    ),
+                    BinOp::Or,
+                    e_binop(
+                        e_cast(CastType::Int, hour()),
+                        BinOp::Gt,
+                        e_int(24),
+                    ),
+                ),
+                BinOp::Or,
+                e_binop(
+                    e_cast(CastType::Int, minute()),
+                    BinOp::Gt,
+                    e_int(59),
+                ),
+            ),
+        ),
+    );
     vec![
+        s_if(
+            invalid_offset,
+            vec![s_throw(e_new(
+                "DateMalformedStringException",
+                vec![e_binop(
+                    e_binop(
+                        e_str("Failed to parse time string ("),
+                        BinOp::Concat,
+                        e_var(datetime_var),
+                    ),
+                    BinOp::Concat,
+                    e_str(")"),
+                )],
+            ))],
+            Vec::new(),
+            None,
+        ),
+        // PHP canonicalizes a negative zero offset to +00:00.
+        s_if(
+            e_binop(e_var(zone_var), BinOp::StrictEq, e_str("-00:00")),
+            vec![s_assign(zone_var, e_str("+00:00"))],
+            Vec::new(),
+            None,
+        ),
         s_assign(
             "__ts",
             e_call(
@@ -163,6 +285,7 @@ pub(super) fn restore_offset(datetime_var: &str, zone_var: &str) -> Vec<Stmt> {
         ),
         s_prop_assign(e_this(), "timestamp", e_var("__ts")),
         s_prop_assign(e_this(), "timezone_name", e_var(zone_var)),
+        s_prop_assign(e_this(), "__elephc_fixed_zone", e_bool(true)),
     ]
 }
 
@@ -170,7 +293,8 @@ pub(super) fn restore_offset(datetime_var: &str, zone_var: &str) -> Vec<Stmt> {
 ///
 /// PHP's `timezone_type` 2 stores the abbreviation, not an IANA identifier, and
 /// the abbreviation carries its own fixed offset (CEST is always UTC+2, even in
-/// January). Returns the sentinel `-2147483648` for an unknown abbreviation.
+/// January). The comparison chain is baked at compile time, so a call builds no
+/// table. Returns the sentinel `-2147483648` for an unknown abbreviation.
 pub(super) fn abbr_offset() -> Vec<Stmt> {
     let entries = vec![
         (e_str("A"), e_int(3600)),
@@ -318,23 +442,75 @@ pub(super) fn abbr_offset() -> Vec<Stmt> {
         (e_str("YWT"), e_int(-28800)),
         (e_str("Z"), e_int(0)),
     ];
-    vec![
-        s_assign("key", e_call("strtoupper", vec![e_var("abbr")])),
-        s_assign("map", e_array_assoc(entries)),
-        s_if(
-            e_call("isset", vec![e_index(e_var("map"), e_var("key"))]),
-            vec![s_return(e_index(e_var("map"), e_var("key")))],
+    let mut body = vec![s_assign("key", e_call("strtoupper", vec![e_var("abbr")]))];
+    for (name, offset) in entries {
+        body.push(s_if(
+            e_binop(e_var("key"), BinOp::StrictEq, name),
+            vec![s_return(offset)],
             Vec::new(),
             None,
-        ),
-        s_return(e_int(-2_147_483_648)),
+        ));
+    }
+    body.push(s_return(e_int(-2_147_483_648)));
+    body
+}
+
+/// Reproduces `DateTime::__elephc_tz_identifier($name)`.
+///
+/// Resolves a `timezone_type` 3 identifier case-insensitively against the full
+/// `ALL_WITH_BC` database and returns the canonical IANA name used for libc display
+/// (`Europe/Kiev` -> `Europe/Kyiv`, `US/Eastern` -> `America/New_York`), or `false`
+/// when the name is unknown. The comparisons are baked at compile time, so a call
+/// builds no lookup array and leaves no per-call or static heap state behind.
+pub(super) fn tz_identifier() -> Vec<Stmt> {
+    vec![
+        s_assign("key", e_call("strtolower", vec![e_var("name")])),
+        canonical_identifier_lookup(super::timezone_ids::TIMEZONE_CANONICAL_NAMES),
     ]
+}
+
+/// Builds the compile-time binary search over the sorted canonical identifier table.
+///
+/// Each level compares the lower-cased input with `strcmp`, so a call performs
+/// `log2(598)` comparisons and allocates nothing. The generated branches return the
+/// canonical zone name, or `false` when no key matches.
+fn canonical_identifier_lookup(pairs: &[(&str, &str)]) -> Stmt {
+    if pairs.is_empty() {
+        return s_return(e_bool(false));
+    }
+    if pairs.len() == 1 {
+        return s_if(
+            e_binop(e_var("key"), BinOp::StrictEq, e_str(pairs[0].0)),
+            vec![s_return(e_str(pairs[0].1))],
+            Vec::new(),
+            Some(vec![s_return(e_bool(false))]),
+        );
+    }
+    let mid = pairs.len() / 2;
+    let (mid_key, mid_name) = pairs[mid];
+    s_if(
+        e_binop(
+            e_call("strcmp", vec![e_var("key"), e_str(mid_key)]),
+            BinOp::Lt,
+            e_int(0),
+        ),
+        vec![canonical_identifier_lookup(&pairs[..mid])],
+        Vec::new(),
+        Some(vec![s_if(
+            e_binop(e_var("key"), BinOp::StrictEq, e_str(mid_key)),
+            vec![s_return(e_str(mid_name))],
+            Vec::new(),
+            Some(vec![canonical_identifier_lookup(&pairs[mid + 1..])]),
+        )]),
+    )
 }
 
 /// Reproduces `DateTime::__elephc_offset_zone($offset)`.
 ///
-/// Whole-hour offsets map to IANA `Etc/GMT∓H` zones, which glibc and Darwin both
-/// accept; minute offsets fall back to a named POSIX `XXX∓HH:MM` zone.
+/// Whole-hour offsets inside tzdata's `Etc/GMT∓H` range (east +14, west -12)
+/// use those zones; every other offset, including +15:00 and +24:00 from a type-1
+/// payload, falls back to a named POSIX `XXX∓HH:MM` zone that both glibc and Darwin
+/// accept.
 pub(super) fn offset_zone() -> Vec<Stmt> {
     vec![
         s_if(
@@ -353,9 +529,25 @@ pub(super) fn offset_zone() -> Vec<Stmt> {
         ),
         s_if(
             e_binop(
-                e_binop(e_var("abs"), BinOp::Mod, e_int(3_600)),
-                BinOp::StrictEq,
-                e_int(0),
+                e_binop(
+                    e_binop(e_var("abs"), BinOp::Mod, e_int(3_600)),
+                    BinOp::StrictEq,
+                    e_int(0),
+                ),
+                BinOp::And,
+                e_binop(
+                    e_binop(
+                        e_binop(e_var("offset"), BinOp::GtEq, e_int(0)),
+                        BinOp::And,
+                        e_binop(e_var("abs"), BinOp::LtEq, e_int(50_400)),
+                    ),
+                    BinOp::Or,
+                    e_binop(
+                        e_binop(e_var("offset"), BinOp::Lt, e_int(0)),
+                        BinOp::And,
+                        e_binop(e_var("abs"), BinOp::LtEq, e_int(43_200)),
+                    ),
+                ),
             ),
             vec![s_return(e_binop(
                 e_binop(e_str("Etc/GMT"), BinOp::Concat, e_var("sign")),
@@ -389,6 +581,15 @@ pub(super) fn offset_zone() -> Vec<Stmt> {
 /// for a known abbreviation, and the libc abbreviation for an IANA identifier.
 pub(super) fn zone_label() -> Vec<Stmt> {
     vec![
+        // A tz-database identifier keeps its own DST rules: `CET` from
+        // date_default_timezone_set() reports `CEST` in summer, while the
+        // fixed-offset `CET` abbreviated zone always reports `CET`.
+        s_if(
+            e_not(e_var("fixed")),
+            vec![s_return(e_call("date", vec![e_str("T"), e_var("timestamp")]))],
+            Vec::new(),
+            None,
+        ),
         s_if(
             e_binop(
                 e_binop(e_call("strlen", vec![e_var("name")]), BinOp::StrictEq, e_int(6)),
@@ -442,9 +643,9 @@ pub(super) fn zone_label() -> Vec<Stmt> {
                     s_assign(
                         "sign",
                         e_ternary(
-                            e_binop(e_var("offset"), BinOp::Gt, e_int(0)),
-                            e_str("+"),
+                            e_binop(e_var("offset"), BinOp::Lt, e_int(0)),
                             e_str("-"),
+                            e_str("+"),
                         ),
                     ),
                     s_return(e_binop(
@@ -487,6 +688,26 @@ pub(super) fn zone_label() -> Vec<Stmt> {
 /// `XXX∓HH:MM` zone; the public `timezone_name` keeps PHP's original spelling.
 pub(super) fn display_timezone() -> Vec<Stmt> {
     vec![
+        // A tz-database identifier must keep its DST rules, but libc needs the
+        // canonical spelling and an alias link that its zoneinfo ships. Resolve it
+        // through the case-insensitive ALL_WITH_BC table first.
+        s_if(
+            e_not(e_var("fixed")),
+            vec![
+                s_assign(
+                    "canonical",
+                    e_self_call("__elephc_tz_identifier", vec![e_var("name")]),
+                ),
+                s_if(
+                    e_binop(e_var("canonical"), BinOp::StrictNotEq, e_bool(false)),
+                    vec![s_return(e_var("canonical"))],
+                    Vec::new(),
+                    Some(vec![s_return(e_var("name"))]),
+                ),
+            ],
+            Vec::new(),
+            None,
+        ),
         // UTC/GMT are already valid libc zone names; remapping them would change
         // `format('e')` from the PHP-visible name to `Etc/GMT+0`.
         s_if(
@@ -579,6 +800,7 @@ pub(super) fn display_timezone() -> Vec<Stmt> {
 /// abbreviation so `getTimezone()->getName()` reports it.
 pub(super) fn restore_abbreviation(datetime_var: &str, zone_var: &str) -> Vec<Stmt> {
     vec![
+        s_assign("zone", e_call("strtoupper", vec![e_var(zone_var)])),
         s_assign(
             "offset",
             e_self_call("__elephc_abbr_offset", vec![e_var(zone_var)]),
@@ -633,7 +855,10 @@ pub(super) fn restore_abbreviation(datetime_var: &str, zone_var: &str) -> Vec<St
             "timestamp",
             e_binop(e_var("__ts"), BinOp::Sub, e_var("offset")),
         ),
-        s_prop_assign(e_this(), "timezone_name", e_var(zone_var)),
+        // PHP stores the abbreviation upper-cased: a serialized `timezone="cest"`
+        // reports `CEST` from format('e'), format('T') and getTimezone()->getName().
+        s_prop_assign(e_this(), "timezone_name", e_var("zone")),
+        s_prop_assign(e_this(), "__elephc_fixed_zone", e_bool(true)),
     ]
 }
 
@@ -645,7 +870,10 @@ pub(super) fn format() -> Vec<Stmt> {
             "date_default_timezone_set",
             vec![e_self_call(
                 "__elephc_display_timezone",
-                vec![e_this_prop("timezone_name")],
+                vec![
+                    e_this_prop("timezone_name"),
+                    e_this_prop("__elephc_fixed_zone"),
+                ],
             )],
         )),
         s_assign("us", e_this_prop("microsecond")),
@@ -771,7 +999,11 @@ pub(super) fn format() -> Vec<Stmt> {
             "trepl",
             e_self_call(
                 "__elephc_zone_label",
-                vec![e_this_prop("timezone_name"), e_this_prop("timestamp")],
+                vec![
+                    e_this_prop("timezone_name"),
+                    e_this_prop("timestamp"),
+                    e_this_prop("__elephc_fixed_zone"),
+                ],
             ),
         ),
         s_assign(
@@ -4327,6 +4559,22 @@ pub(super) fn create_from_format(class_name: &str) -> Vec<Stmt> {
             None,
         ),
         s_if(
+            e_binop(e_var("timezone"), BinOp::StrictNotEq, e_null()),
+            vec![
+                s_assign("__tzname", e_method_call(e_var("timezone"), "getName", vec![])),
+                s_assign("__fixed", zone_is_fixed(e_var("__tzname"))),
+                s_assign(
+                    "__tzdisplay",
+                    e_self_call(
+                        "__elephc_display_timezone",
+                        vec![e_var("__tzname"), e_var("__fixed")],
+                    ),
+                ),
+            ],
+            Vec::new(),
+            None,
+        ),
+        s_if(
             e_var("hasU"),
             vec![
                 s_assign("ts", e_var("U")),
@@ -4341,7 +4589,7 @@ pub(super) fn create_from_format(class_name: &str) -> Vec<Stmt> {
                 vec![],
                 Some(vec![
                 s_assign("saved", e_call("date_default_timezone_get", vec![])),
-                s_expr(e_call("date_default_timezone_set", vec![e_method_call(e_var("timezone"), "getName", vec![])])),
+                s_expr(e_call("date_default_timezone_set", vec![e_var("__tzdisplay")])),
                 s_assign("ts", e_call("__elephc_mktime_raw", vec![e_var("H"), e_var("mi"), e_var("se"), e_var("mo"), e_var("da"), e_var("Y")])),
                 s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
             ]),
@@ -4355,7 +4603,7 @@ pub(super) fn create_from_format(class_name: &str) -> Vec<Stmt> {
                 s_if(
                     e_binop(e_var("timezone"), BinOp::StrictNotEq, e_null()),
                     vec![
-                        s_expr(e_call("date_default_timezone_set", vec![e_method_call(e_var("timezone"), "getName", vec![])])),
+                        s_expr(e_call("date_default_timezone_set", vec![e_var("__tzdisplay")])),
                     ],
                     vec![],
                     None,
@@ -4419,7 +4667,20 @@ pub(super) fn create_from_format(class_name: &str) -> Vec<Stmt> {
         s_if(
             e_binop(e_var("timezone"), BinOp::StrictNotEq, e_null()),
             vec![
-                s_prop_assign(e_var("o"), "timezone_name", e_method_call(e_var("timezone"), "getName", vec![])),
+                s_prop_assign(
+                    e_var("o"),
+                    "timezone_name",
+                    e_ternary(
+                        e_var("__fixed"),
+                        e_call("strtoupper", vec![e_var("__tzname")]),
+                        e_var("__tzname"),
+                    ),
+                ),
+                s_prop_assign(
+                    e_var("o"),
+                    "__elephc_fixed_zone",
+                    e_var("__fixed"),
+                ),
             ],
             vec![],
             None,
@@ -4468,15 +4729,39 @@ pub(super) fn modify_preamble() -> Vec<Stmt> {
     ]
 }
 
-/// Builds `return [<identifiers>];` for `DateTimeZone::listIdentifiers()`.
+/// Builds `return [<identifiers>];` for the test that pins the identifier data to its
+/// transcribed PHP fragment.
 ///
 /// Takes the identifiers as data rather than as a PHP fragment: the old form formatted 419
 /// quoted strings into `<?php return [...];` and parsed the result, which is a tokenizer pass
 /// over ~10 KB of generated source on every compile that reaches this class.
+#[cfg(test)]
 pub(super) fn list_identifiers(identifiers: &[&str]) -> Vec<Stmt> {
     vec![s_return(e_array(
         identifiers.iter().map(|id| e_str(id)).collect(),
     ))]
+}
+
+/// Reproduces `DateTimeZone::listIdentifiers()` with the `ALL_WITH_BC` group.
+///
+/// The synthetic body is only reached through reflection; user calls are desugared to
+/// the `__elephc_list_identifiers()` prelude. Returning the full 598-entry list when
+/// the caller asks for `ALL_WITH_BC` (bit 2048) keeps the reflection answer coherent
+/// with the identifier set `__elephc_tz_identifier()` bakes into its comparison chain.
+pub(super) fn list_identifiers_grouped(default: &[&str], with_bc: &[&str]) -> Vec<Stmt> {
+    let build = |identifiers: &[&str]| {
+        e_array(identifiers.iter().map(|id| e_str(id)).collect())
+    };
+    vec![s_if(
+        e_binop(
+            e_binop(e_var("timezoneGroup"), BinOp::BitAnd, e_int(2_048)),
+            BinOp::StrictNotEq,
+            e_int(0),
+        ),
+        vec![s_return(build(with_bc))],
+        Vec::new(),
+        Some(vec![s_return(build(default))]),
+    )]
 }
 
 /// Reproduces `GET_LOCATION_SRC` — `DateTimeZone::getLocation()`.

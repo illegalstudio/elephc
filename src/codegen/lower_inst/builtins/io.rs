@@ -147,7 +147,7 @@ pub(crate) use phar_write::{
     lower_elephc_phar_set_metadata, lower_elephc_phar_set_stub,
 };
 pub(crate) use phar_metadata::{
-    lower_elephc_phar_archive_valid,
+    lower_elephc_phar_archive_error,
     lower_elephc_phar_get_file_metadata, lower_elephc_phar_set_file_metadata, lower_elephc_phar_gzip_archive, lower_elephc_phar_bzip2_archive,
     lower_elephc_phar_decompress_archive, lower_elephc_phar_sign_openssl, lower_elephc_phar_sign_hash, lower_elephc_phar_set_zip_password,
     lower_elephc_phar_get_signature_hash, lower_elephc_phar_get_signature_type, lower_elephc_phar_list_entries,

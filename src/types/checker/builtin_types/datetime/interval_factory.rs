@@ -1,5 +1,5 @@
 //! Purpose:
-//! Parsed-PHP `DateInterval::createFromDateString` method construction.
+//! AST-built `DateInterval::createFromDateString` method construction.
 //!
 //! Called from:
 //! - DateInterval declaration injection.
@@ -49,10 +49,11 @@ return $iv;
 "#;
 
 /// `DateInterval::createFromDateString(string $datetime): DateInterval` — builds an interval
-/// from a relative date string. Static method; the body is the parsed
-/// `CREATE_FROM_DATE_STRING_SRC` parser, so it is self-contained and emitted with the class.
-/// Unknown words are ignored (PHP throws on malformed input); the ISO 8601 duration form is
-/// handled by the constructor instead.
+/// from a relative date string. Static method; the body is built as AST by
+/// `bodies::create_from_date_string()` (`CREATE_FROM_DATE_STRING_SRC` is its test-only
+/// transcribed oracle), so it is self-contained and emitted with the class. Unknown words are
+/// ignored (PHP throws on malformed input); the ISO 8601 duration form is handled by the
+/// constructor instead.
 pub(super) fn date_interval_create_from_date_string() -> ClassMethod {
     let body = super::bodies::create_from_date_string();
     ClassMethod {

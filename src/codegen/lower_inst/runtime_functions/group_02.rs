@@ -100,8 +100,8 @@ pub(super) fn lower(
         RuntimeFnId::ElephcPharGetSignatureType => Some({
             crate::codegen::lower_inst::builtins::io::lower_elephc_phar_get_signature_type(ctx, inst)
         }),
-        RuntimeFnId::ElephcPharArchiveValid => Some({
-            crate::codegen::lower_inst::builtins::io::lower_elephc_phar_archive_valid(ctx, inst)
+        RuntimeFnId::ElephcPharArchiveError => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_phar_archive_error(ctx, inst)
         }),
         RuntimeFnId::ElephcPharGetStub => Some({
             crate::codegen::lower_inst::builtins::io::lower_elephc_phar_get_stub(ctx, inst)

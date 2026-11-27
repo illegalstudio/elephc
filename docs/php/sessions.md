@@ -341,9 +341,15 @@ cookie name, file path, serializer, and transport policy cannot diverge between
 the two phases.
 
 While `session.upload_progress.enabled` is on, PHP 8.5.13 rejects runtime
-changes to session ini settings, and elephc does the same: both `ini_set()` and
-`session_start([...])` options throw
+changes to session ini settings, and elephc does the same. `ini_set()`,
+`ini_restore()`, `session_start([...])` options, `session_name()`,
+`session_save_path()`, `session_cache_limiter()`, `session_cache_expire()`,
+`session_set_cookie_params()`, `session_module_name()`, and
+`session_set_save_handler()` throw
 `Error: Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On`.
+The upload-progress rule runs before the active-session `false` path, matching
+php-src's modify handlers, so an active session throws rather than silently
+returning `false`.
 Configure `session.serialize_handler` and the other session directives in the
 deployment environment before the worker starts instead of changing them from
 request code.

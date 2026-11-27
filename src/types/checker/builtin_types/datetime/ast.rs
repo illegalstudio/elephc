@@ -159,6 +159,17 @@ pub(super) fn method(
     }
 }
 
+/// Builds a private instance backing `ClassProperty` with a default value.
+///
+/// Backing storage stays private so a subclass can declare its own property with
+/// the same name, as it can on PHP's internal classes (whose date storage is not
+/// an object property at all).
+pub(super) fn backing_property(name: &str, type_expr: TypeExpr, default: Expr) -> ClassProperty {
+    let mut property = property(name, type_expr, default);
+    property.visibility = Visibility::Private;
+    property
+}
+
 /// Builds a public instance `ClassProperty` with a default value.
 pub(super) fn property(name: &str, type_expr: TypeExpr, default: Expr) -> ClassProperty {
     ClassProperty {

@@ -2638,6 +2638,138 @@ try {
     assert_eq!(out, "rejected");
 }
 
+/// Tar and zip executable archives report php-src's missing-signature wording.
+#[test]
+fn test_phar_oop_reports_missing_signature_for_tar_and_zip() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tar = std::env::temp_dir().join(format!("elephc_missing_{unique}.tar"));
+    let zip = std::env::temp_dir().join(format!("elephc_missing_{unique}.zip"));
+    std::fs::write(
+        &tar,
+        build_tar_phar_container(&[
+            (".phar/stub.php", b"<?php __HALT_COMPILER();"),
+            ("a.txt", b"alpha"),
+        ]),
+    )
+    .unwrap();
+    std::fs::write(
+        &zip,
+        build_zip_phar_container(&[
+            (".phar/stub.php", b"<?php __HALT_COMPILER();", false),
+            ("a.txt", b"alpha", false),
+        ]),
+    )
+    .unwrap();
+    let out = compile_and_run(&format!(
+        r#"<?php
+foreach (["{}", "{}"] as $path) {{
+    try {{
+        new Phar($path);
+        echo "opened\n";
+    }} catch (UnexpectedValueException $error) {{
+        echo $error->getMessage(), "\n";
+    }}
+}}
+"#,
+        tar.display(),
+        zip.display()
+    ));
+    std::fs::remove_file(&tar).ok();
+    std::fs::remove_file(&zip).ok();
+    assert_eq!(
+        out,
+        format!(
+            "tar-based phar \"{}\" does not have a signature\nphar error: signature is missing in zip-based phar \"{}\"\n",
+            tar.display(),
+            zip.display()
+        )
+    );
+}
+
+/// Ports the native expectation of `ghsa-68fq-fh7h-f8gr.phpt`: a keyless
+/// SHA-256 signature downgraded under a trusted `.pubkey` is named by the exception.
+#[test]
+fn test_phar_oop_reports_openssl_downgrade_message() {
+    use sha2::{Digest, Sha256};
+
+    const PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAOuAP7xZaVfhwn9l
+BaMgxKPU1ODBpuT7Ybu6Fav03TJp1BKc1wUMiXnUPraUUI2R2JxoattDe7R/LcGk
+jVoPiBGGPoxxTaByd5LJZJk6MJAiGBhzQT7bkK3OMDHLQqhziefqDFfnDLt/TN7+
+umuMCPtLmuF6UUXiebMzyH21x7jvAgMBAAECgYBBhL+2rgVxzrxm5vsnhEFQ9zB2
+i0ncYNey+7V1zr0PfoPi3cGwhOlmfJcqAp9ak534/c/kyqSK9esL+bTdvn5zIQqC
+Swt2znffaW9nC6lM/pkZcvGLETt2m0L71n6pZVkMewsGBm9YrBQFA1krC7BV674U
+mlOmmYpM3LPgzmRLwQJBAPm/G7O4Stmzu5xV5qtvYX1dNZ2gydkVyfK/AwCYpfbK
+8ZXntKeWCt1BER1hNBSMPacHKb0LotK3j3LNNteLHCECQQDxZdNsXNLTHylWKA/X
+dyM3SH9mM6ESZP07cU7Ifq6t9zJdTfGdiyxsAjaaXxDmShL+bAjU16iwaTAGcYTB
+NrMPAkEAoUGwVV7Nlbvji5I7mr4UKKoikGDdc/oJp1+GRMBLiQqI6s3ta7gJ08rL
+jjjRM+NJe6u4W4RD4eL8EJhIrOv5gQJAK4Tm+8c0PtmEU0L/sCGLWMEaLquqIy3P
+tXK0+FJWXYiOLOILaBKaHJK9k1EGM+4wxGtnoC+M+tjLzq2SeF7LIwJAPdLUn2Qq
+eGMK12chOVcx41RxYctqsOlEKCIt011yGsV2/Mdm9ljTXeyXvNXCVOVcnHaf1v5w
+rNiobfy8sSb6iw==
+-----END PRIVATE KEY-----";
+    const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrgD+8WWlX4cJ/ZQWjIMSj1NTg
+wabk+2G7uhWr9N0yadQSnNcFDIl51D62lFCNkdicaGrbQ3u0fy3BpI1aD4gRhj6M
+cU2gcneSyWSZOjCQIhgYc0E+25CtzjAxy0Koc4nn6gxX5wy7f0ze/rprjAj7S5rh
+elFF4nmzM8h9tce47wIDAQAB
+-----END PUBLIC KEY-----";
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("elephc_downgrade_{unique}.phar"));
+    std::fs::write(&path, build_minimal_phar(&[("main.php", b"<?php echo 'GENUINE';")]))
+        .unwrap();
+    let path_bytes = path.to_string_lossy();
+    let signed = unsafe {
+        elephc_phar::elephc_phar_sign_openssl_algo(
+            path_bytes.as_bytes().as_ptr(),
+            path_bytes.len(),
+            PRIVATE_KEY.as_bytes().as_ptr(),
+            PRIVATE_KEY.len(),
+            0x10,
+        )
+    };
+    assert_eq!(signed, 1, "OpenSSL signing must succeed");
+
+    let archive = std::fs::read(&path).unwrap();
+    let trailer = archive.len();
+    let signature_len =
+        u32::from_le_bytes(archive[trailer - 12..trailer - 8].try_into().unwrap()) as usize;
+    let message_len = trailer - 12 - signature_len;
+    let mut downgraded = archive[..message_len].to_vec();
+    downgraded.extend_from_slice(&Sha256::digest(&archive[..message_len]));
+    downgraded.extend_from_slice(&3u32.to_le_bytes());
+    downgraded.extend_from_slice(b"GBMB");
+    std::fs::write(&path, downgraded).unwrap();
+    std::fs::write(format!("{path_bytes}.pubkey"), PUBLIC_KEY).unwrap();
+
+    let out = compile_and_run(&format!(
+        r#"<?php
+try {{
+    new Phar("{}");
+    echo "opened";
+}} catch (UnexpectedValueException $error) {{
+    echo $error->getMessage();
+}}
+"#,
+        path_bytes
+    ));
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(format!("{path_bytes}.pubkey")).ok();
+    assert_eq!(
+        out,
+        format!(
+            "phar \"{path_bytes}\" SHA256 signature could not be verified: openssl public key found, but the signature does not use openssl"
+        )
+    );
+}
+
 /// `ELEPHC_PHAR_REQUIRE_HASH=0` relaxes the runtime constructor policy.
 #[test]
 fn test_phar_require_hash_env_relaxes_runtime_construction() {
@@ -2693,13 +2825,16 @@ try {{
     $p = new Phar("{}");
     echo 'opened:', count($p);
 }} catch (UnexpectedValueException $error) {{
-    echo 'rejected';
+    echo $error->getMessage();
 }}
 "#,
         path.display()
     ));
     std::fs::remove_file(&path).ok();
-    assert_eq!(out, "rejected");
+    assert_eq!(
+        out,
+        format!("phar \"{}\" does not have a signature", path.display())
+    );
 }
 
 /// `PharData` containers stay unsigned until asked, while a new executable `Phar`

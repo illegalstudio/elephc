@@ -48,6 +48,8 @@ echo $abbr["cest"][0]["timezone_id"];               // Europe/Berlin
 
 The identifier is resolved against the system timezone database, so `getOffset()` is DST-correct and `DateTime::format()` honors the zone (see [`setTimezone()`](#datetime-and-datetimeimmutable) and [Limitations](#limitations)).
 
+As in PHP, the default timezone is always a tz-database identifier: after `date_default_timezone_set("CET")`, an object built with `new DateTime("2020-07-01")` formats as `+02:00 CEST`. Passing the abbreviation explicitly selects timelib's fixed-offset abbreviation zone instead, so `new DateTime("2020-07-01", new DateTimeZone("CET"))` formats as `+01:00 CET` year-round.
+
 The `getLocation()`, `getTransitions()`, and `listAbbreviations()` tables are baked from PHP's own timelib data (so they are byte-for-byte identical to PHP) and ship in a small bridge that is linked **only** into programs that call one of these three methods (or their `timezone_location_get()` / `timezone_transitions_get()` / `timezone_abbreviations_list()` procedural aliases).
 
 ## DateTime and DateTimeImmutable
@@ -410,7 +412,11 @@ date_sunset($ts, SUNFUNCS_RET_DOUBLE, $lat, $lon);                        // hou
 A few corners of PHP's date/time API are not implemented:
 
 - **Detailed parse warnings**: `getLastErrors()`/`date_get_last_errors()` report whether the last `createFromFormat()` succeeded or failed (`error_count` 0/1) but do not retain PHP's per-character warning/error positions — only the pass/fail count, which covers the common `if (DateTime::getLastErrors()['error_count'])` guard.
-- **Serialization hooks**: the `__serialize()`/`__unserialize()`/`__wakeup()`/`__set_state()` magic methods are not defined on the date classes, because elephc has no object `serialize()`/`unserialize()`/`var_export()` round-trip for any class.
+- **`__wakeup()` / `__set_state()`**: not defined on the date classes. `__unserialize()` is defined
+  as an internal hydration hook used by `unserialize()`: it validates PHP's
+  `date`/`timezone_type`/`timezone` shape without running a subclass constructor, and keeps a
+  subclass property named `timestamp`, `timezone_name`, or `microsecond` independent of the
+  private backing fields. `serialize()` uses the generic object writer.
 
 A complete runnable program is in [`examples/datetime/main.php`](https://github.com/illegalstudio/elephc/tree/main/examples/datetime).
 

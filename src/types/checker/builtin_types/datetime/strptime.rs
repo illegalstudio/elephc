@@ -1,5 +1,6 @@
 //! Purpose:
-//! Parsed-PHP implementation of the procedural `strptime` adapter.
+//! AST-built implementation of the procedural `strptime` adapter; `STRPTIME_SRC` is its
+//! test-only transcribed oracle.
 //!
 //! Called from:
 //! - DateTime procedural helper method assembly.

@@ -232,6 +232,41 @@ pub unsafe extern "C" fn elephc_phar_archive_valid(
     usize::from(matches!(result, Ok(true)))
 }
 
+/// C ABI wrapper around [`archive_validation_error`].
+///
+/// Returns a pointer to a stable process-global buffer and writes the message length
+/// into `out_len`, or null/zero when the archive is missing or valid. A nonzero
+/// `is_data` relaxes require-hash for `PharData`.
+///
+/// # Safety
+/// `path_ptr` must be valid for `path_len` bytes unless `path_len` is zero.
+/// `out_len` may be null; when non-null it must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_archive_error(
+    path_ptr: *const u8,
+    path_len: usize,
+    is_data: usize,
+    out_len: *mut usize,
+) -> *const u8 {
+    let path = slice(path_ptr, path_len);
+    match std::panic::catch_unwind(|| archive_validation_error(path, is_data != 0)) {
+        Ok(Some(message)) => publish_result(message.into_bytes(), out_len),
+        Ok(None) => {
+            write_len(out_len, 0);
+            std::ptr::null()
+        }
+        // A panic is a rejection cause. Returning null here would be read by the
+        // constructor as "valid" and silently accept an invalid archive.
+        Err(_) => {
+            let message = format!(
+                "phar \"{}\" is not a valid phar archive",
+                String::from_utf8_lossy(path)
+            );
+            publish_result(message.into_bytes(), out_len)
+        }
+    }
+}
+
 /// C ABI wrapper around [`set_metadata_bytes`].
 ///
 /// Returns `1` when the archive was rewritten with the new global metadata, or `0`

@@ -12211,8 +12211,8 @@
       "variadic": null
     },
     "area": "IO",
-    "canonical_name": "__elephc_phar_archive_valid",
-    "description": "Internal: reports whether an existing PHAR passes the require-hash policy.",
+    "canonical_name": "__elephc_phar_archive_error",
+    "description": "Internal: returns php-src's rejection message for an unreadable PHAR, or an empty string.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -12229,15 +12229,15 @@
       "codegen_function": "lower_registry_call",
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.__elephc_phar_archive_valid` through `BuiltinLoweringContext`.",
+        "Emits the typed EIR target `runtime.__elephc_phar_archive_error` through `BuiltinLoweringContext`.",
         "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/io/__elephc_phar_archive_valid.rs"
+      "sig_file": "src/builtins/io/__elephc_phar_archive_error.rs"
     },
     "module": "elephc",
-    "name": "__elephc_phar_archive_valid",
+    "name": "__elephc_phar_archive_error",
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
@@ -12267,7 +12267,7 @@
       },
       "lowering": {
         "kind": "runtime_call",
-        "target": "__elephc_phar_archive_valid"
+        "target": "__elephc_phar_archive_error"
       },
       "ownership": {
         "argument_indexes": [],
@@ -12284,7 +12284,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [
-        "__elephc_phar_archive_valid"
+        "__elephc_phar_archive_error"
       ],
       "target_strategy": "runtime_call",
       "target_support": [
@@ -12316,11 +12316,11 @@
           "type": "int"
         }
       ],
-      "return_type": "bool",
+      "return_type": "string",
       "variadic": null
     },
     "since": null,
-    "slug": "__elephc_phar_archive_valid",
+    "slug": "__elephc_phar_archive_error",
     "sub_area": "IO"
   },
   {

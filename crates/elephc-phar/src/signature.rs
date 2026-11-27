@@ -719,3 +719,105 @@ pub(super) fn signature_type_name(path: &[u8]) -> Option<Vec<u8>> {
     };
     Some(name.to_vec())
 }
+
+/// Builds the cause-specific php-src message for a rejected archive signature.
+///
+/// `data` is the uncompressed archive snapshot. An executable archive with no
+/// signature reports the missing-signature wording; a keyless signature presented
+/// while a trusted `<archive>.pubkey` sidecar requires OpenSSL reports the downgrade
+/// wording. A `PharData` archive is allowed to be unsigned, so when one is rejected
+/// only because of the sidecar the message names that cause instead of claiming the
+/// signature is missing. Every other cause keeps the generic invalid-archive wording.
+pub(super) fn signature_rejection_message(
+    path: &str,
+    data: &[u8],
+    openssl_expected: bool,
+    is_data: bool,
+) -> String {
+    let generic = format!("phar \"{path}\" is not a valid phar archive");
+    let Some(format) = signing_format(data) else {
+        return generic;
+    };
+    let (flag, missing) = match format {
+        ArchiveFormat::NativePhar => {
+            if !data.ends_with(b"GBMB") {
+                let Some(manifest_start) = native_manifest_start(data) else {
+                    return generic;
+                };
+                let Some(global_flags) = le32(data, manifest_start + 10) else {
+                    return generic;
+                };
+                (None, global_flags & PHAR_HDR_SIGNATURE == 0)
+            } else {
+                let Some(flags) = le32(data, data.len().saturating_sub(8)) else {
+                    return generic;
+                };
+                (Some(flags), false)
+            }
+        }
+        ArchiveFormat::Tar => {
+            match read_tar_signature(data).and_then(|payload| parse_signature_bin(&payload)) {
+                Some((flags, _)) => (Some(flags), false),
+                None => (None, true),
+            }
+        }
+        ArchiveFormat::Zip => {
+            match read_zip_signature(data).and_then(|payload| parse_signature_bin(&payload)) {
+                Some((flags, _)) => (Some(flags), false),
+                None => (None, true),
+            }
+        }
+    };
+    if missing {
+        // A PharData archive is allowed to be unsigned, so a rejection of one with
+        // no signature block is caused by the adjacent `<archive>.pubkey` sidecar,
+        // not by `phar.require_hash`. Name that cause instead of claiming the
+        // archive "does not have a signature" like an executable phar.
+        if is_data && openssl_expected {
+            return match format {
+                ArchiveFormat::NativePhar => format!(
+                    "phar \"{path}\" signature could not be verified: openssl public key found, but the signature does not use openssl"
+                ),
+                ArchiveFormat::Tar => format!(
+                    "phar error: tar-based phar \"{path}\" signature cannot be verified: openssl public key found, but the signature does not use openssl"
+                ),
+                ArchiveFormat::Zip => format!(
+                    "phar error: signature cannot be verified: openssl public key found, but the signature does not use openssl in zip-based phar \"{path}\""
+                ),
+            };
+        }
+        return match format {
+            ArchiveFormat::NativePhar => format!("phar \"{path}\" does not have a signature"),
+            ArchiveFormat::Tar => {
+                format!("tar-based phar \"{path}\" does not have a signature")
+            }
+            ArchiveFormat::Zip => {
+                format!("phar error: signature is missing in zip-based phar \"{path}\"")
+            }
+        };
+    }
+    let Some(flags) = flag else {
+        return generic;
+    };
+    if !openssl_expected || is_openssl_signature_flag(flags) {
+        return generic;
+    }
+    let hash = match flags {
+        1 => "MD5",
+        2 => "SHA1",
+        3 => "SHA256",
+        4 => "SHA512",
+        _ => return generic,
+    };
+    match format {
+        ArchiveFormat::NativePhar => format!(
+            "phar \"{path}\" {hash} signature could not be verified: openssl public key found, but the signature does not use openssl"
+        ),
+        ArchiveFormat::Tar => format!(
+            "phar error: tar-based phar \"{path}\" signature cannot be verified: openssl public key found, but the signature does not use openssl"
+        ),
+        ArchiveFormat::Zip => format!(
+            "phar error: signature cannot be verified: openssl public key found, but the signature does not use openssl in zip-based phar \"{path}\""
+        ),
+    }
+}

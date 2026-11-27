@@ -324,6 +324,23 @@ pub(super) fn hash_signed_phars_reject_pubkey_sidecar_downgrade() {
             read_signature_info(path_bytes.as_bytes()).is_none(),
             "{extension}: signature metadata must reject the downgraded signature"
         );
+        let message = archive_validation_error(path_bytes.as_bytes(), false)
+            .expect("downgrade rejection message");
+        let expected = match extension {
+            "phar" => format!(
+                "phar \"{}\" SHA256 signature could not be verified: openssl public key found, but the signature does not use openssl",
+                path.display()
+            ),
+            "tar" => format!(
+                "phar error: tar-based phar \"{}\" signature cannot be verified: openssl public key found, but the signature does not use openssl",
+                path.display()
+            ),
+            _ => format!(
+                "phar error: signature cannot be verified: openssl public key found, but the signature does not use openssl in zip-based phar \"{}\"",
+                path.display()
+            ),
+        };
+        assert_eq!(message, expected, "{extension}: downgrade message");
 
         remove_signed_fixture(&path);
     }
@@ -559,6 +576,12 @@ pub(super) fn stripped_signature_with_pubkey_sidecar_is_rejected() {
         assert!(
             parse_archive_path(&path).is_none(),
             "{extension}: an unsigned archive must be rejected when <archive>.pubkey exists"
+        );
+        let message = archive_validation_error(path_bytes.as_bytes(), true)
+            .expect("a rejected PharData must name its rejection cause");
+        assert!(
+            message.contains("openssl public key found, but the signature does not use openssl"),
+            "{extension}: PharData must report the pubkey downgrade, not a missing signature: {message:?}"
         );
         let url = format!("phar://{}/payload.txt", path.display());
         assert!(

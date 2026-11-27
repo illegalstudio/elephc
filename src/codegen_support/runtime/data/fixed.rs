@@ -1430,7 +1430,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // by the Phar/PharData metadata and stub accessors.
     out.push_str(".p2align 3\n.globl _elephc_phar_get_metadata_fn\n_elephc_phar_get_metadata_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_set_metadata_fn\n_elephc_phar_set_metadata_fn:\n    .quad 0\n");
-    out.push_str(".p2align 3\n.globl _elephc_phar_archive_valid_fn\n_elephc_phar_archive_valid_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_archive_error_fn\n_elephc_phar_archive_error_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_get_stub_fn\n_elephc_phar_get_stub_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_set_stub_fn\n_elephc_phar_set_stub_fn:\n    .quad 0\n");
     // Per-file (PharFileInfo) metadata read/write bridges.

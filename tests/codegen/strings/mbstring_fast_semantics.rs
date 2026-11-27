@@ -160,15 +160,16 @@ echo strlen($repl), '|', strlen($out), '|', bin2hex($out), "\n";
 "#, "7|7|414141414141f0\n");
 }
 
-/// Numeric \k group references above PHP's int range stay literal instead of wrapping.
+/// Numeric \k group references follow PHP's 32-bit `(int) strtoul` wrap.
 #[test]
-fn test_mb_ereg_replace_rejects_wrapped_backreference_group_numbers() {
+fn test_mb_ereg_replace_wraps_backreference_group_numbers_like_php() {
     assert_mb_fast_cli_semantics(r#"<?php
 echo mb_ereg_replace('(X)(Y)', '[\k<4294967297>]', 'XY'), '|';
 echo mb_ereg_replace('(X)(Y)', '[\k<4294967298>]', 'XY'), '|';
+echo mb_ereg_replace('(X)(Y)', '[\k<2147483648>]', 'XY'), '|';
 echo mb_ereg_replace('(X)(Y)', '[\k<2>]', 'XY'), '|';
 echo mb_ereg_replace('(X)(Y)', '[\k<99>]', 'XY'), "\n";
-"#, "[\\k<4294967297>]|[\\k<4294967298>]|[Y]|[\\k<99>]\n");
+"#, "[X]|[Y]|[\\k<2147483648>]|[Y]|[\\k<99>]\n");
 }
 
 /// Length/count observers preserve non-default syntax, multibyte delimiters and later resets.
