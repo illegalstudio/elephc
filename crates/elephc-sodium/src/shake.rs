@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use keccak::f1600;
+use keccak::p1600;
 
 /// SHAKE128 rate in bytes (`crypto_xof_shake128_BLOCKBYTES`).
 pub(crate) const SHAKE128_RATE: usize = 168;
@@ -30,18 +30,30 @@ pub(crate) const DOMAIN_STANDARD: u8 = 0x1f;
 /// Which SHKE variant a state belongs to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShakeKind {
-    /// SHAKE128, rate 168.
+    /// SHAKE128, rate 168, 24 rounds.
     Shake128,
-    /// SHAKE256, rate 136.
+    /// SHAKE256, rate 136, 24 rounds.
     Shake256,
+    /// TurboSHAKE128, rate 168, 12 rounds.
+    TurboShake128,
+    /// TurboSHAKE256, rate 136, 12 rounds.
+    TurboShake256,
 }
 
 impl ShakeKind {
     /// Returns the sponge rate for this variant.
     fn rate(self) -> usize {
         match self {
-            Self::Shake128 => SHAKE128_RATE,
-            Self::Shake256 => SHAKE256_RATE,
+            Self::Shake128 | Self::TurboShake128 => SHAKE128_RATE,
+            Self::Shake256 | Self::TurboShake256 => SHAKE256_RATE,
+        }
+    }
+
+    /// Returns the Keccak-p round count for this variant.
+    fn rounds(self) -> usize {
+        match self {
+            Self::Shake128 | Self::Shake256 => 24,
+            Self::TurboShake128 | Self::TurboShake256 => 12,
         }
     }
 }
@@ -68,6 +80,8 @@ pub(crate) struct Sponge {
     domain: u8,
     /// Rate in bytes.
     rate: usize,
+    /// Keccak-p round count (24 for SHAKE, 12 for TurboSHAKE).
+    rounds: usize,
 }
 
 impl Sponge {
@@ -81,6 +95,16 @@ impl Sponge {
         Self::new(ShakeKind::Shake256, domain)
     }
 
+    /// Starts a TurboSHAKE128 sponge with `domain`.
+    pub(crate) fn new_turboshake_128(domain: u8) -> Self {
+        Self::new(ShakeKind::TurboShake128, domain)
+    }
+
+    /// Starts a TurboSHAKE256 sponge with `domain`.
+    pub(crate) fn new_turboshake_256(domain: u8) -> Self {
+        Self::new(ShakeKind::TurboShake256, domain)
+    }
+
     /// Starts a sponge for `kind`.
     fn new(kind: ShakeKind, domain: u8) -> Self {
         Self {
@@ -89,6 +113,7 @@ impl Sponge {
             phase: Phase::Absorbing,
             domain,
             rate: kind.rate(),
+            rounds: kind.rounds(),
         }
     }
 
@@ -99,7 +124,7 @@ impl Sponge {
         }
         for &byte in input {
             if self.offset == self.rate {
-                f1600(&mut self.state);
+                p1600(&mut self.state, self.rounds);
                 self.offset = 0;
             }
             let lane = self.offset / 8;
@@ -117,7 +142,7 @@ impl Sponge {
         }
         for byte in output {
             if self.offset == self.rate {
-                f1600(&mut self.state);
+                p1600(&mut self.state, self.rounds);
                 self.offset = 0;
             }
             let lane = self.offset / 8;
@@ -130,7 +155,7 @@ impl Sponge {
     /// Applies libsodium's SHAKE padding and performs the final permutation.
     fn finalize(&mut self) {
         if self.offset == self.rate {
-            f1600(&mut self.state);
+            p1600(&mut self.state, self.rounds);
             self.offset = 0;
         }
         if self.offset == self.rate - 1 {
@@ -139,7 +164,7 @@ impl Sponge {
             self.xor_byte(self.domain);
             self.xor_byte_at(0x80, self.rate - 1);
         }
-        f1600(&mut self.state);
+        p1600(&mut self.state, self.rounds);
         self.offset = 0;
         self.phase = Phase::Squeezing;
     }
@@ -166,6 +191,16 @@ pub(crate) fn shake128(length: usize, message: &[u8]) -> Option<Vec<u8>> {
 /// One-shot SHAKE256 over `message`.
 pub(crate) fn shake256(length: usize, message: &[u8]) -> Option<Vec<u8>> {
     one_shot(Sponge::new_256(DOMAIN_STANDARD), length, message)
+}
+
+/// One-shot TurboSHAKE128 over `message`.
+pub(crate) fn turboshake128(length: usize, message: &[u8]) -> Option<Vec<u8>> {
+    one_shot(Sponge::new_turboshake_128(DOMAIN_STANDARD), length, message)
+}
+
+/// One-shot TurboSHAKE256 over `message`.
+pub(crate) fn turboshake256(length: usize, message: &[u8]) -> Option<Vec<u8>> {
+    one_shot(Sponge::new_turboshake_256(DOMAIN_STANDARD), length, message)
 }
 
 /// Runs one sponge over `message` and returns `length` output bytes.

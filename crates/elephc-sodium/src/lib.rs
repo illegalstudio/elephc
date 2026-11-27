@@ -19,6 +19,9 @@ use std::cell::RefCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
+mod aes;
+mod ipcrypt;
+mod kem;
 mod shake;
 use shake::ShakeKind;
 
@@ -278,6 +281,128 @@ pub extern "C" fn elephc_sodium_shake256_drop(handle: i64) {
     let _ = catch_unwind(AssertUnwindSafe(|| shake::drop_state(handle)));
 }
 
+/// C ABI: TurboSHAKE128 over `message`, returning `length` output bytes.
+///
+/// # Safety
+/// `message` must reference `message_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_turboshake128(
+    length: usize,
+    message: *const u8,
+    message_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(message) = bytes(message, message_len) else {
+            return ptr::null();
+        };
+        match shake::turboshake128(length, message) {
+            Some(output) => publish(&output),
+            None => ptr::null(),
+        }
+    })
+}
+
+/// C ABI: TurboSHAKE256 over `message`, returning `length` output bytes.
+///
+/// # Safety
+/// `message` must reference `message_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_turboshake256(
+    length: usize,
+    message: *const u8,
+    message_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(message) = bytes(message, message_len) else {
+            return ptr::null();
+        };
+        match shake::turboshake256(length, message) {
+            Some(output) => publish(&output),
+            None => ptr::null(),
+        }
+    })
+}
+
+/// C ABI: starts a TurboSHAKE128 state; `domain = -1` selects the standard domain.
+#[no_mangle]
+pub extern "C" fn elephc_sodium_turboshake128_init(domain: i64) -> i64 {
+    guarded(-1, || shake::init(ShakeKind::TurboShake128, domain))
+}
+
+/// C ABI: starts a TurboSHAKE256 state; `domain = -1` selects the standard domain.
+#[no_mangle]
+pub extern "C" fn elephc_sodium_turboshake256_init(domain: i64) -> i64 {
+    guarded(-1, || shake::init(ShakeKind::TurboShake256, domain))
+}
+
+/// C ABI: absorbs bytes into a TurboSHAKE128 state; returns 0 or -1.
+///
+/// # Safety
+/// `message` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_turboshake128_update(
+    handle: i64,
+    message: *const u8,
+    len: usize,
+) -> i64 {
+    guarded(-1, || {
+        let Some(message) = bytes(message, len) else {
+            return -1;
+        };
+        shake::update(handle, message)
+    })
+}
+
+/// C ABI: absorbs bytes into a TurboSHAKE256 state; returns 0 or -1.
+///
+/// # Safety
+/// `message` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_turboshake256_update(
+    handle: i64,
+    message: *const u8,
+    len: usize,
+) -> i64 {
+    guarded(-1, || {
+        let Some(message) = bytes(message, len) else {
+            return -1;
+        };
+        shake::update(handle, message)
+    })
+}
+
+/// C ABI: squeezes bytes from a TurboSHAKE128 state, or null on failure.
+#[no_mangle]
+pub extern "C" fn elephc_sodium_turboshake128_squeeze(handle: i64, length: usize) -> *const u8 {
+    guarded(ptr::null(), || {
+        shake::squeeze(handle, length)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: squeezes bytes from a TurboSHAKE256 state, or null on failure.
+#[no_mangle]
+pub extern "C" fn elephc_sodium_turboshake256_squeeze(handle: i64, length: usize) -> *const u8 {
+    guarded(ptr::null(), || {
+        shake::squeeze(handle, length)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: drops a TurboSHAKE128 state.
+#[no_mangle]
+pub extern "C" fn elephc_sodium_turboshake128_drop(handle: i64) {
+    let _ = catch_unwind(AssertUnwindSafe(|| shake::drop_state(handle)));
+}
+
+/// C ABI: drops a TurboSHAKE256 state.
+#[no_mangle]
+pub extern "C" fn elephc_sodium_turboshake256_drop(handle: i64) {
+    let _ = catch_unwind(AssertUnwindSafe(|| shake::drop_state(handle)));
+}
+
 /// C ABI: formats a 16-byte IPv6 address in canonical textual form.
 ///
 /// # Safety
@@ -291,6 +416,13 @@ pub unsafe extern "C" fn elephc_sodium_bin2ip(binary: *const u8, len: usize) -> 
         let Ok(address) = <[u8; 16]>::try_from(binary) else {
             return ptr::null();
         };
+        // libsodium renders the IPv4-mapped prefix as dotted IPv4, not `::ffff:a.b.c.d`.
+        if address[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
+            return publish(
+                format!("{}.{}.{}.{}", address[12], address[13], address[14], address[15])
+                    .as_bytes(),
+            );
+        }
         publish(std::net::Ipv6Addr::from(address).to_string().as_bytes())
     })
 }
@@ -308,14 +440,421 @@ pub unsafe extern "C" fn elephc_sodium_ip2bin(text: *const u8, len: usize) -> *c
         let Ok(text) = std::str::from_utf8(text) else {
             return ptr::null();
         };
-        let address = if let Ok(ipv4) = text.parse::<std::net::Ipv4Addr>() {
+        // libsodium accepts an IPv6 zone suffix and drops it from the binary form.
+        let (address, zone) = match text.split_once('%') {
+            Some((address, zone)) => (address, Some(zone)),
+            None => (text, None),
+        };
+        if let Some(zone) = zone {
+            if address.contains(':') == false
+                || zone.is_empty()
+                || !zone
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return ptr::null();
+            }
+        }
+        let address = if let Ok(ipv4) = address.parse::<std::net::Ipv4Addr>() {
             ipv4.to_ipv6_mapped().octets()
-        } else if let Ok(ipv6) = text.parse::<std::net::Ipv6Addr>() {
+        } else if let Ok(ipv6) = address.parse::<std::net::Ipv6Addr>() {
             ipv6.octets()
         } else {
             return ptr::null();
         };
         publish(&address)
+    })
+}
+
+/// C ABI: IPcrypt plain AES-128 encryption.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_encrypt(
+    input: *const u8,
+    input_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(key)) = (bytes(input, input_len), bytes(key, key_len)) else {
+            return ptr::null();
+        };
+        ipcrypt::encrypt(input, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: IPcrypt plain AES-128 decryption.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_decrypt(
+    input: *const u8,
+    input_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(key)) = (bytes(input, input_len), bytes(key, key_len)) else {
+            return ptr::null();
+        };
+        ipcrypt::decrypt(input, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: IPcrypt-ND encryption, publishing `tweak || ciphertext`.
+///
+/// # Safety
+/// All pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_nd_encrypt(
+    input: *const u8,
+    input_len: usize,
+    tweak: *const u8,
+    tweak_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(tweak), Some(key)) = (
+            bytes(input, input_len),
+            bytes(tweak, tweak_len),
+            bytes(key, key_len),
+        ) else {
+            return ptr::null();
+        };
+        ipcrypt::nd_encrypt(input, tweak, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: IPcrypt-ND decryption.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_nd_decrypt(
+    input: *const u8,
+    input_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(key)) = (bytes(input, input_len), bytes(key, key_len)) else {
+            return ptr::null();
+        };
+        ipcrypt::nd_decrypt(input, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: IPcrypt-NDX encryption, publishing `tweak || ciphertext`.
+///
+/// # Safety
+/// All pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_ndx_encrypt(
+    input: *const u8,
+    input_len: usize,
+    tweak: *const u8,
+    tweak_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(tweak), Some(key)) = (
+            bytes(input, input_len),
+            bytes(tweak, tweak_len),
+            bytes(key, key_len),
+        ) else {
+            return ptr::null();
+        };
+        ipcrypt::ndx_encrypt(input, tweak, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: IPcrypt-NDX decryption.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_ndx_decrypt(
+    input: *const u8,
+    input_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(key)) = (bytes(input, input_len), bytes(key, key_len)) else {
+            return ptr::null();
+        };
+        ipcrypt::ndx_decrypt(input, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: IPcrypt-PFX format-preserving encryption.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_pfx_encrypt(
+    input: *const u8,
+    input_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(key)) = (bytes(input, input_len), bytes(key, key_len)) else {
+            return ptr::null();
+        };
+        ipcrypt::pfx_encrypt(input, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: IPcrypt-PFX format-preserving decryption.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_ipcrypt_pfx_decrypt(
+    input: *const u8,
+    input_len: usize,
+    key: *const u8,
+    key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(input), Some(key)) = (bytes(input, input_len), bytes(key, key_len)) else {
+            return ptr::null();
+        };
+        ipcrypt::pfx_decrypt(input, key)
+            .map(|output| publish(&output))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: generates an X-Wing keypair (`secret || public`).
+#[no_mangle]
+pub extern "C" fn elephc_sodium_kem_keypair() -> *const u8 {
+    guarded(ptr::null(), || publish(&kem::xwing_keypair_random()))
+}
+
+/// C ABI: derives an X-Wing keypair from a 32-byte seed.
+///
+/// # Safety
+/// `seed` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_seed_keypair(
+    seed: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(seed) = bytes(seed, len) else {
+            return ptr::null();
+        };
+        kem::xwing_seed_keypair(seed)
+            .map(|keypair| publish(&keypair))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: extracts the X-Wing secret key from a keypair.
+///
+/// # Safety
+/// `keypair` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_secretkey(
+    keypair: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(keypair) = bytes(keypair, len) else {
+            return ptr::null();
+        };
+        kem::xwing_secretkey(keypair)
+            .map(|key| publish(&key))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: extracts the X-Wing public key from a keypair.
+///
+/// # Safety
+/// `keypair` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_publickey(
+    keypair: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(keypair) = bytes(keypair, len) else {
+            return ptr::null();
+        };
+        kem::xwing_publickey(keypair)
+            .map(|key| publish(&key))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: X-Wing encapsulation, publishing `ciphertext || shared_secret`.
+///
+/// # Safety
+/// `public_key` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_enc(
+    public_key: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(public_key) = bytes(public_key, len) else {
+            return ptr::null();
+        };
+        kem::xwing_enc(public_key)
+            .map(|pair| publish(&pair))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: X-Wing decapsulation.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_dec(
+    ciphertext: *const u8,
+    ciphertext_len: usize,
+    secret_key: *const u8,
+    secret_key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(ciphertext), Some(secret_key)) = (
+            bytes(ciphertext, ciphertext_len),
+            bytes(secret_key, secret_key_len),
+        ) else {
+            return ptr::null();
+        };
+        kem::xwing_dec(ciphertext, secret_key)
+            .map(|shared| publish(&shared))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: generates an ML-KEM-768 keypair (`secret || public`).
+#[no_mangle]
+pub extern "C" fn elephc_sodium_kem_mlkem768_keypair() -> *const u8 {
+    guarded(ptr::null(), || publish(&kem::mlkem_keypair_random()))
+}
+
+/// C ABI: derives an ML-KEM-768 keypair from a 64-byte seed.
+///
+/// # Safety
+/// `seed` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_mlkem768_seed_keypair(
+    seed: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(seed) = bytes(seed, len) else {
+            return ptr::null();
+        };
+        kem::mlkem_seed_keypair(seed)
+            .map(|keypair| publish(&keypair))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: extracts the ML-KEM-768 expanded secret key from a keypair.
+///
+/// # Safety
+/// `keypair` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_mlkem768_secretkey(
+    keypair: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(keypair) = bytes(keypair, len) else {
+            return ptr::null();
+        };
+        kem::mlkem_secretkey(keypair)
+            .map(|key| publish(&key))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: extracts the ML-KEM-768 public key from a keypair.
+///
+/// # Safety
+/// `keypair` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_mlkem768_publickey(
+    keypair: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(keypair) = bytes(keypair, len) else {
+            return ptr::null();
+        };
+        kem::mlkem_publickey(keypair)
+            .map(|key| publish(&key))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: ML-KEM-768 encapsulation, publishing `ciphertext || shared_secret`.
+///
+/// # Safety
+/// `public_key` must reference `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_mlkem768_enc(
+    public_key: *const u8,
+    len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(public_key) = bytes(public_key, len) else {
+            return ptr::null();
+        };
+        kem::mlkem_enc(public_key)
+            .map(|pair| publish(&pair))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: ML-KEM-768 decapsulation.
+///
+/// # Safety
+/// Both pointers must reference their declared readable lengths.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_kem_mlkem768_dec(
+    ciphertext: *const u8,
+    ciphertext_len: usize,
+    secret_key: *const u8,
+    secret_key_len: usize,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let (Some(ciphertext), Some(secret_key)) = (
+            bytes(ciphertext, ciphertext_len),
+            bytes(secret_key, secret_key_len),
+        ) else {
+            return ptr::null();
+        };
+        kem::mlkem_dec(ciphertext, secret_key)
+            .map(|shared| publish(&shared))
+            .unwrap_or(ptr::null())
     })
 }
 
@@ -498,12 +1037,12 @@ mod tests {
             },
             0
         );
-        let first = unsafe { elephc_sodium_shake128_squeeze(handle, 20) };
+        let first = elephc_sodium_shake128_squeeze(handle, 20);
         assert!(!first.is_null());
         let first = unsafe {
             std::slice::from_raw_parts(first, elephc_sodium_last_len()).to_vec()
         };
-        let second = unsafe { elephc_sodium_shake128_squeeze(handle, 28) };
+        let second = elephc_sodium_shake128_squeeze(handle, 28);
         assert!(!second.is_null());
         let second = unsafe {
             std::slice::from_raw_parts(second, elephc_sodium_last_len()).to_vec()
@@ -524,6 +1063,22 @@ mod tests {
         let handle = elephc_sodium_shake256_init(0x7f);
         assert!(handle > 0);
         elephc_sodium_shake256_drop(handle);
+    }
+
+    /// TurboSHAKE128/256 match libsodium's 12-round vectors.
+    #[test]
+    fn turboshake_matches_libsodium_vectors() {
+        let expected128 = hex("1e415f1c5983aff2169217277d17bb538cd945a397ddec541f1ce41af2c1b74c");
+        let pointer = unsafe { elephc_sodium_turboshake128(32, ptr::null(), 0) };
+        assert!(!pointer.is_null());
+        let output = unsafe { std::slice::from_raw_parts(pointer, elephc_sodium_last_len()) };
+        assert_eq!(output, expected128.as_slice());
+
+        let expected256 = hex("367a329dafea871c7802ec67f905ae13c57695dc2c6663c61035f59a18f8e7db");
+        let pointer = unsafe { elephc_sodium_turboshake256(32, ptr::null(), 0) };
+        assert!(!pointer.is_null());
+        let output = unsafe { std::slice::from_raw_parts(pointer, elephc_sodium_last_len()) };
+        assert_eq!(output, expected256.as_slice());
     }
 
     /// IP conversion round-trips canonical IPv6 and IPv4-mapped forms.
@@ -556,7 +1111,7 @@ mod tests {
         let rendered = unsafe {
             std::slice::from_raw_parts(pointer, elephc_sodium_last_len())
         };
-        assert_eq!(rendered, b"::ffff:192.0.2.1");
+        assert_eq!(rendered, b"192.0.2.1");
     }
 
     /// Wrong key/nonce lengths and short ciphertexts fail closed.

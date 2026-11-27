@@ -17,7 +17,11 @@ on every supported target.
 | Secretbox | `sodium_crypto_secretbox()`, `sodium_crypto_secretbox_open()`, `sodium_crypto_secretbox_keygen()` | XSalsa20-Poly1305; byte-compatible with libsodium's `crypto_secretbox_easy` / `_open_easy`. |
 | SHAKE one-shot | `sodium_crypto_xof_shake128()`, `sodium_crypto_xof_shake256()` | PHP 8.6; FIPS 202 output. |
 | SHAKE state | `sodium_crypto_xof_shake128_init/update/squeeze()`, `sodium_crypto_xof_shake256_init/update/squeeze()` | PHP 8.6; interleaved streaming squeezes; an `update()` after squeezing raises `SodiumException`, matching libsodium. |
-| IP conversion | `sodium_bin2ip()`, `sodium_ip2bin()` | PHP 8.6; canonical IPv6 text and 16-byte IPv4-mapped IPv6 binary. |
+| IP conversion | `sodium_bin2ip()`, `sodium_ip2bin()` | PHP 8.6; canonical IPv6 text, dotted IPv4 for the mapped prefix, and 16-byte IPv4-mapped IPv6 binary. |
+| IPcrypt | `sodium_crypto_ipcrypt_*`, `sodium_crypto_ipcrypt_nd_*`, `sodium_crypto_ipcrypt_ndx_*`, `sodium_crypto_ipcrypt_pfx_*` | PHP 8.6; plain AES-128, 8-byte-tweak ND, 16-byte-tweak NDX, and format-preserving PFX. Checked against libsodium's IPcrypt vectors. |
+| TurboSHAKE | `sodium_crypto_xof_turboshake128/256()`, `_init/update/squeeze()` and the `SodiumCryptoXofTurboshake128State`/`Turboshake256State` classes | PHP 8.6; Keccak-p[1600,12] with streaming squeezes and domain separation. |
+| X-Wing KEM | `sodium_crypto_kem_keypair()`, `_seed_keypair()`, `_secretkey()`, `_publickey()`, `_enc()`, `_dec()` | PHP 8.6; hybrid ML-KEM-768 + X25519, libsodium's `secret || public` keypair layout. |
+| ML-KEM-768 KEM | `sodium_crypto_kem_mlkem768_keypair()`, `_seed_keypair()`, `_secretkey()`, `_publickey()`, `_enc()`, `_dec()` | PHP 8.6; FIPS 203, expanded 2400-byte secret-key encoding. |
 
 The matching `SODIUM_CRYPTO_SECRETBOX_*` and `SODIUM_CRYPTO_XOF_SHAKE*` constants
 are declared as well.
@@ -34,11 +38,13 @@ diagnostics for the delivered functions.
 
 ## Deferred ext/sodium surface
 
-The rest of `ext/sodium` remains to be delivered, including the base
-`crypto_box`/`crypto_sign`/`crypto_generichash`/`crypto_pwhash` families and the
-PHP 8.6 IPcrypt-ND/NDX/PFX families, TurboSHAKE128/256, and the X-Wing/ML-KEM768
-KEM functions. None of those names are declared yet, so a program that calls
-them fails at compile time rather than silently returning a wrong value.
+The remaining `ext/sodium` surface is the base families that predate PHP 8.6:
+`crypto_box`, `crypto_sign`, `crypto_generichash`, `crypto_pwhash`, `crypto_kdf`,
+`crypto_kx`, `crypto_auth`, `crypto_aead`, and the secretstream helpers. The
+PHP 8.6 `pwhash` ValueError rule is tracked with that work because the pwhash
+functions themselves are not declared yet. None of those names are declared, so
+a program that calls them fails at compile time rather than silently returning a
+wrong value.
 
 ## Linking
 

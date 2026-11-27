@@ -22,7 +22,7 @@ autotests = false
 # libelephc_iconv.a (character-set conversion and RFC 2047 MIME headers),
 # libelephc_mbstring.a (shared multibyte encoding and Unicode engine),
 # libelephc_phar.a (runtime phar:// archive reads), libelephc_zip.a
-# (in-memory ZipArchive), libelephc_sodium.a (ext/sodium secretbox/SHAKE),
+# (in-memory ZipArchive), libelephc_sodium.a (ext/sodium secretbox/SHAKE/IPcrypt/KEM),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
 # libelephc_web.a (--web prefork HTTP server), libelephc_pcntl.a (process

@@ -14,3 +14,5 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 crypto_secretbox = { version = "0.1.1", default-features = false, features = ["std", "salsa20"] }
 keccak = "0.1.6"
+ml-kem = { version = "0.3.4", features = ["getrandom"] }
+x-wing = { version = "0.1.1", features = ["getrandom"] }

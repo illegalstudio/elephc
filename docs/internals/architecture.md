@@ -667,7 +667,7 @@ crates/
 ├── elephc-openssl/            Symmetric-cipher and Openssl\Session bridge over managed OpenSSL 3.6.4
 ├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
-├── elephc-sodium/             Pure-Rust ext/sodium bridge (secretbox, SHAKE, IP conversion)
+├── elephc-sodium/             Pure-Rust ext/sodium bridge (secretbox, SHAKE/TurboSHAKE, IPcrypt, KEMs)
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-zip/                In-memory `ZipArchive` bridge over the elephc-phar ZIP reader/writer
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint

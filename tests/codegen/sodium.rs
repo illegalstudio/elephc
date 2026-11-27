@@ -155,9 +155,161 @@ try {
 SodiumException:sodium_crypto_xof_shake128_update(): internal error\n\
 SodiumException:sodium_crypto_xof_shake128_init(): Argument #1 ($domain) must be between 0x01 and 0x7f\n\
 SodiumException:sodium_crypto_xof_shake128_squeeze(): Argument #2 ($length) must be greater than 0\n\
-16:2001:db8::1\n16:c0000201:::ffff:192.0.2.1\n\
+16:2001:db8::1\n16:c0000201:192.0.2.1\n\
 SodiumException:sodium_crypto_xof_shake128(): Argument #1 ($length) must be greater than 0\n\
 SodiumException:sodium_bin2ip(): Argument #1 ($bin) must be 16 bytes long\n\
 SodiumException:sodium_ip2bin(): Argument #1 ($ip) must be a valid IP address\n"
+    );
+}
+
+/// IPcrypt plain/PFX vectors, ND/NDX round-trips and argument diagnostics.
+#[test]
+fn test_sodium_ipcrypt_php86() {
+    let out = compile_and_run(
+        r#"<?php
+$key = hex2bin("0123456789abcdeffedcba9876543210");
+if (!is_string($key)) {
+    exit(1);
+}
+echo sodium_crypto_ipcrypt_encrypt("0.0.0.0", $key), "\n";
+$plain = sodium_crypto_ipcrypt_encrypt("192.0.2.1", $key);
+echo sodium_crypto_ipcrypt_decrypt($plain, $key), "\n";
+
+$pfxKey = hex2bin("0123456789abcdeffedcba98765432101032547698badcfeefcdab8967452301");
+if (!is_string($pfxKey)) {
+    exit(1);
+}
+$pfx = sodium_crypto_ipcrypt_pfx_encrypt("192.0.2.1", $pfxKey);
+echo $pfx, ":", sodium_crypto_ipcrypt_pfx_decrypt($pfx, $pfxKey), "\n";
+
+$ndKey = sodium_crypto_ipcrypt_nd_keygen();
+$nd = sodium_crypto_ipcrypt_nd_encrypt("2001:db8::1", $ndKey);
+echo strlen($nd), ":", sodium_crypto_ipcrypt_nd_decrypt($nd, $ndKey), "\n";
+
+$ndxKey = sodium_crypto_ipcrypt_ndx_keygen();
+$ndx = sodium_crypto_ipcrypt_ndx_encrypt("192.0.2.1", $ndxKey);
+echo strlen($ndx), ":", sodium_crypto_ipcrypt_ndx_decrypt($ndx, $ndxKey), "\n";
+
+try {
+    sodium_crypto_ipcrypt_encrypt("192.0.2.1", "short");
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_ipcrypt_nd_decrypt("00", $ndKey);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_ipcrypt_pfx_encrypt("not-an-ip", $pfxKey);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bde9:6789:d353:824c:d7c6:f58a:6bd2:26eb\n192.0.2.1\n\
+100.115.72.131:192.0.2.1\n48:2001:db8::1\n64:192.0.2.1\n\
+SodiumException:sodium_crypto_ipcrypt_encrypt(): Argument #2 ($key) must be SODIUM_CRYPTO_IPCRYPT_KEYBYTES bytes long\n\
+SodiumException:sodium_crypto_ipcrypt_nd_decrypt(): Argument #1 ($ciphertext_hex) must be a valid hex-encoded ciphertext\n\
+SodiumException:sodium_crypto_ipcrypt_pfx_encrypt(): Argument #1 ($ip) must be a valid IP address\n"
+    );
+}
+
+/// PHP 8.6 TurboSHAKE one-shot vectors and streaming state classes.
+#[test]
+fn test_sodium_turboshake_php86() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(sodium_crypto_xof_turboshake128(32, ""))
+    === "1e415f1c5983aff2169217277d17bb538cd945a397ddec541f1ce41af2c1b74c"
+    ? "turbo128" : "bad", "\n";
+echo bin2hex(sodium_crypto_xof_turboshake256(32, ""))
+    === "367a329dafea871c7802ec67f905ae13c57695dc2c6663c61035f59a18f8e7db"
+    ? "turbo256" : "bad", "\n";
+
+$state = sodium_crypto_xof_turboshake128_init();
+sodium_crypto_xof_turboshake128_update($state, "abc");
+$first = sodium_crypto_xof_turboshake128_squeeze($state, 16);
+$second = sodium_crypto_xof_turboshake128_squeeze($state, 16);
+echo bin2hex($first . $second) === bin2hex(sodium_crypto_xof_turboshake128(32, "abc"))
+    ? "stream" : "bad", "\n";
+
+try {
+    sodium_crypto_xof_turboshake128_init(0);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "turbo128\nturbo256\nstream\n\
+SodiumException:sodium_crypto_xof_turboshake128_init(): Argument #1 ($domain) must be between 0x01 and 0x7f\n"
+    );
+}
+
+/// X-Wing and ML-KEM-768 keypair, encapsulation and decapsulation round-trips.
+#[test]
+fn test_sodium_kem_php86() {
+    let out = compile_and_run(
+        r#"<?php
+$keypair = sodium_crypto_kem_keypair();
+echo strlen($keypair), ":",
+    strlen(sodium_crypto_kem_secretkey($keypair)), ":",
+    strlen(sodium_crypto_kem_publickey($keypair)), "\n";
+
+$seed = str_repeat("\x07", SODIUM_CRYPTO_KEM_SEEDBYTES);
+$first = sodium_crypto_kem_seed_keypair($seed);
+$second = sodium_crypto_kem_seed_keypair($seed);
+echo $first === $second ? "deterministic" : "bad", "\n";
+
+$pair = sodium_crypto_kem_enc(sodium_crypto_kem_publickey($first));
+$ciphertext = $pair[0];
+$shared = $pair[1];
+echo strlen($ciphertext), ":", strlen($shared), ":",
+    sodium_crypto_kem_dec($ciphertext, sodium_crypto_kem_secretkey($first)) === $shared
+        ? "match" : "bad", "\n";
+
+$mlkem = sodium_crypto_kem_mlkem768_keypair();
+echo strlen($mlkem), ":",
+    strlen(sodium_crypto_kem_mlkem768_secretkey($mlkem)), ":",
+    strlen(sodium_crypto_kem_mlkem768_publickey($mlkem)), "\n";
+
+$mlkem_seed = str_repeat("\x09",SODIUM_CRYPTO_KEM_MLKEM768_SEEDBYTES);
+echo sodium_crypto_kem_mlkem768_seed_keypair($mlkem_seed)
+    === sodium_crypto_kem_mlkem768_seed_keypair($mlkem_seed)
+    ? "deterministic" : "bad", "\n";
+
+$mlkem_pair = sodium_crypto_kem_mlkem768_enc(
+    sodium_crypto_kem_mlkem768_publickey($mlkem)
+);
+$mlkem_ciphertext = $mlkem_pair[0];
+$mlkem_shared = $mlkem_pair[1];
+echo strlen($mlkem_ciphertext), ":", strlen($mlkem_shared), ":",
+    sodium_crypto_kem_mlkem768_dec(
+        $mlkem_ciphertext,
+        sodium_crypto_kem_mlkem768_secretkey($mlkem)
+    ) === $mlkem_shared ? "match" : "bad", "\n";
+
+try {
+    sodium_crypto_kem_seed_keypair("short");
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+try {
+    sodium_crypto_kem_mlkem768_enc("short");
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1248:32:1216\ndeterministic\n1120:32:match\n3584:2400:1184\ndeterministic\n\
+1088:32:match\n\
+SodiumException:sodium_crypto_kem_seed_keypair(): Argument #1 ($seed) must be SODIUM_CRYPTO_KEM_SEEDBYTES bytes long\n\
+SodiumException:sodium_crypto_kem_mlkem768_enc(): Argument #1 ($public_key) must be SODIUM_CRYPTO_KEM_MLKEM768_PUBLICKEYBYTES bytes long\n"
     );
 }
