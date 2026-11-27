@@ -49,9 +49,11 @@ $result = $client->__soapCall("Add", [["a" => 2, "b" => 3]]);
 
 ## Deferred surface
 
-- MTOM and attachments.
 - WSDL-described `SoapServer` operation metadata; the server dispatches
   RPC-style requests by operation name and returns `<return>` values.
+
+PHP's `ext/soap` exposes no MTOM/attachment classes or methods, so there is no
+PHP 8.6 MTOM surface to mirror.
 
 Calling an undeclared member fails at compile time rather than pretending to
 work.
