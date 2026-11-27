@@ -29,9 +29,9 @@ fn merged_reference_increment_retires_previous_owner_on_every_target() {
     }
 }
 
-/// An atomic scalar seed publishes its stack cell before retiring a physical Mixed occupant.
+/// An atomic scalar seed does not retire the frame-owned cell that it atomically replaces.
 #[test]
-fn atomic_numeric_seed_retires_physical_mixed_owner_on_every_target() {
+fn atomic_numeric_seed_skips_frame_owned_displaced_cell_on_every_target() {
     for name in [
         "macos-aarch64",
         "ios-arm64",
@@ -49,13 +49,13 @@ fn atomic_numeric_seed_retires_physical_mixed_owner_on_every_target() {
             .0;
         assert_eq!(
             body.matches("__rt_decref_mixed").count(),
-            1,
-            "{name}: the atomic seed must retire its displaced owner exactly once: {body}"
+            0,
+            "{name}: the atomic seed must not retire its frame-owned displaced cell: {body}"
         );
     }
 }
 
-/// Builds a numeric local whose logical seed replaces a physical Mixed owner atomically.
+/// Builds a numeric local whose logical seed atomically replaces another frame-owned cell.
 fn atomic_numeric_seed_assembly(target: Target) -> String {
     let mixed = IrType::Heap(IrHeapKind::Mixed);
     let mut module = Module::new(target);
