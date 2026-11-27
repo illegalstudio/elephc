@@ -445,6 +445,23 @@ pub unsafe extern "C" fn elephc_snmp_resolve_oid(oid: *const u8, oid_len: usize)
     })
 }
 
+/// C ABI: reports whether an OID has a textual DISPLAY-HINT (1/0).
+///
+/// # Safety
+/// `oid` must reference `oid_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_string_hint(oid: *const u8, oid_len: usize) -> i64 {
+    guarded(0, || {
+        let Some(oid) = bytes(oid, oid_len) else {
+            return 0;
+        };
+        let Ok(oid) = std::str::from_utf8(oid) else {
+            return 0;
+        };
+        i64::from(mib::string_hint(oid))
+    })
+}
+
 /// C ABI: renders an OID using net-snmp's output format, or returns null.
 ///
 /// # Safety

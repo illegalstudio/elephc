@@ -221,6 +221,7 @@ fn test_snmp_v1_v2c_get_walk_and_class() {
 
     let source = r#"<?php
 snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
+snmp_set_oid_output_format(\Snmp\OidOutput::Numeric);
 $host = "127.0.0.1:__PORT__";
 echo snmp_get($host, "public", ".1.3.6.1.2.1.1.1.0", 1000000, 1), "\n";
 echo snmp2_getnext($host, "public", ".1.3.6.1.2.1.1", 1000000, 1), "\n";
@@ -370,6 +371,7 @@ fn test_snmp_set_and_getbulk_walk() {
 
     let source = r#"<?php
 snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
+snmp_set_oid_output_format(\Snmp\OidOutput::Numeric);
 $host = "127.0.0.1:__PORT__";
 var_dump(snmp2_set($host, "public", ".1.3.6.1.2.1.1.5.0", "s", "newname", 1000000, 1));
 $snmp = new SNMP(SNMP::VERSION_2C, $host, "public", 1000000, 1);
@@ -537,6 +539,7 @@ fn test_snmp_library_value_formatting() {
     });
 
     let source = r#"<?php
+snmp_set_oid_output_format(\Snmp\OidOutput::Numeric);
 $host = "127.0.0.1:__PORT__";
 $root = ".1.3.6.1.4.1.99999";
 $walk = snmp2_walk($host, "public", $root, 1000000, 1);
@@ -572,7 +575,7 @@ foreach ($walk as $oid => $value) {
     let out = compile_and_run(&source);
     worker.join().expect("SNMP value fixture thread");
     let library = "\
-.1.3.6.1.4.1.99999.1.0=STRING: elephc
+.1.3.6.1.4.1.99999.1.0=STRING: \"elephc\"
 .1.3.6.1.4.1.99999.2.0=INTEGER: 23
 .1.3.6.1.4.1.99999.3.0=Timeticks: (101) 0:00:01.01
 .1.3.6.1.4.1.99999.4.0=OID: .1.3.6.1.4.1.8072.3.2.255
@@ -584,7 +587,7 @@ foreach ($walk as $oid => $value) {
 .1.3.6.1.4.1.99999.10.0=No Such Object available on this agent at this OID
 ";
     let quick = "\
-.1.3.6.1.4.1.99999.1.0=elephc
+.1.3.6.1.4.1.99999.1.0=\"elephc\"
 .1.3.6.1.4.1.99999.2.0=23
 .1.3.6.1.4.1.99999.3.0=0:0:00:01.01
 .1.3.6.1.4.1.99999.4.0=.1.3.6.1.4.1.8072.3.2.255
@@ -613,6 +616,48 @@ foreach ($walk as $oid => $value) {
 ";
     assert_eq!(
         out,
-        format!("{library}{quick}{numeric_ticks}{plain}4:STRING: elephc\n")
+        format!("{library}{quick}{numeric_ticks}{plain}4:STRING: \"elephc\"\n")
+    );
+}
+
+/// Default OID output uses net-snmp's module-qualified MIB names.
+#[test]
+fn test_snmp_default_oid_format() {
+    let server = UdpSocket::bind(("127.0.0.1", 0)).expect("bind SNMP default-format fixture");
+    let port = server.local_addr().unwrap().port();
+    let worker = thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        let (size, peer) = server.recv_from(&mut buffer).expect("SNMP request");
+        let request = &buffer[..size];
+        let (version, community) = request_header(request);
+        let (_, request_id, _) = request_details(request);
+        let entries = vec![
+            (".1.3.6.1.4.1.99999.1.0".to_string(), 0x04, b"elephc".to_vec()),
+            (
+                ".1.3.6.1.4.1.99999.2.0".to_string(),
+                0x06,
+                oid_body(".1.3.6.1.4.1.8072.3.2.255"),
+            ),
+            (".1.3.6.1.3.0".to_string(), 0x05, Vec::new()),
+        ];
+        let reply = multi_response(&version, &community, request_id, entries);
+        server.send_to(&reply, peer).expect("SNMP response");
+    });
+
+    let source = r#"<?php
+$host = "127.0.0.1:__PORT__";
+$walk = snmp2_walk($host, "public", ".1.3.6.1.4.1.99999", 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let out = compile_and_run(&source);
+    worker.join().expect("SNMP default-format fixture thread");
+    assert_eq!(
+        out,
+        "SNMPv2-SMI::enterprises.99999.1.0=STRING: \"elephc\"\n\
+         SNMPv2-SMI::enterprises.99999.2.0=OID: NET-SNMP-MIB::netSnmpAgentOIDs.255\n"
     );
 }

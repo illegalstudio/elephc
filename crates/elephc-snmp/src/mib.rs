@@ -26,6 +26,8 @@ struct Entry {
     oid: String,
     /// `(value, label)` pairs from `INTEGER { ... }`/`BITS { ... }`.
     enums: Vec<(i64, String)>,
+    /// Whether the object has a textual DISPLAY-HINT (e.g. DisplayString).
+    hinted: bool,
 }
 
 /// Process-wide MIB registry.
@@ -98,6 +100,7 @@ fn seed(registry: &mut Registry) {
         ("ifTable", ".1.3.6.1.2.1.2.2", "SNMPv2-MIB"),
         ("ifEntry", ".1.3.6.1.2.1.2.2.1", "SNMPv2-MIB"),
         ("snmpEnableAuthenTraps", ".1.3.6.1.2.1.11.30", "SNMPv2-MIB"),
+        ("netSnmpAgentOIDs", ".1.3.6.1.4.1.8072.3.2", "NET-SNMP-MIB"),
     ];
     for (name, oid, module) in roots {
         let entry = Entry {
@@ -109,6 +112,10 @@ fn seed(registry: &mut Registry) {
             } else {
                 Vec::new()
             },
+            hinted: matches!(
+                name,
+                "sysDescr" | "sysContact" | "sysName" | "sysLocation"
+            ),
         };
         registry.oids.insert(oid.to_string(), entry);
         registry.names.insert(name.to_ascii_lowercase(), oid.to_string());
@@ -289,6 +296,21 @@ fn parse_oid_value(registry: &Registry, tokens: &[String]) -> Option<String> {
     ))
 }
 
+/// Reports whether the SYNTAX clause declares a textual DISPLAY-HINT.
+fn parse_hint(tokens: &[String]) -> bool {
+    if tokens.iter().any(|token| token == "DISPLAY-HINT") {
+        return true;
+    }
+    if let Some(position) = tokens.iter().position(|token| token == "SYNTAX") {
+        if let Some(next) = tokens.get(position + 1) {
+            return next == "DisplayString"
+                || next == "SnmpAdminString"
+                || next == "MacAddress";
+        }
+    }
+    false
+}
+
 /// Parses `SYNTAX INTEGER { ... }` enum pairs.
 fn parse_enums(tokens: &[String]) -> Vec<(i64, String)> {
     let Some(position) = tokens.iter().position(|token| token == "SYNTAX") else {
@@ -374,6 +396,7 @@ fn load_file(path: &str) -> bool {
             name: name.clone(),
             oid: oid.clone(),
             enums,
+            hinted: parse_hint(&tokens[..position]),
         };
         registry.oids.insert(oid.clone(), entry);
         registry
@@ -496,6 +519,15 @@ fn lookup<'a>(registry: &'a Registry, oid: &str) -> Option<(&'a Entry, String)> 
     None
 }
 
+/// Reports whether the object at `oid` has a textual DISPLAY-HINT.
+pub(crate) fn string_hint(oid: &str) -> bool {
+    with_registry(|registry| {
+        lookup(registry, oid)
+            .map(|(entry, _)| entry.hinted)
+            .unwrap_or(false)
+    })
+}
+
 /// Renders an OID using net-snmp's output formats.
 pub(crate) fn render(oid: &str, format: i64) -> Option<String> {
     with_registry(|registry| {
@@ -599,6 +631,7 @@ END
                         name: name.clone(),
                         oid: oid.clone(),
                         enums: parse_enums(&tokens[..position]),
+                        hinted: parse_hint(&tokens[..position]),
                     },
                 );
                 registry.names.insert(name.to_ascii_lowercase(), oid);
