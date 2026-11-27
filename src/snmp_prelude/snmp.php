@@ -53,6 +53,9 @@ extern "elephc_snmp" {
     function elephc_snmp_init_mib(string $dirs, int $dirsLength): void;
     function elephc_snmp_resolve_oid(string $oid, int $oidLength): ptr;
     function elephc_snmp_render_oid(string $oid, int $oidLength, int $format): ptr;
+    function elephc_snmp_render_oid_flags(string $oid, int $oidLength, int $format, int $numericIndex, int $extendedIndex): ptr;
+    function elephc_snmp_units(string $oid, int $oidLength): ptr;
+    function elephc_snmp_set_mib_option(int $option, int $enable): void;
     function elephc_snmp_enum_label(string $oid, int $oidLength, int $value): ptr;
     function elephc_snmp_string_hint(string $oid, int $oidLength): int;
     function elephc_snmp_response_count(int $response): int;
@@ -214,7 +217,8 @@ class SNMP
             $this->oid_output_format,
             $this->escape_quotes,
             $this->print_hex_text,
-            $this->__string_output
+            $this->__string_output,
+            $this->dont_print_units
         );
         if ($result === false) {
             $this->__errno = self::ERRNO_TIMEOUT;
@@ -236,7 +240,8 @@ class SNMP
             $this->oid_output_format,
             $this->escape_quotes,
             $this->print_hex_text,
-            $this->__string_output
+            $this->__string_output,
+            $this->dont_print_units
         );
         if ($result === false) {
             $this->__errno = self::ERRNO_TIMEOUT;
@@ -259,7 +264,10 @@ class SNMP
                 $this->numeric_timeticks,
                 $this->escape_quotes,
                 $this->print_hex_text,
-                $this->__string_output
+                $this->__string_output,
+                $this->dont_print_units,
+                $this->numeric_index,
+                $this->extended_index
             );
         } else {
             $repetitions = $maxRepetitions < 0 ? 20 : $maxRepetitions;
@@ -280,7 +288,10 @@ class SNMP
                 $this->numeric_timeticks,
                 $this->escape_quotes,
                 $this->print_hex_text,
-                $this->__string_output
+                $this->__string_output,
+                $this->dont_print_units,
+                $this->numeric_index,
+                $this->extended_index
             );
         }
         if ($result === false) {
@@ -452,7 +463,10 @@ function snmp3_walk(
         __ElephcSnmpConfig::$numeric_timeticks,
         __ElephcSnmpConfig::$escape_quotes,
         __ElephcSnmpConfig::$print_hex_text,
-        __ElephcSnmpConfig::$string_output_format
+        __ElephcSnmpConfig::$string_output_format,
+        __ElephcSnmpConfig::$dont_print_units,
+        __ElephcSnmpConfig::$numeric_index,
+        __ElephcSnmpConfig::$extended_index
     );
     \elephc_snmp_close($session);
     return $result;
@@ -516,7 +530,8 @@ function __elephc_snmp3_get(
         __ElephcSnmpConfig::$oid_output_format,
         __ElephcSnmpConfig::$escape_quotes,
         __ElephcSnmpConfig::$print_hex_text,
-        __ElephcSnmpConfig::$string_output_format
+        __ElephcSnmpConfig::$string_output_format,
+        __ElephcSnmpConfig::$dont_print_units
     );
     \elephc_snmp_close($session);
     return $value;
@@ -595,7 +610,8 @@ function __elephc_snmp_value(
     int $format = 0,
     bool $escape_quotes = false,
     bool $print_hex_text = false,
-    int $string_output_format = 0
+    int $string_output_format = 0,
+    bool $dont_print_units = false
 ) {
     $type = \elephc_snmp_response_type($response, $index);
     $pointer = \elephc_snmp_response_value($response, $index);
@@ -638,7 +654,8 @@ function __elephc_snmp_value(
                 $format,
                 $escape_quotes,
                 $print_hex_text,
-                $string_output_format
+                $string_output_format,
+                $dont_print_units
             );
         return (object) ["type" => $type, "value" => $formatted];
     }
@@ -655,7 +672,8 @@ function __elephc_snmp_value(
         $format,
         $escape_quotes,
         $print_hex_text,
-        $string_output_format
+        $string_output_format,
+        $dont_print_units
     );
 }
 
@@ -669,7 +687,8 @@ function __elephc_snmp_library_value(
     int $format = 0,
     bool $escape_quotes = false,
     bool $print_hex_text = false,
-    int $string_output_format = 0
+    int $string_output_format = 0,
+    bool $dont_print_units = false
 ) {
     if ($type === SNMP_VALUE_NOSUCHOBJECT) {
         return "No Such Object available on this agent at this OID";
@@ -683,19 +702,25 @@ function __elephc_snmp_library_value(
     if ($type === SNMP_VALUE_NULL) {
         return "NULL";
     }
+    $units = "";
+    if (!$dont_print_units && $oid !== "") {
+        $units = __elephc_snmp_units($oid);
+    }
     if ($type === SNMP_VALUE_INTEGER) {
         $value = $text;
         if ($label !== "") {
             $value = $quick_print ? $label : $label . "(" . $text . ")";
         }
-        return $quick_print ? $value : "INTEGER: " . $value;
+        $formatted = $quick_print ? $value : "INTEGER: " . $value;
+        return $units === "" ? $formatted : $formatted . " " . $units;
     }
     if ($type === SNMP_VALUE_TIMETICKS) {
         if ($numeric_timeticks) {
-            return $text;
+            return $units === "" ? $text : $text . " " . $units;
         }
         $uptime = __elephc_snmp_uptime((int) $text, $quick_print);
-        return $quick_print ? $uptime : "Timeticks: (" . $text . ") " . $uptime;
+        $formatted = $quick_print ? $uptime : "Timeticks: (" . $text . ") " . $uptime;
+        return $units === "" ? $formatted : $formatted . " " . $units;
     }
     if ($type === SNMP_VALUE_OCTET_STRING || $type === SNMP_VALUE_OPAQUE) {
         $binary = @\hex2bin($text);
@@ -740,13 +765,16 @@ function __elephc_snmp_library_value(
         return $quick_print ? $text : "IpAddress: " . $text;
     }
     if ($type === SNMP_VALUE_COUNTER) {
-        return $quick_print ? $text : "Counter32: " . $text;
+        $formatted = $quick_print ? $text : "Counter32: " . $text;
+        return $units === "" ? $formatted : $formatted . " " . $units;
     }
     if ($type === SNMP_VALUE_GAUGE) {
-        return $quick_print ? $text : "Gauge32: " . $text;
+        $formatted = $quick_print ? $text : "Gauge32: " . $text;
+        return $units === "" ? $formatted : $formatted . " " . $units;
     }
     if ($type === SNMP_VALUE_COUNTER64) {
-        return $quick_print ? $text : "Counter64: " . $text;
+        $formatted = $quick_print ? $text : "Counter64: " . $text;
+        return $units === "" ? $formatted : $formatted . " " . $units;
     }
     return $text;
 }
@@ -826,12 +854,13 @@ function __elephc_snmp_session_get(
     int $format = 0,
     bool $escape_quotes = false,
     bool $print_hex_text = false,
-    int $string_output_format = 0
+    int $string_output_format = 0,
+    bool $dont_print_units = false
 ) {
     if (\is_array($object_id)) {
         $values = [];
         foreach ($object_id as $oid) {
-            $entry = __elephc_snmp_session_get($session, $oid, $pdu, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format);
+            $entry = __elephc_snmp_session_get($session, $oid, $pdu, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format, $dont_print_units);
             if ($entry === false) {
                 return false;
             }
@@ -849,7 +878,7 @@ function __elephc_snmp_session_get(
         \elephc_snmp_response_free($response);
         return false;
     }
-    $value = __elephc_snmp_value($response, 0, $resolved, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format);
+    $value = __elephc_snmp_value($response, 0, $resolved, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format, $dont_print_units);
     \elephc_snmp_response_free($response);
     return $value;
 }
@@ -871,7 +900,8 @@ function __elephc_snmp_get(int $version, string $hostname, string $community, ar
         __ElephcSnmpConfig::$oid_output_format,
         __ElephcSnmpConfig::$escape_quotes,
         __ElephcSnmpConfig::$print_hex_text,
-        __ElephcSnmpConfig::$string_output_format
+        __ElephcSnmpConfig::$string_output_format,
+        __ElephcSnmpConfig::$dont_print_units
     );
     \elephc_snmp_close($session);
     return $value;
@@ -895,7 +925,10 @@ function __elephc_snmp_walk(int $version, string $hostname, string $community, a
             __ElephcSnmpConfig::$numeric_timeticks,
             __ElephcSnmpConfig::$escape_quotes,
             __ElephcSnmpConfig::$print_hex_text,
-            __ElephcSnmpConfig::$string_output_format
+            __ElephcSnmpConfig::$string_output_format,
+            __ElephcSnmpConfig::$dont_print_units,
+            __ElephcSnmpConfig::$numeric_index,
+            __ElephcSnmpConfig::$extended_index
         );
     } else {
         $result = __elephc_snmp_session_bulk_walk(
@@ -911,7 +944,10 @@ function __elephc_snmp_walk(int $version, string $hostname, string $community, a
             __ElephcSnmpConfig::$numeric_timeticks,
             __ElephcSnmpConfig::$escape_quotes,
             __ElephcSnmpConfig::$print_hex_text,
-            __ElephcSnmpConfig::$string_output_format
+            __ElephcSnmpConfig::$string_output_format,
+            __ElephcSnmpConfig::$dont_print_units,
+            __ElephcSnmpConfig::$numeric_index,
+            __ElephcSnmpConfig::$extended_index
         );
     }
     \elephc_snmp_close($session);
@@ -931,7 +967,10 @@ function __elephc_snmp_session_bulk_walk(
     bool $numeric_timeticks = false,
     bool $escape_quotes = false,
     bool $print_hex_text = false,
-    int $string_output_format = 0
+    int $string_output_format = 0,
+    bool $dont_print_units = false,
+    bool $numeric_index = false,
+    bool $extended_index = false
 ): array|false {
     $root = "." . \ltrim(__elephc_snmp_resolve_oid((string) $object_id), ".");
     $result = [];
@@ -960,8 +999,8 @@ function __elephc_snmp_session_bulk_walk(
                 break;
             }
             $seen[$oid] = true;
-            $key = __elephc_snmp_walk_key($oid, $root, $format, $suffix_as_key);
-            $result[$key] = __elephc_snmp_value($response, $index, $oid, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format);
+            $key = __elephc_snmp_walk_key($oid, $root, $format, $suffix_as_key, $numeric_index, $extended_index);
+            $result[$key] = __elephc_snmp_value($response, $index, $oid, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format, $dont_print_units);
             $current = $oid;
         }
         \elephc_snmp_response_free($response);
@@ -1012,7 +1051,10 @@ function __elephc_snmp_session_walk(
     bool $numeric_timeticks = false,
     bool $escape_quotes = false,
     bool $print_hex_text = false,
-    int $string_output_format = 0
+    int $string_output_format = 0,
+    bool $dont_print_units = false,
+    bool $numeric_index = false,
+    bool $extended_index = false
 ): array|false {
     $root = "." . \ltrim(__elephc_snmp_resolve_oid((string) $object_id), ".");
     $result = [];
@@ -1038,8 +1080,8 @@ function __elephc_snmp_session_walk(
             break;
         }
         $seen[$oid] = true;
-        $key = __elephc_snmp_walk_key($oid, $root, $format, $suffix_as_key);
-        $result[$key] = __elephc_snmp_value($response, 0, $oid, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format);
+        $key = __elephc_snmp_walk_key($oid, $root, $format, $suffix_as_key, $numeric_index, $extended_index);
+        $result[$key] = __elephc_snmp_value($response, 0, $oid, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks, $format, $escape_quotes, $print_hex_text, $string_output_format, $dont_print_units);
         $current = $oid;
     }
     return $result;
@@ -1054,7 +1096,7 @@ function __elephc_snmp_resolve_oid(string $oid): string
     return \__elephc_ptr_read_string($pointer, \elephc_snmp_string_len());
 }
 
-function __elephc_snmp_render_oid(string $oid, int $format): string
+function __elephc_snmp_render_oid(string $oid, int $format, bool $numeric_index = false, bool $extended_index = false): string
 {
     if ($format === 0) {
         $format = 2;
@@ -1062,19 +1104,38 @@ function __elephc_snmp_render_oid(string $oid, int $format): string
     if ($format !== 1 && $format !== 2 && $format !== 3 && $format !== 5) {
         return $oid;
     }
-    $pointer = \elephc_snmp_render_oid($oid, \strlen($oid), $format);
+    if ($numeric_index || $extended_index) {
+        $pointer = \elephc_snmp_render_oid_flags(
+            $oid,
+            \strlen($oid),
+            $format,
+            $numeric_index ? 1 : 0,
+            $extended_index ? 1 : 0
+        );
+    } else {
+        $pointer = \elephc_snmp_render_oid($oid, \strlen($oid), $format);
+    }
     if (\__elephc_ptr_is_null($pointer)) {
         return $oid;
     }
     return \__elephc_ptr_read_string($pointer, \elephc_snmp_string_len());
 }
 
-function __elephc_snmp_walk_key(string $oid, string $root, int $format, bool $suffix_as_key): string
+function __elephc_snmp_units(string $oid): string
+{
+    $pointer = \elephc_snmp_units($oid, \strlen($oid));
+    if (\__elephc_ptr_is_null($pointer)) {
+        return "";
+    }
+    return \__elephc_ptr_read_string($pointer, \elephc_snmp_string_len());
+}
+
+function __elephc_snmp_walk_key(string $oid, string $root, int $format, bool $suffix_as_key, bool $numeric_index = false, bool $extended_index = false): string
 {
     if ($suffix_as_key) {
         return \substr($oid, \strlen($root));
     }
-    return __elephc_snmp_render_oid($oid, $format);
+    return __elephc_snmp_render_oid($oid, $format, $numeric_index, $extended_index);
 }
 
 final class __ElephcSnmpConfig
@@ -1105,6 +1166,13 @@ function snmp_read_mib(string $filename): bool
 
 function snmp_set_mib_option(\Snmp\Mib $option, bool $enable): void
 {
+    $value = 0;
+    if ($option === \Snmp\Mib::CommentTerm) {
+        $value = 1;
+    } elseif ($option === \Snmp\Mib::Replace) {
+        $value = 2;
+    }
+    \elephc_snmp_set_mib_option($value, $enable ? 1 : 0);
 }
 
 function snmp_set_output_option(\Snmp\Output $option, bool $enable): void

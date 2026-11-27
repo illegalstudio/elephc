@@ -12,6 +12,8 @@
 //!   PHP walker stops on the prefix change.
 
 use std::net::UdpSocket;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -401,12 +403,17 @@ $snmp->close();
 fn test_snmp_mib_resolution_and_rendering() {
     let server = UdpSocket::bind(("127.0.0.1", 0)).expect("bind SNMP MIB fixture");
     let port = server.local_addr().unwrap().port();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let worker_shutdown = Arc::clone(&shutdown);
     let worker = thread::spawn(move || {
         let mut buffer = [0u8; 4096];
         server
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_millis(100)))
             .expect("SNMP MIB fixture timeout");
-        while let Ok((size, peer)) = server.recv_from(&mut buffer) {
+        while !worker_shutdown.load(Ordering::Relaxed) {
+            let Ok((size, peer)) = server.recv_from(&mut buffer) else {
+                continue;
+            };
             let request = &buffer[..size];
             let (version, community) = request_header(request);
             let (pdu_tag, request_id, varbinds) = request_details(request);
@@ -475,10 +482,164 @@ foreach ($walk as $oid => $value) {
     .replace("__PORT__", &port.to_string());
 
     let out = compile_and_run(&source);
+    shutdown.store(true, Ordering::Relaxed);
     worker.join().expect("SNMP MIB fixture thread");
     assert_eq!(
         out,
         "bool(true)\nSTRING: value\nelephcName.0=STRING: value\nelephcState.0=INTEGER: down(2)\nELEPHC-MIB::elephcName.0=STRING: value\nELEPHC-MIB::elephcState.0=INTEGER: 2\n"
+    );
+}
+
+/// MIB `UNITS`, table indexes, and the 8.6 MIB parser toggles render like net-snmp.
+#[test]
+fn test_snmp_mib_units_and_index_options() {
+    let server = UdpSocket::bind(("127.0.0.1", 0)).expect("bind SNMP units fixture");
+    let port = server.local_addr().unwrap().port();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let worker_shutdown = Arc::clone(&shutdown);
+    let worker = thread::spawn(move || {
+        let value_oid = ".1.3.6.1.4.1.424244.1.1.2.5.97.108.112.104.97";
+        let under_oid = ".1.3.6.1.4.1.424245.0";
+        let mut buffer = [0u8; 4096];
+        server
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .expect("SNMP units fixture timeout");
+        while !worker_shutdown.load(Ordering::Relaxed) {
+            let Ok((size, peer)) = server.recv_from(&mut buffer) else {
+                continue;
+            };
+            let request = &buffer[..size];
+            let (version, community) = request_header(request);
+            let (pdu_tag, request_id, varbinds) = request_details(request);
+            let current = varbinds.first().cloned().unwrap_or_default();
+            let entries = if pdu_tag == 0xA0 {
+                if current == under_oid {
+                    vec![(under_oid.to_string(), 0x02, vec![7])]
+                } else {
+                    vec![(value_oid.to_string(), 0x02, vec![42])]
+                }
+            } else if current.as_str() < value_oid {
+                vec![(value_oid.to_string(), 0x02, vec![42])]
+            } else if current.as_str() < under_oid {
+                vec![(under_oid.to_string(), 0x02, vec![7])]
+            } else {
+                vec![(".1.3.6.1.3.0".to_string(), 0x05, Vec::new())]
+            };
+            let reply = multi_response(&version, &community, request_id, entries);
+            server.send_to(&reply, peer).expect("SNMP response");
+        }
+    });
+
+    let source = r#"<?php
+$mib = 'ELEPHC-UNITS-MIB DEFINITIONS ::= BEGIN
+elephcUnit OBJECT IDENTIFIER ::= { enterprises 424244 }
+elephcUnitTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF ElephcUnitEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    ::= { elephcUnit 1 }
+elephcUnitEntry OBJECT-TYPE
+    SYNTAX ElephcUnitEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    INDEX { elephcUnitName }
+    ::= { elephcUnitTable 1 }
+ElephcUnitEntry ::= SEQUENCE { elephcUnitName DisplayString, elephcUnitValue Integer32 }
+elephcUnitName OBJECT-TYPE
+    SYNTAX DisplayString
+    MAX-ACCESS not-accessible
+    STATUS current
+    ::= { elephcUnitEntry 1 }
+elephcUnitValue OBJECT-TYPE
+    SYNTAX Integer32
+    UNITS "Bytes"
+    MAX-ACCESS read-only
+    STATUS current
+    ::= { elephcUnitEntry 2 }
+END
+';
+file_put_contents("elephc-units.mib", $mib);
+var_dump(snmp_read_mib("elephc-units.mib"));
+$host = "127.0.0.1:__PORT__";
+$root = "elephcUnit";
+snmp_set_oid_output_format(\Snmp\OidOutput::Module);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "
+";
+}
+snmp_set_output_option(\Snmp\Output::NumericIndex, true);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "
+";
+}
+snmp_set_output_option(\Snmp\Output::NumericIndex, false);
+snmp_set_output_option(\Snmp\Output::ExtendedIndex, true);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "
+";
+}
+snmp_set_output_option(\Snmp\Output::ExtendedIndex, false);
+snmp_set_output_option(\Snmp\Output::DontPrintUnits, true);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "
+";
+}
+snmp_set_output_option(\Snmp\Output::DontPrintUnits, false);
+snmp_set_quick_print(true);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "
+";
+}
+snmp_set_quick_print(false);
+$underscore = 'ELEPHC-UNDER-MIB DEFINITIONS ::= BEGIN
+elephc_under OBJECT IDENTIFIER ::= { enterprises 424245 }
+END
+';
+file_put_contents("elephc-under.mib", $underscore);
+var_dump(snmp_read_mib("elephc-under.mib"));
+snmp_set_mib_option(\Snmp\Mib::AllowUnderscores, true);
+var_dump(snmp_read_mib("elephc-under.mib"));
+echo snmp2_get($host, "public", "elephc_under.0", 1000000, 1), "
+";
+snmp_set_mib_option(\Snmp\Mib::AllowUnderscores, false);
+$comment = 'ELEPHC-COMMENT-MIB DEFINITIONS ::= BEGIN
+elephcCmt OBJECT IDENTIFIER -- inline -- ::= { enterprises 424246 }
+END
+';
+file_put_contents("elephc-comment.mib", $comment);
+var_dump(snmp_read_mib("elephc-comment.mib"));
+snmp_set_mib_option(\Snmp\Mib::CommentTerm, true);
+var_dump(snmp_read_mib("elephc-comment.mib"));
+$replacement = str_replace('UNITS "Bytes"', 'UNITS "Octets"', $mib);
+file_put_contents("elephc-units.mib", $replacement);
+var_dump(snmp_read_mib("elephc-units.mib"));
+snmp_set_mib_option(\Snmp\Mib::Replace, true);
+var_dump(snmp_read_mib("elephc-units.mib"));
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "
+";
+}
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let out = compile_and_run(&source);
+    shutdown.store(true, Ordering::Relaxed);
+    worker.join().expect("SNMP units fixture thread");
+    assert_eq!(
+        out,
+        "bool(true)\n\
+ELEPHC-UNITS-MIB::elephcUnitValue.\"alpha\"=INTEGER: 42 Bytes\n\
+ELEPHC-UNITS-MIB::elephcUnitValue.5.97.108.112.104.97=INTEGER: 42 Bytes\n\
+ELEPHC-UNITS-MIB::elephcUnitValue[STRING: alpha]=INTEGER: 42 Bytes\n\
+ELEPHC-UNITS-MIB::elephcUnitValue.\"alpha\"=INTEGER: 42\n\
+ELEPHC-UNITS-MIB::elephcUnitValue.\"alpha\"=42 Bytes\n\
+bool(false)\nbool(true)\nINTEGER: 7\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nELEPHC-UNITS-MIB::elephcUnitValue.\"alpha\"=INTEGER: 42 Octets\n"
     );
 }
 
@@ -626,7 +787,7 @@ foreach ($walk as $oid => $value) {
         ".1.3.6.1.4.1.99999.1.0=STRING: \"elephc\"",
         ".1.3.6.1.4.1.99999.1.0=Hex-STRING: 65 6C 65 70 68 63",
     );
-    let ascii = library.clone();
+    let ascii = library;
     let hex_text = library.replace(
         ".1.3.6.1.4.1.99999.1.0=STRING: \"elephc\"",
         ".1.3.6.1.4.1.99999.1.0=Hex-STRING: 65 6C 65 70 68 63  [elephc]",

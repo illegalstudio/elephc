@@ -485,6 +485,58 @@ pub unsafe extern "C" fn elephc_snmp_render_oid(
     })
 }
 
+/// C ABI: renders an OID with net-snmp's numeric/extended index options, or returns null.
+///
+/// # Safety
+/// `oid` must reference `oid_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_render_oid_flags(
+    oid: *const u8,
+    oid_len: usize,
+    format: i64,
+    numeric_index: i64,
+    extended_index: i64,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(oid) = bytes(oid, oid_len) else {
+            return ptr::null();
+        };
+        let Ok(oid) = std::str::from_utf8(oid) else {
+            return ptr::null();
+        };
+        mib::render_with_options(oid, format, numeric_index != 0, extended_index != 0)
+            .map(|oid| publish(oid.as_bytes()))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: returns the `UNITS` clause for an OID, or null.
+///
+/// # Safety
+/// `oid` must reference `oid_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_snmp_units(oid: *const u8, oid_len: usize) -> *const u8 {
+    guarded(ptr::null(), || {
+        let Some(oid) = bytes(oid, oid_len) else {
+            return ptr::null();
+        };
+        let Ok(oid) = std::str::from_utf8(oid) else {
+            return ptr::null();
+        };
+        mib::units(oid)
+            .map(|units| publish(units.as_bytes()))
+            .unwrap_or(ptr::null())
+    })
+}
+
+/// C ABI: sets a MIB parser option (`0` underscores, `1` comment term, `2` replace).
+#[no_mangle]
+pub extern "C" fn elephc_snmp_set_mib_option(option: i64, enable: i64) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        mib::set_option(option, enable != 0);
+    }));
+}
+
 /// C ABI: returns the enum label for a value at an OID, or null.
 ///
 /// # Safety

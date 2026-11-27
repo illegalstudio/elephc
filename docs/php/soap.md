@@ -47,10 +47,14 @@ $client = new SoapClient("https://example.test/service.wsdl", [
 $result = $client->__soapCall("Add", [["a" => 2, "b" => 3]]);
 ```
 
-## Deferred surface
+## WSDL-described server
 
-- WSDL-described `SoapServer` operation metadata; the server dispatches
-  RPC-style requests by operation name and returns `<return>` values.
+`SoapServer` reads the WSDL `style`/`use`, message parts and element metadata.
+A document-style request is decoded into the wrapped `stdClass` argument and
+the response is serialised under the declared output element; an RPC-style
+request maps message parts to positional arguments and the response parts to
+the operation response element. `getFunctions()` lists registered functions and
+`__getLastResponse()` returns `null`, matching PHP's server surface.
 
 PHP's `ext/soap` exposes no MTOM/attachment classes or methods, so there is no
 PHP 8.6 MTOM surface to mirror.
