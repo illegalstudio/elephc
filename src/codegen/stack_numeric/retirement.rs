@@ -133,9 +133,30 @@ mod tests {
                         &mut ctx, *slot, offsets[slot], &PhpType::Mixed,
                     );
                 }
+                ctx.emitter.comment("replacement retirement checks");
+                for slot in &slots {
+                    crate::codegen::lower_inst::local_stores::retire_displaced_local_owner(
+                        &mut ctx,
+                        *slot,
+                        &PhpType::Mixed,
+                    )
+                    .unwrap();
+                }
             }
             let asm = emitter.output();
-            assert_eq!(asm.matches("__rt_decref_mixed").count(), expected_calls, "{name}:\n{asm}");
+            let (epilogue, replacement) = asm
+                .split_once("replacement retirement checks")
+                .expect("replacement phase marker");
+            assert_eq!(
+                epilogue.matches("__rt_decref_mixed").count(),
+                expected_calls,
+                "{name} epilogue:\n{epilogue}"
+            );
+            assert_eq!(
+                replacement.matches("__rt_decref_mixed").count(),
+                expected_calls,
+                "{name} replacement:\n{replacement}"
+            );
         }
     }
 

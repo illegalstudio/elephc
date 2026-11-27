@@ -162,6 +162,33 @@ impl IrPass for BoundedMixedCounter {
             .map(|local| local.id)
             .take(16)
             .collect();
+        // Prove mutually observed recurrences as one unit before an earlier per-slot
+        // rewrite changes only one side's representation. Parallel counters such as
+        // `$left++` and `$right++` can then be coalesced in the discarded scalar trial,
+        // while one unsafe member rejects the whole group and falls back to the existing
+        // independent proofs below.
+        let group = candidates
+            .iter()
+            .copied()
+            .filter(|slot| {
+                function.instructions.iter().any(|inst| {
+                    inst.op == Op::StoreLocal
+                        && inst.immediate == Some(Immediate::LocalSlot(*slot))
+                        && inst
+                            .operands
+                            .first()
+                            .is_some_and(|&stored| stored_counter_update(function, *slot, stored))
+                })
+            })
+            .collect::<HashSet<_>>();
+        if group.len() > 1 {
+            if let Some(proof) = CounterProof::for_slots(function, &group, self, data, None) {
+                if let Some(trial) = storage::proven_trial(function, &group, &proof, data) {
+                    *function = trial;
+                    return true;
+                }
+            }
+        }
         let mut changed = false;
         for slot in candidates {
             let Some(proof) = CounterProof::new(function, slot, self, data) else {
@@ -352,6 +379,7 @@ impl CounterProof {
                     | Op::IShrA
                     | Op::INeg
                     | Op::IBitNot
+                    | Op::IToF
                     | Op::ICheckedAddToInt
                     | Op::ICheckedSubToInt
                     | Op::ICheckedMulToInt

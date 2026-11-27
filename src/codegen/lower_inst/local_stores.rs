@@ -617,9 +617,14 @@ fn emit_refcounted_local_slot_retirement(
 }
 
 /// Retires the owner detached by a local publication, propagating any new destructor exception.
+/// A frame-only numeric slot displaced another cell owned by the same frame, so it has no
+/// independent runtime owner to retire.
 pub(in crate::codegen) fn retire_displaced_local_owner(
     ctx: &mut FunctionContext<'_>, slot: LocalSlotId, ty: &PhpType,
 ) -> Result<()> {
+    if ctx.numeric_frame_only_slots.contains(&slot) {
+        return Ok(());
+    }
     if *ty == PhpType::Str {
         abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         return Ok(());

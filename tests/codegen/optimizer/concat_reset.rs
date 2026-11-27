@@ -97,8 +97,8 @@ fn count_ir_concat_resets(ir: &str) -> usize {
         .count()
 }
 
-/// Arithmetic-only `for` and `while` loops inside a pure scalar function eliminate
-/// every `concat_reset` instruction across entry, loop headers, loop bodies, and exit.
+/// Arithmetic-only `for` and `while` loops eliminate every in-loop reset while retaining
+/// the single reset before a mixed-to-int return boundary that may format a diagnostic.
 #[test]
 fn test_concat_reset_eliminated_in_arithmetic_loops() {
     let source = r#"<?php
@@ -126,8 +126,16 @@ echo sum_squares($argc + 4), "\n";
     );
     assert_eq!(
         count_ir_concat_resets(&opt_ir),
-        0,
-        "expected all concat_resets to be eliminated in arithmetic-only function:\n{opt_ir}"
+        1,
+        "expected only the diagnostic-capable return reset to remain:\n{opt_ir}"
+    );
+    let reset = opt_ir.find("concat_reset").expect("one reset remains");
+    let boundary = opt_ir
+        .find("return_boundary_mixed_to_int")
+        .expect("mixed-to-int return boundary remains");
+    assert!(
+        reset < boundary,
+        "the surviving reset must guard the mixed-to-int return boundary:\n{opt_ir}"
     );
     fixture.assert_equiv(&[], "70\n");
     fixture.assert_equiv(&["extra"], "112\n");
