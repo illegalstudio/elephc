@@ -220,6 +220,7 @@ fn test_snmp_v1_v2c_get_walk_and_class() {
     });
 
     let source = r#"<?php
+snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
 $host = "127.0.0.1:__PORT__";
 echo snmp_get($host, "public", ".1.3.6.1.2.1.1.1.0", 1000000, 1), "\n";
 echo snmp2_getnext($host, "public", ".1.3.6.1.2.1.1", 1000000, 1), "\n";
@@ -228,6 +229,7 @@ foreach ($walk as $oid => $value) {
     echo $oid, "=", $value, "\n";
 }
 $snmp = new SNMP(SNMP::VERSION_2C, $host, "public", 1000000, 1);
+$snmp->valueretrieval = SNMP_VALUE_PLAIN;
 echo $snmp->get(".1.3.6.1.2.1.1.1.0"), "\n";
 $snmp->close();
 "#
@@ -367,9 +369,11 @@ fn test_snmp_set_and_getbulk_walk() {
     });
 
     let source = r#"<?php
+snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
 $host = "127.0.0.1:__PORT__";
 var_dump(snmp2_set($host, "public", ".1.3.6.1.2.1.1.5.0", "s", "newname", 1000000, 1));
 $snmp = new SNMP(SNMP::VERSION_2C, $host, "public", 1000000, 1);
+$snmp->valueretrieval = SNMP_VALUE_PLAIN;
 var_dump($snmp->set(".1.3.6.1.2.1.1.5.0", "i", "42"));
 $walk = $snmp->walk(".1.3.6.1.2.1.1", false, 2, 0);
 foreach ($walk as $oid => $value) {
@@ -469,7 +473,7 @@ foreach ($walk as $oid => $value) {
     worker.join().expect("SNMP MIB fixture thread");
     assert_eq!(
         out,
-        "bool(true)\nvalue\nelephcName.0=value\nelephcState.0=down\nELEPHC-MIB::elephcName.0=value\nELEPHC-MIB::elephcState.0=2\n"
+        "bool(true)\nSTRING: value\nelephcName.0=STRING: value\nelephcState.0=INTEGER: down(2)\nELEPHC-MIB::elephcName.0=STRING: value\nELEPHC-MIB::elephcState.0=INTEGER: 2\n"
     );
 }
 
@@ -485,4 +489,130 @@ echo SNMP::VERSION_2c, ":", SNMP::VERSION_2C, "\n";
 "#,
     );
     assert_eq!(out, "1:6:2:66:67:71\n1:1\n");
+}
+
+/// Returns the BER body of an encoded OID TLV.
+fn oid_body(value: &str) -> Vec<u8> {
+    let encoded = oid(value);
+    let (_, body, _) = read_tlv(&encoded, 0);
+    body
+}
+
+/// Library, quick, numeric-timeticks, plain and object value retrieval modes.
+#[test]
+fn test_snmp_library_value_formatting() {
+    let server = UdpSocket::bind(("127.0.0.1", 0)).expect("bind SNMP value fixture");
+    let port = server.local_addr().unwrap().port();
+    let worker = thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        for _ in 0..5 {
+            let (size, peer) = server.recv_from(&mut buffer).expect("SNMP request");
+            let request = &buffer[..size];
+            let (version, community) = request_header(request);
+            let (_, request_id, _) = request_details(request);
+            let entries = vec![
+                (".1.3.6.1.4.1.99999.1.0".to_string(), 0x04, b"elephc".to_vec()),
+                (".1.3.6.1.4.1.99999.2.0".to_string(), 0x02, vec![23]),
+                (".1.3.6.1.4.1.99999.3.0".to_string(), 0x43, vec![101]),
+                (
+                    ".1.3.6.1.4.1.99999.4.0".to_string(),
+                    0x06,
+                    oid_body(".1.3.6.1.4.1.8072.3.2.255"),
+                ),
+                (".1.3.6.1.4.1.99999.5.0".to_string(), 0x40, vec![127, 0, 0, 1]),
+                (".1.3.6.1.4.1.99999.6.0".to_string(), 0x41, vec![42]),
+                (".1.3.6.1.4.1.99999.7.0".to_string(), 0x42, vec![7]),
+                (
+                    ".1.3.6.1.4.1.99999.8.0".to_string(),
+                    0x46,
+                    vec![0x01, 0xe2, 0x40],
+                ),
+                (".1.3.6.1.4.1.99999.9.0".to_string(), 0x05, Vec::new()),
+                (".1.3.6.1.4.1.99999.10.0".to_string(), 0x80, Vec::new()),
+                (".1.3.6.1.3.0".to_string(), 0x05, Vec::new()),
+            ];
+            let reply = multi_response(&version, &community, request_id, entries);
+            server.send_to(&reply, peer).expect("SNMP response");
+        }
+    });
+
+    let source = r#"<?php
+$host = "127.0.0.1:__PORT__";
+$root = ".1.3.6.1.4.1.99999";
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_quick_print(true);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_quick_print(false);
+snmp_set_output_option(\Snmp\Output::NumericTimeticks, true);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_output_option(\Snmp\Output::NumericTimeticks, false);
+snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $oid, "=", $value, "\n";
+}
+snmp_set_valueretrieval(SNMP_VALUE_OBJECT);
+$walk = snmp2_walk($host, "public", $root, 1000000, 1);
+foreach ($walk as $oid => $value) {
+    echo $value->type, ":", $value->value, "\n";
+    break;
+}
+"#
+    .replace("__PORT__", &port.to_string());
+
+    let out = compile_and_run(&source);
+    worker.join().expect("SNMP value fixture thread");
+    let library = "\
+.1.3.6.1.4.1.99999.1.0=STRING: elephc
+.1.3.6.1.4.1.99999.2.0=INTEGER: 23
+.1.3.6.1.4.1.99999.3.0=Timeticks: (101) 0:00:01.01
+.1.3.6.1.4.1.99999.4.0=OID: .1.3.6.1.4.1.8072.3.2.255
+.1.3.6.1.4.1.99999.5.0=IpAddress: 127.0.0.1
+.1.3.6.1.4.1.99999.6.0=Counter32: 42
+.1.3.6.1.4.1.99999.7.0=Gauge32: 7
+.1.3.6.1.4.1.99999.8.0=Counter64: 123456
+.1.3.6.1.4.1.99999.9.0=NULL
+.1.3.6.1.4.1.99999.10.0=No Such Object available on this agent at this OID
+";
+    let quick = "\
+.1.3.6.1.4.1.99999.1.0=elephc
+.1.3.6.1.4.1.99999.2.0=23
+.1.3.6.1.4.1.99999.3.0=0:0:00:01.01
+.1.3.6.1.4.1.99999.4.0=.1.3.6.1.4.1.8072.3.2.255
+.1.3.6.1.4.1.99999.5.0=127.0.0.1
+.1.3.6.1.4.1.99999.6.0=42
+.1.3.6.1.4.1.99999.7.0=7
+.1.3.6.1.4.1.99999.8.0=123456
+.1.3.6.1.4.1.99999.9.0=NULL
+.1.3.6.1.4.1.99999.10.0=No Such Object available on this agent at this OID
+";
+    let numeric_ticks = library.replace(
+        ".1.3.6.1.4.1.99999.3.0=Timeticks: (101) 0:00:01.01",
+        ".1.3.6.1.4.1.99999.3.0=101",
+    );
+    let plain = "\
+.1.3.6.1.4.1.99999.1.0=elephc
+.1.3.6.1.4.1.99999.2.0=23
+.1.3.6.1.4.1.99999.3.0=101
+.1.3.6.1.4.1.99999.4.0=.1.3.6.1.4.1.8072.3.2.255
+.1.3.6.1.4.1.99999.5.0=127.0.0.1
+.1.3.6.1.4.1.99999.6.0=42
+.1.3.6.1.4.1.99999.7.0=7
+.1.3.6.1.4.1.99999.8.0=123456
+.1.3.6.1.4.1.99999.9.0=
+.1.3.6.1.4.1.99999.10.0=
+";
+    assert_eq!(
+        out,
+        format!("{library}{quick}{numeric_ticks}{plain}4:STRING: elephc\n")
+    );
 }

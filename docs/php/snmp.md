@@ -23,6 +23,7 @@ system net-snmp library.
 | MIBs | `snmp_read_mib()`, `snmp_init_mib()`, symbolic OID resolution (`MODULE::name.instance`, `name.instance`), `Snmp\OidOutput::{Suffix,Module,Full,Ucd,Numeric}` rendering, and `INTEGER`/`BITS` enum labels (`snmp_set_enum_print()`/`SNMP::$enum_print`) |
 | PHP 8.6 output API | `Snmp\Mib`, `Snmp\OidOutput`, `Snmp\Output`, `Snmp\StringOutput`; `snmp_init_mib()`, `snmp_set_mib_option()`, `snmp_set_output_option()`, `snmp_set_string_output_format()`, `snmp_set_oid_output_format()` and the `SNMP` instance flags |
 | Values | INTEGER, OCTET STRING, NULL, OID, IpAddress, Counter32/64, Gauge32, TimeTicks, Opaque, noSuchObject/noSuchInstance/endOfMibView |
+| Value retrieval | `SNMP_VALUE_LIBRARY` (default, net-snmp `STRING:`/`INTEGER:`/`Timeticks:`/`Counter32:` labels), `SNMP_VALUE_PLAIN` (raw values), and `SNMP_VALUE_OBJECT` (`{type, value}` objects); `snmp_set_quick_print()`, `snmp_set_enum_print()` and `Snmp\Output::NumericTimeticks` alter the formatted output |
 | Hosts | `host` or `host:port`, defaulting to UDP/161 |
 | Timeout/retries | ext/snmp's microsecond timeout and retry count (defaults: 1 second, 5 retries) |
 
@@ -51,9 +52,9 @@ var_dump(snmp2_set($host, "public", ".1.3.6.1.2.1.1.5.0", "s", "new name"));
 
 - Imported textual conventions and table index rendering beyond the parsed
   `SYNTAX INTEGER`/`BITS` enums.
-- `snmp_set_mib_option()` parser toggles and the remaining net-snmp output
-  options (`quick_print`, hex text, numeric timeticks/indexes) are stored but
-  do not yet alter the rendered strings.
+- `snmp_set_mib_option()` parser toggles; the hex-text, escape-quotes,
+  numeric-index and don't-print-units output options are stored but do not yet
+  alter the rendered strings.
 
 Calling an undeclared name fails at compile time rather than pretending to
 work.

@@ -64,13 +64,7 @@ fn convert_value(value: AsyncValue) -> Value {
         | AsyncValue::Gauge32(value)
         | AsyncValue::UInteger32(value)
         | AsyncValue::TimeTicks(value) => Value::Int(i64::from(value)),
-        AsyncValue::Counter64(value) => {
-            if value <= i64::MAX as u64 {
-                Value::Int(value as i64)
-            } else {
-                Value::Bytes(value.to_string().into_bytes())
-            }
-        }
+        AsyncValue::Counter64(value) => Value::Counter64(value),
         AsyncValue::NoSuchObject => Value::NoSuchObject,
         AsyncValue::NoSuchInstance => Value::NoSuchInstance,
         AsyncValue::EndOfMibView => Value::EndOfMibView,
@@ -121,6 +115,26 @@ fn set_value(value_type: &str, value: &[u8]) -> Result<AsyncValue, String> {
             Ok(AsyncValue::IpAddress(bytes))
         }
         _ => Err(format!("unsupported SNMP set type: {value_type}")),
+    }
+}
+
+/// Returns the ASN.1 tag for an async-snmp value.
+fn value_tag(value: &AsyncValue) -> u8 {
+    match value {
+        AsyncValue::Integer(_) => 0x02,
+        AsyncValue::OctetString(_) | AsyncValue::Nsap(_) => 0x04,
+        AsyncValue::Opaque(_) => 0x44,
+        AsyncValue::Null => 0x05,
+        AsyncValue::ObjectIdentifier(_) => 0x06,
+        AsyncValue::IpAddress(_) => 0x40,
+        AsyncValue::Counter32(_) => 0x41,
+        AsyncValue::Gauge32(_) | AsyncValue::UInteger32(_) => 0x42,
+        AsyncValue::TimeTicks(_) => 0x43,
+        AsyncValue::Counter64(_) => 0x46,
+        AsyncValue::NoSuchObject => 0x80,
+        AsyncValue::NoSuchInstance => 0x81,
+        AsyncValue::EndOfMibView => 0x82,
+        _ => 0x05,
     }
 }
 
@@ -179,8 +193,10 @@ pub(crate) fn request(
         };
         let mut varbinds = Vec::with_capacity(response.varbinds.len());
         for varbind in response.varbinds {
+            let tag = value_tag(&varbind.value);
             varbinds.push(Varbind {
                 oid: format!(".{}", varbind.oid),
+                tag,
                 value: convert_value(varbind.value),
             });
         }
@@ -224,8 +240,10 @@ pub(crate) fn request_set(
             .map_err(|error| error.to_string())?;
         let mut varbinds = Vec::with_capacity(response.varbinds.len());
         for varbind in response.varbinds {
+            let tag = value_tag(&varbind.value);
             varbinds.push(Varbind {
                 oid: format!(".{}", varbind.oid),
+                tag,
                 value: convert_value(varbind.value),
             });
         }
@@ -270,8 +288,10 @@ pub(crate) fn request_bulk(
             .map_err(|error| error.to_string())?;
         let mut varbinds = Vec::with_capacity(response.varbinds.len());
         for varbind in response.varbinds {
+            let tag = value_tag(&varbind.value);
             varbinds.push(Varbind {
                 oid: format!(".{}", varbind.oid),
+                tag,
                 value: convert_value(varbind.value),
             });
         }

@@ -23,8 +23,10 @@ static NEXT_REQUEST_ID: AtomicI32 = AtomicI32::new(1);
 /// One decoded SNMP value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Value {
-    /// INTEGER, Counter32, Gauge32, TimeTicks, or small Counter64.
+    /// INTEGER, Counter32, Gauge32, TimeTicks, or UInteger32.
     Int(i64),
+    /// Counter64 value.
+    Counter64(u64),
     /// OCTET STRING or Opaque bytes.
     Bytes(Vec<u8>),
     /// OBJECT IDENTIFIER.
@@ -46,6 +48,8 @@ pub(crate) enum Value {
 pub(crate) struct Varbind {
     /// Dotted OID with a leading dot.
     pub(crate) oid: String,
+    /// ASN.1 value tag from the response.
+    pub(crate) tag: u8,
     /// Decoded value.
     pub(crate) value: Value,
 }
@@ -345,7 +349,7 @@ fn parse_response(data: &[u8], expected_id: i64) -> Result<Response, String> {
             .read_tlv()
             .ok_or_else(|| "missing SNMP varbind value".to_string())?;
         let value = decode_value(tag, body)?;
-        varbinds.push(Varbind { oid, value });
+        varbinds.push(Varbind { oid, tag, value });
     }
     Ok(Response {
         error_status: ber::decode_integer(error_status).unwrap_or(0),
@@ -373,13 +377,19 @@ fn decode_value(tag: u8, body: &[u8]) -> Result<Value, String> {
             .map(Value::Int)
             .ok_or_else(|| "invalid SNMP counter".to_string()),
         0x46 => {
-            if body.len() <= 8 {
-                ber::decode_integer(body)
-                    .map(Value::Int)
-                    .ok_or_else(|| "invalid SNMP counter64".to_string())
+            let body = if body.len() == 9 && body[0] == 0 {
+                &body[1..]
             } else {
-                Ok(Value::Bytes(body.to_vec()))
+                body
+            };
+            if body.is_empty() || body.len() > 8 {
+                return Ok(Value::Bytes(body.to_vec()));
             }
+            let mut value = 0u64;
+            for byte in body {
+                value = value << 8 | u64::from(*byte);
+            }
+            Ok(Value::Counter64(value))
         }
         0x80 => Ok(Value::NoSuchObject),
         0x81 => Ok(Value::NoSuchInstance),

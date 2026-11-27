@@ -116,6 +116,13 @@ class SNMP
         $this->enum_print = __ElephcSnmpConfig::$enum_print;
         $this->oid_output_format = __ElephcSnmpConfig::$oid_output_format;
         $this->valueretrieval = __ElephcSnmpConfig::$valueretrieval;
+        $this->quick_print = __ElephcSnmpConfig::$quick_print;
+        $this->numeric_timeticks = __ElephcSnmpConfig::$numeric_timeticks;
+        $this->numeric_index = __ElephcSnmpConfig::$numeric_index;
+        $this->extended_index = __ElephcSnmpConfig::$extended_index;
+        $this->dont_print_units = __ElephcSnmpConfig::$dont_print_units;
+        $this->escape_quotes = __ElephcSnmpConfig::$escape_quotes;
+        $this->print_hex_text = __ElephcSnmpConfig::$print_hex_text;
         $this->__hostname = $hostname;
         $this->__timeout = $timeout < 0 ? 1000000 : $timeout;
         $this->__retries = $retries < 0 ? 5 : $retries;
@@ -195,7 +202,15 @@ class SNMP
 
     public function get(array|string $object_id, bool $preserveKeys = false)
     {
-        $result = __elephc_snmp_session_get($this->__session, $object_id, 0xA0, $this->enum_print);
+        $result = __elephc_snmp_session_get(
+            $this->__session,
+            $object_id,
+            0xA0,
+            $this->enum_print,
+            $this->valueretrieval,
+            $this->quick_print,
+            $this->numeric_timeticks
+        );
         if ($result === false) {
             $this->__errno = self::ERRNO_TIMEOUT;
             $this->__error = "SNMP: No response from " . $this->__hostname;
@@ -205,7 +220,15 @@ class SNMP
 
     public function getnext(array|string $object_id)
     {
-        $result = __elephc_snmp_session_get($this->__session, $object_id, 0xA1, $this->enum_print);
+        $result = __elephc_snmp_session_get(
+            $this->__session,
+            $object_id,
+            0xA1,
+            $this->enum_print,
+            $this->valueretrieval,
+            $this->quick_print,
+            $this->numeric_timeticks
+        );
         if ($result === false) {
             $this->__errno = self::ERRNO_TIMEOUT;
             $this->__error = "SNMP: No response from " . $this->__hostname;
@@ -216,14 +239,34 @@ class SNMP
     public function walk(array|string $object_id, bool $suffixAsKey = false, int $maxRepetitions = -1, int $nonRepeaters = -1): array|false
     {
         if ($this->__version === self::VERSION_1) {
-            $result = __elephc_snmp_session_walk($this->__session, $object_id, $this->oid_output_format, $this->enum_print, $suffixAsKey);
+            $result = __elephc_snmp_session_walk(
+                $this->__session,
+                $object_id,
+                $this->oid_output_format,
+                $this->enum_print,
+                $suffixAsKey,
+                $this->valueretrieval,
+                $this->quick_print,
+                $this->numeric_timeticks
+            );
         } else {
             $repetitions = $maxRepetitions < 0 ? 20 : $maxRepetitions;
             if ($repetitions < 1) {
                 $repetitions = 1;
             }
             $nonRepeating = $nonRepeaters < 0 ? 0 : $nonRepeaters;
-            $result = __elephc_snmp_session_bulk_walk($this->__session, $object_id, $repetitions, $nonRepeating, $this->oid_output_format, $this->enum_print, $suffixAsKey);
+            $result = __elephc_snmp_session_bulk_walk(
+                $this->__session,
+                $object_id,
+                $repetitions,
+                $nonRepeating,
+                $this->oid_output_format,
+                $this->enum_print,
+                $suffixAsKey,
+                $this->valueretrieval,
+                $this->quick_print,
+                $this->numeric_timeticks
+            );
         }
         if ($result === false) {
             $this->__errno = self::ERRNO_TIMEOUT;
@@ -381,7 +424,18 @@ function snmp3_walk(
     if ($session < 0) {
         return false;
     }
-    $result = __elephc_snmp_session_bulk_walk($session, $object_id, 20, 0, __ElephcSnmpConfig::$oid_output_format, __ElephcSnmpConfig::$enum_print, false);
+    $result = __elephc_snmp_session_bulk_walk(
+        $session,
+        $object_id,
+        20,
+        0,
+        __ElephcSnmpConfig::$oid_output_format,
+        __ElephcSnmpConfig::$enum_print,
+        false,
+        __ElephcSnmpConfig::$valueretrieval,
+        __ElephcSnmpConfig::$quick_print,
+        __ElephcSnmpConfig::$numeric_timeticks
+    );
     \elephc_snmp_close($session);
     return $result;
 }
@@ -433,7 +487,15 @@ function __elephc_snmp3_get(
     if ($session < 0) {
         return false;
     }
-    $value = __elephc_snmp_session_get($session, $object_id, $pdu, __ElephcSnmpConfig::$enum_print);
+    $value = __elephc_snmp_session_get(
+        $session,
+        $object_id,
+        $pdu,
+        __ElephcSnmpConfig::$enum_print,
+        __ElephcSnmpConfig::$valueretrieval,
+        __ElephcSnmpConfig::$quick_print,
+        __ElephcSnmpConfig::$numeric_timeticks
+    );
     \elephc_snmp_close($session);
     return $value;
 }
@@ -500,41 +562,146 @@ function __elephc_snmp_open(int $version, string $hostname, string $community, i
     return \elephc_snmp_open($version, $hostname, \strlen($hostname), $community, \strlen($community), $timeout_ms, $retries);
 }
 
-function __elephc_snmp_value(int $response, int $index, string $oid = "", bool $enum_print = false)
-{
+function __elephc_snmp_value(
+    int $response,
+    int $index,
+    string $oid = "",
+    bool $enum_print = false,
+    int $valueretrieval = 0,
+    bool $quick_print = false,
+    bool $numeric_timeticks = false
+) {
     $type = \elephc_snmp_response_type($response, $index);
     $pointer = \elephc_snmp_response_value($response, $index);
     if (\__elephc_ptr_is_null($pointer)) {
         return false;
     }
     $text = \__elephc_ptr_read_string($pointer, \elephc_snmp_string_len());
-    if ($type === SNMP_VALUE_OCTET_STRING || $type === SNMP_VALUE_OPAQUE) {
-        $binary = @\hex2bin($text);
-        return $binary === false ? $text : $binary;
-    }
-    if ($type === SNMP_VALUE_INTEGER && !$enum_print && $oid !== "") {
-        $label = \elephc_snmp_enum_label($oid, \strlen($oid), (int) $text);
-        if (!\__elephc_ptr_is_null($label)) {
-            return \__elephc_ptr_read_string($label, \elephc_snmp_string_len());
+    $label = "";
+    if ($type === SNMP_VALUE_INTEGER && $oid !== "") {
+        $label_pointer = \elephc_snmp_enum_label($oid, \strlen($oid), (int) $text);
+        if (!\__elephc_ptr_is_null($label_pointer)) {
+            $label = \__elephc_ptr_read_string($label_pointer, \elephc_snmp_string_len());
         }
     }
-    if ($type === SNMP_VALUE_INTEGER || $type === SNMP_VALUE_COUNTER
+    if ($enum_print) {
+        $label = "";
+    }
+    $plain = null;
+    if ($type === SNMP_VALUE_OCTET_STRING || $type === SNMP_VALUE_OPAQUE) {
+        $binary = @\hex2bin($text);
+        $plain = $binary === false ? $text : $binary;
+    } elseif ($type === SNMP_VALUE_INTEGER || $type === SNMP_VALUE_COUNTER
         || $type === SNMP_VALUE_GAUGE || $type === SNMP_VALUE_TIMETICKS
         || $type === SNMP_VALUE_COUNTER64) {
-        return (int) $text;
+        $plain = $text;
+    } elseif ($type === SNMP_VALUE_OBJECT_ID || $type === SNMP_VALUE_IPADDRESS) {
+        $plain = $text;
     }
-    if ($type === SNMP_VALUE_OBJECT_ID || $type === SNMP_VALUE_IPADDRESS) {
-        return $text;
+
+    if (($valueretrieval & 2) !== 0) {
+        $formatted = ($valueretrieval & 1) !== 0
+            ? $plain
+            : __elephc_snmp_library_value($type, $text, $label, $quick_print, $numeric_timeticks);
+        return (object) ["type" => $type, "value" => $formatted];
     }
-    return null;
+    if (($valueretrieval & 1) !== 0) {
+        return $plain;
+    }
+    return __elephc_snmp_library_value($type, $text, $label, $quick_print, $numeric_timeticks);
 }
 
-function __elephc_snmp_session_get(int $session, array|string $object_id, int $pdu, bool $enum_print = false)
+function __elephc_snmp_library_value(
+    int $type,
+    string $text,
+    string $label,
+    bool $quick_print,
+    bool $numeric_timeticks
+) {
+    if ($type === SNMP_VALUE_NOSUCHOBJECT) {
+        return "No Such Object available on this agent at this OID";
+    }
+    if ($type === SNMP_VALUE_NOSUCHINSTANCE) {
+        return "No Such Instance currently exists at this OID";
+    }
+    if ($type === SNMP_VALUE_ENDOFMIBVIEW) {
+        return "No more variables left in this MIB View (It is past the end of the MIB tree)";
+    }
+    if ($type === SNMP_VALUE_NULL) {
+        return "NULL";
+    }
+    if ($type === SNMP_VALUE_INTEGER) {
+        $value = $text;
+        if ($label !== "") {
+            $value = $quick_print ? $label : $label . "(" . $text . ")";
+        }
+        return $quick_print ? $value : "INTEGER: " . $value;
+    }
+    if ($type === SNMP_VALUE_TIMETICKS) {
+        if ($numeric_timeticks) {
+            return $text;
+        }
+        $uptime = __elephc_snmp_uptime((int) $text, $quick_print);
+        return $quick_print ? $uptime : "Timeticks: (" . $text . ") " . $uptime;
+    }
+    if ($type === SNMP_VALUE_OCTET_STRING || $type === SNMP_VALUE_OPAQUE) {
+        $binary = @\hex2bin($text);
+        $value = $binary === false ? $text : $binary;
+        return $quick_print ? $value : "STRING: " . $value;
+    }
+    if ($type === SNMP_VALUE_OBJECT_ID) {
+        return $quick_print ? $text : "OID: " . $text;
+    }
+    if ($type === SNMP_VALUE_IPADDRESS) {
+        return $quick_print ? $text : "IpAddress: " . $text;
+    }
+    if ($type === SNMP_VALUE_COUNTER) {
+        return $quick_print ? $text : "Counter32: " . $text;
+    }
+    if ($type === SNMP_VALUE_GAUGE) {
+        return $quick_print ? $text : "Gauge32: " . $text;
+    }
+    if ($type === SNMP_VALUE_COUNTER64) {
+        return $quick_print ? $text : "Counter64: " . $text;
+    }
+    return $text;
+}
+
+function __elephc_snmp_uptime(int $ticks, bool $quick_print): string
 {
+    $centisecs = $ticks % 100;
+    $total_seconds = \intdiv($ticks, 100);
+    $days = \intdiv($total_seconds, 86400);
+    $remainder = $total_seconds % 86400;
+    $hours = \intdiv($remainder, 3600);
+    $remainder = $remainder % 3600;
+    $minutes = \intdiv($remainder, 60);
+    $seconds = $remainder % 60;
+    if ($quick_print) {
+        return \sprintf("%d:%d:%02d:%02d.%02d", $days, $hours, $minutes, $seconds, $centisecs);
+    }
+    if ($days === 0) {
+        return \sprintf("%d:%02d:%02d.%02d", $hours, $minutes, $seconds, $centisecs);
+    }
+    if ($days === 1) {
+        return \sprintf("1 day, %d:%02d:%02d.%02d", $hours, $minutes, $seconds, $centisecs);
+    }
+    return \sprintf("%d days, %d:%02d:%02d.%02d", $days, $hours, $minutes, $seconds, $centisecs);
+}
+
+function __elephc_snmp_session_get(
+    int $session,
+    array|string $object_id,
+    int $pdu,
+    bool $enum_print = false,
+    int $valueretrieval = 0,
+    bool $quick_print = false,
+    bool $numeric_timeticks = false
+) {
     if (\is_array($object_id)) {
         $values = [];
         foreach ($object_id as $oid) {
-            $entry = __elephc_snmp_session_get($session, $oid, $pdu, $enum_print);
+            $entry = __elephc_snmp_session_get($session, $oid, $pdu, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks);
             if ($entry === false) {
                 return false;
             }
@@ -552,7 +719,7 @@ function __elephc_snmp_session_get(int $session, array|string $object_id, int $p
         \elephc_snmp_response_free($response);
         return false;
     }
-    $value = __elephc_snmp_value($response, 0, $resolved, $enum_print);
+    $value = __elephc_snmp_value($response, 0, $resolved, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks);
     \elephc_snmp_response_free($response);
     return $value;
 }
@@ -563,7 +730,15 @@ function __elephc_snmp_get(int $version, string $hostname, string $community, ar
     if ($session < 0) {
         return false;
     }
-    $value = __elephc_snmp_session_get($session, $object_id, $pdu, __ElephcSnmpConfig::$enum_print);
+    $value = __elephc_snmp_session_get(
+        $session,
+        $object_id,
+        $pdu,
+        __ElephcSnmpConfig::$enum_print,
+        __ElephcSnmpConfig::$valueretrieval,
+        __ElephcSnmpConfig::$quick_print,
+        __ElephcSnmpConfig::$numeric_timeticks
+    );
     \elephc_snmp_close($session);
     return $value;
 }
@@ -575,16 +750,46 @@ function __elephc_snmp_walk(int $version, string $hostname, string $community, a
         return false;
     }
     if ($version === SNMP_VERSION_1) {
-        $result = __elephc_snmp_session_walk($session, $object_id, __ElephcSnmpConfig::$oid_output_format, __ElephcSnmpConfig::$enum_print, false);
+        $result = __elephc_snmp_session_walk(
+            $session,
+            $object_id,
+            __ElephcSnmpConfig::$oid_output_format,
+            __ElephcSnmpConfig::$enum_print,
+            false,
+            __ElephcSnmpConfig::$valueretrieval,
+            __ElephcSnmpConfig::$quick_print,
+            __ElephcSnmpConfig::$numeric_timeticks
+        );
     } else {
-        $result = __elephc_snmp_session_bulk_walk($session, $object_id, 20, 0, __ElephcSnmpConfig::$oid_output_format, __ElephcSnmpConfig::$enum_print, false);
+        $result = __elephc_snmp_session_bulk_walk(
+            $session,
+            $object_id,
+            20,
+            0,
+            __ElephcSnmpConfig::$oid_output_format,
+            __ElephcSnmpConfig::$enum_print,
+            false,
+            __ElephcSnmpConfig::$valueretrieval,
+            __ElephcSnmpConfig::$quick_print,
+            __ElephcSnmpConfig::$numeric_timeticks
+        );
     }
     \elephc_snmp_close($session);
     return $result;
 }
 
-function __elephc_snmp_session_bulk_walk(int $session, array|string $object_id, int $max_repetitions, int $non_repeaters, int $format = 0, bool $enum_print = false, bool $suffix_as_key = false): array|false
-{
+function __elephc_snmp_session_bulk_walk(
+    int $session,
+    array|string $object_id,
+    int $max_repetitions,
+    int $non_repeaters,
+    int $format = 0,
+    bool $enum_print = false,
+    bool $suffix_as_key = false,
+    int $valueretrieval = 0,
+    bool $quick_print = false,
+    bool $numeric_timeticks = false
+): array|false {
     $root = "." . \ltrim(__elephc_snmp_resolve_oid((string) $object_id), ".");
     $result = [];
     $seen = [];
@@ -613,7 +818,7 @@ function __elephc_snmp_session_bulk_walk(int $session, array|string $object_id, 
             }
             $seen[$oid] = true;
             $key = __elephc_snmp_walk_key($oid, $root, $format, $suffix_as_key);
-            $result[$key] = __elephc_snmp_value($response, $index, $oid, $enum_print);
+            $result[$key] = __elephc_snmp_value($response, $index, $oid, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks);
             $current = $oid;
         }
         \elephc_snmp_response_free($response);
@@ -653,8 +858,16 @@ function __elephc_snmp_session_set(int $session, array|string $object_id, array|
     return $status === 0 && $count > 0;
 }
 
-function __elephc_snmp_session_walk(int $session, array|string $object_id, int $format = 0, bool $enum_print = false, bool $suffix_as_key = false): array|false
-{
+function __elephc_snmp_session_walk(
+    int $session,
+    array|string $object_id,
+    int $format = 0,
+    bool $enum_print = false,
+    bool $suffix_as_key = false,
+    int $valueretrieval = 0,
+    bool $quick_print = false,
+    bool $numeric_timeticks = false
+): array|false {
     $root = "." . \ltrim(__elephc_snmp_resolve_oid((string) $object_id), ".");
     $result = [];
     $seen = [];
@@ -680,7 +893,7 @@ function __elephc_snmp_session_walk(int $session, array|string $object_id, int $
         }
         $seen[$oid] = true;
         $key = __elephc_snmp_walk_key($oid, $root, $format, $suffix_as_key);
-        $result[$key] = __elephc_snmp_value($response, 0, $oid, $enum_print);
+        $result[$key] = __elephc_snmp_value($response, 0, $oid, $enum_print, $valueretrieval, $quick_print, $numeric_timeticks);
         $current = $oid;
     }
     return $result;

@@ -559,16 +559,7 @@ pub extern "C" fn elephc_snmp_response_type(response: i64, index: i64) -> i64 {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&response)
             .and_then(|response| response.varbinds.get(index))
-            .map(|varbind| match varbind.value {
-                Value::Int(_) => 0x02,
-                Value::Bytes(_) => 0x04,
-                Value::Oid(_) => 0x06,
-                Value::Null => 0x05,
-                Value::Ip(_) => 0x40,
-                Value::NoSuchObject => 0x80,
-                Value::NoSuchInstance => 0x81,
-                Value::EndOfMibView => 0x82,
-            })
+            .map(|varbind| i64::from(varbind.tag))
             .unwrap_or(-1)
     })
 }
@@ -587,6 +578,7 @@ pub extern "C" fn elephc_snmp_response_value(response: i64, index: i64) -> *cons
             .and_then(|response| response.varbinds.get(index))
             .map(|varbind| match &varbind.value {
                 Value::Int(value) => publish(value.to_string().as_bytes()),
+                Value::Counter64(value) => publish(value.to_string().as_bytes()),
                 Value::Bytes(value) => publish(hex(value).as_bytes()),
                 Value::Oid(value) => publish(value.as_bytes()),
                 Value::Null => publish(&[]),
