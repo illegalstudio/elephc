@@ -69,6 +69,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Sodium](php/sodium.md): `ext/sodium` secretbox, SHAKE128/256 one-shot and streaming state, IP conversion, and the pure-Rust `elephc-sodium` bridge
+- [SNMP](php/snmp.md): `ext/snmp` SNMP v1/v2c GET, GETNEXT and WALK over the pure-Rust UDP bridge, with v3/USM and the 8.6 MIB/output API explicitly deferred
 - [Zip](php/zip.md): `ZipArchive` in-memory archives, the PHP 8.6 `openString()`/`closeString()` methods, extraction, globbing, and the pure-Rust `elephc-zip` bridge
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
 - [OPcache](php/opcache.md): the Zend OPcache API over compiled scripts and the runtime cache for dynamic include/require, optional file caching, live statistics, and the `opcache.*` directive matrix

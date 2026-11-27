@@ -1097,6 +1097,10 @@ name = "elephc-reference"
 version = "0.1.0"
 
 [[package]]
+name = "elephc-snmp"
+version = "0.1.0"
+
+[[package]]
 name = "elephc-sodium"
 version = "0.1.0"
 dependencies = [

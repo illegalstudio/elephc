@@ -668,6 +668,7 @@ crates/
 ├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-sodium/             Pure-Rust ext/sodium bridge (secretbox, SHAKE/TurboSHAKE, IPcrypt, KEMs)
+├── elephc-snmp/               Pure-Rust ext/snmp v1/v2c UDP client and BER codec
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-zip/                In-memory `ZipArchive` bridge over the elephc-phar ZIP reader/writer
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint

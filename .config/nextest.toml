@@ -301,6 +301,9 @@ relative-to = "target"
 path = "debug/libelephc_sodium.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_snmp.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_crypto.a"
 relative-to = "target"
 [[profile.ci.archive.include]]

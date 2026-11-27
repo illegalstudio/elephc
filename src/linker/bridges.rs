@@ -151,6 +151,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         },
     },
     BridgeStaticlib {
+        lib_name: "elephc_snmp",
+        env_var: "ELEPHC_SNMP_LIB_DIR",
+        crate_name: "elephc-snmp",
+        flag_name: "snmp",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The pure-Rust bridge implements PHP's ext/snmp v1/v2c client.
+        php_extensions: &["snmp"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_sodium",
         env_var: "ELEPHC_SODIUM_LIB_DIR",
         crate_name: "elephc-sodium",

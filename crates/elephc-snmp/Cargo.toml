@@ -1,0 +1,14 @@
+[package]
+name = "elephc-snmp"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust SNMP v1/v2c client bridge for elephc"
+license = "MIT"
+publish = false
+
+# Built as a C-callable staticlib for compiled programs that use SNMP, and as
+# an rlib so the BER/client implementation is unit-testable.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]

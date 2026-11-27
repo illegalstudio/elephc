@@ -389,7 +389,7 @@ elephc build --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc build app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, zip, sodium, tz, image, pcntl, xml, tidy, fileinfo, tokenizer, reference, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, zip, sodium, snmp, tz, image, pcntl, xml, tidy, fileinfo, tokenizer, reference, eval, regex, curl, web)
 elephc build app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc build app.php --with-mysqli
@@ -610,6 +610,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
 - **Tokenizer**: `token_get_all`, `token_name`, `PhpToken` and all 154 PHP 8.5 constants, including `TOKEN_PARSE`; see the [Tokenizer guide](docs/php/tokenizer.md).
+- **SNMP**: PHP `ext/snmp` v1/v2c GET/GETNEXT/WALK, `snmp_get`/`snmp2_get`/`snmp_walk`, the `SNMP` class and typed BER values over a pure-Rust UDP bridge; SNMPv3/USM, the 8.6 AES192/256 privacy protocols and the MIB/output flag API remain deferred; see the [SNMP guide](docs/php/snmp.md)
 - **Sodium**: PHP ext/sodium secretbox (XSalsa20-Poly1305, NaCl-vector compatible) plus the PHP 8.6 SHAKE/TurboSHAKE one-shot and streaming state classes, `sodium_bin2ip()`/`ip2bin()`, the plain/ND/NDX/PFX IPcrypt families, X-Wing/ML-KEM-768 KEMs, and the Argon2/scrypt pwhash families through the pure-Rust `elephc-sodium` bridge; the older crypto_box/sign/generichash/kdf/kx/auth/aead families remain deferred; see the [Sodium guide](docs/php/sodium.md)
 - **Zip**: PHP 8.6 `ZipArchive` in-memory archives (`openString()` / `closeString()`), entry reads/stats/streams, add/delete/rename, comments, compression and mtime setters, `addGlob()` / `addPattern()`, and `extractTo()` through the pure-Rust `elephc-zip` bridge; encryption, progress callbacks and ZIP64 writing fail closed; see the [Zip guide](docs/php/zip.md)
 - **Tidy**: `ext/tidy` repairs malformed HTML with a pinned libtidy 5.8.0, exposing all 24 functions, the `tidy` and `tidyNode` objects, and all 161 `TIDY_*` constants from the native catalog (`elephc native add libtidy`, auto-linked or `--with-tidy`), natively and inside `eval()`; the full php-src `ext/tidy` case corpus is migrated into Rust codegen tests; see the [Tidy guide](docs/php/tidy.md)
@@ -855,6 +856,7 @@ crates/
 ├── elephc-phar/         # PHAR/tar/zip bridge
 ├── elephc-zip/          # In-memory ZipArchive bridge
 ├── elephc-sodium/       # Pure-Rust ext/sodium bridge
+├── elephc-snmp/         # Pure-Rust ext/snmp v1/v2c UDP bridge
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
 ├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge
