@@ -331,12 +331,24 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source base for the count parse
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // reload the colon position
     emitter.instruction("lea rsi, [r8 + 1]");                                   // first property-count digit
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // original object marker position
+    emitter.instruction("movzx r10d, BYTE PTR [rdi + r10]");                    // distinguish O from C payloads
+    emitter.instruction("cmp r10d, 79");                                        // is this an O: object?
+    emitter.instruction("jne __rt_unser_validate_object_count_parse_x");        // C: still requires a byte count
+    emitter.instruction("cmp BYTE PTR [rdi + rsi], 58");                        // empty property count (`O:...::{}`)?
+    emitter.instruction("je __rt_unser_validate_object_empty_count_x");         // php reads it as zero properties
+    emitter.label("__rt_unser_validate_object_count_parse_x");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore end for the count parse
     emitter.instruction("mov ecx, 58");                                         // property-count delimiter
     emitter.instruction("call __rt_unser_validate_uint");                       // parse the property count
     emitter.instruction("test rax, rax");                                       // did the count validate?
     emitter.instruction("jz __rt_unser_validate_at_fail_x");                    // malformed count field
     emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // property count
+    emitter.instruction("jmp __rt_unser_validate_object_count_done_x");         // continue at the opening brace
+    emitter.label("__rt_unser_validate_object_empty_count_x");
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // an empty count is zero properties
+    emitter.instruction("lea rdx, [r8 + 1]");                                   // delimiter is the second ':'
+    emitter.label("__rt_unser_validate_object_count_done_x");
     emitter.instruction("lea r8, [rdx + 1]");                                   // opening brace
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // end after helper call
     emitter.instruction("cmp r8, r9");                                          // is the opening brace in bounds?

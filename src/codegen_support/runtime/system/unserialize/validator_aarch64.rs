@@ -335,12 +335,26 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_unser_refuse_class");                          // throws for a class PHP never unserializes
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload the colon position
     emitter.instruction("add x1, x9, #1");                                      // first property-count digit
+    emitter.instruction("ldr x10, [sp]");                                       // saved source base
+    emitter.instruction("ldr x11, [sp, #8]");                                   // original object marker position
+    emitter.instruction("ldrb w11, [x10, x11]");                                // distinguish O from C payloads
+    emitter.instruction("cmp w11, #79");                                        // is this an O: object?
+    emitter.instruction("b.ne __rt_unser_validate_object_count_parse");         // C: still requires a byte count
+    emitter.instruction("ldrb w13, [x10, x1]");                                 // byte after the count colon
+    emitter.instruction("cmp w13, #58");                                        // empty property count (`O:...::{}`)?
+    emitter.instruction("b.eq __rt_unser_validate_object_empty_count");         // php reads it as zero properties
+    emitter.label("__rt_unser_validate_object_count_parse");
     emitter.instruction("ldr x0, [sp]");                                        // saved source base
     emitter.instruction("ldr x2, [sp, #16]");                                   // saved source end
     emitter.instruction("mov w3, #58");                                         // count delimiter ':'
     emitter.instruction("bl __rt_unser_validate_uint");                         // parse the declared property count
     emitter.instruction("cbz x0, __rt_unser_validate_at_fail");                 // propagate numeric failure
     emitter.instruction("str x1, [sp, #32]");                                   // save property count
+    emitter.instruction("b __rt_unser_validate_object_count_done");             // continue at the opening brace
+    emitter.label("__rt_unser_validate_object_empty_count");
+    emitter.instruction("str xzr, [sp, #32]");                                  // an empty count is zero properties
+    emitter.instruction("add x2, x9, #1");                                      // delimiter is the second ':'
+    emitter.label("__rt_unser_validate_object_count_done");
     emitter.instruction("add x9, x2, #1");                                      // opening brace position
     emitter.instruction("ldr x10, [sp, #16]");                                  // saved source end
     emitter.instruction("cmp x9, x10");                                         // brace byte must be in bounds

@@ -637,6 +637,23 @@ echo (serialize($r) === $s ? "identity" : "DIFF"), "\n";
     assert_eq!(out, "42|hello\nidentity\n");
 }
 
+/// PHP accepts an empty object property-count field (`O:...::{}`) as zero properties.
+#[test]
+fn test_unserialize_empty_object_property_count_calls_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function __unserialize(array $data): void {
+        echo "entries=", count($data), "\n";
+    }
+}
+$r = unserialize('O:1:"C"::{}');
+echo get_class($r), "\n";
+"#,
+    );
+    assert_eq!(out, "entries=0\nC\n");
+}
+
 /// Verifies object unserialization via the legacy `__sleep()`/`__wakeup()` pair
 /// (Stage C): `__sleep()` persists a subset of properties, properties restore by
 /// name on read, and `__wakeup()` runs afterwards to recompute derived state.

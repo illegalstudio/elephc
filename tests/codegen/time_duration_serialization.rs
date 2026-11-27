@@ -90,6 +90,13 @@ try {
 }
 
 try {
+    // Structurally malformed payload with an empty property count.
+    unserialize('O:13:"Time\Duration"::{}');
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage(), PHP_EOL;
+}
+
+try {
     Time\Duration::fromSeconds(1, 1)
         ->__unserialize([
             'seconds' => 2,
@@ -105,6 +112,7 @@ try {
          -1.000000002
 string(85) "O:13:"Time\Duration":3:{s:7:"seconds";i:1;s:11:"nanoseconds";i:2;s:8:"negative";b:1;}"
          -2.000000004
+Exception: Invalid serialization data for Time\Duration object
 Exception: Invalid serialization data for Time\Duration object
 Exception: Invalid serialization data for Time\Duration object
 Exception: Invalid serialization data for Time\Duration object
