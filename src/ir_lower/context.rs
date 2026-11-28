@@ -3094,7 +3094,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// over a boxed `Mixed` slot before dropping the reference, which is what lets an abandoned
     /// numeric binding skip its separate `zero_local_slot` (see
     /// `release_and_abandon_local_binding`).
-    fn release_stored_local_value_before_overwrite(
+    pub(crate) fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
         slot: LocalSlotId,

@@ -29,6 +29,7 @@ pub(super) fn lower_array_splice_args(
     } else {
         lower_positional_builtin_args_with_signature(ctx, sig, args)
     };
+    super::array_builtin_args::reindex_lowered_splice_receiver(ctx, sig, args, &mut operands);
     materialize_boxed_array_splice_replacement(ctx, args, &mut operands);
     snapshot_array_splice_self_replacement(ctx, &mut operands);
     widen_array_splice_receiver_for_replacement(ctx, sig, args, &mut operands);

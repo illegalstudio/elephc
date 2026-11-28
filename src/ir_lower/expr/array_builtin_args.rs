@@ -538,19 +538,21 @@ fn lower_planned_builtin_call_args(
                 })
                 .collect()
         }
-        _ if matches!(canonical.as_str(), "array_reverse" | "array_unshift")
-            && !args.iter().any(is_spread_arg) =>
+        _ if matches!(canonical.as_str(), "array_reverse" | "array_unshift") =>
         {
             // A key-preserving sort turns a packed list into an int-keyed hash. These
             // builtins already handle a Mixed cell, so box that hash before the call.
+            // A spread on another argument still leaves the receiver variable visible.
             box_concrete_hash_local_to_mixed(ctx, sig, args);
-            if !crate::types::call_args::has_named_args(args) {
+            if args.iter().any(is_spread_arg) {
+                lower_args_with_signature(ctx, sig, args)
+            } else if !crate::types::call_args::has_named_args(args) {
                 lower_positional_builtin_args_with_signature(ctx, sig, args)
             } else {
                 lower_named_builtin_args_with_signature(ctx, sig, args)
             }
         }
-        _ if canonical == "array_walk" && !args.iter().any(is_spread_arg) => {
+        _ if canonical == "array_walk" => {
             lower_array_walk_args(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
@@ -581,8 +583,12 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice
             if !args.iter().any(is_spread_arg) =>
         {
-            reindex_int_keyed_hash_local_for_splice(ctx, sig, args);
             lower_array_splice_args(ctx, sig, args)
+        }
+        _ if canonical == "array_splice" => {
+            let mut operands = lower_args_with_signature(ctx, sig, args);
+            reindex_lowered_splice_receiver(ctx, sig, args, &mut operands);
+            operands
         }
         crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter => {
             lower_xml_handler_setter_call(ctx, &canonical, sig, args)
@@ -931,23 +937,15 @@ fn lower_getenv_args(
 /// Boxes a concrete hash local so a later builtin can use its Mixed implementation.
 ///
 /// `asort` and the other key-preserving sorts leave an int-keyed hash. `array_walk`,
-/// `array_reverse`, `array_splice`, and `array_unshift` already implement that shape
-/// when the value is a Mixed cell, and reject the concrete hash.
+/// `array_reverse`, and `array_unshift` already implement that shape when the value is a
+/// Mixed cell. The box retains the hash, so the slot's previous cell is released before the
+/// Mixed store overwrites it. A spread on a later argument still leaves this receiver visible.
 fn box_concrete_hash_local_to_mixed(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) {
-    let Some(sig) = sig else {
-        return;
-    };
-    let Some(plan) = plan_key_sort_args(sig, args) else {
-        return;
-    };
-    let Some(receiver) = plan
-        .iter()
-        .find_map(|(slot, arg)| (*slot == 0).then_some(arg))
-    else {
+    let Some(receiver) = visible_array_receiver(sig, args) else {
         return;
     };
     let ExprKind::Variable(name) = &receiver.kind else {
@@ -969,29 +967,25 @@ fn box_concrete_hash_local_to_mixed(
         Some(receiver.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, source, Some(receiver.span));
+    if let Some(slot) = ctx.local_slots.get(name).copied() {
+        ctx.release_stored_local_value_before_overwrite(name, slot, Some(receiver.span));
+    }
     ctx.store_mutated_local(name, boxed, PhpType::Mixed, Some(receiver.span));
     ctx.retype_ref_alias_group(name, PhpType::Mixed);
 }
 
-/// Copies an int-keyed hash back to a packed list so `array_splice` can renumber it.
+/// Reindexes an int-keyed hash after the other splice arguments have been lowered.
 ///
-/// The mixed splice helper rejects a hash payload. Splice of integer keys reindexes the
-/// remainder from zero, which is what the packed splice does to values in iteration order.
-fn reindex_int_keyed_hash_local_for_splice(
+/// Offset, length, and replacement must observe the sorted keys. A throw or a read in
+/// those arguments happens in the IR emitted before this copy. The packed list is what
+/// `array_splice` then renumbers, because the mixed splice helper only accepts a packed payload.
+pub(super) fn reindex_lowered_splice_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
+    operands: &mut [crate::ir::ValueId],
 ) {
-    let Some(sig) = sig else {
-        return;
-    };
-    let Some(plan) = plan_key_sort_args(sig, args) else {
-        return;
-    };
-    let Some(receiver) = plan
-        .iter()
-        .find_map(|(slot, arg)| (*slot == 0).then_some(arg))
-    else {
+    let Some(receiver) = visible_array_receiver(sig, args) else {
         return;
     };
     let ExprKind::Variable(name) = &receiver.kind else {
@@ -1003,8 +997,14 @@ fn reindex_int_keyed_hash_local_for_splice(
     if key.codegen_repr() != PhpType::Int {
         return;
     }
+    let Some(source_value) = operands.first().copied() else {
+        return;
+    };
     let packed = PhpType::Array(value);
-    let source = ctx.load_local(name, Some(receiver.span));
+    let source = crate::ir_lower::context::LoweredValue {
+        value: source_value,
+        ir_type: ctx.builder.value_type(source_value),
+    };
     let values = ctx.emit_owned_value(
         Op::RuntimeCall,
         vec![source.value],
@@ -1016,7 +1016,38 @@ fn reindex_int_keyed_hash_local_for_splice(
         Some(receiver.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, source, Some(receiver.span));
-    ctx.store_retyped_container_local(name, values, packed.clone(), Some(receiver.span));
+    ctx.store_retyped_container_local(name, values, packed, Some(receiver.span));
+    operands[0] = ctx.load_local(name, Some(receiver.span)).value;
+}
+
+/// Returns the array variable passed as parameter 0 when it is not buried in a spread.
+fn visible_array_receiver(sig: Option<&FunctionSig>, args: &[Expr]) -> Option<Expr> {
+    if let Some(sig) = sig {
+        if let Some(plan) = plan_key_sort_args(sig, args) {
+            return plan
+                .into_iter()
+                .find_map(|(slot, arg)| (slot == 0).then_some(arg))
+                .filter(|arg| matches!(arg.kind, ExprKind::Variable(_)));
+        }
+    }
+    let mut positional = 0usize;
+    for arg in args {
+        if is_spread_arg(arg) {
+            return None;
+        }
+        match &arg.kind {
+            ExprKind::NamedArg { name, value } => {
+                if crate::names::php_symbol_key(name) == "array" {
+                    return matches!(value.kind, ExprKind::Variable(_)).then(|| value.as_ref().clone());
+                }
+            }
+            ExprKind::Variable(_) if positional == 0 => return Some(arg.clone()),
+            _ => {
+                positional += 1;
+            }
+        }
+    }
+    None
 }
 
 /// Lowers `array_walk`, boxing a packed list when the callback's first parameter is by-reference.

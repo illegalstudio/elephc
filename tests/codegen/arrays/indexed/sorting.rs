@@ -819,6 +819,38 @@ array_walk($e, function ($value, $key) { echo $key, "=", $value, " "; });
     assert_eq!(out, "1=10 0=30 \n30,10\n10\n0=30 \n0=9 1=10 2=30 \n0=30 1=10 ");
 }
 
+/// Verifies argument evaluation, spreads, and object lifetimes after a key-preserving sort.
+#[test]
+fn test_sorted_hash_followups_keep_argument_order_and_destructors() {
+    let out = compile_and_run(
+        r#"<?php
+class D {
+    function __destruct() { echo "d"; }
+}
+function f() {
+    $a = [new D(), new D()];
+    asort($a);
+    array_reverse($a);
+}
+f();
+echo "x\n";
+$c = [30, 10];
+asort($c);
+function off(array $items) {
+    foreach ($items as $key => $value) { echo $key, "=", $value, " "; }
+    return 0;
+}
+array_splice($c, off($c), 1);
+echo "\n";
+$b = [30, 10];
+asort($b);
+$rev = array_reverse($b, ...[false]);
+echo $rev[0], ",", $rev[1], "\n";
+"#,
+    );
+    assert_eq!(out, "ddx\n1=10 0=30 \n30,10\n");
+}
+
 /// Verifies `krsort` through a reference sorts the packed list and leaves an earlier copy intact.
 #[test]
 fn test_krsort_reference_to_packed_list() {
