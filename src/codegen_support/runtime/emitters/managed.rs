@@ -178,6 +178,7 @@ arrays::emit_hash_reindex_dense(emitter);
     arrays::emit_array_map(emitter);
     arrays::emit_array_map_boxed(emitter);
     arrays::emit_in_array_boxed(emitter);
+    arrays::emit_array_search_boxed(emitter);
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);
