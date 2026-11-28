@@ -228,7 +228,9 @@ fn emit_replacement_aarch64(
     if matches!(site, ReuseSite::PropertySlot) {
         // Direct hydration keeps this lease until the replacement is visible.
         abi::emit_load_symbol_to_reg(emitter, "x9", context.active_depth, 0);
-        emitter.instruction("cbz x9, __rt_unser_reuse_old_ready");              // only a decoder can own the deferred copy
+        emitter.instruction("cbnz x9, __rt_unser_reuse_defer_old");             // an active decoder owns the deferred copy
+        emitter.instruction("b __rt_unser_reuse_old_ready");                    // direct calls defer the release until after the store
+        emitter.label("__rt_unser_reuse_defer_old");
     }
     abi::load_at_offset(emitter, "x0", 72);
     abi::emit_call_label(emitter, context.defer_data);
@@ -301,7 +303,9 @@ fn emit_replacement_aarch64(
     emitter.label(&format!("{prefix}_return"));
     if matches!(site, ReuseSite::PropertySlot) {
         abi::emit_load_symbol_to_reg(emitter, "x9", context.active_depth, 0);
-        emitter.instruction("cbnz x9, __rt_unser_reuse_return_box");            // the active decoder will retire its deferred copy
+        abi::emit_branch_if_zero_wide(emitter, "x9", "__rt_unser_reuse_release_direct");
+        abi::emit_jump(emitter, "__rt_unser_reuse_return_box");
+        emitter.label("__rt_unser_reuse_release_direct");
         abi::load_at_offset(emitter, "x0", 72);
         abi::emit_call_label(emitter, "__rt_decref_any");
         emitter.label("__rt_unser_reuse_return_box");
@@ -347,7 +351,9 @@ fn emit_replacement_x86_64(
         // Direct hydration keeps this lease until the replacement is visible.
         abi::emit_load_symbol_to_reg(emitter, "r9", context.active_depth, 0);
         emitter.instruction("test r9, r9");                                     // check whether a decoder owns the deferred list
-        emitter.instruction("jz __rt_unser_reuse_old_ready_x");                 // hold the copy locally for a direct call
+        emitter.instruction("jnz __rt_unser_reuse_defer_old_x");                // an active decoder owns the deferred copy
+        emitter.instruction("jmp __rt_unser_reuse_old_ready_x");                // direct calls defer the release until after the store
+        emitter.label("__rt_unser_reuse_defer_old_x");
     }
     // Both sites still have the old owner in rax from boxing. Preserve the
     // hash store's additional reload into its original argument register.
@@ -424,7 +430,9 @@ fn emit_replacement_x86_64(
     if matches!(site, ReuseSite::PropertySlot) {
         abi::emit_load_symbol_to_reg(emitter, "r9", context.active_depth, 0);
         emitter.instruction("test r9, r9");                                     // inspect the active decoder depth after publication
-        emitter.instruction("jnz __rt_unser_reuse_return_box_x");               // the decoder owns the old-value copy
+        emitter.instruction("jz __rt_unser_reuse_release_direct_x");            // direct calls still own the old-value copy
+        emitter.instruction("jmp __rt_unser_reuse_return_box_x");               // a decoder context owns the old-value copy
+        emitter.label("__rt_unser_reuse_release_direct_x");
         abi::load_at_offset(emitter, "rax", 72);
         abi::emit_call_label(emitter, "__rt_decref_any");
         emitter.label("__rt_unser_reuse_return_box_x");

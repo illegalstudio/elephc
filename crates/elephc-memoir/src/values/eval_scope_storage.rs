@@ -74,6 +74,19 @@ pub fn emit_load_entry_field(
     emitter.emit_load_from_address(destination, entry, field.offset());
 }
 
+/// Loads the low 32-bit ABI flags without widening the memory operand.
+pub fn emit_load_entry_flags(emitter: &mut impl Emitter, destination: &str, entry: &str) {
+    let offset = EntryField::Flags.offset();
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {destination}, [{entry}, #{offset}]")); // load the low ABI flags word
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {destination}, DWORD PTR [{entry} + {offset}]")); // load the low ABI flags word
+        }
+    }
+}
+
 /// Emits the C ABI allocator and destructor for a scope and its owned entries.
 pub fn emit_lifecycle(emitter: &mut impl Emitter, owned_flag: i64) {
     match emitter.arch() {

@@ -146,7 +146,7 @@ fn emit_aarch64_eval_scope_get(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x3]");                                       // write the output Mixed cell pointer
     emitter.label("__elephc_eval_scope_get_found_flags");
     emitter.instruction("cbz x4, __elephc_eval_scope_get_ok");                  // skip flags output when caller passed null
-    eval_scope_storage::emit_load_entry_field(emitter, "w10", "x9", EntryField::Flags);
+    eval_scope_storage::emit_load_entry_flags(emitter, "w10", "x9");
     emitter.instruction("str w10, [x4]");                                       // write the output ABI flags
     emitter.instruction("b __elephc_eval_scope_get_ok");                        // finish with success
     emitter.label("__elephc_eval_scope_get_missing");
@@ -291,7 +291,7 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_scope_get_found_flags");
     emitter.instruction("test r8, r8");                                         // did the caller request flag output?
     emitter.instruction("jz __elephc_eval_scope_get_ok");                       // skip flags output for null out_flags
-    eval_scope_storage::emit_load_entry_field(emitter, "r10d", "r9", EntryField::Flags);
+    eval_scope_storage::emit_load_entry_flags(emitter, "r10d", "r9");
     emitter.instruction("mov DWORD PTR [r8], r10d");                            // write the output ABI flags
     emitter.instruction("jmp __elephc_eval_scope_get_ok");                      // finish with success
     emitter.label("__elephc_eval_scope_get_missing");
@@ -321,4 +321,34 @@ fn emit_x86_64_eval_scope_native_type(emitter: &mut Emitter) {
 fn label_c_global(emitter: &mut Emitter, name: &str) {
     let symbol = emitter.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Target;
+
+    /// Eval-scope flag loads use the 32-bit C ABI width on every supported target.
+    #[test]
+    fn eval_scope_flag_load_uses_abi_width_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_eval_scope_runtime(&mut emitter);
+            let arch = emitter.target.arch;
+            let assembly = emitter.output();
+            let expected = match arch {
+                Arch::AArch64 => "ldr w10, [x9, #32]",
+                Arch::X86_64 => "mov r10d, DWORD PTR [r9 + 32]",
+            };
+
+            assert!(assembly.contains(expected), "{name}");
+            assert!(!assembly.contains("mov r10d, QWORD PTR [r9 + 32]"), "{name}");
+        }
+    }
 }

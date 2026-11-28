@@ -18,6 +18,9 @@ pub(crate) fn emit_branch_if_int_result_nonzero(emitter: &mut impl TargetAbi, la
 /// Delegates emit branch if int result zero without duplicating target logic.
 pub(crate) fn emit_branch_if_int_result_zero(emitter: &mut impl TargetAbi, label: &str) { emitter.emit_branch_if_int_result_zero(label) }
 
+/// Delegates emit branch if an arbitrary wide register is zero without duplicating target logic.
+pub(crate) fn emit_branch_if_zero_wide(emitter: &mut impl TargetAbi, register: &str, label: &str) { emitter.emit_branch_if_zero_wide(register, label) }
+
 /// Delegates emit call label without duplicating target logic.
 pub(crate) fn emit_call_label(emitter: &mut impl TargetAbi, label: &str) { emitter.emit_call_label(label) }
 

@@ -57,6 +57,8 @@ impl elephc_memoir::TargetAbi for Emitter {
     fn emit_branch_if_int_result_nonzero(&mut self, label: &str) { abi::emit_branch_if_int_result_nonzero(self, label) }
     /// Uses the existing target ABI for emit branch if int result zero.
     fn emit_branch_if_int_result_zero(&mut self, label: &str) { abi::emit_branch_if_int_result_zero(self, label) }
+    /// Uses the existing target ABI for emit branch if an arbitrary wide register is zero.
+    fn emit_branch_if_zero_wide(&mut self, register: &str, label: &str) { abi::emit_branch_if_zero_wide(self, register, label) }
     /// Uses the existing target ABI for emit call label.
     fn emit_call_label(&mut self, label: &str) { abi::emit_call_label(self, label) }
     /// Uses the existing target ABI for emit call reg.

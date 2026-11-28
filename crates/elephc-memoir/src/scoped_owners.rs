@@ -24,8 +24,8 @@ pub fn emit_defer_data(emitter: &mut impl Emitter, state: ScopedOwnerState<'_>) 
     emitter.label_global("__rt_unserialize_defer_data");
     abi::emit_frame_prologue(emitter, 32);
     abi::store_at_offset(emitter, result, 8);
-    abi::emit_load_symbol_to_reg(emitter, result, depth_symbol, 0);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_unserialize_defer_data_direct");
+    abi::emit_load_symbol_to_reg(emitter, scratch, depth_symbol, 0);
+    abi::emit_branch_if_zero_wide(emitter, scratch, "__rt_unserialize_defer_data_direct");
     abi::emit_load_int_immediate(emitter, result, 24);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     abi::emit_load_symbol_to_reg(emitter, scratch, head_symbol, 0);

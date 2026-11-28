@@ -5,7 +5,10 @@
 //! - Compiler assembly regression tests.
 //!
 //! Key details:
-//! - The reference was captured before extraction at 1a946d133959a352e6ba76f2c2c1332723f09bcc.
+//! - The original reference was captured before extraction at 1a946d133959a352e6ba76f2c2c1332723f09bcc.
+//! - Refreshes require a component-level diff against current main before accepting intentional deltas.
+//! - The current reference includes exact eval-scope owner visits, centralized metadata geometry,
+//!   PHP 8.5.13 hydration ownership, and the corrected 32-bit eval-scope flags load.
 //! - The fingerprints cover internal labels, emitted instructions and buffer storage declarations.
 
 use super::{arrays, data, eval_bridge, eval_scope, exceptions, io, system};

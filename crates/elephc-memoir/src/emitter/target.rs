@@ -33,6 +33,8 @@ pub trait TargetAbi {
     fn emit_branch_if_int_result_nonzero(&mut self, label: &str);
     /// Delegates emit branch if int result zero to the authoritative target ABI.
     fn emit_branch_if_int_result_zero(&mut self, label: &str);
+    /// Delegates emit branch if an arbitrary wide register is zero to the authoritative target ABI.
+    fn emit_branch_if_zero_wide(&mut self, register: &str, label: &str);
     /// Delegates emit call label to the authoritative target ABI.
     fn emit_call_label(&mut self, label: &str);
     /// Delegates emit call reg to the authoritative target ABI.

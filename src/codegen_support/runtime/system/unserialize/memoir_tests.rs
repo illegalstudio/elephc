@@ -5,7 +5,9 @@
 //! - Focused compiler tests for hydration ownership extraction.
 //!
 //! Key details:
-//! - Captured from the original compiler implementation at b1a089c827.
+//! - The original reference was captured from the compiler implementation at b1a089c827.
+//! - Refreshes require a component-level diff against current main before accepting intentional deltas.
+//! - The current reference includes centralized metadata geometry and PHP 8.5.13 hydration ownership.
 //! - Output and sorted internal labels cover all five targets and six emission modes.
 //! - Compiler-owned fixed data is outside this fingerprint.
 
