@@ -2790,7 +2790,7 @@ fn emit_branch_if_saved_receiver_class_id_mismatch(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", receiver_payload_offset);
             ctx.emitter.instruction(&format!("cbz x9, {}", next_label));        // reject null callable-array receivers before reading class id
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the callable-array receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // compare the receiver class id against this target
             ctx.emitter.instruction(&format!("b.ne {}", next_label));           // try the next callable-array target when the class differs
@@ -2799,7 +2799,7 @@ fn emit_branch_if_saved_receiver_class_id_mismatch(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", receiver_payload_offset);
             ctx.emitter.instruction("test r10, r10");                           // reject null callable-array receivers before reading class id
             ctx.emitter.instruction(&format!("je {}", next_label));             // try the next callable-array target when the receiver is null
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the callable-array receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r11", "r10");
             abi::emit_load_int_immediate(ctx.emitter, "r10", class_id as i64);
             ctx.emitter.instruction("cmp r11, r10");                            // compare the receiver class id against this target
             ctx.emitter.instruction(&format!("jne {}", next_label));            // try the next callable-array target when the class differs

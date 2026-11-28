@@ -35,7 +35,7 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter, na
         "__rt_object_clone_shallow_boxed_null_x86",
     );
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the source object payload pointer
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save class id across allocation and ownership calls
     emit_x86_64_reject_runtime_managed_clone_classes(emitter, "rax", "__rt_object_clone_shallow_boxed_null_x86");
     abi::emit_load_symbol_to_reg(emitter, "r11", "_class_gc_desc_count", 0);
@@ -51,7 +51,7 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter, na
     emitter.instruction("mov rax, QWORD PTR [r11 + rax * 8]");                  // include ordinary Throwable construction metadata in the allocation
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the source class id
-    emitter.instruction("mov QWORD PTR [rax], rcx");                            // store the class id at the clone payload head
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "rcx", "rax");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone object payload pointer
     abi::emit_symbol_address(emitter, "r11", "_class_throwable_line_offsets");
     emitter.instruction("mov r11, QWORD PTR [r11 + rcx * 8]");                  // locate optional ordinary Throwable construction metadata

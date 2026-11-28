@@ -94,7 +94,7 @@ fn emit_build_fdset_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, s
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
     emitter.instruction(&format!("cbz x9, {}", done_l));                        // a null set (no array) adds no descriptors
-    emitter.instruction("ldr x10, [x9]");                                       // load the array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x9"); // load the array length
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x9");
     emitter.instruction("lsr x4, x4, #8");                                      // shift the value_type tag into the low byte
     emitter.instruction("and x4, x4, #0x7f");                                   // isolate the value_type tag
@@ -160,7 +160,7 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
     emitter.instruction(&format!("cbz x9, {}", absent_l));                      // a null set has no array to compact
-    emitter.instruction("ldr x10, [x9]");                                       // load the array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x9"); // load the array length
     emitter.instruction(&format!("ldr x14, [sp, #{}]", fds_off));               // load the post-select bitmap word
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x9");
     emitter.instruction("lsr x4, x4, #8");                                      // shift the value_type tag into the low byte
@@ -218,7 +218,7 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction("add x11, x11, #1");                                    // advance to the next source descriptor
     emitter.instruction(&format!("b {}", loop_l));                              // continue compacting the array
     emitter.label(&done_l);
-    emitter.instruction("str x13, [x9]");                                       // store the compacted array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x9", "x13"); // store the compacted array length
     emitter.label(&absent_l);
 }
 
@@ -285,14 +285,14 @@ fn emit_build_fdset_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));    // load the resource array pointer
     emitter.instruction("test r11, r11");                                       // is this set absent (a null argument)?
     emitter.instruction(&format!("jz {}", done_l));                             // a null set adds no descriptors
-    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdi", "r11"); // load the array length
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r12", "r11");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r12", "r12");
     emitter.instruction("xor rsi, rsi");                                        // descriptor index
     emitter.label(&loop_l);
     emitter.instruction("cmp rsi, rdi");                                        // have all descriptors been scanned?
     emitter.instruction(&format!("jae {}", done_l));                            // bitmap is fully built
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 24 + rsi * 8]");             // load the slot value (raw fd or Mixed* cell)
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "rsi", "rdx", "r11");
     emitter.instruction("cmp r12, 7");                                          // is this a Mixed-boxed indexed array?
     emitter.instruction(&format!("je {}", unbox_l));                            // unbox the Mixed cell to get the underlying fd
     emitter.instruction(&format!("jmp {}", after_unbox_l));                     // raw-int array: rdx already holds the fd
@@ -342,7 +342,7 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));    // load the resource array pointer
     emitter.instruction("test r11, r11");                                       // is this set absent (a null argument)?
     emitter.instruction(&format!("jz {}", absent_l));                           // a null set has no array to compact
-    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdi", "r11"); // load the array length
     emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {}]", fds_off));     // load the post-select bitmap word
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r12", "r11");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r12", "r12");
@@ -351,7 +351,7 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.label(&loop_l);
     emitter.instruction("cmp rsi, rdi");                                        // have all descriptors been scanned?
     emitter.instruction(&format!("jae {}", done_l));                            // compaction is complete
-    emitter.instruction("mov r13, QWORD PTR [r11 + 24 + rsi * 8]");             // load the raw slot value (preserved for the kept-array store)
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "rsi", "r13", "r11");
     emitter.instruction("mov rdx, r13");                                        // copy for fd extraction; r13 stays the slot's stored value
     emitter.instruction("cmp r12, 7");                                          // is this a Mixed-boxed indexed array?
     emitter.instruction(&format!("je {}", unbox_l));                            // unbox the Mixed cell to get the underlying fd
@@ -389,12 +389,12 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.instruction("shr rax, cl");                                         // shift the descriptor bit to position 0
     emitter.instruction("and rax, 1");                                          // isolate the descriptor's ready bit
     emitter.instruction(&format!("jz {}", next_l));                             // drop descriptors that are not ready
-    emitter.instruction("mov QWORD PTR [r11 + 24 + r9 * 8], r13");              // keep the original slot value (raw fd or Mixed*) at the front
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r11", "r9", "r13", "r11");
     emitter.instruction("add r9, 1");                                           // advance the kept-descriptor index
     emitter.label(&next_l);
     emitter.instruction("add rsi, 1");                                          // advance to the next source descriptor
     emitter.instruction(&format!("jmp {}", loop_l));                            // continue compacting the array
     emitter.label(&done_l);
-    emitter.instruction("mov QWORD PTR [r11], r9");                             // store the compacted array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "r11", "r9"); // store the compacted array length
     emitter.label(&absent_l);
 }

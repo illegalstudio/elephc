@@ -709,14 +709,18 @@ pub(super) fn store_pushed_value_to_ref_cell(ctx: &mut FunctionContext<'_>, cell
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
-            abi::emit_store_to_address(ctx.emitter, ptr_reg, cell_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, len_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(ctx.emitter, ptr_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_store_high(ctx.emitter, len_reg, cell_reg);
         }
         PhpType::TaggedScalar => {
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
             abi::emit_pop_reg_pair(ctx.emitter, abi::int_result_reg(ctx.emitter), tag_reg);
-            abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), cell_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, tag_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                cell_reg,
+            );
+            elephc_memoir::reference_cells::emit_store_high(ctx.emitter, tag_reg, cell_reg);
         }
         PhpType::Float => {
             abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
@@ -729,8 +733,8 @@ pub(super) fn store_pushed_value_to_ref_cell(ctx: &mut FunctionContext<'_>, cell
         }
         _ => {
             abi::emit_pop_reg(ctx.emitter, temp_reg);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, cell_reg, 0);
-            abi::emit_store_zero_to_address(ctx.emitter, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(ctx.emitter, temp_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_clear_high(ctx.emitter, cell_reg);
         }
     }
 }
@@ -849,7 +853,7 @@ pub(super) fn emit_ref_arg_writebacks_guarding_result(
         // releases it itself, before the old value, and leaves 0 there).
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let cell = abi::int_result_reg(ctx.emitter);
-        abi::emit_load_from_address(ctx.emitter, cell, cell, 0);
+        elephc_memoir::reference_cells::emit_load_low(ctx.emitter, cell, cell);
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         match writeback.source_ty.codegen_repr() {
             PhpType::Float => {
@@ -1280,7 +1284,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the array
             ctx.emitter.instruction("cmp rcx, QWORD PTR [r10]");                // has every element been checked?
             ctx.emitter.instruction(&format!("jge {}", done));                  // yes: the array fits the typed contract
-            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 24 + rcx * 8]"); // load this element's payload pointer
+            elephc_memoir::values::packed_slots::emit_load_indexed_word(ctx.emitter, "r10", "rcx", "rax", "r11");
         }
     }
     if let Some(tag) = hash_tag {
@@ -1379,13 +1383,13 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("mov QWORD PTR [rsp], rax");            // remember the fresh empty array
                 ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");       // reload the (unique) outer array
                 ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 24]");       // reload the element index
-                ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 24 + rcx * 8]"); // load the empty nested array the slot still owns
+                elephc_memoir::values::packed_slots::emit_load_indexed_word(ctx.emitter, "r10", "rcx", "rax", "r11");
                 abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
                 ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");            // recover the fresh empty array
                 ctx.emitter.instruction("add rsp, 16");                         // release the spill slot
                 ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");            // reload the outer array
                 ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");        // reload the element index
-                ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // the slot now owns the fresh empty array
+                elephc_memoir::values::packed_slots::emit_store_indexed_word(ctx.emitter, "r10", "rcx", "rax", "r11");
                 ctx.emitter.instruction(&format!("jmp {}", next));              // nothing else to check in it
                 ctx.emitter.label(&nonempty);
                 elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r11", "rax");
@@ -1398,7 +1402,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                     ctx.emitter.instruction("call __rt_array_to_mixed");        // widen the slot's nested array into boxed cells (consumes it)
                     ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");        // reload the (unique) outer array
                     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");    // reload the element index
-                    ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // the slot now owns the widened copy
+                    elephc_memoir::values::packed_slots::emit_store_indexed_word(ctx.emitter, "r10", "rcx", "rax", "r11");
                 } else if nested_convertible {
                     ctx.emitter.instruction(&format!("cmp r11, {}", boxed_tag)); // are the nested slots boxed Mixed cells?
                     ctx.emitter.instruction(&format!("jne {}", fail));          // any other layout cannot be converted
@@ -1410,13 +1414,13 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");        // remember the converted copy
                     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");   // reload the (unique) outer array
                     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 24]");   // reload the element index
-                    ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 24 + rcx * 8]"); // load the boxed nested array the slot still owns
+                    elephc_memoir::values::packed_slots::emit_load_indexed_word(ctx.emitter, "r10", "rcx", "rax", "r11");
                     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
                     ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");        // recover the converted copy
                     ctx.emitter.instruction("add rsp, 16");                     // release the conversion spill slot
                     ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");        // reload the outer array
                     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");    // reload the element index
-                    ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // the slot now owns the converted copy
+                    elephc_memoir::values::packed_slots::emit_store_indexed_word(ctx.emitter, "r10", "rcx", "rax", "r11");
                 } else {
                     ctx.emitter.instruction(&format!("jmp {}", fail));          // no: the typed local cannot read them
                 }
@@ -1437,7 +1441,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 Arch::X86_64 => {
                     ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");        // reload the outer array
                     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");    // reload the element index
-                    ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // store the nested array the check returned
+                    elephc_memoir::values::packed_slots::emit_store_indexed_word(ctx.emitter, "r10", "rcx", "rax", "r11");
                 }
             }
         }

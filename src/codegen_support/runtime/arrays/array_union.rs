@@ -67,7 +67,7 @@ pub fn emit_array_union(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, #1");                                         // is the right array storing string slots?
     emitter.instruction("b.eq __rt_array_union_push_string");                   // strings need pointer+length loads and persistence
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the right indexed-array pointer
-    emitter.instruction("add x11, x11, #24");                                   // move to the right array payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x1, [x11, x9, lsl #3]");                           // load the right scalar or pointer payload for this numeric key
     emitter.instruction("cmp x12, #4");                                         // is the payload tag in the refcounted range?
     emitter.instruction("b.lo __rt_array_union_push_scalar");                   // scalar payloads can be byte-copied through the int append helper
@@ -149,7 +149,7 @@ fn emit_array_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 1");                                           // is the right array storing string slots?
     emitter.instruction("je __rt_array_union_x86_push_string");                 // strings need pointer+length loads and persistence
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the right indexed-array pointer
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 24 + r10 * 8]");             // load the right scalar or pointer payload for this numeric key
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "rsi", "r11");
     emitter.instruction("cmp r9, 4");                                           // is the payload tag in the refcounted range?
     emitter.instruction("jb __rt_array_union_x86_push_scalar");                 // scalar payloads can be byte-copied through the int append helper
     emitter.instruction("cmp r9, 7");                                           // is the payload tag still a supported refcounted value?
@@ -169,7 +169,7 @@ fn emit_array_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the right indexed-array pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current right index
     emitter.instruction("shl r10, 4");                                          // compute the byte offset for a 16-byte string slot
-    emitter.instruction("lea r11, [r11 + r10 + 24]");                           // address the right string slot inside the indexed-array payload
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "r11", "r11", "r10");
     emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the right string pointer
     emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the right string length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current result indexed-array pointer

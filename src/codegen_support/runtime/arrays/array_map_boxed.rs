@@ -16,6 +16,7 @@ use elephc_memoir::{
     FrameOffset,
     cleanup::boundary::CleanupBoundary,
     hash_layout::{self, EntryField},
+    values::packed_slots,
 };
 
 const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 160;
@@ -191,12 +192,12 @@ fn read_aarch64_entry(emitter: &mut Emitter) {
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x0", "x11");
     elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
     elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x11", "x12");
-    emitter.instruction("madd x11, x10, x12, x11");                             // address the current element before its header offset
-    emitter.instruction("ldr x1, [x11, #24]");                                  // borrow its low payload word
+    emitter.instruction("mul x9, x10, x12");                                    // convert the logical cursor to a packed payload byte offset
+    packed_slots::emit_load_packed_byte_offset_word(emitter, "x1", "x11", "x9");
     emitter.instruction("mov x2, #0");                                          // scalar and pointer slots have no high word
     emitter.instruction("cmp x12, #16");                                        // paired strings need their length word too
     emitter.instruction("b.ne __rt_array_map_boxed_value");                     // do not overread an eight-byte final slot
-    emitter.instruction("ldr x2, [x11, #32]");                                  // borrow the paired high word
+    packed_slots::emit_load_packed_byte_offset_word_delta(emitter, "x2", "x11", "x9", 1);
     emitter.instruction("b __rt_array_map_boxed_value");                        // box or retain the argument before invocation
     emitter.label("__rt_array_map_boxed_hash");
     emitter.instruction("tbnz x10, #63, __rt_array_map_boxed_cleanup");         // minus one ends the live insertion-order chain
@@ -228,13 +229,13 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "rdx", "r11");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rdx", "rdx");
     elephc_memoir::values::array_header::emit_load_element_stride(emitter, "r11", "rcx");
-    emitter.instruction("imul r10, rcx");                                       // convert the logical index to a payload offset
-    emitter.instruction("add r11, r10");                                        // locate the current packed entry
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low value word
+    emitter.instruction("mov r9, r10");                                         // preserve the logical index while forming its byte offset
+    emitter.instruction("imul r9, rcx");                                        // convert the logical index to a payload offset
+    packed_slots::emit_load_packed_byte_offset_word(emitter, "rdi", "r11", "r9");
     emitter.instruction("xor esi, esi");                                        // one-word slots have no high value word
     emitter.instruction("cmp rcx, 16");                                         // only paired slots contain a second word
     emitter.instruction("jne __rt_array_map_boxed_value");                      // avoid reading beyond single-word storage
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // retain the string length or paired high word
+    packed_slots::emit_load_packed_byte_offset_word_delta(emitter, "rsi", "r11", "r9", 1);
     emitter.instruction("jmp __rt_array_map_boxed_value");                      // normalize the callback's boxed input
     emitter.label("__rt_array_map_boxed_hash");
     emitter.instruction("test r10, r10");                                       // inspect the insertion-order end sentinel

@@ -202,7 +202,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
     emitter.instruction("b.ne __rt_mixed_array_get_indexed_missing_string");    // missing string keys use PHP's string-key warning
     emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = key_lo (int index)
-    emitter.instruction("ldr x9, [x10]");                                       // x9 = array length (header offset 0)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x10"); // x9 = array length (header offset 0)
     emitter.instruction("cmp x12, #0");                                         // negative index → null
     emitter.instruction("b.lt __rt_mixed_array_get_indexed_missing");           // warn and return null for a negative indexed-array key
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
@@ -419,7 +419,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     abi::emit_push_call_operand_owner(emitter, "x11", false);
     emitter.instruction("ldr x1, [sp, #56]");                                   // pass boxed offset above the 48-byte cleanup record
     emitter.instruction("ldr x0, [sp, #48]");                                   // pass the receiver above the same cleanup record
-    emitter.instruction("ldr x11, [x0]");                                       // reload class id, clobbered across the boxing call
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x0");
     emit_offset_get_table(emitter, 48);
     emitter.instruction("blr x12");                                             // read through PHP's ArrayAccess::offsetGet
     emitter.instruction("str x0, [sp, #48]");                                   // stash the owned result in the original receiver slot
@@ -569,7 +569,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
     emitter.instruction("jne __rt_mixed_array_get_indexed_missing_string");     // missing string keys use PHP's string-key warning
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = key_lo (int index)
-    emitter.instruction("mov r9, QWORD PTR [r10]");                             // r9 = array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r9", "r10"); // r9 = array length
     emitter.instruction("cmp r8, 0");                                           // negative index → null
     emitter.instruction("jl __rt_mixed_array_get_indexed_missing");             // warn and return null for a negative indexed-array key
     emitter.instruction("cmp r8, r9");                                          // index >= length → null
@@ -778,7 +778,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     abi::emit_push_call_operand_owner(emitter, "r11", false);
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the boxed offset after publishing its cleanup record
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass unboxed receiver as argument 0
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     emit_offset_get_table(emitter, 48);
     emitter.instruction("call r12");                                            // read through PHP's ArrayAccess::offsetGet
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the owned result; the receiver is done

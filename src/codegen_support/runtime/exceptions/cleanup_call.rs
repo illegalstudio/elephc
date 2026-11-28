@@ -162,7 +162,11 @@ mod tests {
                 bounds.instruction("add x10, x9, x10");                         // combine the offset with the preserved heap base
                 bounds.instruction("cmp x1, x10");                              // bound the payload before any header access
                 bounds.instruction("b.hs __rt_cleanup_invoke_protected");        // foreign pointers must take the protected fallback
-                bounds.instruction("ldr w10, [x1, #-12]");                      // only an in-range payload permits a refcount read
+                elephc_memoir::heap_refcount::emit_load_owner_count(
+                    &mut bounds,
+                    "w10",
+                    "x1",
+                );
                 let required = bounds.output();
                 for (kind, probe) in [("scalar", scalar), ("empty array", array)] {
                     assert!(probe.contains(&required),

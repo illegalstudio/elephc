@@ -137,7 +137,7 @@ pub(crate) fn emit_obj_debuginfo_fetch(emitter: &mut Emitter) {
     // -- resolve the class's __debugInfo entry; an unknown id or a zero entry means "none" --
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("ldr x10, [x10]");                              // load the number of registered class ids
             emitter.instruction("cmp x9, x10");                                 // is the class id within the metadata tables?
@@ -147,7 +147,7 @@ pub(crate) fn emit_obj_debuginfo_fetch(emitter: &mut Emitter) {
             emitter.instruction("cbz x10, __rt_obj_debuginfo_none");            // the class dumps through its descriptor rows
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
             abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("cmp r9, QWORD PTR [r10]");                     // is the class id within the metadata tables?
             emitter.instruction("jae __rt_obj_debuginfo_none");                 // incomplete or stale ids have no __debugInfo
@@ -169,7 +169,7 @@ pub(crate) fn emit_obj_debuginfo_fetch(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(emitter, "x9", OBJ);
-            emitter.instruction("ldr x9, [x9]");                                // reload the runtime class id from the borrowed receiver
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
             abi::emit_symbol_address(emitter, "x10", "_class_debuginfo_void");  // resolve the returns-nothing flags
             emitter.instruction("ldrb w10, [x10, x9]");                         // w10 = 1 when this class's __debugInfo() returns nothing
             emitter.instruction("cbz w10, __rt_obj_debuginfo_classify");        // a value-returning method keeps its result
@@ -178,7 +178,7 @@ pub(crate) fn emit_obj_debuginfo_fetch(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             abi::load_at_offset(emitter, "r9", OBJ);
-            emitter.instruction("mov r9, QWORD PTR [r9]");                      // reload the runtime class id from the borrowed receiver
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r9");
             abi::emit_symbol_address(emitter, "r10", "_class_debuginfo_void");  // resolve the returns-nothing flags
             emitter.instruction("movzx r10d, BYTE PTR [r10 + r9]");             // r10 = 1 when this class's __debugInfo() returns nothing
             emitter.instruction("test r10d, r10d");                             // does the method return a value?
@@ -332,18 +332,16 @@ fn emit_null_deprecation(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov x2, #{}", DEBUGINFO_NULL_PREFIX.len())); // prefix byte length
             abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
             abi::load_at_offset(emitter, "x11", OBJ);
-            emitter.instruction("ldr x11, [x11]");                              // load the runtime class id from the object header
-            abi::emit_symbol_address(emitter, "x10", "_class_name_count");      // resolve the class-name table extent
-            emitter.instruction("ldr x10, [x10]");                              // load the number of named class ids
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10"); // load the number of named class ids
             emitter.instruction("cmp x11, x10");                                // is the class id within the name table?
             emitter.instruction("b.hs __rt_obj_debuginfo_anon");                // an unknown class id prints no name
-            abi::emit_symbol_address(emitter, "x12", "_class_name_entries");    // resolve the class-name entry table
-            emitter.instruction("add x12, x12, x11, lsl #4");                   // each entry is a 16-byte (ptr, len) pair
-            emitter.instruction("ldr x1, [x12]");                               // load the class-name pointer
-            emitter.instruction("ldr x2, [x12, #8]");                           // load the class-name length
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x12");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x12", "x12", "x11", "x13");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x1", "x2", "x12");
             emitter.instruction("b __rt_obj_debuginfo_named");                  // emit the resolved name
             emitter.label("__rt_obj_debuginfo_anon");
-            abi::emit_symbol_address(emitter, "x1", "_class_name_missing");     // fall back to the empty class-name slot
+            elephc_memoir::values::class_metadata::emit_missing_class_name_address(emitter, "x1"); // fall back to the empty class-name slot
             emitter.instruction("mov x2, #0");                                  // a zero-length fragment adds nothing
             emitter.label("__rt_obj_debuginfo_named");
             abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
@@ -356,18 +354,16 @@ fn emit_null_deprecation(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov esi, {}", DEBUGINFO_NULL_PREFIX.len())); // prefix byte length
             abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
             abi::load_at_offset(emitter, "r11", OBJ);
-            emitter.instruction("mov r11, QWORD PTR [r11]");                    // load the runtime class id from the object header
-            abi::emit_symbol_address(emitter, "r10", "_class_name_count");      // resolve the class-name table extent
-            emitter.instruction("cmp r11, QWORD PTR [r10]");                    // is the class id within the name table?
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r10");
+            emitter.instruction("cmp r11, r10");                                // is the class id within the name table?
             emitter.instruction("jae __rt_obj_debuginfo_anon");                 // an unknown class id prints no name
-            abi::emit_symbol_address(emitter, "r10", "_class_name_entries");    // resolve the class-name entry table
-            emitter.instruction("shl r11, 4");                                  // each entry is a 16-byte (ptr, len) pair
-            emitter.instruction("add r10, r11");                                // advance to this class's entry
-            emitter.instruction("mov rdi, QWORD PTR [r10]");                    // load the class-name pointer
-            emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                // load the class-name length
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r11", "r9");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rdi", "rsi", "r10");
             emitter.instruction("jmp __rt_obj_debuginfo_named");                // emit the resolved name
             emitter.label("__rt_obj_debuginfo_anon");
-            abi::emit_symbol_address(emitter, "rdi", "_class_name_missing");    // fall back to the empty class-name slot
+            elephc_memoir::values::class_metadata::emit_missing_class_name_address(emitter, "rdi"); // fall back to the empty class-name slot
             emitter.instruction("xor esi, esi");                                // a zero-length fragment adds nothing
             emitter.label("__rt_obj_debuginfo_named");
             abi::emit_call_label(emitter, "__rt_diag_warning_fragment");

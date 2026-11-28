@@ -49,7 +49,7 @@ pub fn emit_array_column_mixed(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save requested column key pointer and length
 
     // -- load outer array length --
-    emitter.instruction("ldr x9, [x0]");                                        // load outer indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load outer indexed-array logical length
     emitter.instruction("str x9, [sp, #24]");                                   // save outer length for the extraction loop
 
     // -- create result array with boxed Mixed slots --
@@ -70,7 +70,7 @@ pub fn emit_array_column_mixed(emitter: &mut Emitter) {
 
     // -- load inner associative row and look up the requested key --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload outer indexed-array pointer
-    emitter.instruction("add x0, x0, #24");                                     // advance to the outer array payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x0", "x0");
     emitter.instruction("ldr x0, [x0, x9, lsl #3]");                            // load current inner associative-array hash pointer
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload requested column key pointer and length
     emitter.instruction("bl __rt_hash_get");                                    // look up row value, returning found plus tag and payload words
@@ -122,7 +122,7 @@ fn emit_array_column_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save outer indexed-array pointer across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save requested column key pointer across the row loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save requested column key length across the row loop
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load outer indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load outer indexed-array logical length
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save outer row count for loop termination
     emitter.instruction("mov rdi, r10");                                        // pass result capacity equal to the outer row count
     emitter.instruction("mov rsi, 8");                                          // boxed Mixed slots store one pointer each
@@ -136,7 +136,7 @@ fn emit_array_column_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // compare index against saved outer row count
     emitter.instruction("jae __rt_acm_done");                                   // finish once all rows have been examined
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload outer indexed-array pointer
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // load current inner associative-array with tag and payload
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "rdi", "r11");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested column key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload requested column key length
     emitter.instruction("call __rt_hash_get");                                  // look up row value, returning found plus tag and payload words

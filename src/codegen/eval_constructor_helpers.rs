@@ -546,7 +546,7 @@ fn emit_aarch64_builtin_throwable_constructor_dispatch(
     for class_id in class_ids {
         let next_label = format!("__elephc_eval_builtin_throwable_next_{}", class_id);
         emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin constructor dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
         abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
@@ -575,7 +575,7 @@ fn emit_x86_64_builtin_throwable_constructor_dispatch(
     for class_id in class_ids {
         let next_label = format!("__elephc_eval_builtin_throwable_next_{}_x", class_id);
         emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin constructor dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r11");
         abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
@@ -794,7 +794,7 @@ fn emit_aarch64_constructor_dispatch(
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_constructor_next_{}", class_id);
         emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for constructor dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
         abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this constructor class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next constructor class when ids differ
@@ -826,7 +826,7 @@ fn emit_x86_64_constructor_dispatch(
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_constructor_next_{}_x", class_id);
         emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for constructor dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r11");
         abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this constructor class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next constructor class when ids differ

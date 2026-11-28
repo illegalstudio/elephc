@@ -13,6 +13,11 @@ use crate::{Arch, Emitter, FrameOffset, abi};
 
 const ACTIVE_STREAM: &str = "_ser_stream";
 
+/// Declares the process-wide active serializer descriptor slot.
+pub fn append_active_storage(out: &mut String, target: &impl crate::data::DataTarget) {
+    out.push_str(&target.common(ACTIVE_STREAM, 8));
+}
+
 /// Materializes the address of the active serializer stream slot.
 pub fn emit_active_address(emitter: &mut impl Emitter, destination: &str) {
     emitter.emit_symbol_address(destination, ACTIVE_STREAM);

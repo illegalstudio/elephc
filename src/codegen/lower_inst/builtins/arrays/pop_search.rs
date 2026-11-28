@@ -100,10 +100,10 @@ pub(super) fn lower_array_pop_aarch64(
     let empty_label = ctx.next_label("array_pop_empty");
     let done_label = ctx.next_label("array_pop_done");
     ctx.load_value_to_reg(array, "x0")?;
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether pop is empty
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x0"); // load the indexed-array length before deciding whether pop is empty
     ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // return boxed null when array_pop() runs on an empty array
     ctx.emitter.instruction("sub x9, x9, #1");                                  // convert the old length into the removed last-element index
-    ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
+    elephc_memoir::values::packed_slots::emit_publish_length(ctx.emitter, "x0", "x9"); // persist the shortened indexed-array length in the header
     emit_array_pop_value_aarch64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array boxed-null path after loading the removed value
@@ -122,11 +122,11 @@ pub(super) fn lower_array_pop_x86_64(
     let empty_label = ctx.next_label("array_pop_empty");
     let done_label = ctx.next_label("array_pop_done");
     ctx.load_value_to_reg(array, "rax")?;
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the indexed-array length before deciding whether pop is empty
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r10", "rax"); // load the indexed-array length before deciding whether pop is empty
     ctx.emitter.instruction("test r10, r10");                                   // check whether the indexed array has any live elements
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // return boxed null when array_pop() runs on an empty array
     ctx.emitter.instruction("sub r10, 1");                                      // convert the old length into the removed last-element index
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
+    elephc_memoir::values::packed_slots::emit_publish_length(ctx.emitter, "rax", "r10"); // persist the shortened indexed-array length in the header
     emit_array_pop_value_x86_64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array boxed-null path after loading the removed value
@@ -145,11 +145,11 @@ pub(super) fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_t
         | PhpType::Mixed
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first float payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("ldr d0, [x10, x9, lsl #3]");               // load the removed float payload into the result register
         }
         PhpType::Str => {
@@ -163,7 +163,7 @@ pub(super) fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_t
             ctx.emitter.instruction("mov x0, #0");                              // materialize a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first refcounted payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed heap pointer into the result register
         }
         other => {
@@ -185,17 +185,17 @@ pub(super) fn emit_array_pop_value_x86_64(ctx: &mut FunctionContext<'_>, elem_ty
         | PhpType::Mixed
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter
                 .instruction("mov rax, QWORD PTR [r11 + r10 * 8]"); // load the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first float payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter
                 .instruction("movsd xmm0, QWORD PTR [r11 + r10 * 8]"); // load the removed float payload into the result register
         }
         PhpType::Str => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first string payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter.instruction("shl r10, 4");                              // scale the removed index by the 16-byte string slot size
             ctx.emitter.instruction("add r11, r10");                            // advance to the removed string slot payload
             ctx.emitter.instruction("mov rax, QWORD PTR [r11]");                // load the removed string pointer into the string result register
@@ -205,7 +205,7 @@ pub(super) fn emit_array_pop_value_x86_64(ctx: &mut FunctionContext<'_>, elem_ty
             ctx.emitter.instruction("xor eax, eax");                            // materialize a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first refcounted payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter
                 .instruction("mov rax, QWORD PTR [r11 + r10 * 8]"); // load the removed heap pointer into the result register
         }
@@ -300,8 +300,8 @@ pub(super) fn lower_array_search_string_aarch64(
     let done_label = ctx.next_label("array_search_str_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the string search at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
@@ -344,8 +344,8 @@ pub(super) fn lower_array_search_string_x86_64(
     let done_label = ctx.next_label("array_search_str_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r10"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r12", "r10");
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the string search at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against indexed-array length

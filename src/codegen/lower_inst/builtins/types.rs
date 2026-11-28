@@ -1508,29 +1508,25 @@ fn emit_dynamic_object_class_name_aarch64(
 ) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));               // null object pointers produce an empty class name
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the object's concrete runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x9", "x0");
     if name == "get_class" {
         let incomplete_label = ctx.next_label("get_class_incomplete");
         ctx.emitter.instruction("cmn x9, #2");                                  // reserved id -2 denotes an incomplete unserialized object
         ctx.emitter.instruction(&format!("b.eq {}", incomplete_label));         // expose PHP's required incomplete-class name
         // The ordinary class lookup below remains the only path for real ids.
-        abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_count");
-        ctx.emitter.instruction("ldr x10, [x10]");                              // load dense class-name lookup bound
+        elephc_memoir::values::class_metadata::emit_load_class_name_count(ctx.emitter, "x10"); // load dense class-name lookup bound
         ctx.emitter.instruction("cmp x9, x10");                                 // validate the object class id before indexing metadata
         ctx.emitter.instruction(&format!("b.hs {}", empty_label));              // invalid ids produce an empty class name
-        abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
-        ctx.emitter.instruction("lsl x12, x9, #4");                             // scale class id by the 16-byte metadata row
-        ctx.emitter.instruction("add x11, x11, x12");                           // select the class-name metadata row
-        ctx.emitter.instruction(&format!("ldr {}, [x11]", ptr_reg));            // load the real class-name pointer
-        ctx.emitter.instruction(&format!("ldr {}, [x11, #8]", len_reg));        // load the real class-name length
+        elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "x11");
+        elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "x11", "x11", "x9", "x12");
+        elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, ptr_reg, len_reg, "x11");
         ctx.emitter.instruction(&format!("b {}", done_label));                  // skip empty fallback after successful lookup
         ctx.emitter.label(&incomplete_label);
         abi::emit_symbol_address(ctx.emitter, ptr_reg, "_incomplete_class_name");
         abi::emit_load_int_immediate(ctx.emitter, len_reg, 22);
         ctx.emitter.instruction(&format!("b {}", done_label));                  // incomplete class name is final
     }
-    abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_count");
-    ctx.emitter.instruction("ldr x10, [x10]");                                  // load the number of dense class-name lookup rows
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(ctx.emitter, "x10"); // load the number of dense class-name lookup rows
     if name == "get_parent_class" {
         ctx.emitter.instruction("cmp x9, x10");                                 // validate the object class id before reading its parent id
         ctx.emitter.instruction(&format!("b.hs {}", empty_label));              // reject unknown object class ids as parentless
@@ -1543,15 +1539,13 @@ fn emit_dynamic_object_class_name_aarch64(
     }
     ctx.emitter.instruction("cmp x9, x10");                                     // validate the class id before indexing class-name metadata
     ctx.emitter.instruction(&format!("b.hs {}", empty_label));                  // invalid class ids produce an empty class name
-    abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
-    ctx.emitter.instruction("lsl x12, x9, #4");                                 // scale the class id by the 16-byte class-name row size
-    ctx.emitter.instruction("add x11, x11, x12");                               // point at the selected class-name metadata row
-    ctx.emitter.instruction(&format!("ldr {}, [x11]", ptr_reg));                // load the concrete class-name string pointer
-    ctx.emitter.instruction(&format!("ldr {}, [x11, #8]", len_reg));            // load the concrete class-name string length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "x11", "x11", "x9", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, ptr_reg, len_reg, "x11");
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-string fallback after a successful lookup
 
     ctx.emitter.label(empty_label);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_class_name_missing");
+    elephc_memoir::values::class_metadata::emit_missing_class_name_address(ctx.emitter, ptr_reg);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
 
     ctx.emitter.label(done_label);
@@ -1566,25 +1560,24 @@ fn emit_dynamic_object_class_name_x86_64(
 ) {
     ctx.emitter.instruction("test rax, rax");                                   // test whether the object pointer is null
     ctx.emitter.instruction(&format!("je {}", empty_label));                    // null object pointers produce an empty class name
-    ctx.emitter.instruction("mov r8, QWORD PTR [rax]");                         // load the object's concrete runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r8", "rax");
     if name == "get_class" {
         let incomplete_label = ctx.next_label("get_class_incomplete_x");
         ctx.emitter.instruction("cmp r8, -2");                                  // reserved id -2 denotes an incomplete unserialized object
         ctx.emitter.instruction(&format!("je {}", incomplete_label));           // expose PHP's required incomplete-class name
-        ctx.emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]"); // load dense class-name lookup bound
+        elephc_memoir::values::class_metadata::emit_load_class_name_count(ctx.emitter, "r9"); // load dense class-name lookup bound
         ctx.emitter.instruction("cmp r8, r9");                                  // validate the object class id before indexing metadata
         ctx.emitter.instruction(&format!("jae {}", empty_label));               // invalid ids produce an empty class name
-        ctx.emitter.instruction("lea r10, [rip + _class_name_entries]");        // materialize class-name metadata table base
-        ctx.emitter.instruction("shl r8, 4");                                   // scale class id by 16-byte row size
-        ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r8]");               // load the real class-name pointer
-        ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");           // load the real class-name length
+        elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "r10");
+        elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "r10", "r10", "r8", "r11");
+        elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, "rax", "rdx", "r10");
         ctx.emitter.instruction(&format!("jmp {}", done_label));                // skip empty fallback after successful lookup
         ctx.emitter.label(&incomplete_label);
         ctx.emitter.instruction("lea rax, [rip + _incomplete_class_name]");     // return PHP incomplete-class name
         ctx.emitter.instruction("mov rdx, 22");                                 // byte length of __PHP_Incomplete_Class
         ctx.emitter.instruction(&format!("jmp {}", done_label));                // incomplete class name is final
     }
-    ctx.emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]");     // load the number of dense class-name lookup rows
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(ctx.emitter, "r9"); // load the number of dense class-name lookup rows
     if name == "get_parent_class" {
         ctx.emitter.instruction("cmp r8, r9");                                  // validate the object class id before reading its parent id
         ctx.emitter.instruction(&format!("jae {}", empty_label));               // reject unknown object class ids as parentless
@@ -1595,14 +1588,13 @@ fn emit_dynamic_object_class_name_x86_64(
     }
     ctx.emitter.instruction("cmp r8, r9");                                      // validate the class id before indexing class-name metadata
     ctx.emitter.instruction(&format!("jae {}", empty_label));                   // invalid class ids produce an empty class name
-    ctx.emitter.instruction("lea r10, [rip + _class_name_entries]");            // materialize the class-name metadata table base pointer
-    ctx.emitter.instruction("shl r8, 4");                                       // scale the class id by the 16-byte class-name row size
-    ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r8]");                   // load the concrete class-name string pointer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");               // load the concrete class-name string length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "r10", "r10", "r8", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, "rax", "rdx", "r10");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-string fallback after a successful lookup
 
     ctx.emitter.label(empty_label);
-    ctx.emitter.instruction("lea rax, [rip + _class_name_missing]");            // return the shared empty class-name string pointer
+    elephc_memoir::values::class_metadata::emit_missing_class_name_address(ctx.emitter, "rax"); // return the shared empty class-name string pointer
     ctx.emitter.instruction("xor edx, edx");                                    // return zero bytes for the empty class name
 
     ctx.emitter.label(done_label);

@@ -212,7 +212,11 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
                 ctx.emitter.comment("-- validate the Mixed throw tag and class --");
                 ctx.emitter.instruction("cmp x0, #6");                          // only Mixed's object tag can be checked for Throwable membership
                 ctx.emitter.instruction(&format!("b.ne {invalid_label}"));      // non-object boxes raise PHP Error with the scalar diagnostic
-                ctx.emitter.instruction("ldr x0, [x1]");                        // pass the runtime class id to the interface checker
+                elephc_memoir::values::object_storage::emit_load_class_id(
+                    ctx.emitter,
+                    "x0",
+                    "x1",
+                );
                 abi::emit_load_int_immediate(ctx.emitter, "x1", throwable_interface_id as i64);
                 abi::emit_load_int_immediate(ctx.emitter, "x2", 1);            // request interface matching for Throwable
             }
@@ -220,7 +224,11 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
                 ctx.emitter.comment("-- validate the Mixed throw tag and class --");
                 ctx.emitter.instruction("cmp rax, 6");                          // only Mixed's object tag can be checked for Throwable membership
                 ctx.emitter.instruction(&format!("jne {invalid_label}"));       // non-object boxes raise PHP Error with the scalar diagnostic
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");            // pass the runtime class id to the interface checker
+                elephc_memoir::values::object_storage::emit_load_class_id(
+                    ctx.emitter,
+                    "rdi",
+                    "rdi",
+                );
                 abi::emit_load_int_immediate(ctx.emitter, "rsi", throwable_interface_id as i64);
                 abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);           // request interface matching for Throwable
             }

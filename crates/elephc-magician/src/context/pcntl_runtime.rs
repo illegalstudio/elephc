@@ -13,7 +13,7 @@
 use super::{ElephcEvalContext, EvalPcntlSignalHandler};
 use crate::errors::EvalStatus;
 use crate::value::RuntimeCellHandle;
-use elephc_memoir::runtime_leases::RuntimeAddressLeaseRegistry;
+use elephc_memoir::runtime_leases::{RuntimeAddressLeaseRegistry, RuntimeAddressOwnerList};
 use elephc_memoir::runtime_owners::RuntimeAddressOwner;
 use std::{cell::RefCell, collections::HashMap};
 use std::sync::{Mutex, OnceLock};
@@ -403,7 +403,7 @@ fn stored_into_entry(stored: StoredSignalEntry) -> Option<EvalPcntlSignalEntry> 
 /// Heap contexts with PHP declaration cells that must survive handler replacement.
 #[derive(Default)]
 struct RequestOwners {
-    contexts: Vec<usize>,
+    contexts: RuntimeAddressOwnerList,
     shutting_down: bool,
 }
 
@@ -419,10 +419,10 @@ pub(crate) fn retain_for_request_shutdown(context: &mut ElephcEvalContext) {
     let address = context as *mut ElephcEvalContext as usize;
     REQUEST_OWNERS.with(|owners| {
         let mut owners = owners.borrow_mut();
-        if !owners.shutting_down && !owners.contexts.contains(&address)
+        if !owners.shutting_down && !owners.contexts.contains(address)
             && context.retain_abi_owner().is_ok()
         {
-            owners.contexts.push(address);
+            debug_assert!(owners.contexts.insert_unique(address));
         }
     });
 }

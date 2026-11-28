@@ -17,7 +17,6 @@ use elephc_memoir::buffers::io_scratch;
 
 use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
 /// Input:  x0=fd, x1=max length, x2=ending pointer, x3=ending length
@@ -168,9 +167,8 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the file descriptor
-    emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // EOF marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // record EOF for this descriptor
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "w10", "x0", "x9");
 
     emitter.label("__rt_stream_get_line_done");
     emitter.instruction("ldr x1, [sp, #48]");                                   // return the result start pointer
@@ -318,8 +316,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof_x86");
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the file descriptor
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // eof-flag table base address
-    emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this descriptor
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "1", "r9", "r10");
 
     emitter.label("__rt_stream_get_line_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer

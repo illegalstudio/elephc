@@ -9,19 +9,20 @@
 //! - Truncated cells are released before clearing their slots. The new length is published last.
 
 use crate::{Arch, Emitter};
+use super::spl_storage;
 
-/// Resizes a fixed array at the supplied receiver offset using the active resize frame.
-pub fn emit_resize(emitter: &mut impl Emitter, storage_offset: usize) {
+/// Resizes a fixed array using the active resize frame.
+pub fn emit_resize(emitter: &mut impl Emitter) {
     match emitter.arch() {
-        Arch::AArch64 => resize_aarch64(emitter, storage_offset),
-        Arch::X86_64 => resize_x86_64(emitter, storage_offset),
+        Arch::AArch64 => resize_aarch64(emitter),
+        Arch::X86_64 => resize_x86_64(emitter),
     }
 }
 
 /// Emits physical resize for the aarch64 storage and its existing spills.
-fn resize_aarch64(emitter: &mut impl Emitter, storage_offset: usize) {
+fn resize_aarch64(emitter: &mut impl Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save requested new size
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", storage_offset));         // load current storage
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x0");
     emitter.instruction("str x9, [sp, #16]");                                   // save current storage pointer
     emitter.instruction("ldr x10, [x9]");                                       // load old size
     emitter.instruction("str x10, [sp, #24]");                                  // save old size
@@ -35,7 +36,7 @@ fn resize_aarch64(emitter: &mut impl Emitter, storage_offset: usize) {
     emitter.instruction("bl __rt_array_grow");                                  // grow fixed-array storage
     emitter.instruction("str x0, [sp, #16]");                                   // save grown storage pointer
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("str x0, [x9, #{}]", storage_offset));         // publish grown storage on receiver
+    spl_storage::emit_store_fixed_storage(emitter, "x0", "x9");
     emitter.instruction("b __rt_spl_fixed_set_size_grow_check");                // grow again if requested size still exceeds capacity
     emitter.label("__rt_spl_fixed_set_size_release_tail");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload storage pointer
@@ -73,9 +74,9 @@ fn resize_aarch64(emitter: &mut impl Emitter, storage_offset: usize) {
 }
 
 /// Emits physical resize for the x86_64 storage and its existing spills.
-fn resize_x86_64(emitter: &mut impl Emitter, storage_offset: usize) {
+fn resize_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save requested new size
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", storage_offset)); // load current storage
+    spl_storage::emit_load_fixed_storage(emitter, "r9", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save current storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load old size
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save old size
@@ -89,7 +90,7 @@ fn resize_x86_64(emitter: &mut impl Emitter, storage_offset: usize) {
     emitter.instruction("call __rt_array_grow");                                // grow fixed-array storage
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save grown storage
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", storage_offset)); // publish grown storage on receiver
+    spl_storage::emit_store_fixed_storage(emitter, "rax", "r9");
     emitter.instruction("jmp __rt_spl_fixed_set_size_grow_check");              // grow again if requested size still exceeds capacity
     emitter.label("__rt_spl_fixed_set_size_release_tail");
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload storage

@@ -43,7 +43,7 @@ pub fn emit_array_reduce(emitter: &mut Emitter) {
     emitter.instruction("mov x21, x2");                                         // x21 = accumulator = initial value
 
     // -- read source array length --
-    emitter.instruction("ldr x9, [x1]");                                        // x9 = source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // x9 = source array length
     emitter.instruction("str x9, [sp, #8]");                                    // save length to stack
 
     // -- set up loop counter --
@@ -92,7 +92,7 @@ pub fn emit_array_reduce(emitter: &mut Emitter) {
 /// Output: rax = accumulated result
 /// Callback ABI: (accumulator, element) in (rdi, rsi), result in rax. When rcx is non-null,
 /// rdx carries the capture environment pointer as the third argument. Array element at index i
-/// is loaded from `array_pointer + 24 + i * 8` (skipping the 24-byte array header).
+/// is loaded from the checked packed payload at the current word index.
 /// Loop index stored in callee-saved r13; accumulator in callee-saved r14.
 fn emit_array_reduce_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -110,7 +110,7 @@ fn emit_array_reduce_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // save the source array pointer so the loop can reload it after callback calls
     emitter.instruction("mov r14, rdx");                                        // keep the current accumulator in a callee-saved register across every callback invocation
     emitter.instruction("mov r15, rcx");                                        // keep the optional callback environment pointer across every callback invocation
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rsi"); // load the source array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the source array length for loop termination checks
     emitter.instruction("xor r13d, r13d");                                      // start the source index at zero before reducing the source array
 
@@ -118,7 +118,7 @@ fn emit_array_reduce_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r13, QWORD PTR [rbp - 48]");                       // stop once the source index reaches the saved source-array length
     emitter.instruction("jge __rt_array_reduce_done");                          // finish reduction once every source element has been folded into the accumulator
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the source array pointer after the previous callback invocation
-    emitter.instruction("mov rsi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the second SysV integer argument register
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r10", "r13", "rsi", "r11");
     emitter.instruction("mov rdi, r14");                                        // move the current accumulator into the first SysV integer argument register
     emitter.instruction("test r15, r15");                                       // check whether this runtime call carries a callback capture environment
     emitter.instruction("jz __rt_array_reduce_call_linux_x86_64");              // keep legacy two-argument callback ABI when no environment is present

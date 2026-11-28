@@ -29,6 +29,7 @@ use crate::codegen_support::runtime::{
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 use elephc_memoir::buffers::output::{self, ControlField};
+use elephc_memoir::callables::layout::{self as callable_layout, DescriptorField};
 
 use super::super::callables::runtime_string_descriptor_cases;
 use super::super::super::context::FunctionContext;
@@ -158,8 +159,18 @@ fn emit_push_descriptor_handler_triple(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("ldr x4, [x0]");                            // load the descriptor kind
             ctx.emitter.instruction("cmp x4, #4");                              // closure/first-class/adapter kinds (1..3)?
             ctx.emitter.instruction(&format!("b.lo {}", closure_name));         // closure-shaped handlers report Closure::__invoke like PHP
-            ctx.emitter.instruction("ldr x4, [x0, #16]");                       // load the descriptor's PHP name pointer
-            ctx.emitter.instruction("ldr x5, [x0, #24]");                       // load the descriptor's PHP name length
+            callable_layout::emit_load_descriptor_field(
+                ctx.emitter,
+                "x4",
+                "x0",
+                DescriptorField::Name,
+            );
+            callable_layout::emit_load_descriptor_field(
+                ctx.emitter,
+                "x5",
+                "x0",
+                DescriptorField::NameLength,
+            );
             ctx.emitter.instruction(&format!("cbnz x4, {}", name_ready));       // a named callable keeps its PHP name
             ctx.emitter.label(&closure_name);
             abi::emit_symbol_address(ctx.emitter, "x4", "_ob_closure_invoke_name");
@@ -174,8 +185,18 @@ fn emit_push_descriptor_handler_triple(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov r8, QWORD PTR [rax]");                 // load the descriptor kind
             ctx.emitter.instruction("cmp r8, 4");                               // closure/first-class/adapter kinds (1..3)?
             ctx.emitter.instruction(&format!("jb {}", closure_name));           // closure-shaped handlers report Closure::__invoke like PHP
-            ctx.emitter.instruction("mov r8, QWORD PTR [rax + 16]");            // load the descriptor's PHP name pointer
-            ctx.emitter.instruction("mov r9, QWORD PTR [rax + 24]");            // load the descriptor's PHP name length
+            callable_layout::emit_load_descriptor_field(
+                ctx.emitter,
+                "r8",
+                "rax",
+                DescriptorField::Name,
+            );
+            callable_layout::emit_load_descriptor_field(
+                ctx.emitter,
+                "r9",
+                "rax",
+                DescriptorField::NameLength,
+            );
             ctx.emitter.instruction("test r8, r8");                             // does the descriptor carry a PHP name?
             ctx.emitter.instruction(&format!("jnz {}", name_ready));            // a named callable keeps its PHP name
             ctx.emitter.label(&closure_name);

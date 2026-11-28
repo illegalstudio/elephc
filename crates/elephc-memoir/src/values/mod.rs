@@ -92,6 +92,9 @@ pub mod spl_storage;
 pub mod stack_cell;
 
 pub mod packed_slots;
+pub mod property_descriptor;
+pub mod reflection_metadata;
+pub mod class_metadata;
 
 pub mod diagnostic_stack;
 

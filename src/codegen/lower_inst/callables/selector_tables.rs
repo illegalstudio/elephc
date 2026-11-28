@@ -23,14 +23,15 @@
 //!   `__rt_strcasecmp` clobbers every caller-saved register. Both exits leave the caller's
 //!   temporary stack exactly as they found it.
 
+use elephc_memoir::callables::layout::{
+    self as callable_layout, InstanceSelectorField, InstanceSelectorRow,
+    NameSelectorField, NameSelectorRow,
+};
+
 use crate::codegen::data_section::DataWord;
 
 use super::*;
 
-/// Bytes in one string-name row: name pointer, name length, descriptor pointer.
-const STRING_ROW_BYTES: usize = 24;
-/// Bytes in one receiver row: class id, method name pointer, name length, template pointer.
-const INSTANCE_ROW_BYTES: usize = 32;
 /// Temporary bytes holding the scan cursor (offset 0) and the remaining-row count (offset 8).
 const SCAN_STATE_BYTES: usize = 16;
 
@@ -71,11 +72,14 @@ pub(super) fn emit_string_case_table_lookup(
         }
         for spelling in spellings {
             let (label, len) = ctx.data.add_string(spelling.as_bytes());
-            words.extend([
-                DataWord::Symbol(label),
-                DataWord::U64(len as u64),
-                DataWord::Symbol(descriptor.clone()),
-            ]);
+            words.extend(
+                NameSelectorRow {
+                    name: DataWord::Symbol(label),
+                    name_len: DataWord::U64(len as u64),
+                    descriptor: DataWord::Symbol(descriptor.clone()),
+                }
+                .into_words(),
+            );
             rows += 1;
         }
     }
@@ -93,31 +97,61 @@ pub(super) fn emit_string_case_table_lookup(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [sp]");                            // load the current callable-name row
-            ctx.emitter.instruction("ldr x4, [x9, #8]");                        // load the row's name length
+            callable_layout::emit_load_name_selector_field(
+                ctx.emitter,
+                "x4",
+                "x9",
+                NameSelectorField::NameLength,
+            );
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", state + 8);
             ctx.emitter.instruction("cmp x2, x4");                              // a name of another length cannot match this row
             ctx.emitter.instruction(&format!("b.ne {}", scan.next));            // skip the byte compare for a different length
-            ctx.emitter.instruction("ldr x3, [x9]");                            // load the row's name bytes
+            callable_layout::emit_load_name_selector_field(
+                ctx.emitter,
+                "x3",
+                "x9",
+                NameSelectorField::Name,
+            );
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", state);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
             ctx.emitter.instruction("cmp x0, #0");                              // did the runtime name match this row case-insensitively?
             ctx.emitter.instruction(&format!("b.ne {}", scan.next));            // keep scanning after a different name
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload the matched row after the compare call
-            ctx.emitter.instruction("ldr x0, [x9, #16]");                       // select the row's callable descriptor
+            callable_layout::emit_load_name_selector_field(
+                ctx.emitter,
+                "x0",
+                "x9",
+                NameSelectorField::Descriptor,
+            );
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // load the current callable-name row
-            ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");            // load the row's name length
+            callable_layout::emit_load_name_selector_field(
+                ctx.emitter,
+                "rcx",
+                "r10",
+                NameSelectorField::NameLength,
+            );
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", state + 8);
             ctx.emitter.instruction("cmp rsi, rcx");                            // a name of another length cannot match this row
             ctx.emitter.instruction(&format!("jne {}", scan.next));             // skip the byte compare for a different length
-            ctx.emitter.instruction("mov rdx, QWORD PTR [r10]");                // load the row's name bytes
+            callable_layout::emit_load_name_selector_field(
+                ctx.emitter,
+                "rdx",
+                "r10",
+                NameSelectorField::Name,
+            );
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", state);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
             ctx.emitter.instruction("test rax, rax");                           // did the runtime name match this row case-insensitively?
             ctx.emitter.instruction(&format!("jne {}", scan.next));             // keep scanning after a different name
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the matched row after the compare call
-            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 16]");           // select the row's callable descriptor
+            callable_layout::emit_load_name_selector_field(
+                ctx.emitter,
+                "rax",
+                "r10",
+                NameSelectorField::Descriptor,
+            );
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, SCAN_STATE_BYTES);
@@ -125,7 +159,7 @@ pub(super) fn emit_string_case_table_lookup(
         emit_runtime_origin_copy_unless_marked(ctx, origin, matched_label);
     }
     abi::emit_jump(ctx.emitter, matched_label);
-    emit_scan_advance(ctx, &scan, STRING_ROW_BYTES, miss_label);
+    emit_scan_advance(ctx, &scan, callable_layout::NAME_SELECTOR_ROW_BYTES, miss_label);
 }
 
 /// Replaces a matched descriptor that does not record `origin` yet (a row without a static
@@ -223,12 +257,15 @@ fn emit_instance_target_table_scan(
             &target.sig,
         )?;
         let (name_label, name_len) = ctx.data.add_string(target.method_name.as_bytes());
-        words.extend([
-            DataWord::U64(target.class_id),
-            DataWord::Symbol(name_label),
-            DataWord::U64(name_len as u64),
-            DataWord::Symbol(template.descriptor_label),
-        ]);
+        words.extend(
+            InstanceSelectorRow {
+                class_id: DataWord::U64(target.class_id),
+                method_name: DataWord::Symbol(name_label),
+                method_name_len: DataWord::U64(name_len as u64),
+                template: DataWord::Symbol(template.descriptor_label),
+            }
+            .into_words(),
+        );
     }
     let table = ctx.data.add_words(words);
     let receiver_offset = selector.receiver_offset();
@@ -257,16 +294,27 @@ fn emit_instance_target_table_scan(
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [sp]");                            // load the current receiver row
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", state + receiver_offset);
-            ctx.emitter.instruction("ldr x10, [x10]");                          // load the receiver's runtime class id
-            ctx.emitter.instruction("ldr x11, [x9]");                           // load the row's class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x10");
+            callable_layout::emit_load_instance_selector_field(
+                ctx.emitter,
+                "x11",
+                "x9",
+                InstanceSelectorField::ClassId,
+            );
             ctx.emitter.instruction("cmp x10, x11");                            // only the row's exact class binds this target
             ctx.emitter.instruction(&format!("b.ne {}", scan.next));            // try the next receiver row
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // load the current receiver row
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", state + receiver_offset);
-            ctx.emitter.instruction("mov r11, QWORD PTR [r11]");                // load the receiver's runtime class id
-            ctx.emitter.instruction("cmp r11, QWORD PTR [r10]");                // only the row's exact class binds this target
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r11", "r11");
+            callable_layout::emit_load_instance_selector_field(
+                ctx.emitter,
+                "rax",
+                "r10",
+                InstanceSelectorField::ClassId,
+            );
+            ctx.emitter.instruction("cmp r11, rax");                            // only the row's exact class binds this target
             ctx.emitter.instruction(&format!("jne {}", scan.next));             // try the next receiver row
         }
     }
@@ -274,22 +322,42 @@ fn emit_instance_target_table_scan(
         let method_ptr = state + MIXED_METHOD_PAYLOAD_OFFSET;
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("ldr x4, [x9, #16]");                   // load the row's method name length
+                callable_layout::emit_load_instance_selector_field(
+                    ctx.emitter,
+                    "x4",
+                    "x9",
+                    InstanceSelectorField::MethodNameLength,
+                );
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", method_ptr + 8);
                 ctx.emitter.instruction("cmp x2, x4");                          // a method name of another length cannot match
                 ctx.emitter.instruction(&format!("b.ne {}", scan.next));        // skip the byte compare for a different length
-                ctx.emitter.instruction("ldr x3, [x9, #8]");                    // load the row's method name bytes
+                callable_layout::emit_load_instance_selector_field(
+                    ctx.emitter,
+                    "x3",
+                    "x9",
+                    InstanceSelectorField::MethodName,
+                );
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", method_ptr);
                 abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
                 ctx.emitter.instruction("cmp x0, #0");                          // did the method name match this row case-insensitively?
                 ctx.emitter.instruction(&format!("b.ne {}", scan.next));        // keep scanning after a different method
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 16]");       // load the row's method name length
+                callable_layout::emit_load_instance_selector_field(
+                    ctx.emitter,
+                    "rcx",
+                    "r10",
+                    InstanceSelectorField::MethodNameLength,
+                );
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", method_ptr + 8);
                 ctx.emitter.instruction("cmp rsi, rcx");                        // a method name of another length cannot match
                 ctx.emitter.instruction(&format!("jne {}", scan.next));         // skip the byte compare for a different length
-                ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");        // load the row's method name bytes
+                callable_layout::emit_load_instance_selector_field(
+                    ctx.emitter,
+                    "rdx",
+                    "r10",
+                    InstanceSelectorField::MethodName,
+                );
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", method_ptr);
                 abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
                 ctx.emitter.instruction("test rax, rax");                       // did the method name match this row case-insensitively?
@@ -298,7 +366,7 @@ fn emit_instance_target_table_scan(
         }
     }
     abi::emit_jump(ctx.emitter, &matched);
-    emit_scan_advance(ctx, &scan, INSTANCE_ROW_BYTES, miss_label);
+    emit_scan_advance(ctx, &scan, callable_layout::INSTANCE_SELECTOR_ROW_BYTES, miss_label);
 
     ctx.emitter.label(&matched);
     if !bind {
@@ -313,12 +381,22 @@ fn emit_instance_target_table_scan(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload the matched receiver row
-            ctx.emitter.instruction("ldr x9, [x9, #24]");                       // load the row's descriptor template
+            callable_layout::emit_load_instance_selector_field(
+                ctx.emitter,
+                "x9",
+                "x9",
+                InstanceSelectorField::Template,
+            );
             ctx.emitter.instruction("str x9, [sp]");                            // keep the template in the retired scan slot across allocation
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the matched receiver row
-            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 24]");           // load the row's descriptor template
+            callable_layout::emit_load_instance_selector_field(
+                ctx.emitter,
+                "r10",
+                "r10",
+                InstanceSelectorField::Template,
+            );
             ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                // keep the template in the retired scan slot across allocation
         }
     }

@@ -600,7 +600,11 @@ fn emit_accept_object_classes(emitter: &mut Emitter, class_ids: &[u64], accepted
     let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(emitter.target);
     let class_reg = abi::secondary_scratch_reg(emitter);
     let expected_reg = abi::tertiary_scratch_reg(emitter);
-    abi::emit_load_from_address(emitter, class_reg, payload_reg, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        emitter,
+        class_reg,
+        payload_reg,
+    );
     for class_id in class_ids {
         abi::emit_load_int_immediate(emitter, expected_reg, *class_id as i64);
         match emitter.target.arch {

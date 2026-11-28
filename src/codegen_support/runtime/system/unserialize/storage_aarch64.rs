@@ -9,6 +9,11 @@
 //! - Every store writes the slot's high word (the string length, or zero), which clears the
 //!   uninitialized marker a typed property without a default starts with.
 
+use elephc_memoir::values::property_descriptor::{
+    self, HydrationField, SerializedField,
+};
+use elephc_memoir::values::object_storage;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::UNSER_PROPERTY_ASSIGN_PREFIX;
 use crate::codegen_support::sentinels::{
@@ -22,18 +27,27 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // Matches the (mangled) key against the class's serialize property-info table and
     // stores the parsed value into the matching object slot per the property's tag.
     emitter.label_global("__rt_obj_store_prop");
-    emitter.instruction("ldr x9, [x0]");                                        // class id from the object header
+    object_storage::emit_load_class_id(emitter, "x9", "x0");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_serprop_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // property-info table for this class
-    emitter.instruction("ldr x11, [x10]");                                      // property count
-    emitter.instruction("add x12, x10, #8");                                    // rows start (skip the count word)
+    property_descriptor::emit_load_count(emitter, "x11", "x10");
     emitter.instruction("mov x13, #0");                                         // row index
     emitter.label("__rt_obj_store_prop_loop");
     emitter.instruction("cmp x13, x11");                                        // scanned every row?
     emitter.instruction("b.ge __rt_obj_store_prop_done");                       // unknown key is ignored
-    emitter.instruction("add x14, x12, x13, lsl #5");                           // row = rows + index*32
-    emitter.instruction("ldr x4, [x14]");                                       // row mangled key pointer
-    emitter.instruction("ldr x5, [x14, #8]");                                   // row mangled key length
+    property_descriptor::emit_serialized_row_address(emitter, "x14", "x10", "x13", "x15");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x4",
+        "x14",
+        SerializedField::Key,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x5",
+        "x14",
+        SerializedField::KeyLength,
+    );
     emitter.instruction("cmp x5, x2");                                          // same length as the parsed key?
     emitter.instruction("b.ne __rt_obj_store_prop_next");                       // lengths differ, skip
     emitter.instruction("mov x6, #0");                                          // byte compare cursor
@@ -51,9 +65,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     //    accept, raising PHP's TypeError instead of writing a mismatched payload --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_serpdiag_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // diagnostic rows for this class
-    emitter.instruction("mov x11, #32");                                        // diagnostic row stride
-    emitter.instruction("madd x10, x13, x11, x10");                             // diagnostic row = base + index*32
-    emitter.instruction("ldr x12, [x10, #16]");                                 // accepted boxed value tags
+    property_descriptor::emit_hydration_row_address(emitter, "x10", "x10", "x13", "x11");
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "x12",
+        "x10",
+        HydrationField::AcceptedTags,
+    );
     emitter.instruction("ldr x11, [x3]");                                       // boxed value tag
     emitter.instruction("mov x15, #1");                                         // probe bit for the boxed tag
     emitter.instruction("lsl x15, x15, x11");                                   // tag bit
@@ -67,7 +85,12 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("cbnz x15, __rt_obj_store_prop_type_error");            // `true` is not a `false`
     emitter.label("__rt_obj_store_prop_accepted");
     // -- PHP widens an accepted int into a `float`/`?float` slot; retag the owned box --
-    emitter.instruction("ldr x12, [x10, #24]");                                 // widen-int-to-float flag
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "x12",
+        "x10",
+        HydrationField::WidenIntToFloat,
+    );
     emitter.instruction("cbz x12, __rt_obj_store_prop_no_widen");               // most slots keep the parsed type
     emitter.instruction("cmp x11, #0");                                         // is the boxed value an int?
     emitter.instruction("b.ne __rt_obj_store_prop_no_widen");                   // only an int widens
@@ -78,9 +101,19 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #2");                                          // runtime tag 2 = float
     emitter.instruction("str x9, [x3]");                                        // retag the owned box as a float
     emitter.label("__rt_obj_store_prop_no_widen");
-    emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
-    emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
-    emitter.instruction("add x8, x0, x6");                                      // address of the property slot
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x6",
+        "x14",
+        SerializedField::ObjectOffset,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x7",
+        "x14",
+        SerializedField::ValueTag,
+    );
+    object_storage::emit_slot_address(emitter, "x8", "x0", "x6");
     emitter.instruction(&format!("tst x7, #{SERPROP_REFERENCE_PROPERTY_FLAG}")); // select inline storage or the object's native cell
     emitter.instruction("b.eq __rt_obj_store_prop_inline_slot");                // inline properties already point at their payload
     emitter.instruction("ldr x8, [x8]");                                        // preserve the object slot and hydrate its native cell
@@ -207,10 +240,19 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // The decoder cleanup record owns the unfinished object until the throw unwinds it.
     crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_class_serpdiag_ptrs");
     emitter.instruction("ldr x4, [x4, x9, lsl #3]");                            // diagnostic rows for this class
-    emitter.instruction("mov x5, #32");                                         // diagnostic row stride
-    emitter.instruction("madd x4, x13, x5, x4");                                // diagnostic row for this property
-    emitter.instruction("ldr x5, [x4, #8]");                                    // message suffix byte length
-    emitter.instruction("ldr x4, [x4]");                                        // message suffix pointer
+    property_descriptor::emit_hydration_row_address(emitter, "x4", "x4", "x13", "x5");
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "x5",
+        "x4",
+        HydrationField::SuffixLength,
+    );
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "x4",
+        "x4",
+        HydrationField::Suffix,
+    );
     emitter.instruction("ldr x1, [x3, #8]");                                    // rejected value payload (object class resolution)
     emitter.instruction("ldr x0, [x3]");                                        // rejected value runtime tag
     crate::codegen_support::abi::emit_symbol_address(emitter, "x2", "_unser_property_assign_prefix");

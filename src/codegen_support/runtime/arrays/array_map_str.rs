@@ -55,7 +55,7 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.instruction("mov x21, x2");                                         // x21 = optional callback environment pointer
 
     // -- read source array metadata --
-    emitter.instruction("ldr x9, [x1]");                                        // x9 = source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // x9 = source array length
     emitter.instruction("str x9, [sp, #16]");                                   // save length to stack
     emitter.instruction("ldr x10, [x1, #16]");                                  // x10 = source elem_size (8=int, 16=str)
     emitter.instruction("str x10, [sp, #24]");                                  // save source elem_size to stack
@@ -109,7 +109,7 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
 
     // -- store string result in new array --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload loop index
-    emitter.instruction("add x9, x20, #24");                                    // new array data region
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x20");
     emitter.instruction("lsl x10, x0, #4");                                     // x10 = i * 16 (string stride)
     emitter.instruction("str x1, [x9, x10]");                                   // store string pointer
     emitter.instruction("add x10, x10, #8");                                    // advance to length slot
@@ -125,7 +125,7 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.label("__rt_array_map_str_done");
     emitter.instruction("mov x0, x20");                                         // x0 = new array pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // x9 = length
-    emitter.instruction("str x9, [x0]");                                        // set new array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x9"); // set new array length
 
     // -- tear down stack frame and return --
     emitter.instruction("ldr x21, [sp, #40]");                                  // restore callee-saved x21
@@ -162,7 +162,7 @@ pub fn emit_array_map_str_owned(emitter: &mut Emitter) {
     emitter.instruction("mov x21, x2");                                         // keep descriptor callback environment pointer across the loop
 
     // -- read source array metadata --
-    emitter.instruction("ldr x9, [x1]");                                        // read source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // read source array length
     emitter.instruction("str x9, [sp, #16]");                                   // save source length across callback calls
     emitter.instruction("ldr x10, [x1, #16]");                                  // read source element width for callback ABI dispatch
     emitter.instruction("str x10, [sp, #24]");                                  // save source element width across callback calls
@@ -187,7 +187,7 @@ pub fn emit_array_map_str_owned(emitter: &mut Emitter) {
     // -- load element from source array based on elem_size --
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload source element width
-    emitter.instruction("add x1, x1, #24");                                     // advance to the source payload region
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("mul x11, x0, x10");                                    // compute current source element byte offset
     emitter.instruction("add x11, x1, x11");                                    // compute current source element address
     emitter.instruction("cmp x10, #16");                                        // does the source array hold string ptr/len pairs?
@@ -208,7 +208,7 @@ pub fn emit_array_map_str_owned(emitter: &mut Emitter) {
     emitter.label("__rt_array_map_str_owned_call");
     emitter.instruction("blr x19");                                             // call callback, returning owned string in x1=ptr, x2=len
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload loop index after callback clobbers caller-saved registers
-    emitter.instruction("add x9, x20, #24");                                    // compute destination payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x20");
     emitter.instruction("lsl x10, x0, #4");                                     // compute destination string slot byte offset
     emitter.instruction("str x1, [x9, x10]");                                   // store owned string pointer in destination slot
     emitter.instruction("add x10, x10, #8");                                    // advance to destination string length word
@@ -249,7 +249,7 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the string-mapping loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the source array pointer so the loop can reload it after callback and persist helper calls
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save optional callback environment pointer for captured-closure wrappers
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the indexed-array header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rsi"); // load the source array length from the first field of the indexed-array header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the source array length across the destination-array allocation call
     elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rsi", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the source element stride across the destination-array allocation call
@@ -266,7 +266,7 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the source element stride so the loop can decode the current source slot
     emitter.instruction("mov rcx, r13");                                        // copy the logical source index before scaling it by the source element stride
     emitter.instruction("imul rcx, r11");                                       // convert the logical index into the byte offset of the current source slot
-    emitter.instruction("lea rcx, [r10 + rcx + 24]");                           // compute the address of the current source slot inside the indexed-array payload region
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r10", "rcx");
     emitter.instruction("cmp r11, 16");                                         // does the source array already contain string ptr/len pairs?
     emitter.instruction("je __rt_array_map_str_load_str");                      // branch to the string-input path when the current source slot is a 16-byte string pair
     emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // load the scalar source element into the first SysV integer argument register for the callback
@@ -318,7 +318,7 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // keep callback address in a callee-saved register
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save source array pointer for every loop iteration
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save descriptor callback environment pointer
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rsi"); // load source array length
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save source length across destination allocation
     emitter.instruction("mov r11, QWORD PTR [rsi + 16]");                       // load source element width for ABI dispatch
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save source element width across callback calls
@@ -335,7 +335,12 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload source element width
     emitter.instruction("mov rcx, r13");                                        // copy loop index before byte-offset scaling
     emitter.instruction("imul rcx, r11");                                       // compute current source element byte offset
-    emitter.instruction("lea rcx, [r10 + rcx + 24]");                           // compute current source element address
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(
+        emitter,
+        "rcx",
+        "r10",
+        "rcx",
+    );
     emitter.instruction("cmp r11, 16");                                         // does the source slot hold a string pair?
     emitter.instruction("je __rt_array_map_str_owned_load_str");                // branch to string-input callback ABI
     emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // load scalar source element into first callback argument
@@ -352,7 +357,12 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload destination array pointer after callback clobbers caller-saved regs
     emitter.instruction("mov rcx, r13");                                        // copy loop index before destination string-slot scaling
     emitter.instruction("shl rcx, 4");                                          // compute 16-byte destination string slot offset
-    emitter.instruction("lea rcx, [r10 + rcx + 24]");                           // compute destination string slot address
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(
+        emitter,
+        "rcx",
+        "r10",
+        "rcx",
+    );
     emitter.instruction("mov QWORD PTR [rcx], rax");                            // transfer owned string pointer into destination slot
     emitter.instruction("mov QWORD PTR [rcx + 8], rdx");                        // transfer owned string length into destination slot
     emitter.instruction("add r13, 1");                                          // advance loop index after storing the mapped string
@@ -361,7 +371,7 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_map_str_owned_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload destination array pointer for return
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload source length for destination length publication
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish destination array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "rax", "r10"); // publish destination array length
     emitter.instruction("add rsp, 48");                                         // release owned-string map local slots
     emitter.instruction("pop r13");                                             // restore loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore callback-address callee-saved register

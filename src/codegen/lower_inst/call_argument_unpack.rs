@@ -252,18 +252,16 @@ fn emit_object_unpack_type_error(ctx: &mut FunctionContext<'_>) {
     let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x2]");                            // load the rejected object's runtime class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("add x10, x10, x9, lsl #4");                // address the matching class-name metadata row
-            ctx.emitter.instruction(&format!("ldr {}, [x10]", text_ptr));       // borrow the concrete class-name pointer
-            ctx.emitter.instruction(&format!("ldr {}, [x10, #8]", text_len));   // borrow the concrete class-name byte length
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x9", "x2");
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "x10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "x10", "x10", "x9", "x11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, text_ptr, text_len, "x10");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r9, QWORD PTR [rsi]");                 // load the rejected object's runtime class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to its metadata row
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", text_ptr)); // borrow the concrete class-name pointer
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", text_len)); // borrow the concrete class-name byte length
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r9", "rsi");
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "r10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "r10", "r10", "r9", "r11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, text_ptr, text_len, "r10");
         }
     }
     emit_dynamic_message(ctx, UNPACK_TYPE_ERROR_PREFIX.as_bytes(), UNPACK_TYPE_ERROR_SUFFIX.as_bytes());

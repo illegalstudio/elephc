@@ -112,7 +112,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     emitter.label(&format!("{prefix}_object"));
     if emitter.target.arch == Arch::AArch64 {
         abi::load_at_offset(emitter, "x0", ENTRY - 8);                        // load the object pointer from the unboxed entry payload
-        emitter.instruction("ldr x9, [x0]");                                    // load the object's runtime class id
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
         abi::emit_symbol_address(emitter, "x10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
         emitter.instruction("ldr x10, [x10, x9, lsl #3]");                      // read this class's numeric cast adapter
         emitter.instruction(&format!("cbz x10, {prefix}_unsupported"));         // classes without a cast keep the warning path
@@ -127,7 +127,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
         abi::emit_jump(emitter, &format!("{prefix}_combine"));                 // add the cast number to the running total
     } else {
         emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                   // load the object pointer from the unboxed entry payload
-        emitter.instruction("mov r9, QWORD PTR [rdi]");                         // load the object's runtime class id
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
         abi::emit_symbol_address(emitter, "r10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
         emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");               // read this class's numeric cast adapter
         emitter.instruction("test r10, r10");                                   // does this class provide a numeric cast?
@@ -215,7 +215,7 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
             elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x9");
             emitter.instruction("cmp x9, #8");                                  // int slots are one 8-byte word
             emitter.instruction(&format!("b.ne {generic}"));                    // widened slots keep the generic fold
-            emitter.instruction("ldr x2, [x0]");                                // exclusive end = array length
+            elephc_memoir::values::packed_slots::emit_load_length(emitter, "x2", "x0"); // exclusive end = array length
             emitter.instruction("mov x1, #0");                                  // start at the first element
             emitter.instruction("mov x3, #0");                                  // the empty seed is int zero
             abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
@@ -233,7 +233,7 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
             emitter.instruction(&format!("jne {generic}"));                     // widened slots keep the generic fold
             emitter.instruction("mov rdi, rax");                                // pass the packed array
             emitter.instruction("xor esi, esi");                                // start at the first element
-            emitter.instruction("mov rdx, QWORD PTR [rax]");                    // exclusive end = array length
+            elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdx", "rax"); // exclusive end = array length
             emitter.instruction("xor ecx, ecx");                                // the empty seed is int zero
             abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
         }
@@ -262,17 +262,25 @@ fn emit_unsupported_warning(emitter: &mut Emitter, prefix: &str, product: bool) 
     branch(emitter, "ne", "ne", &fallback);
     abi::load_at_offset(emitter, result, ENTRY - 8);
     ins(emitter, "ldr x13, [x0]", "mov r8, QWORD PTR [rax]");
-    abi::emit_load_symbol_to_reg(emitter, result, "_class_name_count", 0);
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, result);
     ins(emitter, "cmp x13, x0", "cmp r8, rax");
     branch(emitter, "hs", "ae", &fallback);
-    abi::emit_symbol_address(emitter, abi::secondary_scratch_reg(emitter), "_class_name_entries");
-    ins(emitter, "add x10, x10, x13, lsl #4", "shl r8, 4");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("add r10, r8");                                     // address the current object's dense class-name row
-    }
+    let table = abi::secondary_scratch_reg(emitter);
     let (ptr, len) = warning_regs(emitter);
-    abi::emit_load_from_address(emitter, ptr, abi::secondary_scratch_reg(emitter), 0);
-    abi::emit_load_from_address(emitter, len, abi::secondary_scratch_reg(emitter), 8);
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, table);
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(
+        emitter,
+        table,
+        table,
+        if emitter.target.arch == Arch::AArch64 { "x13" } else { "r8" },
+        ptr,
+    );
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(
+        emitter,
+        ptr,
+        len,
+        table,
+    );
     abi::emit_reg_move(emitter, result, len);
     abi::emit_branch_if_int_result_zero(emitter, &fallback);
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");

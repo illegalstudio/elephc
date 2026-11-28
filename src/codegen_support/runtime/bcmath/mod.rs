@@ -154,7 +154,7 @@ fn emit_throw_dynamic_bcmath_error_aarch64(emitter: &mut Emitter) {
     );
     emitter.label("__rt_bcmath_throw_class_ready");
     emitter.instruction("ldr x9, [x9]");                                        // load the selected program-local exception class id
-    emitter.instruction("str x9, [x0]");                                        // install the selected throwable class id
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
     emitter.instruction("ldp x10, x11, [sp, #24]");                             // reload the owned dynamic message pair
     emitter.instruction(&format!("stp x10, x11, [x0, #{}]", throwable_storage::MESSAGE_POINTER)); // install the throwable message pointer and length
     throwable_storage::emit_default_fields(emitter, "x0");
@@ -192,7 +192,7 @@ fn emit_throw_dynamic_bcmath_error_x86_64(emitter: &mut Emitter) {
         0,
     );
     emitter.label("__rt_bcmath_throw_class_ready_x86_64");
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // install the selected throwable class id
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the owned dynamic message pointer
     abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the owned dynamic message length

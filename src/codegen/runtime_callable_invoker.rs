@@ -566,8 +566,8 @@ fn emit_loaded_mixed_array_callback_call(
 
     // -- unpack the boxed Mixed container and branch on its runtime shape --
     emit_loaded_array_source_to_reg(array_source, mixed_reg, emitter);
-    abi::emit_load_from_address(emitter, tag_reg, mixed_reg, 0);
-    abi::emit_load_from_address(emitter, payload_reg, mixed_reg, 8);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag_reg, mixed_reg);
+    elephc_memoir::layout::emit_load_mixed_low(emitter, payload_reg, mixed_reg);
     abi::emit_push_reg(emitter, payload_reg); // preserve unboxed argument payload while branching by shape
     emit_branch_if_mixed_arg_tag(
         tag_reg,
@@ -660,7 +660,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- load the argument array and validate the required argument count --
     emit_loaded_array_source_to_reg(array_source, array_reg, emitter);
-    abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, len_reg, array_reg);
     emit_indexed_required_arg_count_check(sig, shape.visible_regular, len_reg, emitter, ctx, data);
     if ctx.mbstring_variable_ref_warnings {
         mbstring::warn_indexed_nonreference_roots(emitter, ctx, data, array_reg, len_reg, elem_size);
@@ -1299,7 +1299,7 @@ fn push_loaded_indexed_array_ref_arg(
     let result_reg = abi::int_result_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag_reg, result_reg);
     // -- call_user_func-family invocations pass every argument by value --
     let profile = abi::symbol_scratch_reg(emitter);
     let profile_mask = abi::tertiary_scratch_reg(emitter);
@@ -1332,7 +1332,7 @@ fn push_loaded_indexed_array_ref_arg(
             emitter.instruction(&format!("b.eq {php_reference_label}"));        // forward its original cell
             emitter.instruction(&format!("cmp {tag_reg}, #7"));                 // test for a persistent reference wrapper
             emitter.instruction(&format!("b.ne {temp_label}"));                 // ordinary values require temporary cells
-            abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag_reg, result_reg);
             emitter.instruction(&format!("cmp {tag_reg}, #1"));                 // flag one identifies the persistent reference
             emitter.instruction(&format!("b.eq {php_reference_label}"));        // preserve its writable target
         }
@@ -1341,7 +1341,7 @@ fn push_loaded_indexed_array_ref_arg(
             emitter.instruction(&format!("je {php_reference_label}"));          // forward its original cell
             emitter.instruction(&format!("cmp {tag_reg}, 7"));                  // test for a persistent reference wrapper
             emitter.instruction(&format!("jne {temp_label}"));                  // ordinary values require temporary cells
-            abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag_reg, result_reg);
             emitter.instruction(&format!("cmp {tag_reg}, 1"));                  // flag one identifies the persistent reference
             emitter.instruction(&format!("je {php_reference_label}"));          // preserve its writable target
         }
@@ -1350,8 +1350,12 @@ fn push_loaded_indexed_array_ref_arg(
 
     emitter.label(&special_label);
     let storage_reg = abi::symbol_scratch_reg(emitter);
-    abi::emit_load_from_address(emitter, storage_reg, result_reg, 8);
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    elephc_memoir::reference_cells::invoker_marker::emit_project(
+        emitter,
+        result_reg,
+        tag_reg,
+        storage_reg,
+    );
     push_invoker_ref_storage_address(storage_reg, tag_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
@@ -1370,7 +1374,7 @@ fn push_loaded_indexed_array_ref_arg(
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
     emitter.label(&dereference);
-    abi::emit_load_from_address(emitter, result_reg, result_reg, 8);
+    elephc_memoir::layout::emit_load_mixed_low(emitter, result_reg, result_reg);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
 
@@ -1474,11 +1478,8 @@ fn push_invoker_ref_storage_address(
     }
     emit_invoker_ref_heap_layout_guard(storage_reg, source_tag_reg, false, emitter, ctx);
     emit_boxed_mixed_object_ref_layout_guard(storage_reg, target_ty, emitter, ctx);
-    abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("add {}, {}, #8", result_reg, result_reg)), // address the mutable payload inside the Mixed cell
-        Arch::X86_64 => emitter.instruction(&format!("add {}, 8", result_reg)), // address the mutable payload inside the Mixed cell
-    }
+    elephc_memoir::reference_cells::emit_load_low(emitter, result_reg, storage_reg);
+    elephc_memoir::layout::emit_mixed_low_address(emitter, result_reg, result_reg);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
 
@@ -1516,8 +1517,8 @@ fn emit_boxed_mixed_object_ref_layout_guard(
     let compatible = ctx.next_label("invoker_ref_object_compatible");
     let incompatible = ctx.next_label("invoker_ref_object_incompatible");
     let result = abi::int_result_reg(emitter);
-    abi::emit_load_from_address(emitter, result, storage_reg, 0);
-    abi::emit_load_from_address(emitter, result, result, 0);
+    elephc_memoir::reference_cells::emit_load_low(emitter, result, storage_reg);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, result, result);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cmp x0, #6");                                  // a boxed object uses Mixed tag six
@@ -1571,7 +1572,7 @@ fn emit_invoker_ref_heap_layout_guard(
     let incompatible = ctx.next_label("invoker_ref_heap_layout_incompatible");
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg_pair(emitter, storage_reg, source_tag_reg);
-    abi::emit_load_from_address(emitter, result, storage_reg, 0);
+    elephc_memoir::reference_cells::emit_load_low(emitter, result, storage_reg);
     abi::emit_call_label(emitter, "__rt_heap_kind");
     abi::emit_pop_reg_pair(emitter, storage_reg, source_tag_reg);
     match emitter.target.arch {
@@ -1623,7 +1624,7 @@ fn push_loaded_indexed_array_value_arg(
     let result_reg = abi::int_result_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag_reg, result_reg);
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
     let ordinary_ty = push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data);
     abi::emit_jump(emitter, &done_label);
@@ -1656,8 +1657,12 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
     // -- unpack the marker and materialize its referenced value --
-    abi::emit_load_from_address(emitter, ref_cell_reg, result_reg, 8);
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    elephc_memoir::reference_cells::invoker_marker::emit_project(
+        emitter,
+        result_reg,
+        tag_reg,
+        ref_cell_reg,
+    );
     emit_materialize_invoker_ref_cell_value_as_mixed(ref_cell_reg, tag_reg, emitter, ctx);
 }
 
@@ -1680,7 +1685,7 @@ fn emit_materialize_invoker_ref_cell_value_as_mixed(
     let done_label = ctx.next_label("invoker_ref_materialized");
     let ordinary_label = ctx.next_label("invoker_ref_not_tagged_scalar");
 
-    abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
+    elephc_memoir::reference_cells::emit_load_low(emitter, lo_reg, ref_cell_reg);
     abi::emit_load_int_immediate(emitter, hi_reg, 0);
     crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_source(
         emitter, source_tag_reg, ref_cell_reg, &box_label, &ordinary_label,
@@ -1703,7 +1708,7 @@ fn emit_materialize_invoker_ref_cell_value_as_mixed(
     }
     abi::emit_jump(emitter, &box_label);
     emitter.label(&string_hi_label);
-    abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
+    elephc_memoir::reference_cells::emit_load_high(emitter, hi_reg, ref_cell_reg);
     emitter.label(&box_label);
     emit_box_runtime_payload_as_mixed(emitter, source_tag_reg, lo_reg, hi_reg);
     abi::emit_jump(emitter, &done_label);
@@ -1765,7 +1770,7 @@ fn emit_branch_if_boxed_invoker_ref_cell(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {}, #7", raw_tag_reg));           // is the hash value a boxed Mixed pointer (tag 7)?
             emitter.instruction(&format!("b.ne {}", not_boxed_label));          // only boxed values can hide a ref-cell marker
-            abi::emit_load_from_address(emitter, marker_tag_reg, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, marker_tag_reg, raw_lo_reg);
             emitter.instruction(&format!(                                       // does the boxed cell carry the invoker ref-cell marker tag?
                 "cmp {}, #{}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
@@ -1775,7 +1780,7 @@ fn emit_branch_if_boxed_invoker_ref_cell(
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, 7", raw_tag_reg));            // is the hash value a boxed Mixed pointer (tag 7)?
             emitter.instruction(&format!("jne {}", not_boxed_label));           // only boxed values can hide a ref-cell marker
-            abi::emit_load_from_address(emitter, marker_tag_reg, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, marker_tag_reg, raw_lo_reg);
             emitter.instruction(&format!(                                       // does the boxed cell carry the invoker ref-cell marker tag?
                 "cmp {}, {}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
@@ -1800,14 +1805,14 @@ fn emit_branch_if_boxed_php_reference_cell(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hide references
             emitter.instruction(&format!("b.ne {done}"));                       // leave other values on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, #11"));                    // check the inner boxed reference marker
             emitter.instruction(&format!("b.eq {label}"));                      // forward the live managed cell
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hide references
             emitter.instruction(&format!("jne {done}"));                        // leave other values on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, 11"));                     // check the inner boxed reference marker
             emitter.instruction(&format!("je {label}"));                        // forward the live managed cell
         }
@@ -1826,20 +1831,20 @@ fn emit_branch_if_boxed_persistent_reference(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hold a persistent wrapper
             emitter.instruction(&format!("b.ne {done}"));                       // preserve ordinary hash value handling
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, #7"));                     // check the inner wrapper tag
             emitter.instruction(&format!("b.ne {done}"));                       // leave unrelated boxes on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, #1"));                     // flag one denotes a persistent reference
             emitter.instruction(&format!("b.eq {label}"));                      // forward its original writable storage
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hold a persistent wrapper
             emitter.instruction(&format!("jne {done}"));                        // preserve ordinary hash value handling
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, 7"));                      // check the inner wrapper tag
             emitter.instruction(&format!("jne {done}"));                        // leave unrelated boxes on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, 1"));                      // flag one denotes a persistent reference
             emitter.instruction(&format!("je {label}"));                        // forward its original writable storage
         }
@@ -1855,8 +1860,12 @@ fn load_boxed_invoker_ref_cell_to_raw_regs(
 ) {
     let marker_reg = abi::temp_int_reg(emitter.target);
     emitter.instruction(&format!("mov {}, {}", marker_reg, raw_lo_reg));        // stash the marker pointer before overwriting the raw registers
-    abi::emit_load_from_address(emitter, raw_lo_reg, marker_reg, 8);
-    abi::emit_load_from_address(emitter, raw_hi_reg, marker_reg, 16);
+    elephc_memoir::reference_cells::invoker_marker::emit_project(
+        emitter,
+        marker_reg,
+        raw_hi_reg,
+        raw_lo_reg,
+    );
 }
 
 /// Coerces and pushes a loaded indexed-array element as a call argument.
@@ -1909,64 +1918,64 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
         | PhpType::Packed(_)
         | PhpType::Narrow(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
-            abi::emit_store_zero_to_address(emitter, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_clear_high(emitter, cell_reg);
         }
         PhpType::Float => {
             abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("fmov x10, d0");                        // move the float payload into an integer register for the store
-                    abi::emit_store_to_address(emitter, "x10", cell_reg, 0);
+                    elephc_memoir::reference_cells::emit_store_low(emitter, "x10", cell_reg);
                 }
                 Arch::X86_64 => {
                     emitter.instruction("movq r10, xmm0");                      // move the float payload into an integer register for the store
-                    abi::emit_store_to_address(emitter, "r10", cell_reg, 0);
+                    elephc_memoir::reference_cells::emit_store_low(emitter, "r10", cell_reg);
                 }
             }
             abi::emit_load_int_immediate(emitter, temp_reg, 2);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Str | PhpType::TaggedScalar => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
-            abi::emit_store_to_address(emitter, ptr_reg, cell_reg, 0);
-            abi::emit_store_to_address(emitter, len_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(emitter, ptr_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_store_high(emitter, len_reg, cell_reg);
         }
         PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 7);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Array(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 4);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::AssocArray { .. } => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 5);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Object(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 6);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Resource(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 9);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Void | PhpType::Never => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
-            abi::emit_store_zero_to_address(emitter, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_clear_high(emitter, cell_reg);
         }
     }
 }
@@ -3776,7 +3785,11 @@ fn emit_invoker_throwable(
         Arch::AArch64 => {
             throwable_storage::emit_allocate(emitter);
             abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
-            emitter.instruction("str x9, [x0]");                                // identify the requested builtin throwable class
+            elephc_memoir::values::object_storage::emit_store_class_id(
+                emitter,
+                "x9",
+                "x0",
+            );
             abi::emit_symbol_address(emitter, "x9", &message_label);
             abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
@@ -3793,7 +3806,11 @@ fn emit_invoker_throwable(
                 class_id_symbol,
                 0,
             );
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the requested builtin throwable class
+            elephc_memoir::values::object_storage::emit_store_class_id(
+                emitter,
+                "r10",
+                "rax",
+            );
             abi::emit_symbol_address(emitter, "r10", &message_label);
             abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);

@@ -331,7 +331,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
         "x10",
         "__elephc_eval_value_object_property_len_zero",
     );
-    emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x9");
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
     emitter.instruction("cmp x11, x10");                                        // is the class id within the metadata tables?
@@ -368,7 +368,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
         "x10",
         "__elephc_eval_value_object_property_iter_key_null",
     );
-    emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x9");
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
     emitter.instruction("cmp x11, x10");                                        // is the class id within the metadata tables?

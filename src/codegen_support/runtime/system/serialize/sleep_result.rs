@@ -174,13 +174,15 @@ fn emit_names_warning(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
     abi::load_at_offset(emitter, result, OBJECT);
     abi::emit_load_from_address(emitter, result, result, 0);
-    abi::emit_symbol_address(emitter, scratch, "_class_name_entries");
-    ins(emitter, "add x10, x10, x0, lsl #4", "shl rax, 4");
-    if emitter.target.arch == Arch::X86_64 {
-        ins(emitter, "nop", "add r10, rax");
-    }
-    abi::emit_load_from_address(emitter, ptr, scratch, 0);
-    abi::emit_load_from_address(emitter, len, scratch, 8);
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, scratch);
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(
+        emitter,
+        scratch,
+        scratch,
+        result,
+        ptr,
+    );
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, ptr, len, scratch);
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
     abi::emit_symbol_address(emitter, ptr, "_sleep_warning_suffix");
     abi::emit_load_int_immediate(emitter, len, SLEEP_WARNING_SUFFIX.len() as i64);

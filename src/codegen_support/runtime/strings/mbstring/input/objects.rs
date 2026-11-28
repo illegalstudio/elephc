@@ -24,14 +24,14 @@ pub(super) fn aarch64(emitter: &mut Emitter, eval_bridge: bool) {
         emitter.instruction("ldr x10, [sp, #16]");                              // recover the concrete descriptor after the C metadata lookup
         emitter.instruction("ldr x1, [x10, #8]");                               // recover the raw native object for context-free class-table lookup
     }
-    emitter.instruction("ldr x11, [x1]");                                       // read the actual object's class identity rather than its static type
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x1");
     emitter.instruction("str x11, [sp, #32]");                                  // retain class identity across symbol-address helpers
-    abi::emit_load_symbol_to_reg(emitter, "x12", "_class_name_count", 0);
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x12");
     emitter.instruction("cmp x11, x12");                                        // bound-check dense native class metadata, including negative eval ids
     emitter.instruction("b.hs __rt_mbstring_input_dynamic");                    // resolve synthetic classes through their active eval context
-    abi::emit_symbol_address(emitter, "x12", "_class_name_entries");
-    emitter.instruction("add x12, x12, x11, lsl #4");                           // address the immutable class-name pointer and length pair
-    emitter.instruction("ldp x1, x2, [x12]");                                   // borrow the actual class spelling without allocating
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x12");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x12", "x12", "x11", "x13");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x1", "x2", "x12");
     emitter.instruction("cbz x1, __rt_mbstring_input_dynamic");                 // table holes may require dynamic metadata
     emitter.instruction("cbz x2, __rt_mbstring_input_dynamic");                 // empty native names cannot describe PHP objects
     emitter.instruction("ldr x10, [sp, #16]");                                  // recover the output descriptor
@@ -100,16 +100,14 @@ pub(super) fn x86_64(emitter: &mut Emitter, eval_bridge: bool) {
         emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // recover the writable concrete-value descriptor
         emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                    // recover the raw object for context-free native class lookup
     }
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // inspect the actual object's runtime class identity
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     emitter.instruction("mov QWORD PTR [rsp + 32], r11");                       // retain the class id through symbol-address materialization
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_class_name_count", 0);
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r9");
     emitter.instruction("cmp r11, r9");                                         // bound-check native metadata and reject negative synthetic ids
     emitter.instruction("jae __rt_mbstring_input_dynamic");                     // use eval metadata for synthetic class identities
-    abi::emit_symbol_address(emitter, "r9", "_class_name_entries");
-    emitter.instruction("shl r11, 4");                                          // scale the class id to a pointer/length entry
-    emitter.instruction("add r9, r11");                                         // address the actual native class-name tuple
-    emitter.instruction("mov rdi, QWORD PTR [r9]");                             // borrow the binary class-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [r9 + 8]");                         // preserve the complete class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r9");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r9", "r9", "r11", "r8");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rdi", "rdx", "r9");
     emitter.instruction("test rdi, rdi");                                       // table holes require dynamic metadata
     emitter.instruction("jz __rt_mbstring_input_dynamic");                      // do not publish an absent native class spelling
     emitter.instruction("test rdx, rdx");                                       // empty native class names are not valid object metadata

@@ -33,14 +33,14 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
                 .instruction(&format!("mov x0, #{}", payload_size));            // request object payload storage for the class id and property slots
             elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
-            ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x10", "x0");
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size));            // request object payload storage for the class id and property slots
             elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);

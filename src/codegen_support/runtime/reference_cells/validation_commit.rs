@@ -11,6 +11,7 @@
 //! - The rooted entry removes the original RHS lease after publication, before old retirement.
 
 use super::*;
+use elephc_memoir::owner_layout::NativeValidationContext;
 
 const INVALID_STATUS: i64 = 1;
 pub(super) const THROW_STATUS: i64 = 2;
@@ -20,7 +21,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     use elephc_memoir::reference_cells::validated_commit::{self, Commit};
 
     let context = Commit {
-        pending: elephc_memoir::RecordOffset::new(super::validation_coercion::PENDING_THROWABLE),
+        pending: elephc_memoir::RecordOffset::new(NativeValidationContext::PENDING_THROWABLE),
         retire: "__rt_reference_validation_release",
         take_snapshot: None,
         invalid: INVALID_STATUS,

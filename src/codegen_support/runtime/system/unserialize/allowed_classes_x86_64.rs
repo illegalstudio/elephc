@@ -96,7 +96,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_options_indexed_object_x");              // objects convert through __toString
     emitter.instruction("cmp r11, 7");                                          // heterogeneous packed values use boxed Mixed cells
     emitter.instruction("jne __rt_unser_allowed_classes_entry_metadata_error_x"); // other homogeneous values are invalid class names
-    emitter.instruction("mov r10, QWORD PTR [r8 + r9 * 8 + 24]");               // selected boxed Mixed pointer
+    packed_slots::emit_load_indexed_word(emitter, "r8", "r9", "r10", "r11");
     emitter.instruction("test r10, r10");                                       // null/malformed cell?
     emitter.instruction("jz __rt_unser_allowed_classes_entry_null_error_x");    // report PHP null
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // boxed runtime tag
@@ -112,12 +112,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_options_indexed_string_x");
     emitter.instruction("mov r10, r9");                                         // copy index before scaling
     emitter.instruction("shl r10, 4");                                          // direct string-pair stride is sixteen bytes
-    emitter.instruction("lea r10, [r8 + r10 + 24]");                            // select current direct string pair
-    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // borrow source string pointer
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // borrow source string length
+    packed_slots::emit_load_packed_byte_offset_word(emitter, "rsi", "r8", "r10");
+    packed_slots::emit_load_packed_byte_offset_word_delta(
+        emitter, "rdx", "r8", "r10", 1,
+    );
     emitter.instruction("jmp __rt_unser_options_append_borrowed_x");            // append the borrowed string as an allowed name
     emitter.label("__rt_unser_options_indexed_object_x");
-    emitter.instruction("mov rax, QWORD PTR [r8 + r9 * 8 + 24]");               // load selected direct object pointer
+    packed_slots::emit_load_indexed_word(emitter, "r8", "r9", "rax", "r11");
     emitter.instruction("test rax, rax");                                       // null object slot?
     emitter.instruction("jz __rt_unser_allowed_classes_entry_null_error_x");    // report PHP null
     emitter.instruction("jmp __rt_unser_options_convert_object_x");             // convert the entry object via __toString
@@ -216,10 +217,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                        // preserve the list cursor while deriving a byte offset
     emitter.instruction("shl rax, 4");                                          // scale the cursor by the 16-byte direct-string pair stride
     emitter.instruction("add r11, rax");                                        // advance the list base to the selected direct-string pair
-    emitter.instruction(&format!("add r11, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the indexed-array header before reading the string pair
+    packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r11");
     emitter.instruction("jmp __rt_unser_class_allowed_compare_x");              // compare against the requested class name
     emitter.label("__rt_unser_class_allowed_mixed_cell_x");
-    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8 + 24]");             // validated boxed string cell
+    packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "r11", "r8");
     emitter.instruction("add r11, 8");                                          // string payload pair follows its Mixed tag
     emitter.label("__rt_unser_class_allowed_compare_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // requested class-name pointer

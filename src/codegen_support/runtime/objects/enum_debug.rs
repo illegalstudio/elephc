@@ -82,7 +82,7 @@ fn emit_class_table_lookup(
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("ldr x10, [x10]");                              // load the number of registered class ids
             emitter.instruction("cmp x9, x10");                                 // is the class id within the per-class tables?
@@ -95,7 +95,7 @@ fn emit_class_table_lookup(
             emitter.instruction("ret");                                         // return to caller
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
             abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("mov r10, QWORD PTR [r10]");                    // load the number of registered class ids
             emitter.instruction("cmp r9, r10");                                 // is the class id within the per-class tables?
@@ -131,8 +131,8 @@ pub fn emit_obj_enum_case_name(emitter: &mut Emitter) {
             emitter.instruction("b.lt __rt_obj_enum_case_name_none");           // a plain class reports an empty case name
             emitter.instruction("ldr x9, [sp, #0]");                            // reload the object pointer
             emitter.instruction("add x9, x9, x0");                              // resolve the absolute `name` slot address
-            emitter.instruction("ldr x1, [x9, #8]");                            // load the case-name length from the slot high word
-            emitter.instruction("ldr x0, [x9]");                                // load the case-name pointer from the slot low word
+            elephc_memoir::values::object_storage::emit_load_slot_high(emitter, "x1", "x9"); // load the case-name length from the slot high word
+            elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "x0", "x9"); // load the case-name pointer from the slot low word
             emitter.instruction("b __rt_obj_enum_case_name_done");              // return the resolved case name
             emitter.label("__rt_obj_enum_case_name_none");
             emitter.instruction("mov x0, #0");                                  // no `name` slot → null pointer
@@ -152,8 +152,8 @@ pub fn emit_obj_enum_case_name(emitter: &mut Emitter) {
             emitter.instruction("jl __rt_obj_enum_case_name_none_x86");         // a plain class reports an empty case name
             emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                 // reload the object pointer
             emitter.instruction("add r9, rax");                                 // resolve the absolute `name` slot address
-            emitter.instruction("mov rdx, QWORD PTR [r9 + 8]");                 // load the case-name length from the slot high word
-            emitter.instruction("mov rax, QWORD PTR [r9]");                     // load the case-name pointer from the slot low word
+            elephc_memoir::values::object_storage::emit_load_slot_high(emitter, "rdx", "r9"); // load the case-name length from the slot high word
+            elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "rax", "r9"); // load the case-name pointer from the slot low word
             emitter.instruction("jmp __rt_obj_enum_case_name_done_x86");        // return the resolved case name
             emitter.label("__rt_obj_enum_case_name_none_x86");
             emitter.instruction("xor rax, rax");                                // no `name` slot → null pointer
@@ -193,18 +193,16 @@ pub fn emit_var_dump_emit_enum_line(emitter: &mut Emitter) {
 
     // -- class name from the shared class-id → (name ptr, name len) table --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the enum instance pointer
-    emitter.instruction("ldr x9, [x9]");                                        // load the runtime class id from the object header
-    abi::emit_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
-    emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10"); // load the number of named class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the name table?
     emitter.instruction("b.hs __rt_vd_enum_anon");                              // an unknown class id writes no name
-    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");            // resolve the class-name entry table
-    emitter.instruction("add x11, x11, x9, lsl #4");                            // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("ldr x1, [x11]");                                       // load the class-name pointer
-    emitter.instruction("ldr x2, [x11, #8]");                                   // load the class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x11", "x11", "x9", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x1", "x2", "x11");
     emitter.instruction("b __rt_vd_enum_name");                                 // write the resolved name
     emitter.label("__rt_vd_enum_anon");
-    abi::emit_symbol_address(emitter, "x1", "_class_name_missing");             // fall back to the empty class-name slot
+    elephc_memoir::values::class_metadata::emit_missing_class_name_address(emitter, "x1"); // fall back to the empty class-name slot
     emitter.instruction("mov x2, #0");                                          // a zero-length write emits nothing
     emitter.label("__rt_vd_enum_name");
     emitter.instruction("bl __rt_vd_write");                                    // write the enum class name
@@ -246,19 +244,16 @@ fn emit_var_dump_emit_enum_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_vd_write");                                  // write `enum(`
 
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the enum instance pointer
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the runtime class id from the object header
-    abi::emit_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r9");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r10"); // load the number of named class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id within the name table?
     emitter.instruction("jae __rt_vd_enum_anon_x86");                           // an unknown class id writes no name
-    abi::emit_symbol_address(emitter, "r11", "_class_name_entries");            // resolve the class-name entry table
-    emitter.instruction("shl r9, 4");                                           // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("add r11, r9");                                         // advance to this class's entry
-    emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the class-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r11", "r11", "r9", "r10");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rsi", "rdx", "r11");
     emitter.instruction("jmp __rt_vd_enum_name_x86");                           // write the resolved name
     emitter.label("__rt_vd_enum_anon_x86");
-    abi::emit_symbol_address(emitter, "rsi", "_class_name_missing");            // fall back to the empty class-name slot
+    elephc_memoir::values::class_metadata::emit_missing_class_name_address(emitter, "rsi"); // fall back to the empty class-name slot
     emitter.instruction("xor edx, edx");                                        // a zero-length write emits nothing
     emitter.label("__rt_vd_enum_name_x86");
     emitter.instruction("call __rt_vd_write");                                  // write the enum class name

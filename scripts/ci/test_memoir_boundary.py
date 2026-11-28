@@ -6,6 +6,7 @@ from scripts.audit_memoir_boundary import (
     MIGRATED_OWNER_FIELDS,
     MIGRATED_SOURCE_CONTRACTS,
     audit_archive_symbols,
+    audit_class_name_table_access,
     audit_centralized_memory_access,
     audit_metadata,
     audit_migrated_owner_fields,
@@ -303,6 +304,23 @@ class MigratedSourceContractTests(unittest.TestCase):
         source = 'assert!(assembly.contains("_ob_level")); // _ser_stream remains internal'
         self.assertEqual(audit_centralized_memory_access("consumer.rs", source), [])
 
+    def test_class_name_table_base_requires_typed_row_projection(self):
+        """Reject consumers that recover the table base but keep its row geometry locally."""
+        source = (
+            'class_metadata::emit_class_name_table_address(emitter, "r10");\n'
+            'emitter.instruction("shl r9, 4");'
+        )
+        findings = audit_class_name_table_access("consumer.rs", source)
+        self.assertEqual([finding.code for finding in findings], ["class-name-layout"])
+
+    def test_class_name_table_base_accepts_typed_row_projection(self):
+        """Allow a dense class-name table base immediately projected by Memoir."""
+        source = (
+            'class_metadata::emit_class_name_table_address(emitter, "r10");\n'
+            'class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r9", "r11");'
+        )
+        self.assertEqual(audit_class_name_table_access("consumer.rs", source), [])
+
     def test_repository_contracts_cover_all_eight_migration_groups(self):
         """Guard the owner, descriptor, Throwable, argument, header, symbol, global and tail groups."""
         locations = set(MIGRATED_SOURCE_CONTRACTS)
@@ -315,6 +333,28 @@ class MigratedSourceContractTests(unittest.TestCase):
             "src/codegen_support/abi/symbols.rs",
             "src/codegen_support/runtime/strings/bin2hex_len.rs",
             "src/codegen_support/runtime/objects/dump_dynamic_props.rs",
+        }
+        self.assertTrue(witnesses <= locations)
+
+    def test_repository_contracts_cover_generated_layout_migrations(self):
+        """Guard generated metadata, buffer records and foreign ABI projections."""
+        locations = set(MIGRATED_SOURCE_CONTRACTS)
+        witnesses = {
+            "src/codegen_support/runtime/data/user.rs",
+            "src/codegen_support/runtime/data/instanceof.rs",
+            "src/codegen_support/runtime/callables/function_exists.rs",
+            "src/codegen_support/runtime/system/json_encode_object.rs",
+            "src/codegen_support/runtime/eval_bridge/aarch64_reflection_members.rs",
+            "src/codegen_support/runtime/eval_bridge/x86_64_reflection_names.rs",
+            "src/codegen_support/runtime/eval_bridge/reflection_class_flags.rs",
+            "src/codegen_support/runtime/objects/new_by_name.rs",
+            "src/codegen_support/runtime/exceptions/dynamic_instanceof.rs",
+            "src/codegen_support/runtime/io/ob_process.rs",
+            "src/codegen_support/runtime/io/user_filter/attach.rs",
+            "src/codegen_support/runtime/callables/is_callable.rs",
+            "src/codegen/lower_inst/builtins/output_buffering.rs",
+            "src/codegen_support/runtime/arrays/usort_str.rs",
+            "src/codegen_support/mbstring_query.rs",
         }
         self.assertTrue(witnesses <= locations)
 

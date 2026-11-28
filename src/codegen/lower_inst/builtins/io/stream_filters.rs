@@ -451,17 +451,13 @@ pub(crate) fn lower_stream_filter_remove(
     abi::emit_call_label(ctx.emitter, "__rt_user_filter_release_fd");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "x9");
-            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the read-direction filter slot for this descriptor
-            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "x9");
-            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the write-direction filter slot for this descriptor
+            stream_tables::READ_FILTERS.emit_clear_indexed_byte(ctx.emitter, "x0", "x9");
+            stream_tables::WRITE_FILTERS.emit_clear_indexed_byte(ctx.emitter, "x0", "x9");
             ctx.emitter.instruction("mov x0, #1");                              // return true after removing the filter state
         }
         Arch::X86_64 => {
-            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "r9");
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the read-direction filter slot for this descriptor
-            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "r9");
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the write-direction filter slot for this descriptor
+            stream_tables::READ_FILTERS.emit_clear_indexed_byte(ctx.emitter, "rax", "r9");
+            stream_tables::WRITE_FILTERS.emit_clear_indexed_byte(ctx.emitter, "rax", "r9");
             ctx.emitter.instruction("mov eax, 1");                              // return true after removing the filter state
         }
     }

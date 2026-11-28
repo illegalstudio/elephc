@@ -498,11 +498,11 @@ fn emit_object_class_id(ctx: &mut FunctionContext<'_>, unrelated: &str) {
     crate::codegen_support::sentinels::emit_branch_if_null_container(ctx.emitter, result, scratch, unrelated);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [x0]");                            // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x0", "x0");
             ctx.emitter.instruction("str x0, [sp, #40]");                       // save the subject's class id for the dispatch
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "rax", "rax");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rax");           // save the subject's class id for the dispatch
         }
     }

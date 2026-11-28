@@ -448,7 +448,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __unserialize magic: parse the body into an assoc array, then call
     //    __unserialize($this, $data) instead of injecting properties by name --
     emitter.instruction("ldr x9, [sp, #24]");                                   // object pointer
-    emitter.instruction("ldr x9, [x9]");                                        // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_unserialize_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // __unserialize method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_unser_obj_default");                     // no __unserialize → inject properties by name
@@ -546,7 +546,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_unser_at_obj_box");                       // incomplete objects never run class hooks
     emitter.label("__rt_unser_obj_wakeup");
     emitter.instruction("ldr x9, [sp, #24]");                                   // object pointer
-    emitter.instruction("ldr x9, [x9]");                                        // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_wakeup_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // __wakeup method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_unser_at_obj_box");                      // no __wakeup → box the object directly

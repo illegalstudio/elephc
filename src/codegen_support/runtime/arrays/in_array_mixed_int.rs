@@ -34,7 +34,7 @@ pub fn emit_in_array_mixed_int(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #24]");                                   // save the integer needle across cell-unbox calls
     emitter.instruction("str x2, [sp, #32]");                                   // save whether PHP strict comparison was requested
     emitter.instruction("cbz x0, __rt_in_array_mixed_int_false");               // a null-container pointer has no matching elements
-    emitter.instruction("ldr x9, [x0]");                                        // load the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load the source indexed-array logical length
     emitter.instruction("str x9, [sp, #8]");                                    // preserve the logical length across nested runtime calls
     emitter.instruction("str xzr, [sp, #16]");                                  // initialize the scan cursor at index zero
 
@@ -45,7 +45,7 @@ pub fn emit_in_array_mixed_int(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // check whether every boxed slot has been visited
     emitter.instruction("b.ge __rt_in_array_mixed_int_false");                  // return false after exhausting the source array
     emitter.instruction("ldr x10, [sp]");                                       // reload the source indexed-array pointer
-    emitter.instruction("add x10, x10, #24");                                   // advance from the header to the boxed Mixed slot region
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the borrowed Mixed-cell pointer at the current index
     emitter.instruction("bl __rt_mixed_unbox");                                 // unbox the cell into runtime tag x0 and payload words x1/x2
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the strict-comparison flag
@@ -138,7 +138,7 @@ fn emit_in_array_mixed_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save whether PHP strict comparison was requested
     emitter.instruction("test rdi, rdi");                                       // check whether the source is a null-container pointer
     emitter.instruction("je __rt_in_array_mixed_int_false_x86");                // a null-container pointer has no matching elements
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rax", "rdi"); // load the source indexed-array logical length
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the logical length across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the scan cursor at index zero
 

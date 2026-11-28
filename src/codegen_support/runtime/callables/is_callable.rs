@@ -9,6 +9,10 @@
 //! - String lookup uses fixed builtin metadata plus user metadata emitted with the program.
 //! - Method and `__invoke` lookup use public-method name tables indexed by runtime class id.
 
+use elephc_memoir::callables::layout::{
+    self as callable_layout, MethodNameField, StaticMethodNameField,
+};
+
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -222,11 +226,11 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save candidate method string pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save candidate method string length
     emitter.instruction("cbz x0, __rt_is_callable_method_false");               // null receivers are not callable method arrays
-    emitter.instruction("ldr x9, [x0]");                                        // load receiver runtime class id from object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x10", "_class_callable_method_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // load class-specific public-method name table pointer
     emitter.instruction("str x10, [sp, #24]");                                  // save method table pointer across string comparisons
-    emitter.instruction("ldr x11, [x10]");                                      // load public-method name count from the class table
+    callable_layout::emit_load_method_name_count(emitter, "x11", "x10");
     emitter.instruction("str x11, [sp, #32]");                                  // save method table count
     emitter.instruction("str xzr, [sp, #40]");                                  // start method table scan at entry index zero
 
@@ -236,13 +240,16 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // have all public methods been checked?
     emitter.instruction("b.ge __rt_is_callable_method_false");                  // no method name matched
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload method table pointer
-    emitter.instruction("add x11, x11, #8");                                    // skip the count word before indexed entries
-    emitter.instruction("lsl x12, x9, #4");                                     // multiply method index by 16-byte entry size
-    emitter.instruction("add x11, x11, x12");                                   // compute current method entry address
+    callable_layout::emit_method_name_row_address(emitter, "x11", "x11", "x9", "x12");
     emitter.instruction("ldr x1, [sp, #8]");                                    // pass candidate method pointer as comparison left side
     emitter.instruction("ldr x2, [sp, #16]");                                   // pass candidate method length as comparison left side
-    emitter.instruction("ldr x3, [x11]");                                       // pass table method pointer as comparison right side
-    emitter.instruction("ldr x4, [x11, #8]");                                   // pass table method length as comparison right side
+    callable_layout::emit_load_method_name_field(emitter, "x3", "x11", MethodNameField::Name);
+    callable_layout::emit_load_method_name_field(
+        emitter,
+        "x4",
+        "x11",
+        MethodNameField::NameLength,
+    );
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare method names case-insensitively like PHP method lookup
     emitter.instruction("cbz x0, __rt_is_callable_method_true");                // equal method names mean the object/method pair is callable
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload current method table index
@@ -307,20 +314,39 @@ fn emit_static_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // have all static method entries been checked?
     emitter.instruction("b.ge __rt_is_callable_static_method_false");           // no public static method matched the class/method pair
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload static callable table pointer
-    emitter.instruction("lsl x12, x9, #5");                                     // multiply index by 32-byte static callable entry size
-    emitter.instruction("add x11, x11, x12");                                   // compute address of the current static callable entry
+    callable_layout::emit_static_method_name_row_address(emitter, "x11", "x11", "x9", "x12");
     emitter.instruction("str x11, [sp, #56]");                                  // preserve current table entry across string comparison calls
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass candidate class pointer as comparison left side
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass candidate class length as comparison left side
-    emitter.instruction("ldr x3, [x11]");                                       // pass table class pointer as comparison right side
-    emitter.instruction("ldr x4, [x11, #8]");                                   // pass table class length as comparison right side
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "x3",
+        "x11",
+        StaticMethodNameField::ClassName,
+    );
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "x4",
+        "x11",
+        StaticMethodNameField::ClassNameLength,
+    );
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare class names case-insensitively like PHP class lookup
     emitter.instruction("cbnz x0, __rt_is_callable_static_method_next");        // move on when the class name did not match
     emitter.instruction("ldr x11, [sp, #56]");                                  // reload current table entry after caller-saved registers were clobbered
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass candidate method pointer as comparison left side
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass candidate method length as comparison left side
-    emitter.instruction("ldr x3, [x11, #16]");                                  // pass table method pointer as comparison right side
-    emitter.instruction("ldr x4, [x11, #24]");                                  // pass table method length as comparison right side
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "x3",
+        "x11",
+        StaticMethodNameField::MethodName,
+    );
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "x4",
+        "x11",
+        StaticMethodNameField::MethodNameLength,
+    );
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare static method names case-insensitively like PHP method lookup
     emitter.instruction("cbz x0, __rt_is_callable_static_method_true");         // matching class and method strings name a public static callable
 
@@ -376,7 +402,7 @@ fn emit_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish this helper's frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save indexed array pointer
     emitter.instruction("cbz x0, __rt_is_callable_array_false");                // null arrays are not callable
-    emitter.instruction("ldr x9, [x0]");                                        // load indexed array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load indexed array length
     emitter.instruction("cmp x9, #2");                                          // callable arrays must have receiver and method entries
     emitter.instruction("b.ne __rt_is_callable_array_false");                   // reject arrays without exactly two entries
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
@@ -863,11 +889,11 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save candidate method string length
     emitter.instruction("test rdi, rdi");                                       // null receivers cannot expose callable methods
     emitter.instruction("je __rt_is_callable_method_false_x86_64");             // return false for null receiver objects
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load receiver runtime class id from object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_class_callable_method_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load class-specific public-method name table pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save method table pointer across string comparisons
-    emitter.instruction("mov r10, QWORD PTR [r11]");                            // load public-method name count from class table
+    callable_layout::emit_load_method_name_count(emitter, "r10", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save method table count
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // start method table scan at entry index zero
 
@@ -876,13 +902,16 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 40]");                       // have all public methods been checked?
     emitter.instruction("jge __rt_is_callable_method_false_x86_64");            // no method name matched
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload method table pointer
-    emitter.instruction("add r11, 8");                                          // skip count word before indexed method entries
-    emitter.instruction("shl r10, 4");                                          // multiply method index by 16-byte entry size
-    emitter.instruction("add r11, r10");                                        // compute current method entry address
+    callable_layout::emit_method_name_row_address(emitter, "r11", "r11", "r10", "rax");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass candidate method pointer as comparison left side
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass candidate method length as comparison left side
-    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // pass table method pointer as comparison right side
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 8]");                        // pass table method length as comparison right side
+    callable_layout::emit_load_method_name_field(emitter, "rdx", "r11", MethodNameField::Name);
+    callable_layout::emit_load_method_name_field(
+        emitter,
+        "rcx",
+        "r11",
+        MethodNameField::NameLength,
+    );
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare method names case-insensitively like PHP method lookup
     emitter.instruction("test rax, rax");                                       // zero comparison result means equal method names
     emitter.instruction("je __rt_is_callable_method_true_x86_64");              // return true for public method matches
@@ -948,21 +977,40 @@ fn emit_static_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 48]");                       // have all static method entries been checked?
     emitter.instruction("jge __rt_is_callable_static_method_false_x86_64");     // no public static method matched the class/method pair
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload static callable table pointer
-    emitter.instruction("shl r10, 5");                                          // multiply index by 32-byte static callable entry size
-    emitter.instruction("add r11, r10");                                        // compute address of the current static callable entry
+    callable_layout::emit_static_method_name_row_address(emitter, "r11", "r11", "r10", "rax");
     emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // preserve current table entry across string comparison calls
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass candidate class pointer as comparison left side
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass candidate class length as comparison left side
-    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // pass table class pointer as comparison right side
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 8]");                        // pass table class length as comparison right side
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "rdx",
+        "r11",
+        StaticMethodNameField::ClassName,
+    );
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "rcx",
+        "r11",
+        StaticMethodNameField::ClassNameLength,
+    );
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare class names case-insensitively like PHP class lookup
     emitter.instruction("test rax, rax");                                       // zero comparison result means equal class names
     emitter.instruction("jne __rt_is_callable_static_method_next_x86_64");      // move on when the class name did not match
     emitter.instruction("mov r11, QWORD PTR [rbp - 64]");                       // reload current table entry after caller-saved registers were clobbered
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass candidate method pointer as comparison left side
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass candidate method length as comparison left side
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 16]");                       // pass table method pointer as comparison right side
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // pass table method length as comparison right side
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "rdx",
+        "r11",
+        StaticMethodNameField::MethodName,
+    );
+    callable_layout::emit_load_static_method_name_field(
+        emitter,
+        "rcx",
+        "r11",
+        StaticMethodNameField::MethodNameLength,
+    );
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare static method names case-insensitively like PHP method lookup
     emitter.instruction("test rax, rax");                                       // zero comparison result means equal method names
     emitter.instruction("je __rt_is_callable_static_method_true_x86_64");       // matching class and method strings name a public static callable
@@ -1018,7 +1066,7 @@ fn emit_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save indexed array pointer
     emitter.instruction("test rdi, rdi");                                       // null arrays are not callable
     emitter.instruction("je __rt_is_callable_array_false_x86_64");              // reject null indexed array pointers
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load indexed array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load indexed array length
     emitter.instruction("cmp r10, 2");                                          // callable arrays must have receiver and method entries
     emitter.instruction("jne __rt_is_callable_array_false_x86_64");             // reject arrays without exactly two entries
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rdi");

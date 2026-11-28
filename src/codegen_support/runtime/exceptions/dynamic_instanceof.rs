@@ -12,6 +12,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::reference_cells;
+use elephc_memoir::values::class_metadata::{self, InstanceofTargetField};
 
 /// PHP's message for an invalid dynamic `instanceof` target.
 const INVALID_TARGET_MESSAGE_LEN: i64 = 45;
@@ -58,8 +59,8 @@ fn emit_dynamic_instanceof_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_instanceof_lookup_entry_loop");
     emitter.instruction("cmp x11, x9");                                         // have all target-name metadata entries been scanned?
     emitter.instruction("b.hs __rt_instanceof_lookup_no");                      // no class/interface name matched the dynamic string target
-    emitter.instruction("ldr x12, [x10]");                                      // x12 = candidate class/interface name pointer
-    emitter.instruction("ldr x13, [x10, #8]");                                  // x13 = candidate class/interface name length
+    class_metadata::emit_load_instanceof_target_field(emitter, "x12", "x10", InstanceofTargetField::Name);
+    class_metadata::emit_load_instanceof_target_field(emitter, "x13", "x10", InstanceofTargetField::NameLength);
     emitter.instruction("cmp x2, x13");                                         // compare dynamic target length with this metadata name length
     emitter.instruction("b.ne __rt_instanceof_lookup_next");                    // names with different lengths cannot match
     emitter.instruction("mov x14, #0");                                         // x14 = byte index within the candidate name
@@ -89,13 +90,13 @@ fn emit_dynamic_instanceof_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_instanceof_lookup_byte_loop");                  // continue comparing the current target-name candidate
 
     emitter.label("__rt_instanceof_lookup_match");
-    emitter.instruction("ldr x1, [x10, #16]");                                  // return the matched class/interface id
-    emitter.instruction("ldr x2, [x10, #24]");                                  // return 0 for class targets or 1 for interface targets
+    class_metadata::emit_load_instanceof_target_field(emitter, "x1", "x10", InstanceofTargetField::TargetId);
+    class_metadata::emit_load_instanceof_target_field(emitter, "x2", "x10", InstanceofTargetField::TargetKind);
     emitter.instruction("mov x0, #1");                                          // signal that the dynamic target string resolved successfully
     emitter.instruction("ret");                                                 // return lookup success plus target metadata
 
     emitter.label("__rt_instanceof_lookup_next");
-    emitter.instruction("add x10, x10, #32");                                   // advance to the next four-word target metadata entry
+    class_metadata::emit_advance_instanceof_target_row(emitter, "x10");
     emitter.instruction("add x11, x11, #1");                                    // increment the target metadata index
     emitter.instruction("b __rt_instanceof_lookup_entry_loop");                 // continue scanning dynamic instanceof target metadata
 
@@ -130,8 +131,8 @@ fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_instanceof_lookup_entry_loop");
     emitter.instruction("test r10, r10");                                       // have all target-name metadata entries been scanned?
     emitter.instruction("je __rt_instanceof_lookup_no");                        // no class/interface name matched the dynamic string target
-    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // rdi = candidate class/interface name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // rsi = candidate class/interface name length
+    class_metadata::emit_load_instanceof_target_field(emitter, "rdi", "r11", InstanceofTargetField::Name);
+    class_metadata::emit_load_instanceof_target_field(emitter, "rsi", "r11", InstanceofTargetField::NameLength);
     emitter.instruction("cmp r9, rsi");                                         // compare dynamic target length with this metadata name length
     emitter.instruction("jne __rt_instanceof_lookup_next");                     // names with different lengths cannot match
     emitter.instruction("xor ecx, ecx");                                        // rcx = byte index within the candidate name
@@ -161,13 +162,13 @@ fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_instanceof_lookup_byte_loop");                // continue comparing the current target-name candidate
 
     emitter.label("__rt_instanceof_lookup_match");
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 16]");                       // return the matched class/interface id
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 24]");                       // return 0 for class targets or 1 for interface targets
+    class_metadata::emit_load_instanceof_target_field(emitter, "rdi", "r11", InstanceofTargetField::TargetId);
+    class_metadata::emit_load_instanceof_target_field(emitter, "rdx", "r11", InstanceofTargetField::TargetKind);
     emitter.instruction("mov eax, 1");                                          // signal that the dynamic target string resolved successfully
     emitter.instruction("ret");                                                 // return lookup success plus target metadata
 
     emitter.label("__rt_instanceof_lookup_next");
-    emitter.instruction("add r11, 32");                                         // advance to the next four-word target metadata entry
+    class_metadata::emit_advance_instanceof_target_row(emitter, "r11");
     emitter.instruction("sub r10, 1");                                          // consume one target metadata entry
     emitter.instruction("jmp __rt_instanceof_lookup_entry_loop");               // continue scanning dynamic instanceof target metadata
 

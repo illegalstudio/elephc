@@ -72,13 +72,12 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     }
     emitter.instruction(if arm { "cmp x9, #256" } else { "cmp r9, 256" });      // bound the wrapper handle table
     emitter.instruction(if arm { "b.hs __rt_finfo_cast_done" } else { "jae __rt_finfo_cast_done" }); // ordinary descriptors have no user callback
-    abi::emit_symbol_address(emitter, b, "_user_wrapper_handles");
-    emitter.instruction(if arm { "ldr x0, [x10, x9, lsl #3]" } else { "mov rdi, QWORD PTR [r10 + r9 * 8]" }); // borrow the live wrapper object
+    elephc_memoir::buffers::stream_tables::emit_load_wrapper_owner(emitter, b, a, arg);
     emitter.instruction(if arm { "cmp x0, #0" } else { "test rdi, rdi" });      // detect a retired wrapper handle
     emitter.instruction(if arm { "b.eq __rt_finfo_cast_done" } else { "jz __rt_finfo_cast_done" }); // ignore closed handles
     // -- resolve the wrapper's typed stream-cast method and return representation --
     emitter.instruction(if arm { "ldr x12, [x0]" } else { "mov r9, QWORD PTR [rdi]" }); // preserve the class ID across symbol-load scratch use
-    abi::emit_load_symbol_to_reg(emitter, b, "_class_name_count", 0);
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, b);
     emitter.instruction(if arm { "cmp x12, x10" } else { "cmp r9, r10" });      // validate the dense class ID
     emitter.instruction(if arm { "b.hs __rt_finfo_cast_done" } else { "jae __rt_finfo_cast_done" }); // avoid invalid class metadata
     abi::emit_symbol_address(emitter, b, "_user_wrapper_vtable_ptrs");

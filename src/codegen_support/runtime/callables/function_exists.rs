@@ -10,10 +10,9 @@
 //!
 //! Key details:
 //! - The helper is table-driven, so its size is independent of how many function names the
-//!   program declares: the names live in `.data` (24 bytes per entry plus the name bytes),
-//!   not in the instruction stream at each call site.
-//! - One entry is `[0..8) name pointer`, `[8..16) name length`,
-//!   `[16..24) include-variant "active" symbol address, or 0 for an ordinary name`.
+//!   program declares: the names live in `.data`, not in the instruction stream at each call site.
+//! - Memoir's `FunctionNameRow` owns each entry's name span and optional include-variant
+//!   active-symbol projection.
 //! - Comparison is case-insensitive (`__rt_strcasecmp`), matching PHP: `function_exists('STRLEN')`
 //!   and `function_exists('strlen')` agree.
 //! - A single leading `\` on the needle is skipped before scanning, matching PHP's
@@ -24,6 +23,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::callables::layout::{self as callable_layout, FunctionNameField};
 
 /// Emits `__rt_function_exists_lookup` for the current target.
 ///
@@ -78,18 +78,16 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // have all candidate names been compared?
     emitter.instruction("b.ge __rt_function_exists_lookup_false");              // no candidate matched, so the function does not exist
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the table base pointer
-    emitter.instruction("lsl x12, x9, #4");                                     // compute index * 16 as the first part of index * 24
-    emitter.instruction("add x12, x12, x9, lsl #3");                            // complete index * 24, the entry stride
-    emitter.instruction("add x11, x11, x12");                                   // compute the address of the current entry
+    callable_layout::emit_function_name_row_address(emitter, "x11", "x11", "x9", "x12");
     emitter.instruction("str x11, [sp, #40]");                                  // preserve the entry pointer across the comparison call
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the needle pointer as comparison left side
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the needle length as comparison left side
-    emitter.instruction("ldr x3, [x11]");                                       // pass the candidate name pointer as comparison right side
-    emitter.instruction("ldr x4, [x11, #8]");                                   // pass the candidate name length as comparison right side
+    callable_layout::emit_load_function_name_field(emitter, "x3", "x11", FunctionNameField::Name);
+    callable_layout::emit_load_function_name_field(emitter, "x4", "x11", FunctionNameField::NameLength);
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // PHP compares function names case-insensitively
     emitter.instruction("cbnz x0, __rt_function_exists_lookup_next");           // a non-zero result means this candidate did not match
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload the entry pointer after caller-saved registers were clobbered
-    emitter.instruction("ldr x12, [x11, #16]");                                 // load the optional include-variant "active" symbol address
+    callable_layout::emit_load_function_name_field(emitter, "x12", "x11", FunctionNameField::ActiveSymbol);
     emitter.instruction("cbz x12, __rt_function_exists_lookup_true");           // ordinary declarations exist as soon as the name matches
     emitter.instruction("ldr x12, [x12]");                                      // read the active implementation pointer for this variant group
     emitter.instruction("cbnz x12, __rt_function_exists_lookup_true");          // an include-loaded variant exists only once an implementation is active
@@ -151,21 +149,17 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have all candidate names been compared?
     emitter.instruction("jge __rt_function_exists_lookup_false_x86_64");        // no candidate matched, so the function does not exist
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the table base pointer
-    emitter.instruction("mov r8, r10");                                         // copy the index before scaling to the 24-byte entry stride
-    emitter.instruction("shl r10, 4");                                          // compute index * 16 as the first part of index * 24
-    emitter.instruction("shl r8, 3");                                           // compute index * 8 as the second part of index * 24
-    emitter.instruction("add r10, r8");                                         // combine the scaled parts into index * 24
-    emitter.instruction("add r11, r10");                                        // compute the address of the current entry
+    callable_layout::emit_function_name_row_address(emitter, "r11", "r11", "r10", "r8");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the entry pointer across the comparison call
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the needle pointer as comparison left side
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the needle length as comparison left side
-    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // pass the candidate name pointer as comparison right side
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 8]");                        // pass the candidate name length as comparison right side
+    callable_layout::emit_load_function_name_field(emitter, "rdx", "r11", FunctionNameField::Name);
+    callable_layout::emit_load_function_name_field(emitter, "rcx", "r11", FunctionNameField::NameLength);
     abi::emit_call_label(emitter, "__rt_strcasecmp");                           // PHP compares function names case-insensitively
     emitter.instruction("test rax, rax");                                       // a zero result means the strings are equal
     emitter.instruction("jne __rt_function_exists_lookup_next_x86_64");         // this candidate did not match, so keep scanning
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the entry pointer after caller-saved registers were clobbered
-    emitter.instruction("mov r8, QWORD PTR [r11 + 16]");                        // load the optional include-variant "active" symbol address
+    callable_layout::emit_load_function_name_field(emitter, "r8", "r11", FunctionNameField::ActiveSymbol);
     emitter.instruction("test r8, r8");                                         // ordinary declarations use a null active-symbol address
     emitter.instruction("je __rt_function_exists_lookup_true_x86_64");          // ordinary declarations exist as soon as the name matches
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // read the active implementation pointer for this variant group

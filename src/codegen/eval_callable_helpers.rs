@@ -1759,7 +1759,7 @@ fn emit_branch_if_receiver_class_id_mismatch(
         crate::codegen::platform::Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(emitter, "x9", receiver_offset);
             emitter.instruction(&format!("cbz x9, {}", next_label));            // reject null receiver pointers before reading their class id
-            emitter.instruction("ldr x10, [x9]");                               // load the receiver runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x9");
             abi::emit_load_int_immediate(emitter, "x11", class_id as i64);
             emitter.instruction("cmp x10, x11");                                // compare receiver class id against this callable case
             emitter.instruction(&format!("b.ne {}", next_label));               // try the next callable target when the receiver class differs
@@ -1768,7 +1768,7 @@ fn emit_branch_if_receiver_class_id_mismatch(
             abi::emit_load_temporary_stack_slot(emitter, "r10", receiver_offset);
             emitter.instruction("test r10, r10");                               // reject null receiver pointers before reading their class id
             emitter.instruction(&format!("je {}", next_label));                 // try the next callable target when the receiver pointer is null
-            emitter.instruction("mov r11, QWORD PTR [r10]");                    // load the receiver runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r10");
             abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
             emitter.instruction("cmp r11, r10");                                // compare receiver class id against this callable case
             emitter.instruction(&format!("jne {}", next_label));                // try the next callable target when the receiver class differs

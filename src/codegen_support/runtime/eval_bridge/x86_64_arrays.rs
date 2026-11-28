@@ -346,7 +346,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_object_property_len_zero",
     );
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");    // resolve the class-id table extent
     emitter.instruction("cmp rax, QWORD PTR [r11]");                            // is the class id within the metadata tables?
     emitter.instruction("jae __elephc_eval_value_object_property_len_zero");    // incomplete or unknown ids expose no properties
@@ -384,7 +384,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_object_property_iter_key_null",
     );
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");    // resolve the class-id table extent
     emitter.instruction("cmp rax, QWORD PTR [r11]");                            // is the class id within the metadata tables?
     emitter.instruction("jae __elephc_eval_value_object_property_iter_key_null"); // incomplete or unknown ids expose no properties

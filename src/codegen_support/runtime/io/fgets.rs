@@ -17,7 +17,6 @@ use elephc_memoir::buffers::io_scratch;
 use elephc_memoir::strings::concat_window::{self, ReadAhead, WindowSlots};
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 /// Initial reserved line capacity, in bytes. Long enough that ordinary text lines never grow,
 /// small enough that a `while (fgets($f))` loop still stays inside the shared concat scratch.
@@ -169,9 +168,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- EOF reached: set eof flag for this fd --
     emitter.label("__rt_fgets_eof");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "w10", "x0", "x9");
 
     // -- return result string --
     emitter.label("__rt_fgets_done");
@@ -305,7 +303,6 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fgets_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
-    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "1", "r10", "r11");
     emitter.instruction("jmp __rt_fgets_done_x86");                             // return the possibly empty borrowed slice accumulated before EOF or read failure
 }

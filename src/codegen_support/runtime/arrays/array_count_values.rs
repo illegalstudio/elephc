@@ -132,7 +132,7 @@ fn emit_array_count_values_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #16]");                                  // x10 = current source index
     emitter.instruction("cmp x10, x9");                                         // has every source element been tallied?
     emitter.instruction("b.ge __rt_array_count_values_done");                   // yes - the destination hash is complete
-    emitter.instruction("add x11, x0, #24");                                    // x11 = source payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x0");
     emitter.instruction("ldr x12, [sp, #24]");                                  // x12 = compile-time element tag
     emitter.instruction("cmp x12, #1");                                         // element tag 1 = string payload
     emitter.instruction("b.eq __rt_array_count_values_str");                    // string elements live in 16-byte slots
@@ -347,7 +347,7 @@ fn emit_array_count_values_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // rcx = current source index
     emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // has every source element been tallied?
     emitter.instruction("jge __rt_array_count_values_done_x86");                // yes - the destination hash is complete
-    emitter.instruction("lea r11, [r10 + 24]");                                 // r11 = source payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r10");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // r10 = compile-time element tag
     emitter.instruction("cmp r10, 1");                                          // element tag 1 = string payload
     emitter.instruction("je __rt_array_count_values_str_x86");                  // string elements live in 16-byte slots

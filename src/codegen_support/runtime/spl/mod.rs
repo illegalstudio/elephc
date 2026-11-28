@@ -12,10 +12,6 @@ mod doubly_linked_list;
 mod fixed_array;
 pub(super) mod offset_convert;
 
-pub(crate) use elephc_memoir::values::spl_storage::{
-    SPL_DLL_ITER_INDEX_OFFSET, SPL_DLL_ITER_MODE_OFFSET, SPL_DLL_STORAGE_OFFSET, SPL_FIXED_STORAGE_OFFSET,
-};
-
 /// Emits all runtime helpers for `SplDoublyLinkedList`, `SplStack`, and `SplQueue`
 /// for the target architecture. Routes to either ARM64 or x86_64 emitters.
 pub(crate) use doubly_linked_list::emit_doubly_linked_list_runtime;

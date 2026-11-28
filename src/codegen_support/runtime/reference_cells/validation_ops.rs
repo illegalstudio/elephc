@@ -10,6 +10,7 @@
 //! - Candidate retirement contains Throwable exits in the validation context's pending slot.
 
 use super::*;
+use elephc_memoir::owner_layout::NativeValidationContext;
 
 /// Emits the three native callbacks paired with the protected declaration coercer.
 pub(super) fn emit(emitter: &mut Emitter) {
@@ -102,7 +103,7 @@ fn emit_release(emitter: &mut Emitter) {
     elephc_memoir::reference_cells::validated_commit::emit_release(
         emitter,
         "__rt_reference_validation_release",
-        elephc_memoir::RecordOffset::new(super::validation_coercion::PENDING_THROWABLE),
+        elephc_memoir::RecordOffset::new(NativeValidationContext::PENDING_THROWABLE),
         "__rt_decref_mixed",
         super::validation_commit::THROW_STATUS,
     );

@@ -34,16 +34,15 @@ pub(super) fn warn_indexed_nonreference_roots(
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x9, #{element_stride}"));         // select the indexed argument's physical stride
             emitter.instruction("mul x9, x23, x9");                             // locate this argument beyond the array header
-            packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
-            emitter.instruction(&format!("ldr {cell}, [{array_reg}, x9]"));     // load the original Mixed argument cell
+            packed_slots::emit_load_packed_byte_offset_word(emitter, cell, array_reg, "x9");
         }
         Arch::X86_64 => {
             emitter.instruction("mov r10, rbx");                                // start with the current argument index
             emitter.instruction(&format!("imul r10, {element_stride}"));        // locate this argument beyond the array header
-            emitter.instruction(&format!("mov {cell}, QWORD PTR [{array_reg} + r10 + 24]")); // load the original Mixed argument cell
+            packed_slots::emit_load_packed_byte_offset_word(emitter, cell, array_reg, "r10");
         }
     }
-    abi::emit_load_from_address(emitter, tag, cell, 0);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, cell);
     super::emit_branch_if_invoker_ref_cell_tag(tag, &accepted_label, emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -51,7 +50,7 @@ pub(super) fn warn_indexed_nonreference_roots(
             emitter.instruction(&format!("b.eq {accepted_label}"));             // retain that existing reference
             emitter.instruction(&format!("cmp {tag}, #7"));                     // a persistent wrapper can hold an indexed reference
             emitter.instruction(&format!("b.ne {warn_label}"));                 // ordinary values require PHP's by-reference warning
-            abi::emit_load_from_address(emitter, tag, cell, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag, cell);
             emitter.instruction(&format!("cmp {tag}, #1"));                     // identify the persistent reference marker
             emitter.instruction(&format!("b.eq {accepted_label}"));             // preserve its live storage
         }
@@ -60,7 +59,7 @@ pub(super) fn warn_indexed_nonreference_roots(
             emitter.instruction(&format!("je {accepted_label}"));               // retain that existing reference
             emitter.instruction(&format!("cmp {tag}, 7"));                      // a persistent wrapper can hold an indexed reference
             emitter.instruction(&format!("jne {warn_label}"));                  // ordinary values require PHP's by-reference warning
-            abi::emit_load_from_address(emitter, tag, cell, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag, cell);
             emitter.instruction(&format!("cmp {tag}, 1"));                      // identify the persistent reference marker
             emitter.instruction(&format!("je {accepted_label}"));               // preserve its live storage
         }
@@ -357,20 +356,20 @@ pub(super) fn emit_indexed(
     let array_reg = match target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
     emit_loaded_array_source_to_reg(source, array_reg, emitter);
     abi::emit_reserve_temporary_stack(emitter, bytes);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(target, 2), array_reg, 0);
+    packed_slots::emit_load_length(emitter, abi::int_arg_reg_name(target, 2), array_reg);
     let ready = ctx.next_label("mbstring_pointers_ready");
     for index in 0..capacity {
         match target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("cmp x2, #{index}"));              // preserve the actual argument count before bounded pointer staging
                 emitter.instruction(&format!("b.ls {ready}"));                  // leave omitted arguments absent for the shared coordinator
-                emitter.instruction(&format!("ldr x10, [x9, #{}]", 24 + index * 8)); // read one borrowed Mixed cell from the native array
+                packed_slots::emit_load_packed_word(emitter, "x10", "x9", index);
                 emitter.instruction(&format!("str x10, [sp, #{}]", index * 8)); // provide an aligned pointer array for the Rust boundary
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("cmp rdx, {index}"));              // retain actual arity independently of the bounded staging area
                 emitter.instruction(&format!("jbe {ready}"));                   // skip absent arguments without filling defaults
-                emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", 24 + index * 8)); // borrow the original cell without an extra owner
+                packed_slots::emit_load_packed_word(emitter, "r11", "r10", index);
                 emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", index * 8)); // align the pointer slice consumed by Rust
             }
         }

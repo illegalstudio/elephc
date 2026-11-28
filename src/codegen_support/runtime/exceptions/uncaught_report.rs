@@ -297,15 +297,13 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish the frame pointer
     emitter.instruction("mov x19, x0");                                         // keep the throwable across the writes
 
-    emitter.instruction("ldr x10, [x19]");                                      // runtime class id from the object header
-    abi::emit_symbol_address(emitter, "x11", "_class_name_count");
-    emitter.instruction("ldr x11, [x11]");                                      // number of named class ids
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x19");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x11"); // number of named class ids
     emitter.instruction("cmp x10, x11");                                        // is the class id inside the name table?
     emitter.instruction("b.hs __rt_uncaught_no_name");                          // an unknown id writes no class name, exactly as var_dump does
-    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
-    emitter.instruction("add x11, x11, x10, lsl #4");                           // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("ldr x0, [x11]");                                       // class-name pointer
-    emitter.instruction("ldr x1, [x11, #8]");                                   // class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x11", "x11", "x10", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x0", "x1", "x11");
     emitter.instruction("bl __rt_stdout_write");                                // write the throwable class name
 
     emitter.label("__rt_uncaught_no_name");
@@ -687,16 +685,13 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // second push keeps the stack 16-byte aligned for calls
     emitter.instruction("mov r12, rax");                                        // keep the throwable across the writes
 
-    emitter.instruction("mov r9, QWORD PTR [r12]");                             // runtime class id from the object header
-    abi::emit_symbol_address(emitter, "r10", "_class_name_count");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // number of named class ids
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r10"); // number of named class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id inside the name table?
     emitter.instruction("jae __rt_uncaught_no_name");                           // an unknown id writes no class name, exactly as var_dump does
-    abi::emit_symbol_address(emitter, "r10", "_class_name_entries");
-    emitter.instruction("shl r9, 4");                                           // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("add r10, r9");                                         // address of this class's entry
-    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r9", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rdi", "rsi", "r10");
     emitter.instruction("call __rt_stdout_write");                              // write the throwable class name
 
     emitter.label("__rt_uncaught_no_name");

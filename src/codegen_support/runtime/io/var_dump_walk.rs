@@ -178,7 +178,7 @@ pub fn emit_var_dump_array_str(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload array pointer
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload index
     emitter.instruction("lsl x12, x11, #4");                                    // index * 16
-    emitter.instruction("add x12, x12, #24");                                   // element base offset = 24 + index*16
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("add x13, x9, x12");                                    // element address
     emitter.instruction("ldr x1, [x13]");                                       // load element string ptr
     emitter.instruction("ldr x2, [x13, #8]");                                   // load element string len
@@ -1461,7 +1461,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_idx_str");
     emitter.instruction("lsl x15, x14, #4");                                    // index * 16
-    emitter.instruction("add x15, x15, #24");                                   // element base offset = 24 + index*16
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x15", "x15");
     emitter.instruction("add x15, x13, x15");                                   // element address
     emitter.instruction("ldr x1, [x15]");                                       // string ptr → value low
     emitter.instruction("ldr x2, [x15, #8]");                                   // string len → value high

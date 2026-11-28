@@ -50,8 +50,6 @@ mod native_origins;
 
 use elephc_memoir::values::iterator_storage::{self, ITER_SOURCE_OFFSET_DELTA, ITER_CURSOR_OFFSET_DELTA, ITER_KEY_LO_OFFSET_DELTA, ITER_KEY_HI_OFFSET_DELTA, ITER_VALUE_LO_OFFSET_DELTA, ITER_VALUE_HI_OFFSET_DELTA, ITER_VALUE_TAG_OFFSET_DELTA, ITER_VALUE_ADDR_OFFSET_DELTA, ITER_SNAPSHOT_LEN_OFFSET_DELTA, ITER_TABLE_SNAPSHOT_OFFSET_DELTA, ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA, ITER_FALLBACK_KEY_LO_OFFSET_DELTA, ITER_FALLBACK_KEY_HI_OFFSET_DELTA};
 
-const MIXED_CELL_PAYLOAD_LOW_OFFSET: usize = 8;
-
 /// The runtime value tag `__rt_warn_foreach_non_iterable` reads as "null".
 ///
 /// Matches `crate::codegen_support::value_boxing::runtime_value_tag(&PhpType::Void)`.
@@ -1470,12 +1468,7 @@ fn adopt_get_iterator_result(
     box_compiled_iterator_result(ctx, return_ty);
     let local_offset = ctx.local_offset(slot)?;
     abi::store_at_offset(ctx.emitter, result_reg, local_offset);
-    abi::emit_load_from_address(
-        ctx.emitter,
-        result_reg,
-        result_reg,
-        MIXED_CELL_PAYLOAD_LOW_OFFSET,
-    );
+    elephc_memoir::layout::emit_load_mixed_low(ctx.emitter, result_reg, result_reg);
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     ctx.emitter.label(&keep_original);
     Ok(())
@@ -1885,7 +1878,7 @@ fn emit_generator_interface_fast_path(
     let not_generator = ctx.next_label("interface_dispatch_not_generator");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x10, [x0]");                           // load receiver class id before checking for the built-in Generator
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x0");
             abi::emit_load_symbol_to_reg(ctx.emitter, "x11", "_generator_class_id", 0);
             ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("b.ne {}", not_generator));        // fall back to interface dispatch for non-Generator iterators
@@ -1895,7 +1888,7 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.label(&not_generator);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load receiver class id before checking for the built-in Generator
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "rdi");
             abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_generator_class_id", 0);
             ctx.emitter.instruction("cmp r10, r11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("jne {}", not_generator));         // fall back to interface dispatch for non-Generator iterators
@@ -1938,7 +1931,7 @@ pub(super) fn emit_interface_dispatch_call(
         .unwrap_or_else(|| ctx.next_label("interface_dispatch_done"));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x10, [x0]");                           // load receiver class id for interface metadata lookup
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x0");
             abi::emit_symbol_address(ctx.emitter, "x11", "_class_interface_ptrs");
             ctx.emitter.instruction("ldr x11, [x11, x10, lsl #3]");             // select this class's interface metadata block
             ctx.emitter.instruction("ldr x10, [x11]");                          // load implemented interface count
@@ -1967,7 +1960,7 @@ pub(super) fn emit_interface_dispatch_call(
             ctx.emitter.instruction("mov x0, #0");                              // defensive fallback for invalid interface metadata
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load receiver class id for interface metadata lookup
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "rdi");
             abi::emit_symbol_address(ctx.emitter, "r11", "_class_interface_ptrs");
             ctx.emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");      // select this class's interface metadata block
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load implemented interface count
@@ -2523,7 +2516,7 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r9", "r9");
     ctx.emitter.instruction("cmp r9, 1");                                       // does this indexed array store string slots?
     ctx.emitter.instruction(&format!("je {}", string_case));                    // branch to the 16-byte string-slot loader
-    ctx.emitter.instruction(&format!("add r11, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                     // skip the indexed-array header to the 8-byte payload slots
+    packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "r11");
     ctx.emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");              // load the scalar or pointer payload from the selected indexed slot
     ctx.emitter.instruction("xor r8, r8");                                      // non-string indexed payloads have no high payload word
     ctx.emitter.instruction(&format!("jmp {}", loaded));                        // continue with a normalized runtime payload triple
@@ -2531,7 +2524,7 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     ctx.emitter.label(&string_case);
     ctx.emitter.instruction("shl r10, 4");                                      // scale the index by the 16-byte string slot size
     ctx.emitter.instruction("add r11, r10");                                    // move to the selected string slot
-    ctx.emitter.instruction(&format!("add r11, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                     // skip the indexed-array header before loading the slot
+    packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "r11");
     ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                        // load the string pointer payload
     ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 8]");                     // load the string length payload
 
@@ -2642,16 +2635,20 @@ fn load_current_array_value_x86_64(
         | PhpType::Mixed
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
-            ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            elephc_memoir::values::packed_slots::emit_packed_payload(
+                ctx.emitter,
+                array_reg,
+                array_reg,
             );
             ctx.emitter.instruction(                                            // load the selected pointer-sized indexed-array element
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)
             );
         }
         PhpType::Float => {
-            ctx.emitter.instruction(                                            // skip the indexed-array header to reach float payloads
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            elephc_memoir::values::packed_slots::emit_packed_payload(
+                ctx.emitter,
+                array_reg,
+                array_reg,
             );
             ctx.emitter.instruction(                                            // load the selected indexed-array float element
                 &format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
@@ -2663,13 +2660,15 @@ fn load_current_array_value_x86_64(
             ctx.emitter.instruction(                                            // move to the selected string slot within the indexed array
                 &format!("add {}, {}", array_reg, index_reg)
             );
-            ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
+            elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(                                            // skip the indexed-array header to reach refcounted payloads
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            elephc_memoir::values::packed_slots::emit_packed_payload(
+                ctx.emitter,
+                array_reg,
+                array_reg,
             );
             ctx.emitter.instruction(                                            // load the selected refcounted indexed-array element
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)

@@ -55,7 +55,7 @@ fn emit_mixed_array_append_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x11", NULL_SENTINEL);
     emitter.instruction("cmp x10, x11");                                        // does the payload carry the in-band null-container sentinel?
     emitter.instruction("b.eq __rt_mixed_array_append_autovivify");             // sentinels are PHP null, never array pointers
-    emitter.instruction("ldr x1, [x10]");                                       // use the current logical length as the append key
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x1", "x10");
     emitter.instruction("b __rt_mixed_array_append_set");                       // delegate conversion, COW, growth, and ownership transfer
 
     emitter.label("__rt_mixed_array_append_assoc");
@@ -136,7 +136,7 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "r11", NULL_SENTINEL);
     emitter.instruction("cmp r10, r11");                                        // does the payload carry the in-band null-container sentinel?
     emitter.instruction("je __rt_mixed_array_append_autovivify");               // sentinels are PHP null, never array pointers
-    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // use the current logical length as the append key
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rsi", "r10");
     emitter.instruction("jmp __rt_mixed_array_append_set");                     // delegate conversion, COW, growth, and ownership transfer
 
     emitter.label("__rt_mixed_array_append_assoc");

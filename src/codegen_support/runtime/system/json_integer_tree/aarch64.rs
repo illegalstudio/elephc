@@ -45,7 +45,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction("lsr x9, x9, #8");                                      // move the value type into the low bits
     emitter.instruction("and x9, x9, #0x7f");                                   // discard copy-on-write and other header flags
     emitter.instruction(&format!("cbnz x9, {attempt}"));                        // nested and boxed layouts still need the complete proof
-    emitter.instruction("ldr x9, [x0]");                                        // load the direct integer array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load the direct integer array length
     abi::emit_load_int_immediate(emitter, "x10", max_scratch_integer_slots as i64);
     emitter.instruction("cmp x9, x10");                                         // test the twenty-byte-per-value upper bound against scratch capacity
     emitter.instruction(&format!("b.ls {fallback}"));                           // bounded direct arrays retain the faster single-pass encoder
@@ -126,7 +126,7 @@ fn emit_probe(emitter: &mut Emitter) {
     emitter.instruction("and x10, x9, #0xff");                                  // isolate the uniform top-level heap kind
     emitter.instruction("cmp x10, #2");                                         // kind 2 identifies indexed-array storage
     emitter.instruction("b.ne __rt_json_integer_tree_probe_unsupported");       // hashes and other containers need the general encoder
-    emitter.instruction("ldr x10, [x0]");                                       // load the logical array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x0"); // load the logical array length
     emitter.instruction("tbnz x10, #63, __rt_json_integer_tree_probe_unsupported"); // reject invalid negative metadata defensively
     emitter.instruction("str x10, [x29, #-32]");                                // retain the length for the element loop
     emitter.instruction("mov x11, #2");                                         // every accepted array contributes '[' and ']'
@@ -235,7 +235,7 @@ fn emit_writer(emitter: &mut Emitter) {
     emitter.instruction("strb w9, [x1]");                                       // write the opening bracket
     emitter.instruction("add x1, x1, #1");                                      // advance the output cursor
     emitter.instruction("str x1, [x29, #-16]");                                 // persist the advanced cursor
-    emitter.instruction("ldr x10, [x0]");                                       // load the source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x0"); // load the source array length
     emitter.instruction("str x10, [x29, #-32]");                                // save it for the element loop
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // move the value type into the low bits

@@ -9,6 +9,7 @@
 //! - Table shape must match __rt_dynamic_instanceof and __rt_exception_matches exactly.
 
 use crate::types::{ClassInfo, InterfaceInfo};
+use elephc_memoir::values::class_metadata::InstanceofTargetRow;
 
 /// Emits the global `instanceof` target lookup table used by `__rt_dynamic_instanceof`
 /// at runtime. Each entry contains a pointer to a name string, its length, the class/interface
@@ -27,33 +28,36 @@ pub(super) fn emit_instanceof_target_lookup_data(
     out.push_str(&format!("    .quad {}\n", entry_count));
     out.push_str(".globl _instanceof_target_entries\n_instanceof_target_entries:\n");
     for (class_name, class_info) in sorted_classes {
-        out.push_str(&format!("    .quad _instanceof_name_class_{}\n", class_info.class_id));
-        out.push_str(&format!("    .quad {}\n", class_name.len()));
-        out.push_str(&format!("    .quad {}\n", class_info.class_id));
-        out.push_str("    .quad 0\n");
-        out.push_str(&format!(
-            "    .quad _instanceof_name_class_abs_{}\n",
-            class_info.class_id
-        ));
-        out.push_str(&format!("    .quad {}\n", class_name.len() + 1));
-        out.push_str(&format!("    .quad {}\n", class_info.class_id));
-        out.push_str("    .quad 0\n");
+        emit_instanceof_target_row(
+            out,
+            format!("_instanceof_name_class_{}", class_info.class_id),
+            class_name.len(),
+            class_info.class_id,
+            0,
+        );
+        emit_instanceof_target_row(
+            out,
+            format!("_instanceof_name_class_abs_{}", class_info.class_id),
+            class_name.len() + 1,
+            class_info.class_id,
+            0,
+        );
     }
     for (interface_name, interface_info) in sorted_interfaces {
-        out.push_str(&format!(
-            "    .quad _instanceof_name_interface_{}\n",
-            interface_info.interface_id
-        ));
-        out.push_str(&format!("    .quad {}\n", interface_name.len()));
-        out.push_str(&format!("    .quad {}\n", interface_info.interface_id));
-        out.push_str("    .quad 1\n");
-        out.push_str(&format!(
-            "    .quad _instanceof_name_interface_abs_{}\n",
-            interface_info.interface_id
-        ));
-        out.push_str(&format!("    .quad {}\n", interface_name.len() + 1));
-        out.push_str(&format!("    .quad {}\n", interface_info.interface_id));
-        out.push_str("    .quad 1\n");
+        emit_instanceof_target_row(
+            out,
+            format!("_instanceof_name_interface_{}", interface_info.interface_id),
+            interface_name.len(),
+            interface_info.interface_id,
+            1,
+        );
+        emit_instanceof_target_row(
+            out,
+            format!("_instanceof_name_interface_abs_{}", interface_info.interface_id),
+            interface_name.len() + 1,
+            interface_info.interface_id,
+            1,
+        );
     }
     for (class_name, class_info) in sorted_classes {
         out.push_str(&format!(
@@ -86,6 +90,25 @@ pub(super) fn emit_instanceof_target_lookup_data(
         ));
     }
     out.push_str("    .p2align 3\n");
+}
+
+/// Emits one typed dynamic `instanceof` target metadata row.
+fn emit_instanceof_target_row(
+    out: &mut String,
+    name: String,
+    name_len: usize,
+    target_id: u64,
+    target_kind: u64,
+) {
+    let row = InstanceofTargetRow {
+        name,
+        name_len: name_len.to_string(),
+        target_id: target_id.to_string(),
+        target_kind: target_kind.to_string(),
+    };
+    for word in row.into_words() {
+        out.push_str(&format!("    .quad {word}\n"));
+    }
 }
 
 /// Converts a string to an assembly-friendly ASCII escape sequence, delegating to `escaped_bytes`.

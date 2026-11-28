@@ -62,15 +62,14 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("b __rt_fopen_uw_scan");                                // keep scanning for the scheme marker
 
     emitter.label("__rt_fopen_uw_check_wrappers");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_fopen_uw_slot");
     emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_fopen_uw_done");                             // no registered wrapper matched
-    emitter.instruction(&format!("add x12, x10, x11, lsl #{}", stream_tables::REGISTRATION_SHIFT));                           // slot base = table + index * 32
-    emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x12", "x11", "x10");
+    stream_tables::emit_load_registration_field(emitter, "x13", "x12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x13, __rt_fopen_uw_slot_next");                    // empty slot — skip it
-    emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x14", "x12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x14, x9");                                         // does the stored length match the scheme length?
     emitter.instruction("b.ne __rt_fopen_uw_slot_next");                        // length mismatch — try the next slot
     emitter.instruction("mov x15, #0");                                         // byte compare index
@@ -172,20 +171,20 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("str xzr, [sp, #32]");                                  // pre-initialise the obj slot to 0 so the fail path can tell whether an object was allocated
 
     // -- instantiate the wrapper class via __rt_new_by_name --
-    emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
-    emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
+    stream_tables::emit_load_registration_field(emitter, "x1", "x12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "x2", "x12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("bl __rt_new_by_name");                                 // returns obj pointer in x0, or 0 when the class is unknown
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // unknown class → silent fail with -1
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper object pointer for later
 
     // -- php-src assigns the stream context RESOURCE before stream_open; SimpleXML refuses it --
-    emitter.instruction("ldr x9, [x0]");                                        // class id stored at the wrapper object head
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x10", "_class_native_xml");             // per-class native SimpleXML flag table
     emitter.instruction("ldrb w10, [x10, x9]");                                 // load this class's native-view flag
     emitter.instruction("cbnz w10, __rt_fopen_uw_xml_fail");                    // XML classes raise the chained context TypeError
 
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
-    emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
@@ -224,7 +223,6 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the handle slot index
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object pointer
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
     stream_tables::emit_publish_wrapper_owner(emitter);
     emitter.instruction("ldr x0, [sp, #40]");                                   // handle slot → metadata helper arg0
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // path ptr/len → metadata helper args
@@ -258,8 +256,7 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
 
     // -- restore frame and return fd in x0 --
     emitter.label("__rt_fopen_opened");
-    abi::emit_symbol_address(emitter, "x9", "_eof_flags");
-    emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the newly opened descriptor
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_clear_indexed_byte(emitter, "x0", "x9");
     emitter.label("__rt_fopen_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
@@ -308,18 +305,15 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("jmp __rt_fopen_uw_scan_x86");                          // keep scanning for the scheme marker
 
     emitter.label("__rt_fopen_uw_check_wrappers_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_fopen_uw_slot_x86");
     emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_fopen_uw_done_x86");                          // no registered wrapper matched
-    emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction(&format!("shl r12, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
-    emitter.instruction("add r12, r10");                                        // slot base = table + offset
-    emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r12", "r11", "r10");
+    stream_tables::emit_load_registration_field(emitter, "r13", "r12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r13, r13");                                       // is this slot empty?
     emitter.instruction("jz __rt_fopen_uw_slot_next_x86");                      // skip empty slots
-    emitter.instruction("mov r14, QWORD PTR [r12 + 8]");                        // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "r14", "r12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp r14, r9");                                         // does the stored length match the scheme length?
     emitter.instruction("jne __rt_fopen_uw_slot_next_x86");                     // length mismatch — try the next slot
     emitter.instruction("xor r15, r15");                                        // byte compare index
@@ -406,22 +400,22 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("mov QWORD PTR [rsp + 32], 0");                         // pre-initialise the obj slot to 0 so the fail path can tell whether an object was allocated
 
     // -- instantiate the wrapper class via __rt_new_by_name --
-    emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
-    emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length from the registry slot
+    stream_tables::emit_load_registration_field(emitter, "rax", "r12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "rdx", "r12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("call __rt_new_by_name");                               // returns obj pointer in rax, or 0 when the class is unknown
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // unknown class → silent fail with -1
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the wrapper object pointer for later
 
     // -- php-src assigns the stream context RESOURCE before stream_open; SimpleXML refuses it --
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class id stored at the wrapper object head
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rax");
     abi::emit_symbol_address(emitter, "r11", "_class_native_xml");             // per-class native SimpleXML flag table
     emitter.instruction("movzx r10d, BYTE PTR [r11 + r10]");                    // load this class's native-view flag
     emitter.instruction("test r10d, r10d");                                     // is this a SimpleXMLElement subclass?
     emitter.instruction("jnz __rt_fopen_uw_xml_fail_x86");                      // XML classes raise the chained context TypeError
 
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rax");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r10, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
@@ -468,7 +462,6 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("mov r12, QWORD PTR [rsp + 40]");                       // reload the handle slot index
     emitter.instruction("mov r13, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     stream_tables::emit_publish_wrapper_owner(emitter);
     emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // handle slot → metadata helper arg0
     emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // path ptr → metadata helper
@@ -505,8 +498,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
 
     emitter.label("__rt_fopen_opened_x86");
     emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the newly opened descriptor
-    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_clear_indexed_byte(emitter, "rax", "r10");
     emitter.label("__rt_fopen_return_x86");
 
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor

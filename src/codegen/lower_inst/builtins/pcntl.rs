@@ -274,7 +274,7 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", PCNTL_CPU_COUNT_OFFSET);
             abi::emit_temporary_stack_address(ctx.emitter, "x11", 0);
-            ctx.emitter.instruction("add x12, x0, #24");                        // destination payload after the array header
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x12", "x0");
             ctx.emitter.instruction("mov x13, #0");                             // copy index
             ctx.emitter.label(&copy_loop);
             ctx.emitter.instruction("cmp x13, x10");                            // test whether every returned CPU id was copied
@@ -284,7 +284,7 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             ctx.emitter.instruction("add x13, x13, #1");                        // advance the copy index
             ctx.emitter.instruction(&format!("b {copy_loop}"));                 // copy the next CPU identifier
             ctx.emitter.label(&copy_done);
-            ctx.emitter.instruction("str x10, [x0]");                           // publish logical array length
+            elephc_memoir::values::packed_slots::emit_publish_length(ctx.emitter, "x0", "x10"); // publish logical array length
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", PCNTL_CPU_PID_OFFSET);
@@ -299,7 +299,7 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", PCNTL_CPU_COUNT_OFFSET);
             ctx.emitter.instruction("mov r11, rsp");                            // source CPU-id buffer
-            ctx.emitter.instruction("lea r8, [rax + 24]");                      // destination array payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r8", "rax");
             ctx.emitter.instruction("xor ecx, ecx");                            // copy index
             ctx.emitter.label(&copy_loop);
             ctx.emitter.instruction("cmp rcx, r10");                            // test whether every returned CPU id was copied
@@ -309,7 +309,7 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             ctx.emitter.instruction("add rcx, 1");                              // advance the copy index
             ctx.emitter.instruction(&format!("jmp {copy_loop}"));               // copy the next CPU identifier
             ctx.emitter.label(&copy_done);
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // publish logical array length
+            elephc_memoir::values::packed_slots::emit_publish_length(ctx.emitter, "rax", "r10"); // publish logical array length
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, PCNTL_CPU_FRAME_BYTES);
@@ -346,12 +346,12 @@ fn lower_setcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x2, [x0]");                            // C arg2 = CPU-id count
-            ctx.emitter.instruction("add x1, x0, #24");                         // C arg1 = indexed-array payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x1", "x0");
             ctx.emitter.instruction("ldr x0, [sp]");                            // C arg0 = selected process id
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdx, QWORD PTR [rax]");                // C arg2 = CPU-id count
-            ctx.emitter.instruction("lea rsi, [rax + 24]");                     // C arg1 = indexed-array payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "rsi", "rax");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // C arg0 = selected process id
         }
     }

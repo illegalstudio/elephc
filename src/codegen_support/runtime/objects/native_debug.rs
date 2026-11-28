@@ -167,7 +167,7 @@ fn emit_lookup_hook(emitter: &mut Emitter) {
     let object = abi::int_arg_reg_name(emitter.target, 0);
     let class = abi::secondary_scratch_reg(emitter);
     let result = abi::int_result_reg(emitter);
-    abi::emit_load_from_address(emitter, class, object, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, class, object);
     abi::emit_load_symbol_to_reg(emitter, result, "_class_gc_desc_count", 0);
     match emitter.target.arch {
         Arch::AArch64 => {

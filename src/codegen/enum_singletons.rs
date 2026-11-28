@@ -443,13 +443,13 @@ fn emit_enum_object_allocation(emitter: &mut Emitter, class_id: u64, property_co
             emitter.instruction(&format!("mov x0, #{}", payload_size));         // request enum singleton object payload storage
             elephc_memoir::values::object_storage::emit_allocate_object(emitter);
             emitter.instruction(&format!("mov x10, #{}", class_id));            // materialize the enum class id
-            emitter.instruction("str x10, [x0]");                               // store the enum class id at payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x10", "x0");
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov rax, {}", payload_size));         // request enum singleton object payload storage
             elephc_memoir::values::object_storage::emit_allocate_object(emitter);
             emitter.instruction(&format!("mov r10, {}", class_id));             // materialize the enum class id
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the enum class id at payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
         }
     }
     let object_reg = abi::int_result_reg(emitter);

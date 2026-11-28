@@ -46,7 +46,7 @@ pub(in crate::codegen_support::runtime) fn emit_throw_static_message_aarch64(
     throwable_storage::emit_allocate(emitter);
     abi::emit_symbol_address(emitter, "x9", class_id_symbol);
     emitter.instruction("ldr x9, [x9]");                                        // load the Throwable's runtime class id for this program
-    emitter.instruction("str x9, [x0]");                                        // store class id at the object header
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x9", message_symbol);
     abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static ValueError message length
@@ -90,7 +90,7 @@ pub(in crate::codegen_support::runtime) fn emit_throw_static_message_x86_64(
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
     throwable_storage::emit_allocate(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0);           // load the Throwable's runtime class id for this program
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at the object header
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize static ValueError message pointer
     abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], {}", throwable_storage::MESSAGE_LENGTH, message_len)); // store static ValueError message length

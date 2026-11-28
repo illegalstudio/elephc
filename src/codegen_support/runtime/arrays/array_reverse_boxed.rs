@@ -68,11 +68,11 @@ fn emit_aarch64(emitter: &mut Emitter) {
     elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
     emitter.instruction("ldr x12, [x11, #16]");                                 // packed strings require a sixteen-byte stride
     emitter.instruction("madd x11, x10, x12, x11");                             // address this slot relative to the source header
-    emitter.instruction("ldr x1, [x11, #24]");                                  // read the low payload word after the array header
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x1", "x11", 0);
     emitter.instruction("mov x2, #0");                                          // scalar and pointer slots have no second word
     emitter.instruction("cmp x12, #16");                                        // read a high word only when storage actually contains it
     emitter.instruction("b.ne __rt_array_reverse_boxed_value");                 // avoid reading past an eight-byte final slot
-    emitter.instruction("ldr x2, [x11, #32]");                                  // preserve the string length or other paired payload
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x2", "x11", 1);
     emitter.instruction("b __rt_array_reverse_boxed_value");                    // normalize this value into an owned cell
 
     emitter.label("__rt_array_reverse_boxed_hash");
@@ -193,11 +193,11 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r11 + 16]");                       // read the actual packed element stride
     emitter.instruction("imul r10, rcx");                                       // locate this slot within the packed payload
     emitter.instruction("add r11, r10");                                        // keep the source header offset separate
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word after the array header
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rdi", "r11", 0);
     emitter.instruction("xor esi, esi");                                        // scalar and pointer slots have no second word
     emitter.instruction("cmp rcx, 16");                                         // read a high word only when storage contains it
     emitter.instruction("jne __rt_array_reverse_boxed_value");                  // avoid reading past an eight-byte final slot
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // preserve string lengths and other paired payloads
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rsi", "r11", 1);
     emitter.instruction("jmp __rt_array_reverse_boxed_value");                  // normalize the source value into an owned cell
 
     emitter.label("__rt_array_reverse_boxed_hash");

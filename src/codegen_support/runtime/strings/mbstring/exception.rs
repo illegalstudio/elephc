@@ -57,7 +57,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #56]");                               // retain the owned string while allocating its Throwable
     throwable_storage::emit_allocate(emitter);
     emitter.instruction("ldr x9, [sp, #48]");                                   // restore the selected exception class
-    emitter.instruction("str x9, [x0]");                                        // initialize its class identity before exposing the object
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
     emitter.instruction("ldp x9, x10, [sp, #56]");                              // recover the native-owned binary message
     emitter.instruction(&format!("stp x9, x10, [x0, #{}]", throwable_storage::MESSAGE_POINTER)); // transfer message pointer and length into the Throwable
     throwable_storage::emit_default_code(emitter, "x0");
@@ -122,7 +122,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 64], rdx");                       // retain its complete byte length
     throwable_storage::emit_allocate(emitter);
     emitter.instruction("mov r10, QWORD PTR [rsp + 48]");                       // restore the chosen per-program exception class
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // initialize class identity before publishing the object
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     emitter.instruction("mov r10, QWORD PTR [rsp + 56]");                       // recover the native-owned binary message
     abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     emitter.instruction("mov r10, QWORD PTR [rsp + 64]");                       // recover the exact message byte length

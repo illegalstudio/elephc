@@ -38,7 +38,7 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set up the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the indexed array pointer
-    emitter.instruction("ldr x9, [x0]");                                        // load the indexed array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load the indexed array length
     emitter.instruction("str x9, [sp, #24]");                                   // save the length
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x0");
     emitter.instruction("lsr x10, x10, #8");                                    // shift the packed value_type into the low bits
@@ -160,7 +160,7 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 80");                                         // reserve local slots for the conversion loop state
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the indexed array pointer
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the indexed array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rax", "rdi"); // load the indexed array length
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the length
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rdi");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
@@ -181,7 +181,7 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // have all source elements been visited?
     emitter.instruction("jge __rt_array_to_hash_uniq_done");                    // every element has been considered
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the indexed array pointer
-    emitter.instruction(&format!("add r10, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the element stride
     emitter.instruction("imul r11, rax");                                       // byte offset of element[i]
     emitter.instruction("add r11, r10");                                        // r11 = address of element[i]
@@ -220,7 +220,7 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // scan index j
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // candidate index i
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // indexed array pointer
-    emitter.instruction(&format!("add r10, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // candidate element low word
     emitter.label("__rt_array_to_hash_uniq_scan_next");
     emitter.instruction("add r9, 1");                                           // advance the backward scan

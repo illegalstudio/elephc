@@ -580,10 +580,13 @@ fn capture_callback_argument_count(ctx: &mut FunctionContext<'_>) -> Result<()> 
             .local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM)
             .expect("optional argument-count metadata requires a hidden collector");
         ctx.load_local_to_result(collector)?;
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0, #24]"),      // load the hidden caller argument count
-            Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax + 24]"), // load the hidden caller argument count
-        }
+        let result = abi::int_result_reg(ctx.emitter);
+        elephc_memoir::values::packed_slots::emit_load_packed_word(
+            ctx.emitter,
+            result,
+            result,
+            0,
+        );
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         match ctx.emitter.target.arch {
             Arch::AArch64 => abi::emit_store_to_sp(ctx.emitter, "x1", CALLBACK_ARG_COUNT_OFFSET),
@@ -797,7 +800,7 @@ fn emit_append_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 32);
-            ctx.emitter.instruction("add x10, x10, #24");                       // advance from array metadata to Mixed slots
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
             ctx.emitter.instruction("ldr x1, [x10, x9, lsl #3]");               // load the borrowed boxed argument cell
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 48);
         }
@@ -822,9 +825,9 @@ fn emit_load_argument_tail_value(ctx: &mut FunctionContext<'_>, element_ty: &Php
             if stride == 16 {
                 ctx.emitter.instruction("lsl x9, x9, #4");                      // scale the index for a two-word typed slot
                 ctx.emitter.instruction("add x10, x10, x9");                    // select the indexed typed slot
-                ctx.emitter.instruction("add x10, x10, #24");                   // advance past array metadata
+                elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
             } else {
-                ctx.emitter.instruction("add x10, x10, #24");                   // advance past array metadata
+                elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
                 ctx.emitter.instruction("add x10, x10, x9, lsl #3");            // select the indexed one-word slot
             }
             match element_ty {
@@ -841,7 +844,7 @@ fn emit_load_argument_tail_value(ctx: &mut FunctionContext<'_>, element_ty: &Php
                 ctx.emitter.instruction("shl r10, 4");                          // scale the index for a two-word typed slot
                 ctx.emitter.instruction("lea r11, [r11 + r10 + 24]");           // select the indexed typed slot after metadata
             } else {
-                ctx.emitter.instruction("lea r11, [r11 + r10 * 8 + 24]");       // select the indexed one-word slot after metadata
+                elephc_memoir::values::packed_slots::emit_indexed_word_address(ctx.emitter, "r11", "r10", "r11");
             }
             match element_ty {
                 PhpType::Float => ctx.emitter.instruction("movsd xmm0, QWORD PTR [r11]"), // load a typed floating-point argument
@@ -1313,7 +1316,7 @@ fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 32);
-            ctx.emitter.instruction("add x10, x10, #24");                       // advance from array metadata to Mixed slots
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
             ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the borrowed boxed argument for printing
         }
         Arch::X86_64 => {

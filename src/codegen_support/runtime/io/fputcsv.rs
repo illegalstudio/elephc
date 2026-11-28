@@ -53,7 +53,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // current element index = 0
 
     // -- get array length --
-    emitter.instruction("ldr x9, [x1]");                                        // load array length from header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // load array length from header
     emitter.instruction("str x9, [sp, #32]");                                   // save array length
 
     // -- main loop: iterate over array elements --
@@ -80,7 +80,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload array pointer
     emitter.instruction("lsl x11, x9, #4");                                     // byte offset = index * 16
     emitter.instruction("add x11, x10, x11");                                   // element address = array + offset
-    emitter.instruction("ldr x3, [x11, #24]");                                  // load string pointer (skip 24-byte header)
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x3", "x11", 0);
     emitter.instruction("ldr x4, [x11, #32]");                                  // load string length
 
     // -- check if field needs quoting (contains comma, quote, or newline) --
@@ -241,7 +241,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the source string-array pointer across repeated field loads
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // total written bytes start at zero before any CSV separator or field bytes are emitted
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // current field index starts at zero before iterating the source array
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source string-array logical length before entering the CSV writer loop
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rsi"); // load the source string-array logical length before entering the CSV writer loop
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the source string-array length for the loop termination check
 
     emitter.label("__rt_fputcsv_loop_x86");
@@ -261,7 +261,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the source string-array pointer before computing the current field slot address
     emitter.instruction("mov rcx, r10");                                        // copy the field index before scaling it into the 16-byte string-slot offset
     emitter.instruction("shl rcx, 4");                                          // convert the field index into the byte offset of the current 16-byte string slot
-    emitter.instruction("lea rcx, [r11 + rcx + 24]");                           // compute the current string-slot address inside the source array payload region
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r11", "rcx");
     emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the current field string pointer from the source array slot
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // load the current field string length from the source array slot
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // preserve the current field string pointer across the quote scan and repeated write() calls

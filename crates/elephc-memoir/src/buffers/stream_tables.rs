@@ -8,6 +8,8 @@
 //! - Callers select descriptors and retain control over PHP callbacks.
 //! - Table declarations and reset byte counts share the same geometry.
 
+use std::mem::{offset_of, size_of};
+
 use crate::{Arch, Emitter, data::StaticStorage};
 
 /// Number of ordinary fd entries in the stream side tables.
@@ -25,6 +27,98 @@ pub const REGISTRATION_BYTES: usize = 1 << REGISTRATION_SHIFT;
 
 const WORD: usize = 8;
 const HOST_PAIR_SHIFT: usize = 4;
+
+/// One per-class user-filter dispatch and storage descriptor.
+#[repr(C)]
+pub struct UserFilterVtable<T> {
+    /// Native `filter` entry.
+    pub filter: T,
+    /// Optional native `onCreate` entry.
+    pub on_create: T,
+    /// Optional native `onClose` entry.
+    pub on_close: T,
+    /// Whether `filter` uses PHP's four-argument brigade contract.
+    pub brigade_arity: T,
+    /// Byte offset of the declared `params` property, or zero.
+    pub params_offset: T,
+    /// Bit mask of boxed visible parameter representations.
+    pub boxed_params: T,
+}
+
+impl<T> UserFilterVtable<T> {
+    /// Returns the native words in their physical vtable order.
+    pub fn into_words(self) -> [T; 6] {
+        [
+            self.filter,
+            self.on_create,
+            self.on_close,
+            self.brigade_arity,
+            self.params_offset,
+            self.boxed_params,
+        ]
+    }
+}
+
+/// Selects one word from a per-class user-filter vtable.
+#[derive(Clone, Copy)]
+pub enum UserFilterVtableField {
+    /// Native `filter` entry.
+    Filter,
+    /// Optional native `onCreate` entry.
+    OnCreate,
+    /// Optional native `onClose` entry.
+    OnClose,
+    /// Whether `filter` uses PHP's four-argument brigade contract.
+    BrigadeArity,
+    /// Byte offset of the declared `params` property, or zero.
+    ParamsOffset,
+    /// Bit mask of boxed visible parameter representations.
+    BoxedParams,
+}
+
+impl UserFilterVtableField {
+    /// Returns the field displacement inside one native user-filter vtable.
+    const fn offset(self) -> usize {
+        match self {
+            Self::Filter => offset_of!(UserFilterVtable<u64>, filter),
+            Self::OnCreate => offset_of!(UserFilterVtable<u64>, on_create),
+            Self::OnClose => offset_of!(UserFilterVtable<u64>, on_close),
+            Self::BrigadeArity => offset_of!(UserFilterVtable<u64>, brigade_arity),
+            Self::ParamsOffset => offset_of!(UserFilterVtable<u64>, params_offset),
+            Self::BoxedParams => offset_of!(UserFilterVtable<u64>, boxed_params),
+        }
+    }
+}
+
+/// Words occupied by one per-class user-filter vtable.
+pub const USER_FILTER_VTABLE_WORDS: usize = size_of::<UserFilterVtable<u64>>() / WORD;
+
+const _: () = assert!(USER_FILTER_VTABLE_WORDS == 6);
+
+/// One word inside a wrapper or user-filter registration row.
+#[derive(Clone, Copy)]
+pub enum RegistrationField {
+    /// Pointer to the registered protocol or filter name.
+    NamePointer,
+    /// Byte length of the registered protocol or filter name.
+    NameLength,
+    /// Pointer to the registered wrapper or filter class name.
+    ClassPointer,
+    /// Byte length of the registered wrapper or filter class name.
+    ClassLength,
+}
+
+impl RegistrationField {
+    /// Returns the native byte offset of this field inside a registration row.
+    const fn offset(self) -> usize {
+        match self {
+            Self::NamePointer => 0,
+            Self::NameLength => WORD,
+            Self::ClassPointer => 2 * WORD,
+            Self::ClassLength => 3 * WORD,
+        }
+    }
+}
 
 /// Defines the bytes reserved for one table from its number of rows and stride.
 const fn table(symbol: &'static str, count: usize, stride: usize) -> StaticStorage {
@@ -62,6 +156,66 @@ pub fn emit_request_clear(emitter: &mut impl Emitter) {
 pub fn emit_connect_host_slot(emitter: &mut impl Emitter, base: &str, index: &str) {
     CONNECT_HOSTS.emit_address(emitter, base);
     emit_connect_host_offset(emitter, base, index);
+}
+
+/// Addresses one wrapper or user-filter registration row selected by its checked index.
+pub fn emit_registration_entry_address(
+    storage: StaticStorage,
+    emitter: &mut impl Emitter,
+    destination: &str,
+    index: &str,
+    base: &str,
+) {
+    storage.emit_address(emitter, base);
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!(
+            "add {destination}, {base}, {index}, lsl #{REGISTRATION_SHIFT}"
+        )),
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {destination}, {index}"));
+            emitter.instruction(&format!("shl {destination}, {REGISTRATION_SHIFT}"));
+            emitter.instruction(&format!("add {destination}, {base}"));
+        }
+    }
+}
+
+/// Loads one typed word from a materialized registration row.
+pub fn emit_load_registration_field(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    entry: &str,
+    field: RegistrationField,
+) {
+    emitter.emit_load_from_address(destination, entry, field.offset());
+}
+
+/// Loads one typed word from a per-class user-filter vtable.
+pub fn emit_load_user_filter_vtable_field(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    vtable: &str,
+    field: UserFilterVtableField,
+) {
+    emitter.emit_load_from_address(destination, vtable, field.offset());
+}
+
+/// Stores one typed word into a materialized registration row.
+pub fn emit_store_registration_field(
+    emitter: &mut impl Emitter,
+    source: &str,
+    entry: &str,
+    field: RegistrationField,
+) {
+    emitter.emit_store_to_address(source, entry, field.offset());
+}
+
+/// Clears one typed word in a materialized registration row.
+pub fn emit_clear_registration_field(
+    emitter: &mut impl Emitter,
+    entry: &str,
+    field: RegistrationField,
+) {
+    emitter.emit_store_zero_to_address(entry, field.offset());
 }
 
 /// Adds the fd offset after the caller materializes the base and reloads the index.
@@ -118,17 +272,9 @@ pub fn emit_retire_fd_metadata(emitter: &mut impl Emitter) {
     emitter.emit_pop_reg(fd);
 
     for table in [READ_FILTERS, WRITE_FILTERS, EOF_FLAGS] {
-        table.emit_address(emitter, base);
-        emitter.instruction(match emitter.arch() {
-            Arch::AArch64 => "strb wzr, [x9, x0]",
-            Arch::X86_64 => "mov BYTE PTR [r9 + rax], 0",
-        });                                                                     // clear one byte of descriptor state
+        table.emit_clear_indexed_byte(emitter, fd, base);
     }
-    CHUNK_SIZES.emit_address(emitter, base);
-    emitter.instruction(match emitter.arch() {
-        Arch::AArch64 => "str xzr, [x9, x0, lsl #3]",
-        Arch::X86_64 => "mov QWORD PTR [r9 + rax * 8], 0",
-    });                                                                         // clear the configured chunk size
+    CHUNK_SIZES.emit_clear_indexed_word(emitter, fd, base);
 }
 
 /// Scans for a vacant wrapper slot, leaving the table base and index live.
@@ -163,10 +309,12 @@ pub fn emit_find_wrapper_slot(emitter: &mut impl Emitter, scan: &str, found: &st
 
 /// Transfers the wrapper object in the scan's owner register into the selected slot.
 pub fn emit_publish_wrapper_owner(emitter: &mut impl Emitter) {
-    emitter.instruction(match emitter.arch() {
-        Arch::AArch64 => "str x13, [x10, x12, lsl #3]",
-        Arch::X86_64 => "mov QWORD PTR [r10 + r12 * 8], r13",
-    });                                                                         // publish the selected wrapper owner
+    USER_WRAPPER_HANDLES.emit_store_indexed_word(
+        emitter,
+        if emitter.arch() == Arch::AArch64 { "x13" } else { "r13" },
+        if emitter.arch() == Arch::AArch64 { "x12" } else { "r12" },
+        if emitter.arch() == Arch::AArch64 { "x10" } else { "r10" },
+    );
 }
 
 /// Borrows a wrapper owner and leaves the table address live for an optional detach.
@@ -182,8 +330,56 @@ pub fn emit_load_wrapper_owner(
 
 /// Clears the slot after its owner is moved to the caller's local storage.
 pub fn emit_clear_wrapper_slot(emitter: &mut impl Emitter, base: &str, index: &str) {
+    USER_WRAPPER_HANDLES.emit_clear_indexed_word(emitter, index, base);
+}
+
+/// Loads one user-filter instance selected by its linearized fd and direction index.
+pub fn emit_load_filter_instance(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    index: &str,
+    base: &str,
+) {
+    USER_FILTER_INSTANCES.emit_load_indexed_word(emitter, destination, index, base);
+}
+
+/// Publishes one user-filter instance selected by its linearized fd and direction index.
+pub fn emit_store_filter_instance(
+    emitter: &mut impl Emitter,
+    source: &str,
+    index: &str,
+    base: &str,
+) {
+    USER_FILTER_INSTANCES.emit_store_indexed_word(emitter, source, index, base);
+}
+
+/// Detaches one user-filter instance selected by its linearized fd and direction index.
+pub fn emit_clear_filter_instance(emitter: &mut impl Emitter, index: &str, base: &str) {
+    USER_FILTER_INSTANCES.emit_clear_indexed_word(emitter, index, base);
+}
+
+/// Loads both adjacent direction owners and combines their presence into `destination`.
+pub fn emit_load_filter_instance_pair_presence(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    second: &str,
+    first_index: &str,
+    base: &str,
+) {
+    USER_FILTER_INSTANCES.emit_address(emitter, base);
     match emitter.arch() {
-        Arch::AArch64 => emitter.instruction(&format!("str xzr, [{base}, {index}, lsl #3]")), // retire the wrapper's published slot
-        Arch::X86_64 => emitter.instruction(&format!("mov QWORD PTR [{base} + {index} * 8], 0")), // retire the wrapper's published slot
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {base}, {base}, {first_index}, lsl #3"));
+            emitter.instruction(&format!("ldp {destination}, {second}, [{base}]"));
+            emitter.instruction(&format!("orr {destination}, {destination}, {second}"));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "mov {destination}, QWORD PTR [{base} + {first_index} * 8]"
+            ));
+            emitter.instruction(&format!(
+                "or {destination}, QWORD PTR [{base} + {first_index} * 8 + 8]"
+            ));
+        }
     }
 }

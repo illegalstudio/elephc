@@ -34,7 +34,7 @@ pub fn emit_array_column_ref(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save column key ptr/len
 
     // -- load outer array length --
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = outer array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = outer array length
     emitter.instruction("str x9, [sp, #24]");                                   // save outer length
 
     // -- create result array with elem_size=8 for heap pointers --
@@ -54,7 +54,7 @@ pub fn emit_array_column_ref(emitter: &mut Emitter) {
 
     // -- load inner assoc array pointer at index --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload outer array
-    emitter.instruction("add x0, x0, #24");                                     // skip header
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x0", "x0");
     emitter.instruction("ldr x0, [x0, x9, lsl #3]");                            // load inner hash table pointer at index
 
     // -- look up column key in inner hash table --
@@ -102,7 +102,7 @@ fn emit_array_column_ref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the outer indexed-array pointer across hash lookups and refcounted append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested column key pointer across the associative-array lookup loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the requested column key length across the associative-array lookup loop
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the outer indexed-array logical length so the result array can be sized exactly once
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the outer indexed-array logical length so the result array can be sized exactly once
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the outer indexed-array logical length for the loop termination check
     emitter.instruction("mov rdi, r10");                                        // pass the outer indexed-array logical length as the result-array capacity argument
     emitter.instruction("mov rsi, 8");                                          // choose 8-byte pointer slots for the extracted refcounted result values
@@ -115,7 +115,7 @@ fn emit_array_column_ref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // compare the current outer indexed-array loop cursor against the saved logical length
     emitter.instruction("jae __rt_acr_done");                                   // stop once every outer row has been examined for the requested refcounted column
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the outer indexed-array pointer after prior helper calls clobbered caller-saved registers
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // load the current inner associative-array hash pointer from the outer indexed-array payload
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "rdi", "r9");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested column key pointer for the inner associative-array lookup
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the requested column key length for the inner associative-array lookup
     emitter.instruction("call __rt_hash_get");                                  // look up the requested refcounted column key in the current inner associative-array row

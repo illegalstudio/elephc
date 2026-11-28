@@ -187,7 +187,11 @@ fn emit_class_id_ladder(
     }
     let class_id_reg = abi::symbol_scratch_reg(ctx.emitter);
     let compare_reg = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        ctx.emitter,
+        class_id_reg,
+        receiver_reg,
+    );
     for (class_id, label) in pairs {
         abi::emit_load_int_immediate(ctx.emitter, compare_reg, *class_id as i64);
         emit_cmp_regs(ctx, class_id_reg, compare_reg);

@@ -271,7 +271,11 @@ fn emit_class_id_dispatch(
         Arch::AArch64 => ("x9", "x10"),
         Arch::X86_64 => ("r11", "r10"),
     };
-    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        ctx.emitter,
+        class_id_reg,
+        receiver_reg,
+    );
     for (class_id, label) in class_labels {
         abi::emit_load_int_immediate(ctx.emitter, compare_reg, *class_id as i64);
         ctx.emitter

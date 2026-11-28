@@ -9,7 +9,70 @@
 //! - Owned cells retire before their nodes. Scope flags and lookup stay with the caller.
 //! - Suspended-frame collection visits the exact non-null owned cell fields without mutation.
 
+use std::mem::{offset_of, size_of};
+
 use crate::{Arch, Emitter};
+
+/// One native linked-list entry in a materialized eval scope.
+#[repr(C)]
+struct EvalScopeEntry<T> {
+    next: T,
+    name: T,
+    name_len: T,
+    cell: T,
+    flags: T,
+}
+
+/// Selects one physical word in a materialized eval-scope entry.
+#[derive(Clone, Copy)]
+pub enum EntryField {
+    /// Next linked-list entry.
+    Next,
+    /// Borrowed static variable-name pointer.
+    Name,
+    /// Variable-name byte count.
+    NameLength,
+    /// Visible Mixed cell pointer.
+    Cell,
+    /// ABI visibility, dirtiness and ownership flags.
+    Flags,
+}
+
+impl EntryField {
+    /// Returns the field displacement inside one native entry.
+    const fn offset(self) -> usize {
+        match self {
+            Self::Next => offset_of!(EvalScopeEntry<u64>, next),
+            Self::Name => offset_of!(EvalScopeEntry<u64>, name),
+            Self::NameLength => offset_of!(EvalScopeEntry<u64>, name_len),
+            Self::Cell => offset_of!(EvalScopeEntry<u64>, cell),
+            Self::Flags => offset_of!(EvalScopeEntry<u64>, flags),
+        }
+    }
+}
+
+const ENTRY_BYTES: usize = size_of::<EvalScopeEntry<u64>>();
+const _: () = assert!(ENTRY_BYTES == 40);
+
+/// Loads the first entry pointer from a validated eval-scope header.
+pub fn emit_load_head(emitter: &mut impl Emitter, destination: &str, scope: &str) {
+    emitter.emit_load_from_address(destination, scope, 0);
+}
+
+/// Loads a linked pointer whose target is either a scope head or an entry successor.
+pub fn emit_load_link(emitter: &mut impl Emitter, destination: &str, link: &str) {
+    emitter.emit_load_from_address(destination, link, 0);
+}
+
+/// Loads one typed word from a validated eval-scope entry.
+pub fn emit_load_entry_field(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    entry: &str,
+    field: EntryField,
+) {
+    emitter.emit_load_from_address(destination, entry, field.offset());
+}
 
 /// Emits the C ABI allocator and destructor for a scope and its owned entries.
 pub fn emit_lifecycle(emitter: &mut impl Emitter, owned_flag: i64) {
@@ -127,7 +190,7 @@ fn emit_aarch64_eval_scope_owner_visitor(emitter: &mut impl Emitter, owned_flag:
 /// Allocates and publishes a node using the ARM64 setter frame.
 fn aarch64_insert(emitter: &mut impl Emitter, visible_flags: i64) {
     emitter.label("__elephc_eval_scope_set_insert");
-    emitter.instruction("mov x0, #40");                                         // entry records store next, name, length, cell, and flags
+    emitter.instruction(&format!("mov x0, #{ENTRY_BYTES}"));                    // entry records store next, name, length, cell, and flags
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate a new entry record
     emitter.instruction("mov x26, x0");                                         // keep the new entry pointer while initializing fields
     emitter.instruction("str x25, [x26]");                                      // new entry next points at the old successor, normally null
@@ -236,7 +299,7 @@ fn emit_x86_64_eval_scope_owner_visitor(emitter: &mut impl Emitter, owned_flag: 
 /// Allocates and publishes a node using the x86_64 setter frame.
 fn x86_64_insert(emitter: &mut impl Emitter, visible_flags: i64) {
     emitter.label("__elephc_eval_scope_set_insert");
-    emitter.instruction("mov rax, 40");                                         // entry records store next, name, length, cell, and flags
+    emitter.instruction(&format!("mov rax, {ENTRY_BYTES}"));                    // entry records store next, name, length, cell, and flags
     emitter.instruction("call __rt_heap_alloc");                                // allocate a new entry record
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload old successor, normally null
     emitter.instruction("mov QWORD PTR [rax], r9");                             // new entry next points at the old successor

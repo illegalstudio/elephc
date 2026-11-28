@@ -868,7 +868,7 @@ fn emit_aarch64_method_dispatch(
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_method_next_{}", class_id);
         emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for method dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
         abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this eval bridge class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next class when ids differ
@@ -890,7 +890,7 @@ fn emit_x86_64_method_dispatch(
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_method_next_{}_x", class_id);
         emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for method dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r11");
         abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this eval bridge class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next class when ids differ
@@ -983,7 +983,7 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
     for class_id in class_ids {
         let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}", class_id);
         emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin Throwable test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin Throwable dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
         abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
@@ -1021,7 +1021,7 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
     for class_id in class_ids {
         let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}_x", class_id);
         emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin Throwable test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin Throwable dispatch
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r11");
         abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
@@ -1298,8 +1298,12 @@ fn emit_aarch64_builtin_throwable_method_bodies(
     emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
     emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getMessage()
-    emitter.instruction("ldr x1, [x9, #8]");                                    // load Throwable message pointer
-    emitter.instruction("ldr x2, [x9, #16]");                                   // load Throwable message length
+    elephc_memoir::values::throwable_storage::emit_load_message_pair(
+        emitter,
+        "x1",
+        "x2",
+        "x9",
+    );
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable message as a Mixed string
     emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
@@ -1307,7 +1311,7 @@ fn emit_aarch64_builtin_throwable_method_bodies(
     emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
     emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getCode()
-    emitter.instruction("ldr x1, [x9, #24]");                                   // load Throwable integer code
+    elephc_memoir::values::throwable_storage::emit_load_code(emitter, "x1", "x9");
     emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable code as a Mixed integer
@@ -1326,8 +1330,12 @@ fn emit_x86_64_builtin_throwable_method_bodies(
     emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
     emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getMessage()
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // load Throwable message pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load Throwable message length
+    elephc_memoir::values::throwable_storage::emit_load_message_pair(
+        emitter,
+        "rdi",
+        "rsi",
+        "r10",
+    );
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable message as a Mixed string
     emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
@@ -1335,7 +1343,7 @@ fn emit_x86_64_builtin_throwable_method_bodies(
     emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
     emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getCode()
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 24]");                       // load Throwable integer code
+    elephc_memoir::values::throwable_storage::emit_load_code(emitter, "rdi", "r10");
     emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
     emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer
     emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable code as a Mixed integer

@@ -14,6 +14,12 @@ use crate::{abi, cleanup::Scope as CleanupScope, Emitter};
 const OPTIONS: &str = "_stream_context_options";
 const NOTIFICATION: &str = "_stream_notification_callback";
 
+/// Declares the ambient stream-context owner slots.
+pub fn append_ambient_storage(out: &mut String, target: &impl crate::data::DataTarget) {
+    out.push_str(&target.common(OPTIONS, 8));
+    out.push_str(&target.common(NOTIFICATION, 8));
+}
+
 /// Materializes the address of the ambient stream-context options owner slot.
 pub fn emit_options_address(emitter: &mut impl Emitter, destination: &str) {
     emitter.emit_symbol_address(destination, OPTIONS);
@@ -27,6 +33,11 @@ pub fn emit_load_options(emitter: &mut impl Emitter, destination: &str) {
 /// Publishes the ambient stream-context options owner.
 pub fn emit_store_options(emitter: &mut impl Emitter, source: &str) {
     emitter.emit_store_reg_to_symbol(source, OPTIONS, 0);
+}
+
+/// Clears only the ambient stream-context options slot.
+pub fn emit_clear_options(emitter: &mut impl Emitter) {
+    emitter.emit_store_zero_to_symbol(OPTIONS, 0);
 }
 
 /// Clears both ambient stream-context owner slots without invoking releases.

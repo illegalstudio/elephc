@@ -31,7 +31,7 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save array pointer
 
     // -- load array metadata --
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = array length
     emitter.instruction("str x9, [sp, #8]");                                    // save length to stack
 
     // -- Fisher-Yates: iterate i from length-1 down to 1 --
@@ -47,7 +47,7 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
 
     // -- swap data[i] and data[j] --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = array pointer
-    emitter.instruction("add x2, x1, #24");                                     // x2 = data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("ldr x3, [x2, x19, lsl #3]");                           // x3 = data[i]
     emitter.instruction("ldr x4, [x2, x0, lsl #3]");                            // x4 = data[j] (x0 = j from arc4random)
     emitter.instruction("str x4, [x2, x19, lsl #3]");                           // data[i] = data[j]
@@ -77,7 +77,7 @@ fn emit_shuffle_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the array pointer and Fisher-Yates loop cursor
     emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots for the shuffled array pointer and the current descending Fisher-Yates cursor
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the shuffled indexed-array pointer across random-number helper calls
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the indexed-array logical length once before starting the Fisher-Yates loop
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the indexed-array logical length once before starting the Fisher-Yates loop
     emitter.instruction("cmp r10, 2");                                          // does the indexed array contain fewer than two elements?
     emitter.instruction("jb __rt_shuffle_done");                                // arrays of length zero or one are already trivially shuffled
     emitter.instruction("sub r10, 1");                                          // initialize the descending Fisher-Yates cursor to the final indexed-array slot
@@ -92,7 +92,7 @@ fn emit_shuffle_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // restore the Fisher-Yates cursor after the C-ABI bridge call clobbered r10
     emitter.instruction("mov r11, rax");                                        // preserve the sampled Fisher-Yates partner index before reloading the array base pointer
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the indexed-array pointer after the random helper clobbered caller-saved registers
-    emitter.instruction("lea r9, [r8 + 24]");                                   // compute the indexed-array payload base pointer so the swap can address element slots directly
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "r8");
     emitter.instruction("mov rax, QWORD PTR [r9 + r10 * 8]");                   // load the current Fisher-Yates tail element that will be swapped toward the sampled position
     emitter.instruction("mov rdx, QWORD PTR [r9 + r11 * 8]");                   // load the sampled Fisher-Yates partner element before overwriting either slot
     emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rdx");                   // store the sampled partner element into the current Fisher-Yates tail slot

@@ -74,7 +74,7 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_count_object");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load object payload from the Mixed cell
     emit_branch_if_null_container(emitter, "x10", "x11", "__rt_mixed_count_zero");
-    emitter.instruction("ldr x11, [x10]");                                      // load object class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x10");
     abi::emit_symbol_address(emitter, "x12", "_spl_fixed_array_class_id");
     emitter.instruction("ldr x12, [x12]");                                      // load SplFixedArray class id
     emitter.instruction("cmp x11, x12");                                        // is this a SplFixedArray object?
@@ -169,7 +169,7 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_count_object");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load object payload from the Mixed cell
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_count_zero");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load object class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r10");
     abi::emit_load_symbol_to_reg(emitter, "r12", "_spl_fixed_array_class_id", 0);
     emitter.instruction("cmp r11, r12");                                        // is this a SplFixedArray object?
     emitter.instruction("je __rt_mixed_count_spl_fixed");                       // count fixed-array storage through the SPL helper

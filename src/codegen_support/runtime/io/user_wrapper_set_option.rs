@@ -58,7 +58,7 @@ pub fn emit_user_wrapper_set_option(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_uwsetopt_false");                         // empty slot → false
 
     // -- resolve stream_set_option (vtable slot 13) for the object's class --
-    emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
     emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_SET_OPTION_OFFSET)); // load the stream_set_option method pointer (slot 13)
@@ -94,7 +94,7 @@ fn emit_user_wrapper_set_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uwsetopt_false_x86");                          // empty slot → false
 
     // -- resolve stream_set_option (vtable slot 13) for the object's class --
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SET_OPTION_OFFSET)); // load the stream_set_option method pointer (slot 13)

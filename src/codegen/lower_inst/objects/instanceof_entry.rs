@@ -135,12 +135,12 @@ fn emit_incomplete_class_instanceof(
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction("ldr x0, [x0]");                    // object header class id
+                    elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x0", "x0");
                     ctx.emitter.instruction("cmn x0, #2");                      // class id -2 marks an incomplete object
                     ctx.emitter.instruction("cset x0, eq");                     // return whether this is the synthetic class
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction("mov rax, QWORD PTR [rax]");        // object header class id
+                    elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "rax", "rax");
                     ctx.emitter.instruction("cmp rax, -2");                     // class id -2 marks an incomplete object
                     ctx.emitter.instruction("sete al");                         // materialize the identity comparison
                     ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the integer ABI
@@ -156,7 +156,7 @@ fn emit_incomplete_class_instanceof(
                 Arch::AArch64 => {
                     ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 = object payload
                     ctx.emitter.instruction(&format!("b.ne {}", false_label));  // non-objects are not instances
-                    ctx.emitter.instruction("ldr x1, [x1]");                    // object header class id
+                    elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x1", "x1");
                     ctx.emitter.instruction("cmn x1, #2");                      // class id -2 marks an incomplete object
                     ctx.emitter.instruction("cset x0, eq");                     // return the synthetic-class identity
                     ctx.emitter.instruction(&format!("b {}", done));            // skip the false arm
@@ -167,7 +167,7 @@ fn emit_incomplete_class_instanceof(
                 Arch::X86_64 => {
                     ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 = object payload
                     ctx.emitter.instruction(&format!("jne {}", false_label));   // non-objects are not instances
-                    ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");        // object header class id
+                    elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "rdi", "rdi");
                     ctx.emitter.instruction("cmp rdi, -2");                     // class id -2 marks an incomplete object
                     ctx.emitter.instruction("sete al");                         // materialize the identity comparison
                     ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the integer ABI

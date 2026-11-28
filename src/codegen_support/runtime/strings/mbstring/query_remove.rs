@@ -60,25 +60,22 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction(if arm { "str x0, [sp, #56]" } else { "mov QWORD PTR [rsp + 56], rax" }); // remember whether this deletion owns the old value release
     if arm {
         emitter.instruction("ldr x4, [sp, #64]");                               // recover the stable entry before any PHP callbacks
-        emitter.instruction("ldp x9, x10, [x4, #24]");                          // detach the removed value's payload words
+        elephc_memoir::hash_layout::emit_entry_value(emitter, "x4", "x10", "x9", "x11");
         emitter.instruction("str x9, [sp, #24]");                               // retain the value owner until protected cleanup
-        emitter.instruction("ldr x10, [x4, #40]");                              // recover the concrete value release tag
         emitter.instruction("str x10, [sp, #32]");                              // retain its release convention after tombstoning
-        emitter.instruction("ldr x9, [x4, #8]");                                // retain the hash-owned key allocation
-        emitter.instruction("ldr x10, [x4, #16]");                              // inspect integer versus managed string key ownership
+        elephc_memoir::hash_layout::emit_entry_key(emitter, "x4", "x9", "x10");
         emitter.instruction("cmn x10, #1");                                     // integer keys own no separate bytes
         emitter.instruction("csel x9, xzr, x9, eq");                            // use a null owner for inline integer keys
         emitter.instruction("str x9, [sp, #40]");                               // detach key ownership before callbacks may reuse the slot
     } else {
         emitter.instruction("mov r8, QWORD PTR [rsp + 64]");                    // recover the stable entry before any PHP callbacks
-        emitter.instruction("mov r10, QWORD PTR [r8 + 24]");                    // detach the removed value's low payload
-        emitter.instruction("mov QWORD PTR [rsp + 24], r10");                   // retain its owner for protected cleanup
-        emitter.instruction("mov r10, QWORD PTR [r8 + 40]");                    // recover the concrete value release tag
+        elephc_memoir::hash_layout::emit_entry_value(emitter, "r8", "r10", "r11", "rax");
+        emitter.instruction("mov QWORD PTR [rsp + 24], r11");                   // retain its owner for protected cleanup
         emitter.instruction("mov QWORD PTR [rsp + 32], r10");                   // retain the release convention after tombstoning
-        emitter.instruction("mov r10, QWORD PTR [r8 + 8]");                     // retain the hash-owned key allocation
-        emitter.instruction("xor r11d, r11d");                                  // prepare no owner for an inline integer key
-        emitter.instruction("cmp QWORD PTR [r8 + 16], -1");                     // classify the owned key representation
-        emitter.instruction("cmove r10, r11");                                  // string keys keep their separate allocation owner
+        elephc_memoir::hash_layout::emit_entry_key(emitter, "r8", "r10", "r11");
+        emitter.instruction("xor eax, eax");                                    // prepare no owner for an inline integer key
+        emitter.instruction("cmp r11, -1");                                     // classify the owned key representation
+        emitter.instruction("cmove r10, rax");                                  // string keys keep their separate allocation owner
         emitter.instruction("mov QWORD PTR [rsp + 40], r10");                   // detach key ownership before callbacks may reuse the slot
     }
     elephc_memoir::values::hash_unset::emit_unlink_pinned_entry(emitter, NAME);

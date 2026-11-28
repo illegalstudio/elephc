@@ -942,7 +942,7 @@ pub(super) fn emit_branch_if_stacked_object_class_matches(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the stacked receiver's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // compare it with this candidate class
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // take the candidate's declared-slot store
@@ -956,7 +956,7 @@ pub(super) fn emit_branch_if_stacked_object_class_matches(
             // class-id word in `r10`.
             let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked receiver's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "r11");
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", candidate_reg));           // compare it with this candidate class
@@ -1697,7 +1697,7 @@ pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the candidate receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id before checking the property name
             ctx.emitter.instruction(&format!("b.ne {}", next_label));           // skip name comparison for unrelated classes
@@ -1706,7 +1706,7 @@ pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
             // Caller-saved `rcx`, never callee-saved `r12`. See the sibling probe above.
             let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the candidate receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "r11");
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", candidate_reg));           // compare receiver class id before checking the property name
@@ -1729,7 +1729,7 @@ pub(super) fn emit_branch_if_stacked_object_is_stdclass(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the stacked object's class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", stdclass_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // check whether the runtime receiver is stdClass
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // route stdClass writes through the dynamic-property helper
@@ -1738,7 +1738,7 @@ pub(super) fn emit_branch_if_stacked_object_is_stdclass(
             // Caller-saved `rcx`, never callee-saved `r12`. See the sibling probes above.
             let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked object's class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "r11");
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, stdclass_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", candidate_reg));           // check whether the runtime receiver is stdClass

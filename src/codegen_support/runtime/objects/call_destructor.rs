@@ -77,7 +77,7 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     destructor_header::emit_clear_running(emitter);
     emitter.instruction("b __rt_call_object_destructor_static");                // continue ordinary lookup after restoring a missed eval guard
     emitter.label("__rt_call_object_destructor_static");
-    emitter.instruction("ldr x11, [x0]");                                       // x11 = runtime class_id (object payload offset 0)
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x0");
     // emit_load_symbol_to_reg uses x9 as scratch, so class_id is kept in x11.
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_class_destruct_count", 0);
     emitter.instruction("cmp x11, x10");                                        // is class_id within the destructor table?
@@ -130,7 +130,7 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     destructor_header::emit_clear_running(emitter);
     emitter.instruction("jmp __rt_call_object_destructor_static_x86");          // continue static lookup after restoring a missed eval guard
     emitter.label("__rt_call_object_destructor_static_x86");
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = runtime class_id (object payload offset 0)
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "rdi");
     abi::emit_cmp_reg_to_symbol(emitter, "rax", "_class_destruct_count");       // is class_id within the destructor table?
     emitter.instruction("jae __rt_call_object_destructor_ret");                 // out-of-range class ids have no destructor
     abi::emit_symbol_address(emitter, "r10", "_class_destruct_ptrs");           // r10 = base of the per-class destructor symbol table

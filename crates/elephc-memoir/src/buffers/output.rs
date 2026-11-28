@@ -9,6 +9,8 @@
 //! - A closed slot is detached before payload releases and before its handler can reenter.
 //! - These routines emit target assembly from the compiler.
 
+use std::mem::{offset_of, size_of};
+
 use crate::{Arch, Emitter};
 
 /// Number of slots in the output-buffer stack.
@@ -59,6 +61,69 @@ pub enum ControlField {
     /// Compatibility state set by `ob_implicit_flush`.
     ImplicitFlush,
 }
+
+/// One protected output-buffer operation shared with its callback adapters.
+#[repr(C)]
+pub struct ProcessRecord<T> {
+    /// Selected output-buffer slot.
+    pub slot: T,
+    /// Requested handler phase.
+    pub phase: T,
+    /// Whether surviving bytes must be forwarded.
+    pub write: T,
+    /// Whether the handler supplied replacement bytes.
+    pub replaced: T,
+    /// Owned replacement byte allocation.
+    pub replacement_pointer: T,
+    /// Replacement byte count.
+    pub replacement_length: T,
+    /// Pending Throwable owner from a protected step.
+    pub pending: T,
+    /// Incoming output-handler recursion guard.
+    pub incoming_guard: T,
+}
+
+/// Selects one word from a protected output-buffer operation record.
+#[derive(Clone, Copy)]
+pub enum ProcessField {
+    /// Selected output-buffer slot.
+    Slot,
+    /// Requested handler phase.
+    Phase,
+    /// Whether surviving bytes must be forwarded.
+    Write,
+    /// Whether the handler supplied replacement bytes.
+    Replaced,
+    /// Owned replacement byte allocation.
+    ReplacementPointer,
+    /// Replacement byte count.
+    ReplacementLength,
+    /// Pending Throwable owner from a protected step.
+    Pending,
+    /// Incoming output-handler recursion guard.
+    IncomingGuard,
+}
+
+impl ProcessField {
+    /// Returns the field displacement inside one protected operation record.
+    const fn offset(self) -> usize {
+        match self {
+            Self::Slot => offset_of!(ProcessRecord<u64>, slot),
+            Self::Phase => offset_of!(ProcessRecord<u64>, phase),
+            Self::Write => offset_of!(ProcessRecord<u64>, write),
+            Self::Replaced => offset_of!(ProcessRecord<u64>, replaced),
+            Self::ReplacementPointer => offset_of!(ProcessRecord<u64>, replacement_pointer),
+            Self::ReplacementLength => offset_of!(ProcessRecord<u64>, replacement_length),
+            Self::Pending => offset_of!(ProcessRecord<u64>, pending),
+            Self::IncomingGuard => offset_of!(ProcessRecord<u64>, incoming_guard),
+        }
+    }
+}
+
+/// Bytes occupied by one protected output-buffer operation record.
+pub const PROCESS_RECORD_BYTES: usize = size_of::<ProcessRecord<u64>>();
+
+const _: () = assert!(PROCESS_RECORD_BYTES == 64);
 
 impl ControlField {
     /// Returns the private assembly symbol backing this scalar.
@@ -132,6 +197,35 @@ pub fn emit_clear_control(emitter: &mut impl Emitter, field: ControlField) {
     emitter.emit_store_zero_to_symbol(field.symbol(), 0);
 }
 
+/// Loads one typed word from a protected output-buffer operation record.
+pub fn emit_load_process_field(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    record: &str,
+    field: ProcessField,
+) {
+    emitter.emit_load_from_address(destination, record, field.offset());
+}
+
+/// Stores one typed word into a protected output-buffer operation record.
+pub fn emit_store_process_field(
+    emitter: &mut impl Emitter,
+    source: &str,
+    record: &str,
+    field: ProcessField,
+) {
+    emitter.emit_store_to_address(source, record, field.offset());
+}
+
+/// Clears one typed word in a protected output-buffer operation record.
+pub fn emit_clear_process_field(
+    emitter: &mut impl Emitter,
+    record: &str,
+    field: ProcessField,
+) {
+    emitter.emit_store_zero_to_address(record, field.offset());
+}
+
 /// Loads the requested field for a level already checked by the caller.
 pub fn emit_load_buffer_field(
     emitter: &mut impl Emitter, field: BufferField, address: &str, level: &str, destination: &str,
@@ -174,6 +268,17 @@ const HANDLER_METADATA: [&str; 4] = ["_ob_name_lens", "_ob_chunk_sizes", "_ob_fl
 pub fn append_handler_storage(out: &mut String, target: &impl crate::data::DataTarget) {
     for field in HANDLER_OWNERS.into_iter().chain(HANDLER_METADATA) {
         out.push_str(&target.common(field, MAX_LEVELS as usize * 8));
+    }
+}
+
+/// Declares process-wide output control scalars beside the stack storage they govern.
+pub fn append_control_storage(out: &mut String, target: &impl crate::data::DataTarget) {
+    for field in [
+        ControlField::InHandler,
+        ControlField::Flushing,
+        ControlField::ImplicitFlush,
+    ] {
+        out.push_str(&target.common(field.symbol(), 8));
     }
 }
 

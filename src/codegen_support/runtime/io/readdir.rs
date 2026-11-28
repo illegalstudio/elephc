@@ -11,7 +11,7 @@
 //!   the next `readdir`/`closedir` call.
 //! - A null pointer result marks end-of-directory and is boxed as PHP `false`.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 use elephc_memoir::{buffers::stream_tables, interop::glob_storage};
 
 /// readdir: read the next directory entry name.
@@ -35,8 +35,7 @@ pub fn emit_readdir(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
-    stream_tables::GLOB_HANDLES.emit_address(emitter, "x9");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // glob_state* = _glob_handles[fd]
+    stream_tables::GLOB_HANDLES.emit_load_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("cbz x10, __rt_readdir_libc");                          // no glob handle: fall through to libc readdir
     glob_storage::emit_next_path(emitter, "__rt_readdir_end");
     emitter.instruction("mov x2, #0");                                          // length counter for the strlen scan
@@ -51,8 +50,7 @@ pub fn emit_readdir(emitter: &mut Emitter) {
 
     emitter.label("__rt_readdir_libc");
     // -- look up the DIR* recorded for this descriptor --
-    abi::emit_symbol_address(emitter, "x9", "_dir_handles");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // DIR* = _dir_handles[fd]
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.emit_load_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("cbz x10, __rt_readdir_end");                           // no handle recorded: report end of directory
     emitter.instruction("mov x0, x10");                                         // DIR* argument for readdir
     emitter.bl_c("readdir");
@@ -94,8 +92,7 @@ fn emit_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
-    stream_tables::GLOB_HANDLES.emit_address(emitter, "r9");
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // glob_state* = _glob_handles[fd]
+    stream_tables::GLOB_HANDLES.emit_load_indexed_word(emitter, "r10", "rdi", "r9");
     emitter.instruction("test r10, r10");                                       // glob handle present?
     emitter.instruction("jz __rt_readdir_libc_x86");                            // no glob handle: fall through to libc readdir
     glob_storage::emit_next_path(emitter, "__rt_readdir_end_x86");
@@ -113,8 +110,7 @@ fn emit_readdir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_readdir_libc_x86");
     // -- look up the DIR* recorded for this descriptor --
-    abi::emit_symbol_address(emitter, "r9", "_dir_handles");                    // base of the fd->DIR* table
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // DIR* = _dir_handles[fd]
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.emit_load_indexed_word(emitter, "r10", "rdi", "r9");
     emitter.instruction("test r10, r10");                                       // was a DIR* recorded for this descriptor?
     emitter.instruction("jz __rt_readdir_end_x86");                             // no handle recorded: report end of directory
     emitter.instruction("mov rdi, r10");                                        // DIR* argument for readdir

@@ -105,7 +105,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // reject negative indexes before touching storage
     emitter.instruction("b.lt __rt_mixed_array_set_promote");                   // negative integer keys require associative PHP-array storage
-    emitter.instruction("ldr x12, [x10]");                                      // inspect the packed array's current logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x12", "x10"); // inspect the packed array's current logical length
     emitter.instruction("cmp x9, x12");                                         // only overwrites and contiguous appends stay packed
     emitter.instruction("b.hi __rt_mixed_array_set_promote");                   // preserve absent positive keys by promoting sparse writes
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x12", "x10");
@@ -127,7 +127,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload the original logical length
     emitter.instruction("cmp x9, x11");                                         // does this write overwrite an existing slot?
     emitter.instruction("b.hs __rt_mixed_array_set_skip_release");              // writes past the old end do not replace an existing Mixed cell
-    emitter.instruction("add x12, x10, #24");                                   // compute the indexed-array data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x10");
     emitter.instruction("ldr x0, [x12, x9, lsl #3]");                           // load the previous boxed Mixed pointer from the slot
     emitter.instruction("cbz x0, __rt_mixed_array_set_release_slot");           // absent slots contain no persistent reference
     emitter.instruction("ldr x9, [x0]");                                        // inspect the stored boxed tag
@@ -147,7 +147,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the array pointer after the release helper
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload the target index after the release helper
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the new boxed Mixed value
-    emitter.instruction("add x12, x10, #24");                                   // compute the indexed-array data base for the store
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x10");
     emitter.instruction("str x0, [x12, x9, lsl #3]");                           // store the new boxed Mixed pointer into the target slot
 
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload the original logical length for extension checks
@@ -209,7 +209,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0, #8]");                                   // load object payload from the Mixed cell
     emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_set_autovivify");
     emitter.instruction("str x10, [sp, #32]");                                  // save object receiver while boxing the offset
-    emitter.instruction("ldr x11, [x10]");                                      // load object class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x10");
     abi::emit_symbol_address(emitter, "x12", "_spl_fixed_array_class_id");
     emitter.instruction("ldr x12, [x12]");                                      // load SplFixedArray class id
     emitter.instruction("cmp x11, x12");                                        // is this a SplFixedArray object?
@@ -321,7 +321,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #104]");                                  // borrow the boxed key above two cleanup records
     emitter.instruction("ldr x0, [sp, #128]");                                  // pass unboxed receiver above both records
     emitter.instruction("ldr x2, [sp, #120]");                                  // borrow the consumed value above both records
-    emitter.instruction("ldr x11, [x0]");                                       // reload class id, clobbered across the boxing call
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x0");
     abi::emit_symbol_address(emitter, "x12", "_class_offsetset_ptrs");
     emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // re-resolve offsetSet for the same class
     emitter.instruction("blr x12");                                             // write through PHP's ArrayAccess::offsetSet
@@ -444,7 +444,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the original logical length
     emitter.instruction("cmp r9, r11");                                         // does this write overwrite an existing slot?
     emitter.instruction("jae __rt_mixed_array_set_skip_release");               // writes past the old end do not replace an existing Mixed cell
-    emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // load the previous boxed Mixed pointer from the slot
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r10", "r9", "rax", "r11");
     emitter.instruction("test rax, rax");                                       // recognize an absent previous slot
     emitter.instruction("jz __rt_mixed_array_set_release_slot");                // absent slots contain no persistent reference
     emitter.instruction("cmp QWORD PTR [rax], 11");                             // invoker-backed variadic slots must retain caller identity
@@ -462,7 +462,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the array pointer after the release helper
     emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the target index after the release helper
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the new boxed Mixed value
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], rax");              // store the new boxed Mixed pointer into the target slot
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r10", "r9", "rax", "r11");
 
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the original logical length for extension checks
     emitter.instruction("cmp r9, r11");                                         // did the write extend beyond the old logical length?
@@ -522,7 +522,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load object payload from the Mixed cell
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_set_autovivify");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save object receiver while boxing the offset
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load object class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r10");
     abi::emit_load_symbol_to_reg(emitter, "r12", "_spl_fixed_array_class_id", 0);
     emitter.instruction("cmp r11, r12");                                        // is this a SplFixedArray object?
     emitter.instruction("je __rt_mixed_array_set_spl_fixed");                   // dispatch to SplFixedArray::offsetSet
@@ -629,7 +629,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // borrow the published key
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // pass unboxed receiver as argument 0
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // pass the boxed value as argument 2
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     emitter.instruction("lea r12, [rip + _class_offsetset_ptrs]");              // dense ArrayAccess::offsetSet table
     emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetSet for the same class
     emitter.instruction("call r12");                                            // write through PHP's ArrayAccess::offsetSet
@@ -851,7 +851,7 @@ mod tests {
             let assembly = emitter.output();
             let overwrite = assembly.split_once("__rt_mixed_array_set_release_slot:").unwrap().1
                 .split_once("__rt_mixed_array_set_skip_release:").unwrap().0;
-            let store = if name == "linux-x86_64" { "mov QWORD PTR [r10 + 24 + r9 * 8], r11" }
+            let store = if name == "linux-x86_64" { "mov QWORD PTR [r10 + r9 * 8 + 24], r11" }
                 else { "str x11, [x12, x9, lsl #3]" };
             let cleanup = overwrite.find("__rt_cleanup_preserve_exception").unwrap();
             assert!(overwrite.find(store).unwrap() < cleanup, "{name}: {overwrite}");

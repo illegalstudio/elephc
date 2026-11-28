@@ -25,8 +25,8 @@ pub fn emit_array_search(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_search");
 
     // -- set up loop variables --
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = array length from header
-    emitter.instruction("add x10, x0, #24");                                    // x10 = base of data region (skip 24-byte header)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = array length from header
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("mov x11, #0");                                         // x11 = i = 0 (loop counter)
 
     // -- iterate through elements looking for needle --
@@ -58,8 +58,8 @@ fn emit_array_search_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_search ---");
     emitter.label_global("__rt_array_search");
 
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the indexed-array length from the header before starting the linear scan
-    emitter.instruction("lea r11, [rdi + 24]");                                 // point at the indexed-array payload region just after the fixed header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the indexed-array length from the header before starting the linear scan
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "rdi");
     emitter.instruction("xor eax, eax");                                        // start scanning from element index 0
 
     emitter.label("__rt_array_search_loop");

@@ -560,7 +560,7 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
 
     emitter.label("__rt_pr_idx_str");
     emitter.instruction("lsl x15, x14, #4");                                    // index * 16
-    emitter.instruction("add x15, x15, #24");                                   // element base offset = 24 + index*16
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x15", "x15");
     emitter.instruction("add x15, x13, x15");                                   // element address
     emitter.instruction("ldr x1, [x15]");                                       // string ptr → value low
     emitter.instruction("ldr x2, [x15, #8]");                                   // string len → value high

@@ -8,6 +8,7 @@
 //! - Class-filtered tables retain their dense metadata layout.
 
 use super::*;
+use elephc_memoir::values::reflection_metadata::{self, NameField, NameRowKind};
 
 /// Emits the x86_64 eval hook that returns AOT ReflectionMethod names.
 pub(super) fn emit_x86_64_eval_reflection_method_names(emitter: &mut Emitter) {
@@ -18,7 +19,7 @@ pub(super) fn emit_x86_64_eval_reflection_method_names(emitter: &mut Emitter) {
         "_eval_reflection_methods",
         "__elephc_eval_reflection_method_names_x86",
         "method",
-        56,
+        NameRowKind::Member,
     );
 }
 
@@ -31,7 +32,7 @@ pub(super) fn emit_x86_64_eval_reflection_property_names(emitter: &mut Emitter) 
         "_eval_reflection_properties",
         "__elephc_eval_reflection_property_names_x86",
         "property",
-        56,
+        NameRowKind::Member,
     );
 }
 
@@ -44,7 +45,7 @@ pub(super) fn emit_x86_64_eval_reflection_class_interface_names(emitter: &mut Em
         "_eval_reflection_class_interfaces",
         "__elephc_eval_reflection_class_interface_names_x86",
         "class interface",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -57,7 +58,7 @@ pub(super) fn emit_x86_64_eval_reflection_class_trait_names(emitter: &mut Emitte
         "_eval_reflection_class_traits",
         "__elephc_eval_reflection_class_trait_names_x86",
         "class trait",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -70,7 +71,7 @@ pub(super) fn emit_x86_64_eval_reflection_class_trait_alias_names(emitter: &mut 
         "_eval_reflection_class_trait_aliases",
         "__elephc_eval_reflection_class_trait_alias_names_x86",
         "class trait alias",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -83,7 +84,7 @@ pub(super) fn emit_x86_64_eval_reflection_class_trait_alias_sources(emitter: &mu
         "_eval_reflection_class_trait_alias_sources",
         "__elephc_eval_reflection_class_trait_alias_sources_x86",
         "class trait alias source",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -110,7 +111,7 @@ pub(super) fn emit_x86_64_eval_reflection_member_names(
     table_symbol: &str,
     label_prefix: &str,
     member_kind: &str,
-    row_stride: u64,
+    row_kind: NameRowKind,
 ) {
     let loop_label = format!("{label_prefix}_loop");
     let skip_label = format!("{label_prefix}_skip");
@@ -144,13 +145,13 @@ pub(super) fn emit_x86_64_eval_reflection_member_names(
     emitter.instruction("cmp r11, r10");                                        // have all member metadata rows been scanned?
     emitter.instruction(&format!("jae {done_label}"));                          // return the accumulated names after the final row
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current member metadata row
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    reflection_metadata::emit_load_name_field(emitter, "rcx", "r10", NameField::ClassNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
     emitter.instruction(&format!("jne {skip_label}"));                          // length mismatch means this row belongs to another class
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    reflection_metadata::emit_load_name_field(emitter, "rdx", "r10", NameField::ClassName);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
@@ -158,8 +159,8 @@ pub(super) fn emit_x86_64_eval_reflection_member_names(
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the row index across appending the member name
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the matched member metadata row
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the boxed result string array
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // pass the stored member-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // pass the stored member-name length
+    reflection_metadata::emit_load_name_field(emitter, "rsi", "r10", NameField::Name);
+    reflection_metadata::emit_load_name_field(emitter, "rdx", "r10", NameField::NameLength);
     emitter.instruction(&format!("call {string_array_push_symbol}"));           // append the matched member name to the result array
     emitter.instruction("test rax, rax");                                       // did append return a usable boxed array?
     emitter.instruction(&format!("jz {miss_label}"));                           // malformed append state reports a null pointer to Rust
@@ -167,7 +168,7 @@ pub(super) fn emit_x86_64_eval_reflection_member_names(
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // restore the row index after appending the member name
     emitter.label(&skip_label);
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current member metadata row
-    emitter.instruction(&format!("add r10, {row_stride}"));                     // advance to the next reflection metadata row
+    reflection_metadata::emit_advance_name_row(emitter, "r10", row_kind);
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
     emitter.instruction(&format!("jmp {loop_label}"));                          // continue scanning member metadata rows

@@ -10,6 +10,17 @@
 
 use std::collections::{HashMap, HashSet};
 
+use elephc_memoir::values::property_descriptor::{
+    HydrationDiagnostic, JsonClassDescriptor, JsonPropertyDescriptor, PropertyDescriptor,
+    SerializedPropertyDescriptor,
+};
+use elephc_memoir::values::class_metadata::{ClassLookupRow, ClassNameRow};
+use elephc_memoir::values::reflection_metadata::{ClassRow, MemberRow, NameRow};
+use elephc_memoir::callables::layout::{
+    FunctionNameRow, MethodNameRow, StaticMethodNameRow,
+};
+use elephc_memoir::buffers::stream_tables::UserFilterVtable;
+
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
 use crate::codegen_support::sentinels::{CANONICAL_SCALAR_PROPERTY_FLAG, JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
@@ -1114,9 +1125,15 @@ pub(crate) fn emit_runtime_data_user(
     // _class_json_desc_missing: zero flags, zero properties, no jsonSerialize.
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_json_desc_missing\n_class_json_desc_missing:\n");
-    out.push_str("    .quad 0\n"); // flags
-    out.push_str("    .quad 0\n"); // jsonSerialize target
-    out.push_str("    .quad 0\n"); // public property count
+    for word in (JsonClassDescriptor {
+        flags: "0",
+        projection_target: "0",
+        property_count: "0",
+    })
+    .into_words()
+    {
+        out.push_str(&format!("    .quad {word}\n"));
+    }
     // _class_vd_desc_missing: zero properties (a class id with no var_dump metadata).
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vd_desc_missing\n_class_vd_desc_missing:\n");
@@ -1147,8 +1164,16 @@ pub(crate) fn emit_runtime_data_user(
     }
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_filter_vtable_missing\n_user_filter_vtable_missing:\n");
-    for _ in 0..USER_FILTER_VTABLE_SLOTS {
-        out.push_str("    .quad 0\n");
+    let missing_user_filter_vtable = UserFilterVtable {
+        filter: 0,
+        on_create: 0,
+        on_close: 0,
+        brigade_arity: 0,
+        params_offset: 0,
+        boxed_params: 0,
+    };
+    for word in missing_user_filter_vtable.into_words() {
+        out.push_str(&format!("    .quad {word}\n"));
     }
     out.push_str(".p2align 3\n");
     emit_static_callable_method_data(&mut out, &sorted_classes);
@@ -1429,17 +1454,20 @@ pub(crate) fn emit_runtime_data_user(
             .any(|i| i == "JsonSerializable");
         let native_projection = crate::types::builtin_classes::has_native_dimensions(class_name, classes);
         let flags: u64 = if implements_jsonserializable || native_projection { 1 } else { 0 };
-        out.push_str(&format!("    .quad {}\n", flags));
-        if implements_jsonserializable || native_projection {
+        let projection_target = if implements_jsonserializable || native_projection {
             let key = php_symbol_key(if implements_jsonserializable { "jsonSerialize" } else { "__elephc_json" });
-            out.push_str(&format!(
-                "    .quad {}\n",
-                source_instance_method_entry(class_info, &key, classes)?,
-            ));
+            source_instance_method_entry(class_info, &key, classes)?
         } else {
-            out.push_str("    .quad 0\n");
+            "0".to_string()
+        };
+        let descriptor = JsonClassDescriptor {
+            flags: flags.to_string(),
+            projection_target,
+            property_count: public_props.len().to_string(),
+        };
+        for word in descriptor.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
         }
-        out.push_str(&format!("    .quad {}\n", public_props.len()));
         for (prop_index, (prop_name, prop_ty)) in &public_props {
             let tag = if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                 TAGGED_SCALAR_PROPERTY_TAG
@@ -1476,13 +1504,15 @@ pub(crate) fn emit_runtime_data_user(
                 JSON_DECLARED_PROPERTY_FLAG
             } else { 0 };
             let tag = tag | canonical_scalar_property_flag(class_info, *prop_index, prop_ty);
-            out.push_str(&format!(
-                "    .quad _class_json_pname_{}_{}\n",
-                class_info.class_id, prop_index,
-            ));
-            out.push_str(&format!("    .quad {}\n", prop_name.len()));
-            out.push_str(&format!("    .quad {}\n", prop_index));
-            out.push_str(&format!("    .quad {}\n", tag));
+            let descriptor = JsonPropertyDescriptor {
+                name: format!("_class_json_pname_{}_{}", class_info.class_id, prop_index),
+                name_len: prop_name.len().to_string(),
+                object_index: prop_index.to_string(),
+                value_tag: tag.to_string(),
+            };
+            for word in descriptor.into_words() {
+                out.push_str(&format!("    .quad {word}\n"));
+            }
         }
 
         out.push_str("    .p2align 3\n");
@@ -1601,13 +1631,15 @@ pub(crate) fn emit_runtime_data_user(
                     && metadata.property_hooks.get(*prop_name).is_none_or(|hooks| !hooks.any())
                 { SERPROP_MIXED_REFERENCE_PROPERTY_FLAG } else { 0 }
                 | canonical_scalar_property_flag(class_info, *prop_index, prop_ty);
-            out.push_str(&format!(
-                "    .quad _class_serpname_{}_{}\n",
-                class_info.class_id, prop_index
-            ));
-            out.push_str(&format!("    .quad {}\n", mangled_len)); // mangled key byte length
-            out.push_str(&format!("    .quad {}\n", offset)); // byte offset within the object
-            out.push_str(&format!("    .quad {}\n", tag)); // runtime value tag
+            let row = SerializedPropertyDescriptor {
+                key: format!("_class_serpname_{}_{}", class_info.class_id, prop_index),
+                key_len: mangled_len.to_string(),
+                object_offset: offset.to_string(),
+                value_tag: tag.to_string(),
+            };
+            for word in row.into_words() {
+                out.push_str(&format!("    .quad {word}\n"));
+            }
         }
         out.push_str("    .p2align 3\n");
         out.push_str(&format!(
@@ -1685,13 +1717,15 @@ pub(crate) fn emit_runtime_data_user(
             class_info.class_id, class_info.class_id,
         ));
         for (prop_index, (suffix, mask, widen)) in serprop_diag.iter().enumerate() {
-            out.push_str(&format!(
-                "    .quad _class_serpsuffix_{}_{}\n",
-                class_info.class_id, prop_index
-            ));
-            out.push_str(&format!("    .quad {}\n", suffix.len())); // message-suffix byte length
-            out.push_str(&format!("    .quad {}\n", mask)); // accepted boxed value tags
-            out.push_str(&format!("    .quad {}\n", widen)); // widen an accepted int into a float
+            let row = HydrationDiagnostic {
+                suffix: format!("_class_serpsuffix_{}_{}", class_info.class_id, prop_index),
+                suffix_len: suffix.len().to_string(),
+                accepted_tags: mask.to_string(),
+                widen_int_to_float: widen.to_string(),
+            };
+            for word in row.into_words() {
+                out.push_str(&format!("    .quad {word}\n"));
+            }
         }
 
         // var_dump property-info table: one row per RENDERED property, carrying the
@@ -1728,18 +1762,17 @@ pub(crate) fn emit_runtime_data_user(
         ));
         out.push_str(&format!("    .quad {}\n", vd_rows.len()));
         for (row_index, row) in vd_rows.iter().enumerate() {
-            out.push_str(&format!(
-                "    .quad _class_vd_pkey_{}_{}\n",
-                class_info.class_id, row_index
-            ));
-            out.push_str(&format!("    .quad {}\n", row.key.len())); // rendered key byte length
-            out.push_str(&format!("    .quad {}\n", row.offset)); // byte offset within the object
-            out.push_str(&format!("    .quad {}\n", row.tag)); // runtime value tag
-            out.push_str(&format!(
-                "    .quad _class_vd_ptype_{}_{}\n",
-                class_info.class_id, row_index
-            ));
-            out.push_str(&format!("    .quad {}\n", row.type_name.len())); // declared type-name byte length
+            let descriptor = PropertyDescriptor {
+                key: format!("_class_vd_pkey_{}_{}", class_info.class_id, row_index),
+                key_len: row.key.len().to_string(),
+                object_offset: row.offset.to_string(),
+                value_tag: row.tag.to_string(),
+                auxiliary: format!("_class_vd_ptype_{}_{}", class_info.class_id, row_index),
+                auxiliary_len: row.type_name.len().to_string(),
+            };
+            for word in descriptor.into_words() {
+                out.push_str(&format!("    .quad {word}\n"));
+            }
         }
 
         // print_r / var_export property table: the SAME rows (and therefore the
@@ -1768,18 +1801,17 @@ pub(crate) fn emit_runtime_data_user(
         ));
         out.push_str(&format!("    .quad {}\n", vd_rows.len()));
         for (row_index, row) in vd_rows.iter().enumerate() {
-            out.push_str(&format!(
-                "    .quad _class_prop_pkey_{}_{}\n",
-                class_info.class_id, row_index
-            ));
-            out.push_str(&format!("    .quad {}\n", row.print_r_key.len())); // print_r key byte length
-            out.push_str(&format!("    .quad {}\n", row.offset)); // byte offset within the object
-            out.push_str(&format!("    .quad {}\n", row.tag)); // runtime value tag
-            out.push_str(&format!(
-                "    .quad _class_prop_nkey_{}_{}\n",
-                class_info.class_id, row_index
-            ));
-            out.push_str(&format!("    .quad {}\n", row.plain_key.len())); // bare property-name byte length
+            let descriptor = PropertyDescriptor {
+                key: format!("_class_prop_pkey_{}_{}", class_info.class_id, row_index),
+                key_len: row.print_r_key.len().to_string(),
+                object_offset: row.offset.to_string(),
+                value_tag: row.tag.to_string(),
+                auxiliary: format!("_class_prop_nkey_{}_{}", class_info.class_id, row_index),
+                auxiliary_len: row.plain_key.len().to_string(),
+            };
+            for word in descriptor.into_words() {
+                out.push_str(&format!("    .quad {word}\n"));
+            }
         }
 
         out.push_str("    .p2align 3\n");
@@ -1976,9 +2008,9 @@ fn global_definition_symbol(line: &str) -> Option<&str> {
 
 /// Emits a dense class-id to class-name lookup table for runtime `get_class()`.
 ///
-/// Each `_class_name_entries` row is two words: `(name_ptr, name_len)`. Missing
-/// class ids point at `_class_name_missing` with length zero so runtime lookups
-/// can fail to an empty string without branching into undefined labels.
+/// Each `_class_name_entries` item is emitted through Memoir's `ClassNameRow`.
+/// Missing class ids point at `_class_name_missing` with length zero so runtime
+/// lookups can fail to an empty string without branching into undefined labels.
 fn emit_class_name_lookup_data(
     out: &mut String,
     max_class_id: Option<u64>,
@@ -1993,12 +2025,19 @@ fn emit_class_name_lookup_data(
     out.push_str(".globl _class_name_entries\n_class_name_entries:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
-            if let Some(class_name) = class_name_by_id.get(&class_id) {
-                out.push_str(&format!("    .quad _class_name_{}\n", class_id));
-                out.push_str(&format!("    .quad {}\n", class_name.len()));
+            let row = if let Some(class_name) = class_name_by_id.get(&class_id) {
+                ClassNameRow {
+                    name: format!("_class_name_{class_id}"),
+                    name_len: class_name.len().to_string(),
+                }
             } else {
-                out.push_str("    .quad _class_name_missing\n");
-                out.push_str("    .quad 0\n");
+                ClassNameRow {
+                    name: "_class_name_missing".to_string(),
+                    name_len: "0".to_string(),
+                }
+            };
+            for word in row.into_words() {
+                out.push_str(&format!("    .quad {word}\n"));
             }
         }
     }
@@ -2260,13 +2299,18 @@ fn emit_eval_reflection_method_lookup_data(
     for (class_label, class_len, method_label, method_len, flags, declaring_label, declaring_len) in
         entries
     {
-        out.push_str(&format!("    .quad {}\n", class_label));
-        out.push_str(&format!("    .quad {}\n", class_len));
-        out.push_str(&format!("    .quad {}\n", method_label));
-        out.push_str(&format!("    .quad {}\n", method_len));
-        out.push_str(&format!("    .quad {}\n", flags));
-        out.push_str(&format!("    .quad {}\n", declaring_label));
-        out.push_str(&format!("    .quad {}\n", declaring_len));
+        let row = MemberRow {
+            class_name: class_label,
+            class_name_len: class_len.to_string(),
+            member_name: method_label,
+            member_name_len: method_len.to_string(),
+            flags: flags.to_string(),
+            declaring_class: declaring_label,
+            declaring_class_len: declaring_len.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -2611,13 +2655,18 @@ fn emit_eval_reflection_property_lookup_data(
     for (class_label, class_len, property_label, property_len, flags, declaring_label, declaring_len) in
         entries
     {
-        out.push_str(&format!("    .quad {}\n", class_label));
-        out.push_str(&format!("    .quad {}\n", class_len));
-        out.push_str(&format!("    .quad {}\n", property_label));
-        out.push_str(&format!("    .quad {}\n", property_len));
-        out.push_str(&format!("    .quad {}\n", flags));
-        out.push_str(&format!("    .quad {}\n", declaring_label));
-        out.push_str(&format!("    .quad {}\n", declaring_len));
+        let row = MemberRow {
+            class_name: class_label,
+            class_name_len: class_len.to_string(),
+            member_name: property_label,
+            member_name_len: property_len.to_string(),
+            flags: flags.to_string(),
+            declaring_class: declaring_label,
+            declaring_class_len: declaring_len.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -2707,9 +2756,14 @@ fn emit_eval_reflection_class_lookup_data(
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_classes\n_eval_reflection_classes:\n");
     for (class_label, class_len, flags) in entries {
-        out.push_str(&format!("    .quad {}\n", class_label));
-        out.push_str(&format!("    .quad {}\n", class_len));
-        out.push_str(&format!("    .quad {}\n", flags));
+        let row = ClassRow {
+            class_name: class_label,
+            class_name_len: class_len.to_string(),
+            flags: flags.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -2790,10 +2844,15 @@ fn emit_eval_reflection_class_interface_lookup_data(
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_class_interfaces\n_eval_reflection_class_interfaces:\n");
     for (class_label, class_len, interface_label, interface_len) in entries {
-        out.push_str(&format!("    .quad {}\n", class_label));
-        out.push_str(&format!("    .quad {}\n", class_len));
-        out.push_str(&format!("    .quad {}\n", interface_label));
-        out.push_str(&format!("    .quad {}\n", interface_len));
+        let row = NameRow {
+            class_name: class_label,
+            class_name_len: class_len.to_string(),
+            name: interface_label,
+            name_len: interface_len.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -2867,10 +2926,15 @@ fn emit_eval_reflection_class_trait_lookup_data(
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_class_traits\n_eval_reflection_class_traits:\n");
     for (class_label, class_len, trait_label, trait_len) in entries {
-        out.push_str(&format!("    .quad {}\n", class_label));
-        out.push_str(&format!("    .quad {}\n", class_len));
-        out.push_str(&format!("    .quad {}\n", trait_label));
-        out.push_str(&format!("    .quad {}\n", trait_len));
+        let row = NameRow {
+            class_name: class_label,
+            class_name_len: class_len.to_string(),
+            name: trait_label,
+            name_len: trait_len.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -2927,19 +2991,29 @@ fn emit_eval_reflection_class_trait_alias_lookup_data(
     out.push_str(&format!("    .quad {}\n", alias_entries.len()));
     out.push_str(".globl _eval_reflection_class_trait_aliases\n_eval_reflection_class_trait_aliases:\n");
     for (class_label, class_len, alias_label, alias_len) in alias_entries {
-        out.push_str(&format!("    .quad {}\n", class_label));
-        out.push_str(&format!("    .quad {}\n", class_len));
-        out.push_str(&format!("    .quad {}\n", alias_label));
-        out.push_str(&format!("    .quad {}\n", alias_len));
+        let row = NameRow {
+            class_name: class_label,
+            class_name_len: class_len.to_string(),
+            name: alias_label,
+            name_len: alias_len.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
     out.push_str(
         ".globl _eval_reflection_class_trait_alias_sources\n_eval_reflection_class_trait_alias_sources:\n",
     );
     for (class_label, class_len, source_label, source_len) in source_entries {
-        out.push_str(&format!("    .quad {}\n", class_label));
-        out.push_str(&format!("    .quad {}\n", class_len));
-        out.push_str(&format!("    .quad {}\n", source_label));
-        out.push_str(&format!("    .quad {}\n", source_len));
+        let row = NameRow {
+            class_name: class_label,
+            class_name_len: class_len.to_string(),
+            name: source_label,
+            name_len: source_len.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -3118,15 +3192,18 @@ fn emit_callable_function_data(
     out.push_str(&format!("    .quad {}\n", sorted_functions.len()));
     out.push_str(".globl _callable_user_function_table\n_callable_user_function_table:\n");
     for (idx, name) in sorted_functions.iter().enumerate() {
-        out.push_str(&format!("    .quad _callable_user_fn_name_{}\n", idx));
-        out.push_str(&format!("    .quad {}\n", name.len()));
-        if function_variant_groups.contains(name.as_str()) {
-            out.push_str(&format!(
-                "    .quad {}\n",
-                function_variant_active_symbol(name)
-            ));
+        let active_symbol = if function_variant_groups.contains(name.as_str()) {
+            function_variant_active_symbol(name)
         } else {
-            out.push_str("    .quad 0\n");
+            "0".to_string()
+        };
+        let row = FunctionNameRow {
+            name: format!("_callable_user_fn_name_{idx}"),
+            name_len: name.len().to_string(),
+            active_symbol,
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
         }
     }
 }
@@ -3164,13 +3241,15 @@ fn emit_classes_by_name_table(
     for (class_name, class_info) in sorted_classes {
         let creation_line = crate::codegen_support::throwable_layout::ordinary_creation_line_offset(class_name, classes);
         let obj_size = class_object_payload_size(class_name, class_info, creation_line.is_some());
-        out.push_str(&format!(
-            "    .quad _class_by_name_str_{}\n",
-            class_info.class_id
-        ));
-        out.push_str(&format!("    .quad {}\n", class_name.len()));
-        out.push_str(&format!("    .quad {}\n", class_info.class_id));
-        out.push_str(&format!("    .quad {}\n", obj_size));
+        let row = ClassLookupRow {
+            name: format!("_class_by_name_str_{}", class_info.class_id),
+            name_len: class_name.len().to_string(),
+            class_id: class_info.class_id.to_string(),
+            object_size: obj_size.to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -3249,8 +3328,6 @@ fn user_wrapper_cast_result_tag(class_info: &ClassInfo) -> u64 {
 /// The flag is read by the runtime dispatcher to choose which code path
 /// to invoke. Adding the flag inline in the vtable lets the dispatcher
 /// branch with a single load + cmp.
-pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 6;
-
 /// Returns true when a method key belongs to the fixed-ABI stream-wrapper
 /// vtable surface dispatched by the runtime with raw arguments.
 pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
@@ -3393,18 +3470,16 @@ fn emit_user_filter_vtable(
         ".globl _user_filter_vtable_{0}\n_user_filter_vtable_{0}:\n",
         class_info.class_id
     ));
+    let mut method_entries = Vec::with_capacity(USER_FILTER_METHOD_NAMES.len());
     for method_name in &USER_FILTER_METHOD_NAMES {
         let is_public = class_info
             .method_visibilities
             .get(*method_name)
             .is_some_and(|visibility| matches!(visibility, Visibility::Public));
         if is_public && class_info.method_impl_classes.contains_key(*method_name) {
-            out.push_str(&format!(
-                "    .quad {}\n",
-                source_instance_method_entry(class_info, method_name, classes)?
-            ));
+            method_entries.push(source_instance_method_entry(class_info, method_name, classes)?);
         } else {
-            out.push_str("    .quad 0\n");
+            method_entries.push("0".to_string());
         }
     }
     // -- slot 3: filter()-arity flag (0 = 1-arg string contract, 1 = 4-arg brigade)
@@ -3418,13 +3493,11 @@ fn emit_user_filter_vtable(
         .transpose()?
         .map(|sig| sig.params.len() == 4)
         .unwrap_or(false);
-    out.push_str(&format!("    .quad {}\n", if brigade_arity { 1 } else { 0 }));
     let params_offset = class_info
         .property_offsets
         .get("params")
         .copied()
         .unwrap_or(0);
-    out.push_str(&format!("    .quad {}\n", params_offset));
     // Slot 5 describes referent representations; consumed remains an address in both ABIs.
     let boxed_params = class_info.methods.get("filter")
         .map(source_method_adapters::source_visible_signature).transpose()?
@@ -3433,7 +3506,17 @@ fn emit_user_filter_vtable(
                 mask | (1 << index)
             } else { mask }
         })).unwrap_or(0);
-    out.push_str(&format!("    .quad {boxed_params}\n"));
+    let vtable = UserFilterVtable {
+        filter: method_entries[0].clone(),
+        on_create: method_entries[1].clone(),
+        on_close: method_entries[2].clone(),
+        brigade_arity: u8::from(brigade_arity).to_string(),
+        params_offset: params_offset.to_string(),
+        boxed_params: boxed_params.to_string(),
+    };
+    for word in vtable.into_words() {
+        out.push_str(&format!("    .quad {word}\n"));
+    }
 
     Ok(())
 }
@@ -3505,12 +3588,17 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
     ));
     out.push_str(&format!("    .quad {}\n", public_methods.len()));
     for method_name in public_methods {
-        out.push_str(&format!(
-            "    .quad _class_callable_method_name_{}_{}\n",
-            class_info.class_id,
-            mangle_fqn(method_name)
-        ));
-        out.push_str(&format!("    .quad {}\n", method_name.len()));
+        let row = MethodNameRow {
+            name: format!(
+                "_class_callable_method_name_{}_{}",
+                class_info.class_id,
+                mangle_fqn(method_name)
+            ),
+            name_len: method_name.len().to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 
@@ -3556,17 +3644,19 @@ fn emit_static_callable_method_data(out: &mut String, sorted_classes: &[(&String
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _class_callable_static_method_table\n_class_callable_static_method_table:\n");
     for (class_id, class_name, method_name) in entries {
-        out.push_str(&format!(
-            "    .quad _class_callable_static_class_name_{}\n",
-            class_id
-        ));
-        out.push_str(&format!("    .quad {}\n", class_name.len()));
-        out.push_str(&format!(
-            "    .quad _class_callable_static_method_name_{}_{}\n",
-            class_id,
-            mangle_fqn(method_name)
-        ));
-        out.push_str(&format!("    .quad {}\n", method_name.len()));
+        let row = StaticMethodNameRow {
+            class_name: format!("_class_callable_static_class_name_{class_id}"),
+            class_name_len: class_name.len().to_string(),
+            method_name: format!(
+                "_class_callable_static_method_name_{}_{}",
+                class_id,
+                mangle_fqn(method_name)
+            ),
+            method_name_len: method_name.len().to_string(),
+        };
+        for word in row.into_words() {
+            out.push_str(&format!("    .quad {word}\n"));
+        }
     }
 }
 

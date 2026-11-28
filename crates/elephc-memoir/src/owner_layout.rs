@@ -143,6 +143,80 @@ pub struct ArgumentPin {
     pub staging: u64,
 }
 
+/// Native publisher context whose pending Throwable is owned by the active assignment.
+#[repr(C)]
+#[derive(Default)]
+pub struct NativeValidationContext {
+    caller_flags: u64,
+    pending_throwable: u64,
+}
+
+impl NativeValidationContext {
+    /// Caller-defined flags forwarded to declaration validators.
+    pub const CALLER_FLAGS: usize = offset_of!(Self, caller_flags);
+    /// Independently owned Throwable contained by protected callbacks.
+    pub const PENDING_THROWABLE: usize = offset_of!(Self, pending_throwable);
+    /// Size of the complete publisher context.
+    pub const BYTES: usize = size_of::<Self>();
+}
+
+/// Scratch record handed to the protected declaration-coercion body.
+#[repr(C)]
+#[derive(Default)]
+pub struct NativeValidationInvocation {
+    entry: u64,
+    context: u64,
+    original: u64,
+    output: u64,
+}
+
+/// Immutable declaration validator descriptor referenced by native source rows.
+#[repr(C)]
+#[derive(Default)]
+pub struct NativePropertyValidator {
+    entry: u64,
+}
+
+impl NativePropertyValidator {
+    /// Protected declaration-coercion entry point.
+    pub const ENTRY: usize = offset_of!(Self, entry);
+    /// Size of the complete validator descriptor.
+    pub const BYTES: usize = size_of::<Self>();
+}
+
+impl NativeValidationInvocation {
+    /// Declaration validator entry point.
+    pub const ENTRY: usize = offset_of!(Self, entry);
+    /// Borrowed validation context.
+    pub const CONTEXT: usize = offset_of!(Self, context);
+    /// Borrowed original RHS Mixed cell.
+    pub const ORIGINAL: usize = offset_of!(Self, original);
+    /// Writable candidate owner slot.
+    pub const OUTPUT: usize = offset_of!(Self, output);
+    /// Size of the complete protected invocation record.
+    pub const BYTES: usize = size_of::<Self>();
+}
+
+/// Result buffer written by the native reference-validation coordinator.
+#[repr(C)]
+#[derive(Default)]
+pub struct NativeValidationOutcome {
+    candidate: u64,
+    first_source: [u64; 4],
+    second_source: [u64; 4],
+}
+
+impl NativeValidationOutcome {
+    /// Owned candidate transferred to the publisher on success.
+    pub const CANDIDATE: usize = offset_of!(Self, candidate);
+    /// First conflicting source descriptor.
+    pub const FIRST_SOURCE: usize = offset_of!(Self, first_source);
+    /// Second conflicting source descriptor.
+    pub const SECOND_SOURCE: usize = offset_of!(Self, second_source);
+    /// Size of the complete coordinator result.
+    pub const BYTES: usize = size_of::<Self>();
+}
+
 impl ArgumentPin {
     /// Source lease still pending parameter acquisition.
     pub const PENDING: i64 = 0x105;
@@ -177,6 +251,20 @@ const _: () = {
     assert!(ArgumentPin::STAGING == 40);
     assert!(size_of::<ArgumentPin>() == 48);
     assert!(core::mem::align_of::<ArgumentPin>() == 8);
+    assert!(NativeValidationContext::CALLER_FLAGS == 0);
+    assert!(NativeValidationContext::PENDING_THROWABLE == 8);
+    assert!(NativeValidationContext::BYTES == 16);
+    assert!(NativeValidationInvocation::ENTRY == 0);
+    assert!(NativeValidationInvocation::CONTEXT == 8);
+    assert!(NativeValidationInvocation::ORIGINAL == 16);
+    assert!(NativeValidationInvocation::OUTPUT == 24);
+    assert!(NativeValidationInvocation::BYTES == 32);
+    assert!(NativePropertyValidator::ENTRY == 0);
+    assert!(NativePropertyValidator::BYTES == 8);
+    assert!(NativeValidationOutcome::CANDIDATE == 0);
+    assert!(NativeValidationOutcome::FIRST_SOURCE == 8);
+    assert!(NativeValidationOutcome::SECOND_SOURCE == 40);
+    assert!(NativeValidationOutcome::BYTES == 72);
 };
 
 /// A native count word followed by that many borrowed cell addresses.

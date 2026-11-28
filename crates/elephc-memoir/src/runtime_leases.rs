@@ -10,6 +10,38 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// Unique opaque addresses carrying one caller-owned lifetime obligation each.
+#[derive(Default)]
+pub struct RuntimeAddressOwnerList {
+    addresses: Vec<usize>,
+}
+
+impl RuntimeAddressOwnerList {
+    /// Inserts one nonzero address if the list does not already own it.
+    pub fn insert_unique(&mut self, address: usize) -> bool {
+        if address == 0 || self.addresses.contains(&address) {
+            return false;
+        }
+        self.addresses.push(address);
+        true
+    }
+
+    /// Removes the most recently inserted address for ordered shutdown.
+    pub fn pop(&mut self) -> Option<usize> {
+        self.addresses.pop()
+    }
+
+    /// Reports whether this list currently owns the selected address.
+    pub fn contains(&self, address: usize) -> bool {
+        self.addresses.contains(&address)
+    }
+
+    /// Reports whether no opaque address remains owned.
+    pub fn is_empty(&self) -> bool {
+        self.addresses.is_empty()
+    }
+}
+
 /// A checked count of opaque owners keeping one runtime allocation alive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeLeaseCounter {
@@ -142,5 +174,19 @@ mod tests {
         assert!(leases.is_detached(7));
         assert!(leases.take_if_unreferenced(7, false));
         assert!(!leases.is_detached(7));
+    }
+
+    /// Opaque owner addresses stay unique and detach in reverse publication order.
+    #[test]
+    fn runtime_address_owner_list_deduplicates_and_pops() {
+        let mut owners = RuntimeAddressOwnerList::default();
+        assert!(!owners.insert_unique(0));
+        assert!(owners.insert_unique(7));
+        assert!(!owners.insert_unique(7));
+        assert!(owners.insert_unique(11));
+        assert!(owners.contains(7));
+        assert_eq!(owners.pop(), Some(11));
+        assert_eq!(owners.pop(), Some(7));
+        assert!(owners.is_empty());
     }
 }

@@ -60,7 +60,7 @@ fn emit_bind_object(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
     abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 0));
     abi::emit_branch_if_int_result_zero(emitter, done);
-    abi::emit_load_from_address(emitter, result, result, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, result, result);
     abi::emit_load_symbol_to_reg(emitter, scratch, "_native_reference_source_class_count", 0);
     match emitter.target.arch {
         Arch::AArch64 => {

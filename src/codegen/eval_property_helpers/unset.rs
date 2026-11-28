@@ -49,7 +49,7 @@ pub(super) fn emit_property_unset_helper(
             emitter.instruction("cmp x0, #6");                                  // require an object payload before accessing its layout
             emitter.instruction(&format!("b.ne {fail}"));                       // reject non-object receivers
             emitter.instruction("str x1, [sp, #16]");                           // root the raw receiver in the shared property-dispatch spill
-            emitter.instruction("ldr x9, [x1]");                                // select slots using the physical native class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x1");
             emit_aarch64_property_dispatch(module, emitter, data, &slots, "unset", fail);
         }
         Arch::X86_64 => {
@@ -67,7 +67,7 @@ pub(super) fn emit_property_unset_helper(
             emitter.instruction("cmp rax, 6");                                  // require an object payload before accessing its layout
             emitter.instruction(&format!("jne {fail}"));                        // reject non-object receivers
             emitter.instruction("mov QWORD PTR [rbp - 24], rdi");               // preserve the receiver in the shared property-dispatch spill
-            emitter.instruction("mov r11, QWORD PTR [rdi]");                    // select slots using the physical native class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
             emit_x86_64_property_dispatch(module, emitter, data, &slots, "unset", fail);
         }
     }

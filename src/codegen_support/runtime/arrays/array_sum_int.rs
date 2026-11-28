@@ -154,7 +154,7 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool, raw_result:
     }
 
     emitter.label(&vector_restart);
-    emitter.instruction("add x12, x0, #24");                                    // rebuild the element cursor from the original array base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x0");
     emitter.instruction("add x12, x12, x1, lsl #3");                            // address the first element in the requested range
     emitter.instruction("sub x9, x2, x1");                                      // rebuild the exact element count after the failed gate
 
@@ -344,7 +344,7 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool, raw_result: 
     }
 
     emitter.label(&vector_restart);
-    emitter.instruction("lea r9, [rdi + 24]");                                  // rebuild the element cursor from the original array base
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
     emitter.instruction("lea r9, [r9 + rsi * 8]");                              // address the first element in the requested range
     emitter.instruction("mov r10, rdx");                                        // rebuild the exclusive end before subtracting the start
     emitter.instruction("sub r10, rsi");                                        // rebuild the exact element count after the failed gate

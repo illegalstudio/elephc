@@ -59,7 +59,7 @@ pub(crate) fn lower_stream_bucket_make_writeable(
             ctx.emitter.instruction(&format!("b.ne {}", release_null));         // non-array `_buckets` is treated as empty
             ctx.emitter.instruction("ldr x9, [x0, #8]");                        // unbox the indexed-array pointer
             ctx.emitter.instruction(&format!("cbz x9, {}", release_null));      // null array payload returns null
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the indexed-array length
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x10", "x9"); // load the indexed-array length
             ctx.emitter.instruction(&format!("cbz x10, {}", release_null));     // an empty brigade returns null
             ctx.emitter.instruction("mov x0, x9");                              // pass the array pointer to array_shift
             abi::emit_call_label(ctx.emitter, "__rt_array_shift");
@@ -101,7 +101,7 @@ pub(crate) fn lower_stream_bucket_make_writeable(
             ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");            // unbox the indexed-array pointer
             ctx.emitter.instruction("test r10, r10");                           // null array payload returns null
             ctx.emitter.instruction(&format!("jz {}", release_null));           // branch to the PHP null result
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the indexed-array length
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r10"); // load the indexed-array length
             ctx.emitter.instruction("test r11, r11");                           // an empty brigade returns null
             ctx.emitter.instruction(&format!("jz {}", release_null));           // branch to the PHP null result
             ctx.emitter.instruction("mov rdi, r10");                            // pass the array pointer to array_shift

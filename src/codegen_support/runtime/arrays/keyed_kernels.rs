@@ -127,7 +127,7 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // transfer the scalar result to the caller
 
     emitter.label(vector_restart);
-    emitter.instruction("add x10, x0, #24");                                    // rebuild the element cursor from the original array base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("ldr x9, [x0]");                                        // rebuild the exact element count after the failed gate
     emitter.instruction("mov x11, xzr");                                        // restart the integer accumulator at zero
     emitter.instruction("mov x12, xzr");                                        // restart in integer mode
@@ -304,7 +304,7 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // rax already holds the raw int sum
 
     emitter.label(vector_restart);
-    emitter.instruction("lea r9, [rdi + 24]");                                  // rebuild the element cursor from the original array base
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // rebuild the exact element count after the failed gate
     emitter.instruction("xor r8d, r8d");                                        // restart the integer accumulator at zero
     emitter.instruction("xor r11d, r11d");                                      // restart in integer mode

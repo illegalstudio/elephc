@@ -235,13 +235,18 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     // -- look up the rejected object class name --
     emitter.label("__rt_spl_offset_convert_object");
     emitter.instruction("ldr x13, [sp, #24]");                                  // the object pointer
-    emitter.instruction("ldr x13, [x13]");                                      // its class id, kept outside the symbol helper's x9 scratch
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x13", "x13");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10");
     emitter.instruction("cmp x13, x10");                                        // is the class id within the dense name table?
     emitter.instruction("b.hs __rt_spl_offset_convert_object_fallback");        // malformed ids use the generic spelling
-    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
-    emitter.instruction("add x11, x11, x13, lsl #4");                           // select the 16-byte class-name row
-    emitter.instruction("ldr x12, [x11, #8]");                                  // its byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x11", "x11", "x13", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        emitter,
+        "x12",
+        "x11",
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
     emitter.instruction("cbz x12, __rt_spl_offset_convert_object_fallback");    // a nameless class reads as "object"
     emitter.instruction("str x11, [sp, #40]");                                  // the class-name row is the result
     emitter.instruction("b __rt_spl_offset_convert_rejected");                  // record the type error
@@ -459,13 +464,18 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     // -- look up the rejected object class name --
     emitter.label("__rt_spl_offset_convert_object_x");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // the object pointer
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // its class id
-    emitter.instruction("cmp r11, QWORD PTR [rip + _class_name_count]");        // is the class id within the dense name table?
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r11");
+    elephc_memoir::values::class_metadata::emit_cmp_class_id_to_name_count(emitter, "r11"); // is the class id within the dense name table?
     emitter.instruction("jae __rt_spl_offset_convert_object_fallback_x");       // malformed ids use the generic spelling
-    emitter.instruction("lea r10, [rip + _class_name_entries]");                // dense class-name metadata table
-    emitter.instruction("shl r11, 4");                                          // scale the class id to the 16-byte row
-    emitter.instruction("add r10, r11");                                        // select the class-name row
-    emitter.instruction("cmp QWORD PTR [r10 + 8], 0");                          // is the name non-empty?
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r11", "r9");
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        emitter,
+        "r9",
+        "r10",
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
+    emitter.instruction("test r9, r9");                                         // is the name non-empty?
     emitter.instruction("je __rt_spl_offset_convert_object_fallback_x");        // a nameless class reads as "object"
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // the class-name row is the result
     emitter.instruction("jmp __rt_spl_offset_convert_rejected_x");              // record the type error

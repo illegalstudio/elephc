@@ -636,7 +636,11 @@ fn emit_dispatched_literal_parameter_guards(
     abi::emit_push_reg(ctx.emitter, receiver_reg);
     let class_id_reg = abi::symbol_scratch_reg(ctx.emitter);
     let compare_reg = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        ctx.emitter,
+        class_id_reg,
+        receiver_reg,
+    );
     for (candidate, label) in candidates.iter().zip(&labels) {
         abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
         match ctx.emitter.target.arch {

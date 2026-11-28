@@ -230,7 +230,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, rsi");                                        // identical heap pointers are trivially strictly equal
     emitter.instruction("je __rt_array_strict_eq_true");                        // short-circuit copy-on-write shared arrays
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = left element count (header word 0)
-    emitter.instruction("cmp rax, QWORD PTR [rsi]");                            // arrays of different length are never strictly equal
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rax", "rsi"); // arrays of different length are never strictly equal
     emitter.instruction("jne __rt_array_strict_eq_false");                      // reject on count mismatch
     emitter.instruction("test rax, rax");                                       // are both operands empty?
     emitter.instruction("je __rt_array_strict_eq_true");                        // two empty arrays are strictly equal
@@ -323,7 +323,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rsi");                                        // scratch index for the byte-offset computation
     emitter.instruction("shl r11, 3");                                          // byte offset = index * 8
     emitter.instruction("add r11, rdi");                                        // address of the 8-byte slot within the data region
-    emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // value low word = data[index] (past the 24-byte header)
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "r9", "r11", 0);
     emitter.instruction("xor r10d, r10d");                                      // value high word unused for 8-byte slots
     emitter.instruction("jmp __rt_array_iter_next_packed_ret");                 // return the synthesized packed entry
 
@@ -331,7 +331,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rsi");                                        // scratch index for the byte-offset computation
     emitter.instruction("shl r11, 4");                                          // byte offset = index * 16
     emitter.instruction("add r11, rdi");                                        // address of the string slot base
-    emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // value low word = string pointer
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "r9", "r11", 0);
     emitter.instruction("mov r10, QWORD PTR [r11 + 32]");                       // value high word = string length
     emitter.instruction("mov r8, 1");                                           // value tag = string
     emitter.instruction("jmp __rt_array_iter_next_packed_ret");                 // return the synthesized packed string entry
@@ -340,7 +340,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rsi");                                        // scratch index for the byte-offset computation
     emitter.instruction("shl r11, 4");                                          // byte offset = index * 16
     emitter.instruction("add r11, rdi");                                        // address of the tagged-scalar slot base
-    emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // value low word = tagged-scalar payload
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "r9", "r11", 0);
     emitter.instruction("mov r8, QWORD PTR [r11 + 32]");                        // value tag = the per-slot runtime tag
     emitter.instruction("xor r10d, r10d");                                      // value high word unused for tagged scalars
     emitter.instruction("jmp __rt_array_iter_next_packed_ret");                 // return the synthesized tagged-scalar entry

@@ -242,7 +242,7 @@ fn lower_indexed_array_keys_aarch64(
     result_elem_ty: &PhpType,
 ) -> Result<()> {
     let elem_size = INDEXED_KEY_ELEMENT_SIZE;
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the source indexed-array length for exact result allocation
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x0"); // load the source indexed-array length for exact result allocation
     ctx.emitter.instruction("str x9, [sp, #-16]!");                             // preserve the source length for the fill loop and final length stamp
     ctx.emitter.instruction("mov x0, x9");                                      // pass the source length as the result array capacity
     ctx.emitter.instruction(&format!("mov x1, #{}", elem_size));                // choose the indexed-array element size for the key payload representation
@@ -280,7 +280,7 @@ fn lower_indexed_array_keys_x86_64(
     result_elem_ty: &PhpType,
 ) -> Result<()> {
     let elem_size = INDEXED_KEY_ELEMENT_SIZE;
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the source indexed-array length for exact result allocation
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r10", "rax"); // load the source indexed-array length for exact result allocation
     ctx.emitter.instruction("sub rsp, 16");                                     // reserve a temporary slot for the source indexed-array length
     ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                        // preserve the source length for the fill loop and final length stamp
     ctx.emitter.instruction("mov rdi, r10");                                    // pass the source length as the result array capacity
@@ -319,7 +319,7 @@ fn emit_indexed_key_payload_aarch64(ctx: &mut FunctionContext<'_>, result_elem_t
     match result_elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // load the result keys array pointer from the fixed stack layout
-            ctx.emitter.instruction("add x10, x0, #24");                        // point at the result keys payload region after the array header
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("str x12, [x10, x12, lsl #3]");             // store the loop counter as the next integer key
         }
         PhpType::Mixed => {
@@ -344,7 +344,7 @@ fn emit_indexed_key_payload_x86_64(ctx: &mut FunctionContext<'_>, result_elem_ty
     match result_elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // load the result keys array pointer from the fixed stack layout
-            ctx.emitter.instruction("mov QWORD PTR [rcx + r10 * 8 + 24], r10"); // store the loop counter as the next integer key
+            elephc_memoir::values::packed_slots::emit_store_indexed_word(ctx.emitter, "rcx", "r10", "r10", "r11");
         }
         PhpType::Mixed => {
             ctx.emitter.instruction("mov rdi, r10");                            // use the loop counter as the integer mixed-key payload
@@ -580,8 +580,8 @@ fn emit_assoc_mixed_key_append_x86_64(ctx: &mut FunctionContext<'_>, key_ty: &Ph
 /// Appends a pointer-sized AArch64 key payload into the result keys array.
 fn emit_append_word_key_aarch64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction("ldr x9, [sp, #16]");                               // load the result keys array pointer from the fixed stack layout
-    ctx.emitter.instruction("ldr x10, [x9]");                                   // load the current result keys array length before appending
-    ctx.emitter.instruction("add x11, x9, #24");                                // point at the result keys payload region after the fixed header
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x10", "x9"); // load the current result keys array length before appending
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x9");
     ctx.emitter.instruction(&format!("str {}, [x11, x10, lsl #3]", value_reg)); // store the key payload into the next result keys slot
     ctx.emitter.instruction("add x10, x10, #1");                                // increment the result keys length after the append
     ctx.emitter.instruction("str x10, [x9]");                                   // persist the updated result keys length in the array header
@@ -590,10 +590,10 @@ fn emit_append_word_key_aarch64(ctx: &mut FunctionContext<'_>, value_reg: &str) 
 /// Appends a pointer-sized x86_64 key payload into the result keys array.
 fn emit_append_word_key_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result keys array pointer from the fixed stack layout
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result keys array length before appending
-    ctx.emitter.instruction(
-        &format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)
-    );                                                                          // store the key payload into the next result keys slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r10"); // load the current result keys array length before appending
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(
+        ctx.emitter, "r10", "r11", value_reg, "r9",
+    );
     ctx.emitter.instruction("add r11, 1");                                      // increment the result keys length after the append
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result keys length in the array header
 }

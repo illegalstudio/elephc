@@ -35,6 +35,128 @@ impl StaticStorage {
         emitter.emit_symbol_address(destination, self.symbol);
     }
 
+    /// Loads one word selected by a checked runtime index.
+    pub fn emit_load_indexed_word(
+        self,
+        emitter: &mut impl crate::Emitter,
+        destination: &str,
+        index: &str,
+        base: &str,
+    ) {
+        self.emit_address(emitter, base);
+        match emitter.arch() {
+            crate::Arch::AArch64 => {
+                emitter.instruction(&format!("ldr {destination}, [{base}, {index}, lsl #3]"));
+            }
+            crate::Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov {destination}, QWORD PTR [{base} + {index} * 8]"
+                ));
+            }
+        }
+    }
+
+    /// Stores one word selected by a checked runtime index.
+    pub fn emit_store_indexed_word(
+        self,
+        emitter: &mut impl crate::Emitter,
+        source: &str,
+        index: &str,
+        base: &str,
+    ) {
+        self.emit_address(emitter, base);
+        match emitter.arch() {
+            crate::Arch::AArch64 => {
+                emitter.instruction(&format!("str {source}, [{base}, {index}, lsl #3]"));
+            }
+            crate::Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov QWORD PTR [{base} + {index} * 8], {source}"
+                ));
+            }
+        }
+    }
+
+    /// Clears one word selected by a checked runtime index.
+    pub fn emit_clear_indexed_word(
+        self,
+        emitter: &mut impl crate::Emitter,
+        index: &str,
+        base: &str,
+    ) {
+        self.emit_address(emitter, base);
+        match emitter.arch() {
+            crate::Arch::AArch64 => {
+                emitter.instruction(&format!("str xzr, [{base}, {index}, lsl #3]"));
+            }
+            crate::Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov QWORD PTR [{base} + {index} * 8], 0"
+                ));
+            }
+        }
+    }
+
+    /// Loads one byte selected by a checked runtime index.
+    pub fn emit_load_indexed_byte(
+        self,
+        emitter: &mut impl crate::Emitter,
+        destination: &str,
+        index: &str,
+        base: &str,
+    ) {
+        self.emit_address(emitter, base);
+        match emitter.arch() {
+            crate::Arch::AArch64 => {
+                emitter.instruction(&format!("ldrb {destination}, [{base}, {index}]"));
+            }
+            crate::Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "movzx {destination}, BYTE PTR [{base} + {index}]"
+                ));
+            }
+        }
+    }
+
+    /// Stores one byte selected by a checked runtime index.
+    pub fn emit_store_indexed_byte(
+        self,
+        emitter: &mut impl crate::Emitter,
+        source: &str,
+        index: &str,
+        base: &str,
+    ) {
+        self.emit_address(emitter, base);
+        match emitter.arch() {
+            crate::Arch::AArch64 => {
+                emitter.instruction(&format!("strb {source}, [{base}, {index}]"));
+            }
+            crate::Arch::X86_64 => {
+                emitter.instruction(&format!(
+                    "mov BYTE PTR [{base} + {index}], {source}"
+                ));
+            }
+        }
+    }
+
+    /// Clears one byte selected by a checked runtime index.
+    pub fn emit_clear_indexed_byte(
+        self,
+        emitter: &mut impl crate::Emitter,
+        index: &str,
+        base: &str,
+    ) {
+        self.emit_address(emitter, base);
+        match emitter.arch() {
+            crate::Arch::AArch64 => {
+                emitter.instruction(&format!("strb wzr, [{base}, {index}]"));
+            }
+            crate::Arch::X86_64 => {
+                emitter.instruction(&format!("mov BYTE PTR [{base} + {index}], 0"));
+            }
+        }
+    }
+
     /// Clears the full storage with libc, using the caller's aligned frame.
     pub fn emit_clear(self, emitter: &mut impl crate::Emitter) {
         use crate::Arch;

@@ -939,7 +939,7 @@ fn emit_x86_scalar_slot_call(emitter: &mut Emitter, vtable_slot: usize, tag: &st
 
 /// Emits an AArch64 wrapper-vtable lookup that branches to the missing-method path when absent.
 fn emit_aarch64_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) {
-    emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x13, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x11 is reused
@@ -968,7 +968,7 @@ fn emit_x86_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
 /// class of the object currently held in `rdi`. Leaves the method pointer
 /// in `r11`. On a missing method jumps to `missing_label`.
 fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) {
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused

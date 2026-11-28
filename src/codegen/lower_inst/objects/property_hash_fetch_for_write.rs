@@ -155,7 +155,7 @@ fn emit_load_readable_property_hash(
             debug_assert_eq!((object_register, result_register), ("x9", "x0"));
             ctx.emitter.instruction("mov x0, #0");                              // default to an absent dynamic hash
             ctx.emitter.instruction(&format!("cbz x9, {done}"));                // a null receiver has no tail
-            ctx.emitter.instruction("ldr x10, [x9]");                           // read the actual object's class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_symbol_address(ctx.emitter, "x11", "_class_gc_desc_count");
             ctx.emitter.instruction("ldr x11, [x11]");                          // load the runtime class table extent
             ctx.emitter.instruction("cmp x10, x11");                            // reject incomplete or unregistered class ids
@@ -173,7 +173,7 @@ fn emit_load_readable_property_hash(
             ctx.emitter.instruction("xor edi, edi");                            // default to an absent dynamic hash
             ctx.emitter.instruction("test r11, r11");                           // determine whether the receiver exists
             ctx.emitter.instruction(&format!("jz {done}"));                     // a null receiver has no tail
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // read the actual object's class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "r11");
             abi::emit_symbol_address(ctx.emitter, "rcx", "_class_gc_desc_count");
             ctx.emitter.instruction("cmp r10, QWORD PTR [rcx]");                // reject incomplete or unregistered class ids
             ctx.emitter.instruction(&format!("jae {done}"));                    // preserve the absent hash on invalid ids

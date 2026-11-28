@@ -43,7 +43,7 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_array_walk_recursive_hash");                 // hashes iterate in insertion order
     emitter.instruction("lsr x11, x9, #8");                                     // shift the packed indexed-array value_type into the low bits
     emitter.instruction("and x11, x11, #0x7f");                                 // isolate the indexed-array value_type tag
-    emitter.instruction("ldr x12, [x1]");                                       // load the indexed-array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x12", "x1"); // load the indexed-array length
     emitter.instruction("str x12, [sp, #8]");                                   // save the length for the loop bound
     emitter.instruction("str xzr, [sp, #16]");                                  // index i = 0
     emitter.instruction("cmp x11, #4");                                         // are the elements indexed sub-arrays?
@@ -136,7 +136,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 3");                                          // is the container an associative hash?
     emitter.instruction("je __rt_array_walk_recursive_hash");                   // hashes iterate in insertion order
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
-    emitter.instruction("mov rax, QWORD PTR [rsi]");                            // load the indexed-array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rax", "rsi"); // load the indexed-array length
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the length for the loop bound
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // index i = 0
     emitter.instruction("cmp r10, 4");                                          // are the elements indexed sub-arrays?
@@ -148,7 +148,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 40]");                       // has the index reached the length?
     emitter.instruction("jge __rt_array_walk_recursive_done");                  // finish once every element is visited
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the array pointer
-    emitter.instruction("mov rdi, QWORD PTR [r10 + rax * 8 + 24]");             // load the scalar leaf at element[i]
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r10", "rax", "rdi", "r11");
     emitter.instruction("test r14, r14");                                       // is a callback environment present?
     emitter.instruction("jz __rt_array_walk_recursive_idx_call");               // no environment keeps the one-argument callback ABI
     emitter.instruction("mov rsi, r14");                                        // pass the callback environment as the second argument
@@ -163,7 +163,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 40]");                       // has the index reached the length?
     emitter.instruction("jge __rt_array_walk_recursive_done");                  // finish once every sub-array is visited
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the array pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + rax * 8 + 24]");             // load the sub-array pointer at element[i]
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r10", "rax", "rsi", "r11");
     emitter.instruction("mov rdi, r12");                                        // pass the callback address to the recursive call
     emitter.instruction("mov rdx, r14");                                        // pass the callback environment to the recursive call
     emitter.instruction("call __rt_array_walk_recursive");                      // recurse into the sub-array

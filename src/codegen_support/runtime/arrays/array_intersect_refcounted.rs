@@ -49,7 +49,7 @@ pub fn emit_array_intersect_refcounted(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save second array pointer
 
     // -- create result array with same capacity as arr1 --
-    emitter.instruction("ldr x0, [x0, #8]");                                    // load first array capacity
+    elephc_memoir::values::packed_slots::emit_load_capacity(emitter, "x0", "x0");
     emitter.instruction("mov x1, #8");                                          // use 8-byte slots for heap pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate result array
     emitter.instruction("str x0, [sp, #16]");                                   // save result array pointer
@@ -57,15 +57,15 @@ pub fn emit_array_intersect_refcounted(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_isect_ref_outer");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload first array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // load first array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // load first array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload outer loop index
     emitter.instruction("cmp x4, x3");                                          // compare index with first array length
     emitter.instruction("b.ge __rt_array_isect_ref_done");                      // finish once every source element has been considered
-    emitter.instruction("add x5, x0, #24");                                     // compute first array data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x0");
     emitter.instruction("ldr x6, [x5, x4, lsl #3]");                            // load candidate payload from first array
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload second array pointer
-    emitter.instruction("ldr x7, [x1]");                                        // load second array length
-    emitter.instruction("add x8, x1, #24");                                     // compute second array data base
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x7", "x1"); // load second array length
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x8", "x1");
     emitter.instruction("mov x9, #0");                                          // initialize inner loop index
 
     emitter.label("__rt_array_isect_ref_inner");
@@ -115,7 +115,7 @@ fn emit_array_intersect_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the refcounted array-intersect bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the first input indexed-array pointer across constructor and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the second input indexed-array pointer across constructor and append helper calls
-    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // pass the first input indexed-array capacity as the result indexed-array capacity to the shared constructor
+    elephc_memoir::values::packed_slots::emit_load_capacity(emitter, "rdi", "rdi");
     emitter.instruction("mov rsi, 8");                                          // request 8-byte payload slots for the refcounted result indexed array
     emitter.instruction("call __rt_array_new");                                 // allocate the refcounted result indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the result indexed-array pointer across the refcounted append helper calls
@@ -124,13 +124,13 @@ fn emit_array_intersect_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_isect_ref_outer_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the outer loop index before reading the next candidate refcounted payload from the first input indexed array
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the first input indexed-array pointer before reading its logical length and current payload
-    emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare the outer loop index against the first input indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rcx", "r10"); // compare the outer loop index against the first input indexed-array logical length
     emitter.instruction("jge __rt_array_isect_ref_done_x86");                   // finish once every payload slot from the first input indexed array has been examined
-    emitter.instruction("lea r11, [r10 + 24]");                                 // compute the payload base address for the first input indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r10");
     emitter.instruction("mov r8, QWORD PTR [r11 + rcx * 8]");                   // load the current candidate refcounted payload from the first input indexed array
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the second input indexed-array pointer before scanning it for the candidate payload
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the second input indexed-array logical length before scanning it for the candidate payload
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the second input indexed array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r11", "r10"); // load the second input indexed-array logical length before scanning it for the candidate payload
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("xor r9, r9");                                          // initialize the inner scan index to the first payload slot of the second input indexed array
 
     emitter.label("__rt_array_isect_ref_inner_x86");

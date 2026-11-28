@@ -64,10 +64,18 @@ pub(super) fn emit_class_name_lookup(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [{}]", object_reg));          // load the receiver's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                emitter,
+                "x9",
+                object_reg,
+            );
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov r9, QWORD PTR [{}]", object_reg)); // load the receiver's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                emitter,
+                "r9",
+                object_reg,
+            );
         }
     }
     emit_class_name_table_read(emitter, fallback, fallback_label, done_label);
@@ -83,24 +91,20 @@ fn emit_class_name_table_read(
     let (name_ptr_reg, name_len_reg) = abi::string_result_regs(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x10", "_class_name_count");
-            emitter.instruction("ldr x10, [x10]");                              // load the dense class-name table bound
+            elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10"); // load the dense class-name table bound
             emitter.instruction("cmp x9, x10");                                 // validate the class id before indexing metadata
             emitter.instruction(&format!("b.hs {}", fallback_label));           // ids outside the table use the static fallback name
-            abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-            emitter.instruction("lsl x11, x9, #4");                             // scale the class id to the 16-byte class-name row
-            emitter.instruction("add x10, x10, x11");                           // address the receiver's class-name metadata row
-            emitter.instruction(&format!("ldr {}, [x10]", name_ptr_reg));       // borrow the class-name pointer
-            emitter.instruction(&format!("ldr {}, [x10, #8]", name_len_reg));   // borrow the class-name byte length
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x10", "x9", "x11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, name_ptr_reg, name_len_reg, "x10");
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r10, QWORD PTR [rip + _class_name_count]"); // load the dense class-name table bound
+            elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r10"); // load the dense class-name table bound
             emitter.instruction("cmp r9, r10");                                 // validate the class id before indexing metadata
             emitter.instruction(&format!("jae {}", fallback_label));            // ids outside the table use the static fallback name
-            emitter.instruction("lea r10, [rip + _class_name_entries]");        // materialize the class-name metadata table base
-            emitter.instruction("shl r9, 4");                                   // scale the class id to the 16-byte class-name row
-            emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
-            emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r9", "r11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, name_ptr_reg, name_len_reg, "r10");
         }
     }
     abi::emit_jump(emitter, done_label);

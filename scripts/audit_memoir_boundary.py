@@ -22,6 +22,7 @@ CENTRALIZED_MEMORY_SYMBOLS = {
     "_ob_level", "_ob_in_handler", "_ob_flushing", "_ob_implicit_flush",
     "_stream_context_options", "_stream_context_notification", "_stream_read_filters",
     "_stream_write_filters", "_glob_handles", "_user_filter_instances", "_ser_stream",
+    "_class_name_count", "_class_name_entries", "_class_name_missing",
 }
 DIRECT_MEMORY_PRIMITIVES = (
     "emit_symbol_address(", "emit_load_symbol_to_reg(", "emit_store_reg_to_symbol(",
@@ -77,7 +78,12 @@ MIGRATED_SOURCE_CONTRACTS = {
         ),
     },
     "src/codegen_support/runtime/callables/closure_copy.rs": {
-        "required": ("emit_allocate_initialized_descriptor_from_result_size(",),
+        "required": (
+            "emit_allocate_initialized_descriptor_from_result_size(",
+            "DescriptorField::Environment",
+            "EnvironmentField::CaptureCount",
+            "BindingField::ByRef",
+        ),
         "forbidden": (
             'instruction("bl __rt_heap_alloc")',
             'instruction("call __rt_heap_alloc")',
@@ -132,7 +138,11 @@ MIGRATED_SOURCE_CONTRACTS = {
         ),
     },
     "src/codegen_support/runtime/zval/zval_pack_array_packed.rs": {
-        "required": ("values::array_header::emit_load_value_type_tag(",),
+        "required": (
+            "values::array_header::emit_load_value_type_tag(",
+            "array_header::emit_load_element_stride(",
+        ),
+        "forbidden": ("[x0, #16]", "[rax + 16]"),
     },
     "src/codegen_support/abi/symbols.rs": {
         "required": (
@@ -645,10 +655,6 @@ MIGRATED_SOURCE_CONTRACTS = {
             'instruction("mov rax, QWORD PTR [rdi]")',
         ),
     },
-    "src/codegen_support/runtime/zval/zval_pack_array_packed.rs": {
-        "required": ("array_header::emit_load_element_stride(",),
-        "forbidden": ("[x0, #16]", "[rax + 16]"),
-    },
     "src/codegen_support/runtime/strings/mbstring/snapshot.rs": {
         "required": ("array_header::emit_load_element_stride(",),
         "forbidden": ("[x0, #16]", "[rdi + 16]"),
@@ -684,6 +690,127 @@ MIGRATED_SOURCE_CONTRACTS = {
     "src/codegen/eval_property_helpers/unset_boundary.rs": {
         "required": ("CleanupBoundary::new(", "boundary.emit_install_with_previous("),
         "forbidden": ("emit_save_frame_try_prefix", "TRY_HANDLER_JMP_BUF_OFFSET"),
+    },
+    "src/codegen_support/runtime/data/user.rs": {
+        "required": (
+            "JsonClassDescriptor",
+            "JsonPropertyDescriptor",
+            "PropertyDescriptor",
+            "SerializedPropertyDescriptor",
+            "HydrationDiagnostic",
+            "UserFilterVtable",
+            "MethodNameRow",
+            "StaticMethodNameRow",
+            "FunctionNameRow",
+            "MemberRow",
+            "NameRow",
+            "ClassRow",
+            "ClassLookupRow",
+            "ClassNameRow",
+        ),
+    },
+    "src/codegen_support/runtime/callables/function_exists.rs": {
+        "required": (
+            "emit_function_name_row_address(",
+            "emit_load_function_name_field(",
+        ),
+        "forbidden": (
+            'instruction("lsl x12, x9, #4")',
+            'instruction("add x12, x12, x9, lsl #3")',
+            'instruction("shl r10, 4")',
+            'instruction("shl r8, 3")',
+        ),
+    },
+    "src/codegen_support/runtime/data/instanceof.rs": {
+        "required": ("InstanceofTargetRow", "row.into_words()"),
+    },
+    "src/codegen_support/runtime/system/json_encode_object.rs": {
+        "required": (
+            "emit_load_json_header_field(",
+            "emit_json_property_row_address(",
+            "emit_load_json_property_field(",
+        ),
+        "forbidden": ("add x13, x13, #24", "add rdi, 24"),
+    },
+    "src/codegen_support/runtime/eval_bridge/aarch64_reflection_members.rs": {
+        "required": ("emit_load_member_field(", "emit_advance_member_row("),
+        "forbidden": ("add x10, x10, #56",),
+    },
+    "src/codegen_support/runtime/eval_bridge/x86_64_reflection_members.rs": {
+        "required": ("emit_load_member_field(", "emit_advance_member_row("),
+        "forbidden": ("add r10, 56",),
+    },
+    "src/codegen_support/runtime/eval_bridge/aarch64_reflection_names.rs": {
+        "required": ("emit_load_name_field(", "emit_advance_name_row("),
+        "forbidden": ("row_stride",),
+    },
+    "src/codegen_support/runtime/eval_bridge/x86_64_reflection_names.rs": {
+        "required": ("emit_load_name_field(", "emit_advance_name_row("),
+        "forbidden": ("row_stride",),
+    },
+    "src/codegen_support/runtime/eval_bridge/reflection_class_flags.rs": {
+        "required": ("emit_load_class_field(", "emit_advance_class_row("),
+        "forbidden": ("add x10, x10, #24", "add r10, 24"),
+    },
+    "src/codegen_support/runtime/objects/new_by_name.rs": {
+        "required": ("emit_load_class_lookup_field(", "emit_advance_class_lookup_row("),
+        "forbidden": ("add x10, x10, #32", "add r10, 32"),
+    },
+    "src/codegen_support/runtime/eval_bridge/aarch64_values_classes.rs": {
+        "required": ("emit_load_class_lookup_field(", "emit_advance_class_lookup_row("),
+    },
+    "src/codegen_support/runtime/eval_bridge/x86_64_values_classes.rs": {
+        "required": ("emit_load_class_lookup_field(", "emit_advance_class_lookup_row("),
+    },
+    "src/codegen_support/runtime/exceptions/dynamic_instanceof.rs": {
+        "required": (
+            "emit_load_instanceof_target_field(",
+            "emit_advance_instanceof_target_row(",
+        ),
+        "forbidden": ("add x10, x10, #32", "add r11, 32"),
+    },
+    "src/codegen_support/runtime/io/ob_process.rs": {
+        "required": (
+            "ProcessField",
+            "emit_load_process_field(",
+            "emit_store_process_field(",
+        ),
+    },
+    "src/codegen_support/runtime/io/user_filter.rs": {
+        "required": ("UserFilterVtableField::Filter", "UserFilterVtableField::BrigadeArity"),
+    },
+    "src/codegen_support/runtime/io/user_filter/attach.rs": {
+        "required": ("UserFilterVtableField::ParamsOffset", "UserFilterVtableField::OnCreate"),
+    },
+    "src/codegen_support/runtime/io/user_filter_brigade.rs": {
+        "required": ("UserFilterVtableField::BoxedParams",),
+    },
+    "src/codegen_support/runtime/io/user_filter_lifecycle.rs": {
+        "required": ("UserFilterVtableField::OnClose",),
+    },
+    "src/codegen_support/runtime/callables/is_callable.rs": {
+        "required": ("emit_load_method_name_field(", "emit_load_static_method_name_field("),
+    },
+    "src/codegen/lower_inst/builtins/output_buffering.rs": {
+        "required": ("DescriptorField::Name", "DescriptorField::NameLength"),
+    },
+    "src/codegen/eval_method_helpers.rs": {
+        "required": ("throwable_storage::emit_load_message_pair(", "throwable_storage::emit_load_code("),
+    },
+    "src/codegen_support/runtime/arrays/usort_str.rs": {
+        "required": (
+            "emit_load_packed_byte_offset_word(",
+            "emit_load_packed_byte_offset_word_delta(",
+            "emit_store_packed_byte_offset_word_delta(",
+        ),
+    },
+    "src/codegen_support/mbstring_query.rs": {
+        "required": ("offset_of!(MbNativeQueryV1", "offset_of!(MbNativeCaptureV1"),
+        "forbidden": ("for field in [0, 8, 16, 32]",),
+    },
+    "src/codegen_support/runtime/strings/mbstring/capture_invoke/query_policy.rs": {
+        "required": ("offset_of!(MbNativeQueryV1, context)", "CONFIGURATION_OFFSET", "FILTER_OFFSET"),
+        "forbidden": ("[x11, #24]", "[x11, #32]", "[r11 + 24]", "[r11 + 32]"),
     },
 }
 
@@ -978,6 +1105,27 @@ def audit_centralized_memory_access(location: str, source: str) -> list[Finding]
     return findings
 
 
+def audit_class_name_table_access(location: str, source: str) -> list[Finding]:
+    """Require every dense class-name table base to flow through Memoir's row projection."""
+    findings = []
+    lines = source.splitlines()
+    table_helpers = (
+        "emit_class_name_table_address(",
+        "emit_local_class_name_table_address(",
+    )
+    for index, line in enumerate(lines):
+        if not any(helper in line for helper in table_helpers):
+            continue
+        window = "\n".join(lines[index:index + 12])
+        if "emit_class_name_row_address(" not in window:
+            findings.append(Finding(
+                "class-name-layout",
+                f"{location}:{index + 1}",
+                "dense class-name table rows must be selected through Memoir",
+            ))
+    return findings
+
+
 def audit_archive_symbols(location: str, symbols: str) -> list[Finding]:
     """Require the eval registry and reject compiler emitter definitions in Magician."""
     memoir_symbols = [line for line in symbols.splitlines() if "elephc_memoir" in line]
@@ -1039,8 +1187,10 @@ def main() -> int:
                 location, path.read_text(), contract))
         for source_root in (root / "src", root / "crates/elephc-magician/src"):
             for path in sorted(source_root.rglob("*.rs")):
-                findings.extend(audit_centralized_memory_access(
-                    path.relative_to(root).as_posix(), path.read_text()))
+                location = path.relative_to(root).as_posix()
+                source = path.read_text()
+                findings.extend(audit_centralized_memory_access(location, source))
+                findings.extend(audit_class_name_table_access(location, source))
         for archive in args.magician_archive:
             findings.extend(audit_magician_archive(archive))
     except subprocess.CalledProcessError as error:

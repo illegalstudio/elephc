@@ -425,7 +425,7 @@ fn emit_zero_x86_64(emitter: &mut impl Emitter, wide: bool, array_reg: &str, ind
 
 /// Byte width of the length, capacity and stride words preceding packed slots.
 /// Byte offset of the first slot after the packed array header.
-pub const PACKED_PAYLOAD_OFFSET: usize = 24;
+const PACKED_PAYLOAD_OFFSET: usize = 24;
 
 /// Borrows one word from a packed payload whose logical length and representation were checked.
 pub fn emit_load_packed_word(emitter: &mut impl Emitter, destination: &str, array: &str, word: usize) {
@@ -448,6 +448,123 @@ pub fn emit_packed_payload_aarch64(emitter: &mut impl Emitter, destination: &str
 /// Forms the x86_64 payload base from a validated packed array pointer.
 pub fn emit_packed_payload_x86_64(emitter: &mut impl Emitter, destination: &str, array: &str) {
     emitter.instruction(&format!("lea {destination}, [{array} + {PACKED_PAYLOAD_OFFSET}]")); // skip the packed array header
+}
+
+/// Forms the payload base from a validated packed array pointer for the selected target.
+pub fn emit_packed_payload(emitter: &mut impl Emitter, destination: &str, array: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emit_packed_payload_aarch64(emitter, destination, array),
+        Arch::X86_64 => emit_packed_payload_x86_64(emitter, destination, array),
+    }
+}
+
+/// Forms the address of a packed slot selected by a caller-computed byte offset.
+pub fn emit_packed_byte_offset_address(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    array: &str,
+    byte_offset: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {destination}, {array}, {byte_offset}"));
+            emitter.instruction(&format!(
+                "add {destination}, {destination}, #{PACKED_PAYLOAD_OFFSET}"
+            ));
+        }
+        Arch::X86_64 => emitter.instruction(&format!(
+            "lea {destination}, [{array} + {byte_offset} + {PACKED_PAYLOAD_OFFSET}]"
+        )),
+    }
+}
+
+/// Loads one word from a packed slot selected by a caller-computed byte offset.
+pub fn emit_load_packed_byte_offset_word(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    array: &str,
+    byte_offset: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {destination}, {array}, {byte_offset}"));
+            emitter.instruction(&format!(
+                "ldr {destination}, [{destination}, #{PACKED_PAYLOAD_OFFSET}]"
+            ));
+        }
+        Arch::X86_64 => emitter.instruction(&format!(
+            "mov {destination}, QWORD PTR [{array} + {byte_offset} + {PACKED_PAYLOAD_OFFSET}]"
+        )),
+    }
+}
+
+/// Loads one word at a constant delta from a caller-computed packed payload byte offset.
+pub fn emit_load_packed_byte_offset_word_delta(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    array: &str,
+    byte_offset: &str,
+    delta: usize,
+) {
+    let field_offset = PACKED_PAYLOAD_OFFSET + delta * 8;
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {destination}, {array}, {byte_offset}"));
+            emitter.instruction(&format!("ldr {destination}, [{destination}, #{field_offset}]"));
+        }
+        Arch::X86_64 => emitter.instruction(&format!(
+            "mov {destination}, QWORD PTR [{array} + {byte_offset} + {field_offset}]"
+        )),
+    }
+}
+
+/// Stores one word at a constant delta from a caller-computed packed payload byte offset.
+pub fn emit_store_packed_byte_offset_word_delta(
+    emitter: &mut impl Emitter,
+    array: &str,
+    byte_offset: &str,
+    value: &str,
+    address: &str,
+    delta: usize,
+) {
+    let field_offset = PACKED_PAYLOAD_OFFSET + delta * 8;
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {address}, {array}, {byte_offset}"));
+            emitter.instruction(&format!("str {value}, [{address}, #{field_offset}]"));
+        }
+        Arch::X86_64 => emitter.instruction(&format!(
+            "mov QWORD PTR [{array} + {byte_offset} + {field_offset}], {value}"
+        )),
+    }
+}
+
+/// Forms the address of a checked word-sized packed slot at a dynamic index.
+pub fn emit_indexed_word_address(
+    emitter: &mut impl Emitter,
+    array: &str,
+    index: &str,
+    destination: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_packed_payload_aarch64(emitter, destination, array);
+            emitter.instruction(&format!("add {destination}, {destination}, {index}, lsl #3"));
+        }
+        Arch::X86_64 => emitter.instruction(&format!(
+            "lea {destination}, [{array} + {index} * 8 + {PACKED_PAYLOAD_OFFSET}]"
+        )),
+    }
+}
+
+/// Stores one word at a constant packed payload index.
+pub fn emit_store_packed_word(
+    emitter: &mut impl Emitter,
+    array: &str,
+    value: &str,
+    word: usize,
+) {
+    emitter.emit_store_to_address(value, array, PACKED_PAYLOAD_OFFSET + word * 8);
 }
 
 /// Borrows a checked word-sized slot at a dynamic index.
@@ -480,6 +597,48 @@ pub fn emit_store_indexed_word(
     }
 }
 
+/// Borrows a checked word at a constant delta from a dynamic packed index.
+pub fn emit_load_indexed_word_delta(
+    emitter: &mut impl Emitter,
+    array: &str,
+    index: &str,
+    value: &str,
+    address: &str,
+    delta: usize,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_indexed_word_address(emitter, array, index, address);
+            emitter.emit_load_from_address(value, address, delta * 8);
+        }
+        Arch::X86_64 => emitter.instruction(&format!(
+            "mov {value}, QWORD PTR [{array} + {index} * 8 + {}]",
+            PACKED_PAYLOAD_OFFSET + delta * 8
+        )),
+    }
+}
+
+/// Stores a prepared word at a constant delta from a dynamic packed index.
+pub fn emit_store_indexed_word_delta(
+    emitter: &mut impl Emitter,
+    array: &str,
+    index: &str,
+    value: &str,
+    address: &str,
+    delta: usize,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_indexed_word_address(emitter, array, index, address);
+            emitter.emit_store_to_address(value, address, delta * 8);
+        }
+        Arch::X86_64 => emitter.instruction(&format!(
+            "mov QWORD PTR [{array} + {index} * 8 + {}], {value}",
+            PACKED_PAYLOAD_OFFSET + delta * 8
+        )),
+    }
+}
+
 /// Initializes a constant-index word slot and publishes the initialized prefix through that slot.
 pub fn emit_publish_word_at(
     emitter: &mut impl Emitter, array: &str, value: &str, length: &str, index: usize,
@@ -494,9 +653,63 @@ pub fn emit_publish_length(emitter: &mut impl Emitter, array: &str, length: &str
     emitter.emit_store_to_address(length, array, 0);
 }
 
+/// Publishes an immediate logical length without exposing the header offset.
+pub fn emit_publish_length_immediate(
+    emitter: &mut impl Emitter,
+    array: &str,
+    length: i64,
+) {
+    let scratch = [
+        emitter.secondary_scratch_reg(),
+        emitter.symbol_scratch_reg(),
+        emitter.tertiary_scratch_reg(),
+    ]
+    .into_iter()
+    .find(|register| *register != array)
+    .expect("the target ABI must expose an array-length scratch register");
+    emitter.emit_load_int_immediate(scratch, length);
+    emit_publish_length(emitter, array, scratch);
+}
+
 /// Reads the logical length of checked packed storage.
 pub fn emit_load_length(emitter: &mut impl Emitter, destination: &str, array: &str) {
     emitter.emit_load_from_address(destination, array, 0);
+}
+
+/// Reads the reserved capacity of checked packed storage.
+pub fn emit_load_capacity(emitter: &mut impl Emitter, destination: &str, array: &str) {
+    emitter.emit_load_from_address(destination, array, 8);
+}
+
+/// Compares an index with the logical length of checked packed storage.
+pub fn emit_compare_index_to_length(emitter: &mut impl Emitter, index: &str, array: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            let length = [
+                emitter.secondary_scratch_reg(),
+                emitter.symbol_scratch_reg(),
+                emitter.tertiary_scratch_reg(),
+            ]
+            .into_iter()
+            .find(|register| *register != index && *register != array)
+            .expect("the target ABI must expose an array-length scratch register");
+            emit_load_length(emitter, length, array);
+            emitter.instruction(&format!("cmp {index}, {length}"));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {index}, QWORD PTR [{array}]"));
+        }
+    }
+}
+
+/// Publishes the reserved capacity of checked packed storage.
+pub fn emit_publish_capacity(emitter: &mut impl Emitter, array: &str, capacity: &str) {
+    emitter.emit_store_to_address(capacity, array, 8);
+}
+
+/// Publishes the physical element stride of checked packed storage.
+pub fn emit_publish_stride(emitter: &mut impl Emitter, array: &str, stride: &str) {
+    emitter.emit_store_to_address(stride, array, 16);
 }
 
 /// Loads the logical length and reserved capacity without touching the payload.

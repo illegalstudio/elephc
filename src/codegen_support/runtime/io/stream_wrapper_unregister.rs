@@ -13,7 +13,7 @@
 
 use elephc_memoir::buffers::stream_tables;
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_stream_wrapper_unregister` runtime helper.
 /// Input:  AArch64 x0 = protocol ptr, x1 = protocol len.
@@ -29,15 +29,14 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_wrapper_unregister ---");
     emitter.label_global("__rt_stream_wrapper_unregister");
 
-    abi::emit_symbol_address(emitter, "x4", "_user_wrappers");
     emitter.instruction("mov x5, #0");                                          // wrapper slot index
     emitter.label("__rt_swu_scan");
     emitter.instruction(&format!("cmp x5, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // scanned every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_swu_miss");                                  // no match found
-    emitter.instruction(&format!("add x6, x4, x5, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base = table + index * 32
-    emitter.instruction("ldr x7, [x6]");                                        // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x6", "x5", "x4");
+    stream_tables::emit_load_registration_field(emitter, "x7", "x6", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x7, __rt_swu_next");                               // skip empty slots
-    emitter.instruction("ldr x8, [x6, #8]");                                    // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x8", "x6", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x8, x1");                                          // do the lengths match?
     emitter.instruction("b.ne __rt_swu_next");                                  // different length: not this slot
 
@@ -73,18 +72,15 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_wrapper_unregister ---");
     emitter.label_global("__rt_stream_wrapper_unregister");
 
-    abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
     emitter.label("__rt_swu_scan_x86");
     emitter.instruction(&format!("cmp r9, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                          // scanned every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_swu_miss_x86");                               // no match found
-    emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r10", "r9", "r8");
+    stream_tables::emit_load_registration_field(emitter, "rax", "r10", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test rax, rax");                                       // is this slot empty?
     emitter.instruction("jz __rt_swu_next_x86");                                // skip empty slots
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "r11", "r10", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp r11, rsi");                                        // do the lengths match?
     emitter.instruction("jne __rt_swu_next_x86");                               // different length: not this slot
 

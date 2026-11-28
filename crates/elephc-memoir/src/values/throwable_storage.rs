@@ -107,6 +107,22 @@ pub fn emit_store_code(emitter: &mut impl TargetAbi, payload: &str, code: &str) 
     emitter.emit_store_to_address(code, payload, CODE);
 }
 
+/// Loads the compact Throwable message pointer and byte count.
+pub fn emit_load_message_pair(
+    emitter: &mut impl TargetAbi,
+    pointer: &str,
+    length: &str,
+    payload: &str,
+) {
+    emitter.emit_load_from_address(pointer, payload, MESSAGE_POINTER);
+    emitter.emit_load_from_address(length, payload, MESSAGE_LENGTH);
+}
+
+/// Loads the compact Throwable integer code.
+pub fn emit_load_code(emitter: &mut impl TargetAbi, destination: &str, payload: &str) {
+    emitter.emit_load_from_address(destination, payload, CODE);
+}
+
 /// Publishes the already-retained previous owner in the constructor's payload.
 pub fn emit_store_previous(emitter: &mut impl TargetAbi, payload: &str, previous: &str) {
     emitter.emit_store_to_address(previous, payload, PREVIOUS);

@@ -91,12 +91,12 @@ fn test_array_set_overwrite_stores_before_release_on_all_targets() {
         let x86 = target == "linux-x86_64";
         let refcounted = instructions(target, emit_array_set_refcounted);
         let path = path_from(&refcounted, "__rt_array_set_refcounted_store");
-        let store = if x86 { "mov QWORD PTR [rax + 24 + rsi * 8], rdx" } else { "str x2, [x10, x1, lsl #3]" };
+        let store = if x86 { "mov QWORD PTR [rax + rsi * 8 + 24], rdx" } else { "str x2, [x10, x1, lsl #3]" };
         assert_store_precedes_release(&format!("{target} refcounted"), path, store, "__rt_decref_any");
 
         let mixed = instructions(target, emit_array_set_mixed);
         let path = path_from(&mixed, "__rt_array_set_mixed_grow_ready");
-        let store = if x86 { "mov QWORD PTR [r10 + 24 + r9 * 8], r8" } else { "str x13, [x12, x9, lsl #3]" };
+        let store = if x86 { "mov QWORD PTR [r10 + r9 * 8 + 24], r8" } else { "str x13, [x12, x9, lsl #3]" };
         assert_store_precedes_release(&format!("{target} mixed"), path, store, "__rt_decref_mixed");
     }
 }

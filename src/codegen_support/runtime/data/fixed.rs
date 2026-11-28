@@ -294,11 +294,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // _ob_in_handler: non-zero while a user output handler runs. Output produced
     // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
     // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.
-    out.push_str(&comm_directive("_ob_in_handler", 8, target));
     // _ob_flushing: re-entry guard for the process-exit drain. A user handler
     // running during __rt_ob_flush_all may call exit() again; the guard makes
     // the nested drain a no-op instead of an infinite loop.
-    out.push_str(&comm_directive("_ob_flushing", 8, target));
+    elephc_memoir::buffers::output::append_control_storage(&mut out, &target);
     // _elephc_eval_ob_handler_fn: installed Rust callback (magician) that runs
     // an eval-registered ob_start() handler: fn(id, buf, len, phase) -> Mixed
     // result cell pointer (0 = pass-through). Called via __rt_ob_eval_trampoline.
@@ -312,7 +311,6 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     // ob_implicit_flush() stored flag. Semantically inert in elephc: terminal
     // writes are unbuffered syscalls, so implicit flushing is always on.
-    out.push_str(&comm_directive("_ob_implicit_flush", 8, target));
     // ob_get_status()/ob_list_handlers() string constants: PHP's default handler
     // name and the status-array key strings read by __rt_ob_get_status.
     out.push_str(&format!(
@@ -373,7 +371,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // The active serialize() output stream: a pointer to the `__rt_strbuf_*` descriptor in the
     // frame of the innermost `__rt_serialize_call_value`, which saves and restores it around itself and
     // every hook call that can re-enter serialize().
-    out.push_str(&comm_directive("_ser_stream", 8, target));
+    elephc_memoir::strings::scoped_stream::append_active_storage(&mut out, &target);
     elephc_memoir::values::serialize_registry::append_data(&mut out, &target);
     elephc_memoir::values::reference_registry::append_unserialize_storage(&mut out, &target);
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
@@ -1311,7 +1309,6 @@ pub(crate) fn emit_runtime_data_fixed(
     // stream_context_create / stream_context_set_params. __rt_http_open fires
     // it at the CONNECT, COMPLETED, and FAILURE transfer milestones. Zero when
     // no notification callback is registered (the fire shim is then a no-op).
-    out.push_str(&comm_directive("_stream_notification_callback", 8, target));
     // _tls_peer_name_default: hardcoded peer-name buffer used as the SNI
     // hint when stream_socket_enable_crypto is called without a context
     // peer_name. v1 limitation — production TLS needs real peer-name
@@ -1571,7 +1568,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // (http://, ftp://, fopen 4th arg) read it back through
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
-    out.push_str(&comm_directive("_stream_context_options", 8, target));
+    elephc_memoir::buffers::stream_context_owners::append_ambient_storage(&mut out, &target);
     // var_dump body literals (rodata): per-element prefix/suffix bytes used by
     // the array/hash walkers. NONE of them carry a leading indent: every
     // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`

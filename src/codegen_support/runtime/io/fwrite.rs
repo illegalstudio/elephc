@@ -62,8 +62,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
-    stream_tables::WRITE_FILTERS.emit_address(emitter, "x9");
-    emitter.instruction("ldrb w3, [x9, x0]");                                   // write filter id for this descriptor
+    stream_tables::WRITE_FILTERS.emit_load_indexed_byte(emitter, "w3", "x0", "x9");
     emitter.instruction("cbz w3, __rt_fwrite_direct");                          // no filter: write the payload directly
     emitter.instruction("cmp w3, #128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
     emitter.instruction("b.ge __rt_fwrite_user_filter");                        // dispatch through the user filter method, then write the result
@@ -206,8 +205,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
-    stream_tables::WRITE_FILTERS.emit_address(emitter, "r9");
-    emitter.instruction("movzx ecx, BYTE PTR [r9 + rdi]");                      // write filter id for this descriptor
+    stream_tables::WRITE_FILTERS.emit_load_indexed_byte(emitter, "ecx", "rdi", "r9");
     emitter.instruction("test rcx, rcx");                                       // is a write filter attached?
     emitter.instruction("jz __rt_fwrite_direct_x86");                           // no filter: write the payload directly
     emitter.instruction("cmp rcx, 128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?

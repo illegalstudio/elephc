@@ -31,7 +31,7 @@ fn emit_aarch64(e: &mut Emitter) {
     e.label_global("__rt_array_map_sum_probe_int");
     e.instruction("ldr x9, [x0]");                                              // load the packed element count
     e.instruction("cbz x9, __rt_array_map_sum_probe_zero");                     // an empty map+sum is integer zero
-    e.instruction("add x10, x0, #24");                                          // skip the indexed-array header to the payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(e, "x10", "x0");
     e.instruction("mov x11, xzr");                                              // start the integer accumulator at zero
     e.label("__rt_array_map_sum_probe_loop");
     e.instruction("ldr x12, [x10], #8");                                        // load the next source element
@@ -62,7 +62,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("mov r8, QWORD PTR [rdi]");                                   // load the packed element count
     e.instruction("test r8, r8");                                               // is the range empty?
     e.instruction("jz __rt_array_map_sum_probe_zero_x86");                      // an empty map+sum is integer zero
-    e.instruction("lea r9, [rdi + 24]");                                        // skip the indexed-array header to the payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(e, "r9", "rdi");
     e.instruction("xor ecx, ecx");                                              // start the integer accumulator at zero
     e.label("__rt_array_map_sum_probe_loop_x86");
     e.instruction("mov r10, QWORD PTR [r9]");                                   // load the next source element

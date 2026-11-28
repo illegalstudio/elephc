@@ -47,7 +47,7 @@ pub fn emit_array_fill(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save new array pointer
 
     // -- fill array with the value --
-    emitter.instruction("add x3, x0, #24");                                     // x3 = data base of new array
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("ldr x4, [sp, #0]");                                    // x4 = count
     emitter.instruction("ldr x5, [sp, #8]");                                    // x5 = fill value
     emitter.instruction("mov x6, #0");                                          // x6 = i = 0
@@ -63,7 +63,7 @@ pub fn emit_array_fill(emitter: &mut Emitter) {
     emitter.label("__rt_array_fill_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = new array pointer
     emitter.instruction("ldr x9, [sp, #0]");                                    // x9 = count
-    emitter.instruction("str x9, [x0]");                                        // set array length = count
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x9"); // set array length = count
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -96,7 +96,7 @@ fn emit_array_fill_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because this helper fills scalar indexed arrays
     emitter.instruction("call __rt_array_new");                                 // allocate the destination indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the destination indexed-array pointer while the fill loop writes payload slots
-    emitter.instruction("lea r8, [rax + 24]");                                  // compute the destination indexed-array payload base address once before the fill loop starts
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "rax");
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the requested element count before entering the fill loop
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the scalar fill payload before entering the fill loop
     emitter.instruction("xor rcx, rcx");                                        // initialize the fill loop index to the first destination payload slot

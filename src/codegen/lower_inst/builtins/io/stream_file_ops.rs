@@ -73,10 +73,8 @@ fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_user_filter_close_fd");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "x9");
-            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear any read filter before the descriptor can be reused
-            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "x9");
-            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear any write filter before the descriptor can be reused
+            stream_tables::READ_FILTERS.emit_clear_indexed_byte(ctx.emitter, "x0", "x9");
+            stream_tables::WRITE_FILTERS.emit_clear_indexed_byte(ctx.emitter, "x0", "x9");
             ctx.emitter.label(&native_close_label);
             ctx.emitter.syscall(6);
             ctx.emitter.instruction("cmp x0, #0");                              // test whether close() reported success
@@ -87,10 +85,8 @@ fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov x0, #1");                              // return true when the stream close succeeded
         }
         Arch::X86_64 => {
-            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "r9");
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any read filter before the descriptor can be reused
-            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "r9");
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any write filter before the descriptor can be reused
+            stream_tables::READ_FILTERS.emit_clear_indexed_byte(ctx.emitter, "rax", "r9");
+            stream_tables::WRITE_FILTERS.emit_clear_indexed_byte(ctx.emitter, "rax", "r9");
             ctx.emitter.label(&native_close_label);
             ctx.emitter.instruction("mov rdi, rax");                            // pass the stream fd to libc close()
             ctx.emitter.instruction("call close");                              // close the requested stream descriptor

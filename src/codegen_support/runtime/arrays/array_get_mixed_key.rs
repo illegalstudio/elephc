@@ -73,7 +73,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
 
     // -- integer key on indexed storage: inline bounds-checked read --
     emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = key_lo (int index)
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = array length (header offset 0)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = array length (header offset 0)
     emitter.instruction("cmp x12, #0");                                         // negative index → null
     emitter.instruction("b.lt __rt_array_get_mixed_key_int_missing");           // warn and return null for a negative indexed-array key
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
@@ -281,7 +281,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
 
     // -- integer key on indexed storage: inline bounds-checked read --
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = key_lo (int index); caller-saved scratch only
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // r9 = array length (header offset 0)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r9", "rdi"); // r9 = array length (header offset 0)
     emitter.instruction("test r8, r8");                                         // negative index → null
     emitter.instruction("js __rt_array_get_mixed_key_int_missing");             // warn and return null for a negative indexed-array key
     emitter.instruction("cmp r8, r9");                                          // index >= length → null

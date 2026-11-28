@@ -429,7 +429,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __unserialize magic: parse the body into an assoc array, then call
     //    __unserialize($this, $data) instead of injecting properties by name --
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // object pointer
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_unserialize_ptrs");
     emitter.instruction("mov r10, QWORD PTR [r11 + rax*8]");                    // __unserialize method symbol (0 if none)
     emitter.instruction("test r10, r10");                                       // does the class define __unserialize?
@@ -528,7 +528,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_at_obj_box");                            // incomplete objects never run class hooks
     emitter.label("__rt_unser_obj_wakeup_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // object pointer
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_wakeup_ptrs");
     emitter.instruction("mov r10, QWORD PTR [r11 + rax*8]");                    // __wakeup method symbol (0 if none)
     emitter.instruction("test r10, r10");                                       // does the class define __wakeup?

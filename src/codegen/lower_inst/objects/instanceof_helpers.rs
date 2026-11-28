@@ -108,7 +108,7 @@ pub(super) fn emit_object_target_metadata(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("cbnz x0, {}", ok_label));         // non-null object targets can provide runtime class metadata
             emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&ok_label);
-            ctx.emitter.instruction("ldr x0, [x0]");                            // load the runtime class id from the target object header
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x0", "x0");
             ctx.emitter.instruction("mov x1, #0");                              // object targets always resolve to class target kind
         }
         Arch::X86_64 => {
@@ -116,7 +116,7 @@ pub(super) fn emit_object_target_metadata(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("jne {}", ok_label));              // non-null object targets can provide runtime class metadata
             emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&ok_label);
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime class id from the target object header
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "rax", "rax");
             ctx.emitter.instruction("xor edx, edx");                            // object targets always resolve to class target kind
         }
     }

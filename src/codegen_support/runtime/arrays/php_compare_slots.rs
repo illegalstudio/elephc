@@ -70,7 +70,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             // -- objects sort only through a reviewed internal comparison adapter --
             emitter.instruction("ldr x12, [x11, x10, lsl #3]");                 // reload this slot's boxed Mixed cell
             emitter.instruction("ldr x12, [x12, #8]");                          // load the object pointer from the cell payload
-            emitter.instruction("ldr x12, [x12]");                              // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x12");
             abi::emit_symbol_address(emitter, "x13", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("ldr x13, [x13, x12, lsl #3]");                 // read this class's comparison adapter
             emitter.instruction("cbz x13, __rt_mixed_sort_non_scalar");         // unhandled object classes still fail closed
@@ -113,7 +113,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             // -- objects sort only through a reviewed internal comparison adapter --
             emitter.instruction("mov r9, QWORD PTR [r8 + rdx * 8]");            // reload this slot's boxed Mixed cell
             emitter.instruction("mov r9, QWORD PTR [r9 + 8]");                  // load the object pointer from the cell payload
-            emitter.instruction("mov r9, QWORD PTR [r9]");                      // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r9");
             abi::emit_symbol_address(emitter, "r10", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("cmp QWORD PTR [r10 + r9 * 8], 0");             // does this class declare a comparison adapter?
             emitter.instruction("je __rt_mixed_sort_non_scalar_x86");           // unhandled object classes still fail closed
@@ -261,7 +261,7 @@ pub fn emit_hash_sort_require_scalars(emitter: &mut Emitter) {
             emitter.label("__rt_hash_sort_scalar_inline_object");
             hash_layout::emit_load_entry_field(emitter, "x14", "x13", EntryField::ValueLow);
             emitter.label("__rt_hash_sort_scalar_object_class");
-            emitter.instruction("ldr x14, [x14]");                              // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x14", "x14");
             abi::emit_symbol_address(emitter, "x17", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("ldr x14, [x17, x14, lsl #3]");                 // read this class's comparison adapter
             emitter.instruction("cbz x14, __rt_hash_sort_scalar_non_scalar");   // unhandled object classes still fail closed
@@ -318,7 +318,7 @@ pub fn emit_hash_sort_require_scalars(emitter: &mut Emitter) {
             emitter.label("__rt_hash_sort_scalar_inline_object_x86");
             hash_layout::emit_load_entry_field(emitter, "rax", "r10", EntryField::ValueLow);
             emitter.label("__rt_hash_sort_scalar_object_class_x86");
-            emitter.instruction("mov rax, QWORD PTR [rax]");                    // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "rax");
             abi::emit_symbol_address(emitter, "rsi", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("cmp QWORD PTR [rsi + rax * 8], 0");            // does this class declare a comparison adapter?
             emitter.instruction("je __rt_hash_sort_scalar_non_scalar_x86");     // unhandled object classes still fail closed

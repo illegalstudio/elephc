@@ -10,7 +10,10 @@
 //! - Sources remain rooted by the caller, including while an overwritten result cell is released.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch, sentinels::emit_branch_if_null_container};
-use elephc_memoir::hash_layout::{self, EntryField};
+use elephc_memoir::{
+    hash_layout::{self, EntryField},
+    values::packed_slots,
+};
 
 /// Emits the two-layout merge helper for every supported native target.
 pub fn emit_array_merge_boxed(emitter: &mut Emitter) {
@@ -72,12 +75,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x0", "x11");
     elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
     elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x11", "x12");
-    emitter.instruction("madd x11, x10, x12, x11");                             // locate the indexed slot relative to the array header
-    emitter.instruction("ldr x1, [x11, #24]");                                  // borrow the low value word
+    emitter.instruction("mul x9, x10, x12");                                    // convert the logical index to a packed payload byte offset
+    packed_slots::emit_load_packed_byte_offset_word(emitter, "x1", "x11", "x9");
     emitter.instruction("mov x2, #0");                                          // single-word payloads have no high word
     emitter.instruction("cmp x12, #16");                                        // only paired slots contain a second word
     emitter.instruction("b.ne __rt_array_merge_boxed_value");                   // avoid reading past an eight-byte final slot
-    emitter.instruction("ldr x2, [x11, #32]");                                  // preserve a paired payload such as a string length
+    packed_slots::emit_load_packed_byte_offset_word_delta(emitter, "x2", "x11", "x9", 1);
     emitter.instruction("b __rt_array_merge_boxed_value");                      // acquire an independent result owner
 
     emitter.label("__rt_array_merge_boxed_hash");
@@ -212,13 +215,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "r11");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rax", "rax");
     elephc_memoir::values::array_header::emit_load_element_stride(emitter, "r11", "rcx");
-    emitter.instruction("imul r10, rcx");                                       // locate this slot within the packed payload
-    emitter.instruction("add r11, r10");                                        // keep the fixed array header offset separate
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word
+    emitter.instruction("mov r9, r10");                                         // preserve the logical source index while forming its byte offset
+    emitter.instruction("imul r9, rcx");                                        // locate this slot within the packed payload
+    packed_slots::emit_load_packed_byte_offset_word(emitter, "rdi", "r11", "r9");
     emitter.instruction("xor esi, esi");                                        // single-word payloads have no high word
     emitter.instruction("cmp rcx, 16");                                         // only paired slots contain a second word
     emitter.instruction("jne __rt_array_merge_boxed_value");                    // avoid reading outside the final eight-byte slot
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // preserve a string length or other paired payload
+    packed_slots::emit_load_packed_byte_offset_word_delta(emitter, "rsi", "r11", "r9", 1);
     emitter.instruction("jmp __rt_array_merge_boxed_value");                    // acquire the result's value owner
 
     emitter.label("__rt_array_merge_boxed_hash");

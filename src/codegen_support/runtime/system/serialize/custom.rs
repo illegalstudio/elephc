@@ -138,22 +138,27 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_serializable_string_ready");
     abi::load_at_offset(emitter, result, 16);
     let name = abi::tertiary_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, scratch, "_class_name_entries");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("add x10, x10, x0, lsl #4");                    // select the class name entry by runtime class id
-            abi::emit_load_from_address(emitter, name, scratch, 0);
-            abi::store_at_offset(emitter, name, 32);
-            abi::emit_load_from_address(emitter, name, scratch, 8);
-        }
-        Arch::X86_64 => {
-            emitter.instruction("shl rax, 4");                                  // scale the runtime id to the class name entry stride
-            emitter.instruction("add r10, rax");                                // select the class name entry
-            abi::emit_load_from_address(emitter, name, scratch, 0);
-            abi::store_at_offset(emitter, name, 32);
-            abi::emit_load_from_address(emitter, name, scratch, 8);
-        }
-    }
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, scratch);
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(
+        emitter,
+        scratch,
+        scratch,
+        result,
+        name,
+    );
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        emitter,
+        name,
+        scratch,
+        elephc_memoir::values::class_metadata::ClassNameField::Name,
+    );
+    abi::store_at_offset(emitter, name, 32);
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        emitter,
+        name,
+        scratch,
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
     abi::store_at_offset(emitter, name, 40);
     literal(emitter, b"C:");
     abi::load_at_offset(emitter, result, 40);

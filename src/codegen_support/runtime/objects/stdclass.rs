@@ -213,7 +213,7 @@ fn emit_stdclass_new_aarch64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "x9", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x9]");                                       // load the compile-time stdClass class_id
-    emitter.instruction("str x10, [x0]");                                       // store class_id at obj+0
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x10", "x0");
 
     emitter.instruction("mov x0, #8");                                          // initial capacity = 8 slots
     emitter.instruction("mov x1, #7");                                          // value_type = 7 (boxed Mixed)
@@ -248,7 +248,7 @@ fn emit_stdclass_from_hash_aarch64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "x9", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x9]");                                       // load the compile-time stdClass class_id
-    emitter.instruction("str x10, [x0]");                                       // store class_id at obj+0
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x10", "x0");
 
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the incoming hash pointer
     emitter.instruction("str x9, [x0, #8]");                                    // store hash_ptr at obj+8
@@ -505,7 +505,7 @@ fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // park the obj pointer in the local slot
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class_id at obj+0
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
 
     emitter.instruction("mov rdi, 8");                                          // pass the hash capacity through the SysV first argument
     emitter.instruction("mov rsi, 7");                                          // pass the boxed Mixed value type through the SysV second argument
@@ -541,7 +541,7 @@ fn emit_stdclass_from_hash_x86_64(emitter: &mut Emitter) {
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class_id at obj+0
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the saved hash pointer
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store hash_ptr at obj+8

@@ -118,6 +118,22 @@ pub fn emit_load_mixed_high(emitter: &mut impl crate::TargetAbi, dest: &str, cel
     emitter.emit_load_from_address(dest, cell, 16);
 }
 
+/// Projects the address of the first payload word inside a raw Mixed cell.
+pub fn emit_mixed_low_address(
+    emitter: &mut impl crate::Emitter,
+    destination: &str,
+    cell: &str,
+) {
+    match emitter.arch() {
+        crate::Arch::AArch64 => {
+            emitter.instruction(&format!("add {destination}, {cell}, #8"));
+        }
+        crate::Arch::X86_64 => {
+            emitter.instruction(&format!("lea {destination}, [{cell} + 8]"));
+        }
+    }
+}
+
 /// Stores the tag into an already selected raw Mixed cell.
 pub fn emit_store_mixed_tag(emitter: &mut impl crate::TargetAbi, value: &str, cell: &str) {
     emitter.emit_store_to_address(value, cell, 0);

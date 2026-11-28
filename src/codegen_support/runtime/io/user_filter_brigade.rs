@@ -10,6 +10,7 @@
 //! - Callback parameter metadata selects boxed objects, scalar references and closing flags.
 //! - Output grows in owned storage instead of overflowing the shared 64 KiB filter buffer.
 
+use elephc_memoir::buffers::stream_tables;
 use elephc_memoir::strings::str_new_owned;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use elephc_memoir::{FrameOffset, guarded_owners::GuardedFrameOwners};
@@ -127,7 +128,12 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, if arm { "x10" } else { "r10" }, "_user_filter_vtable_ptrs");
     // The symbol register differs on SysV, so the common lookup below is target-selected.
     emitter.instruction(if arm { "ldr x10, [x10, x9, lsl #3]" } else { "mov r10, QWORD PTR [r10 + r9 * 8]" });// select the class's filter table
-    emitter.instruction(if arm { "ldr x9, [x10, #40]" } else { "mov r9, QWORD PTR [r10 + 40]" });// load the four visible parameter representation bits
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        if arm { "x9" } else { "r9" },
+        if arm { "x10" } else { "r10" },
+        stream_tables::UserFilterVtableField::BoxedParams,
+    );
     save(emitter, 120, if arm { "x9" } else { "r9" });
     for (bit, object, cell) in [(1, IN, BOXED_IN), (2, OUT, BOXED_OUT)] {
         load(emitter, 120, if arm { "x9" } else { "r9" });
@@ -185,7 +191,8 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     emitter.instruction(if arm { "ldr x9, [x0, #8]" } else { "mov r9, QWORD PTR [rax + 8]" });// borrow the retained bucket array
     emit_branch_if_null_container(emitter, if arm { "x9" } else { "r9" }, if arm { "x10" } else { "r10" }, "__rt_ufbi_done");
     save(emitter, 32, if arm { "x9" } else { "r9" });
-    emitter.instruction(if arm { "ldr x10, [x9]" } else { "mov r10, QWORD PTR [r9]" });// bound the walk by the array length
+    let (length, array) = if arm { ("x10", "x9") } else { ("r10", "r9") };
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, length, array);
     save(emitter, 40, if arm { "x10" } else { "r10" });
     abi::emit_store_zero_to_address(emitter, frame(emitter), 48);
     emitter.label("__rt_ufbi_walk");
@@ -194,7 +201,7 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     emitter.instruction(if arm { "cmp x10, x11" } else { "cmp r10, r11" });     // stop after the final output bucket
     emitter.instruction(if arm { "b.hs __rt_ufbi_done" } else { "jae __rt_ufbi_done" });// all selected bytes now belong to the result
     load(emitter, 32, if arm { "x9" } else { "r9" });
-    emitter.instruction(if arm { "add x9, x9, #24" } else { "add r9, 24" });    // skip the indexed array header
+    elephc_memoir::values::packed_slots::emit_packed_payload(emitter, if arm { "x9" } else { "r9" }, if arm { "x9" } else { "r9" });
     emitter.instruction(if arm { "ldr x0, [x9, x10, lsl #3]" } else { "mov rax, QWORD PTR [r9 + r10 * 8]" });// borrow the next boxed bucket
     emitter.instruction(if arm { "cbz x0, __rt_ufbi_next" } else { "test rax, rax" });// empty array slots carry no bucket
     if !arm { emitter.instruction("jz __rt_ufbi_next"); }                       // skip an empty bucket slot

@@ -747,16 +747,22 @@ pub(super) fn emit_branch_if_object_reg_class_matches(
     );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("ldr {}, [{}]", header_reg, object_reg)); // load the receiver's runtime class id from its object header
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                header_reg,
+                object_reg,
+            );
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", header_reg, candidate_reg)); // compare it with this candidate class
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // take that class's own runtime action
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("mov {}, QWORD PTR [{}]", header_reg, object_reg)); // load the receiver's runtime class id from its object header
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                header_reg,
+                object_reg,
+            );
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", header_reg, candidate_reg)); // compare it with this candidate class

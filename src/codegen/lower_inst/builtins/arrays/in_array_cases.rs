@@ -183,8 +183,8 @@ pub(super) fn lower_in_array_scalar_truthy_aarch64(
     ctx.load_value_to_reg(needle, "x11")?;
     emit_reg_nonzero_bool(ctx, "x11");
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed scalar-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed scalar payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load indexed scalar-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the scalar membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
@@ -218,8 +218,8 @@ pub(super) fn lower_in_array_scalar_truthy_x86_64(
     ctx.load_value_to_reg(needle, "r10")?;
     emit_reg_nonzero_bool(ctx, "r10");
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed scalar-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed scalar payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r12", "r11"); // load indexed scalar-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "r11");
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the scalar membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length
@@ -268,8 +268,8 @@ pub(super) fn lower_in_array_string_needle_int_array_aarch64(
     ctx.emitter.instruction(&format!("b.eq {}", end_label));                    // a non-numeric string needle cannot equal an int element
     ctx.emitter.instruction("fmov d1, d0");                                     // preserve the parsed numeric-string value for the scan
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed int-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed int payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load indexed int-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the numeric membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
@@ -306,8 +306,8 @@ pub(super) fn lower_in_array_string_needle_int_array_x86_64(
     ctx.emitter.instruction(&format!("je {}", end_label));                      // a non-numeric string needle cannot equal an int element
     ctx.emitter.instruction("movapd xmm1, xmm0");                               // preserve the parsed numeric-string value for the scan
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed int-array length before scanning payload slots
-    ctx.emitter.instruction("lea r10, [r10 + 24]");                             // point at the first indexed int payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r10"); // load indexed int-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r10", "r10");
     ctx.emitter.instruction("xor r12d, r12d");                                  // start the numeric membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r12, r11");                                    // compare the scan index against indexed-array length

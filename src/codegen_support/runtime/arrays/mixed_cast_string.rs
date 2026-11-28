@@ -92,7 +92,7 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     // -- object elements: the same dense `__toString` table `__rt_sprintf_mixed_string` uses --
     emitter.label("__rt_mixed_cast_string_from_object");
     emitter.instruction("mov x0, x1");                                          // the borrowed object becomes the method receiver
-    emitter.instruction("ldr x11, [x0]");                                       // load the object's dense runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x0");
     emitter.instruction("tbnz x11, #63, __rt_mixed_cast_string_object_empty");  // synthetic negative ids index no native metadata
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_class_tostring_count", 0);
     emitter.instruction("cmp x11, x10");                                        // is the class id inside the generated table?
@@ -206,7 +206,7 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     // -- object elements: the same dense `__toString` table `__rt_sprintf_mixed_string` uses --
     emitter.label("__rt_mixed_cast_string_from_object");
     emitter.instruction("sub rsp, 16");                                         // scratch for the method result across nested helper calls
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // load the object's dense runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rdi");
     emitter.instruction("test r8, r8");                                         // reject synthetic negative class ids
     emitter.instruction("js __rt_mixed_cast_string_object_empty");              // synthetic ids index no native metadata
     emitter.instruction("cmp r8, QWORD PTR [rip + _class_tostring_count]");     // is the class id inside the generated table?

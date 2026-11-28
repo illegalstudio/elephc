@@ -512,7 +512,7 @@ fn emit_descriptor_identity(
         Arch::AArch64 => ("x9", "x10"),
         Arch::X86_64 => ("r10", "r11"),
     };
-    abi::emit_load_from_address(ctx.emitter, kind, payload, 0);
+    elephc_memoir::callables::layout::emit_load_kind(ctx.emitter, kind, payload);
     if accept_objects {
         // -- an invokable object converted to a callable keeps its receiver, which is an object --
         let invoke = desc::CALLABLE_DESC_KIND_OBJECT_INVOKE;

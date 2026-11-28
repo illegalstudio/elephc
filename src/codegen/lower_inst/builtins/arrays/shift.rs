@@ -114,7 +114,7 @@ fn lower_array_shift_aarch64(
     let empty_label = ctx.next_label("array_shift_empty");
     let done_label = ctx.next_label("array_shift_done");
     ctx.load_value_to_reg(array, "x0")?;
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether shift is empty
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x0"); // load the indexed-array length before deciding whether shift is empty
     ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // return boxed null when array_shift() runs on an empty array
     emit_array_shift_save_first_aarch64(ctx, elem_ty)?;
     let loop_label = ctx.next_label("array_shift_loop");
@@ -123,7 +123,7 @@ fn lower_array_shift_aarch64(
         ctx.emitter, matches!(elem_ty, PhpType::Str), &loop_label, &compact_done,
     );
     ctx.emitter.instruction("sub x9, x9, #1");                                  // decrement the indexed-array length after removing the first element
-    ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
+    elephc_memoir::values::packed_slots::emit_publish_length(ctx.emitter, "x0", "x9"); // persist the shortened indexed-array length in the header
     emit_array_shift_restore_first_aarch64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array boxed-null path after loading the removed value
@@ -142,7 +142,7 @@ fn lower_array_shift_x86_64(
     let empty_label = ctx.next_label("array_shift_empty");
     let done_label = ctx.next_label("array_shift_done");
     ctx.load_value_to_reg(array, "rax")?;
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the indexed-array length before deciding whether shift is empty
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r10", "rax"); // load the indexed-array length before deciding whether shift is empty
     ctx.emitter.instruction("test r10, r10");                                   // check whether the indexed array has any live elements
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // return boxed null when array_shift() runs on an empty array
     emit_array_shift_save_first_x86_64(ctx, elem_ty)?;
@@ -152,7 +152,7 @@ fn lower_array_shift_x86_64(
         ctx.emitter, matches!(elem_ty, PhpType::Str), &loop_label, &compact_done,
     );
     ctx.emitter.instruction("sub r10, 1");                                      // decrement the indexed-array length after removing the first element
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
+    elephc_memoir::values::packed_slots::emit_publish_length(ctx.emitter, "rax", "r10"); // persist the shortened indexed-array length in the header
     emit_array_shift_restore_first_x86_64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array boxed-null path after loading the removed value
@@ -174,24 +174,24 @@ fn emit_array_shift_save_first_aarch64(
         | PhpType::Mixed
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("ldr x11, [x10]");                          // preserve the removed first pointer-sized payload across compaction
         }
         PhpType::Float => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first float payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("ldr d1, [x10]");                           // preserve the removed first float payload across compaction
         }
         PhpType::Str => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first string payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("ldr x11, [x10]");                          // preserve the removed first string pointer across compaction
             ctx.emitter.instruction("ldr x12, [x10, #8]");                      // preserve the removed first string length across compaction
         }
         PhpType::Void | PhpType::Never => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the payload base even though impossible live slots carry null
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("mov x11, #0");                             // preserve a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first refcounted payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             ctx.emitter.instruction("ldr x11, [x10]");                          // preserve the removed first heap pointer across compaction
         }
         other => {
@@ -216,24 +216,24 @@ fn emit_array_shift_save_first_x86_64(
         | PhpType::Mixed
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // preserve the removed first pointer-sized payload across compaction
         }
         PhpType::Float => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first float payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter.instruction("movsd xmm1, QWORD PTR [r11]");             // preserve the removed first float payload across compaction
         }
         PhpType::Str => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first string payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // preserve the removed first string pointer across compaction
             ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 8]");             // preserve the removed first string length across compaction
         }
         PhpType::Void | PhpType::Never => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the payload base even though impossible live slots carry null
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter.instruction("xor r8d, r8d");                            // preserve a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first refcounted payload slot in the indexed array
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
             ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // preserve the removed first heap pointer across compaction
         }
         other => {

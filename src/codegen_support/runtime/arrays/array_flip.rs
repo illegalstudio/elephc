@@ -42,7 +42,7 @@ pub fn emit_array_flip(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
 
     // -- create hash table with capacity = array length * 2 (load factor) --
-    emitter.instruction("ldr x0, [x0]");                                        // x0 = array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x0", "x0"); // x0 = array length
     emitter.instruction("lsl x0, x0, #1");                                      // x0 = length * 2 (capacity with headroom)
     emitter.instruction("mov x9, #16");                                         // x9 = minimum capacity
     emitter.instruction("cmp x0, x9");                                          // compare with minimum
@@ -56,13 +56,13 @@ pub fn emit_array_flip(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_flip_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // x3 = array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // x3 = array length
     emitter.instruction("ldr x4, [sp, #16]");                                   // x4 = i
     emitter.instruction("cmp x4, x3");                                          // compare i with length
     emitter.instruction("b.ge __rt_array_flip_done");                           // if i >= length, done
 
     // -- load array[i] as the integer key --
-    emitter.instruction("add x5, x0, #24");                                     // x5 = data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x0");
     emitter.instruction("ldr x1, [x5, x4, lsl #3]");                            // x1 = integer key payload from array[i]
     emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks the flipped key as integer
 
@@ -99,7 +99,7 @@ fn emit_array_flip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source array, result hash, and loop index bookkeeping
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the scalar array-flip bookkeeping while keeping nested calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across nested hash-constructor and insertion helper calls
-    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the source indexed-array logical length before deriving the result hash capacity
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdi", "rdi"); // load the source indexed-array logical length before deriving the result hash capacity
     emitter.instruction("shl rdi, 1");                                          // double the source indexed-array length to give the destination hash some insertion headroom
     emitter.instruction("cmp rdi, 16");                                         // clamp the destination hash capacity to the minimum bucket count expected by the runtime
     emitter.instruction("jge __rt_array_flip_capacity_x86");                    // keep the doubled source length when it already meets the minimum bucket count
@@ -112,9 +112,9 @@ fn emit_array_flip_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_flip_loop_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the array-flip loop index before reading the next source payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before reading its logical length and selected payload
-    emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare the loop index against the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rcx", "r10"); // compare the loop index against the source indexed-array logical length
     emitter.instruction("jge __rt_array_flip_done_x86");                        // finish once every source payload has been converted into a destination hash key
-    emitter.instruction("lea r11, [r10 + 24]");                                 // compute the payload base address for the source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r10");
     emitter.instruction("mov rax, QWORD PTR [r11 + rcx * 8]");                  // load the current integer payload into the x86_64 integer-to-string helper input register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the destination hash pointer before inserting the flipped key/value pair
     emitter.instruction("mov rsi, rax");                                        // place the integer key payload in the hash insertion key low-word register

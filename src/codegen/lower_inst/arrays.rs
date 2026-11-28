@@ -557,7 +557,7 @@ pub(super) fn lower_array_get_unchecked(
         Arch::X86_64 => {
             ctx.load_value_to_reg(index, "rax")?;
             ctx.load_value_to_reg(array, "r11")?;
-            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rax*8 + 24]");   // load the proven in-bounds int slot
+            packed_slots::emit_load_indexed_word(ctx.emitter, "r11", "rax", "rax", "r10");
         }
     }
     store_if_result(ctx, inst)
@@ -1217,7 +1217,7 @@ fn lower_load_array_elem_ref_cell_aarch64(
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);            // load the indexed-array logical length
     ctx.emitter.instruction(&format!("cmp {}, {}", idx_reg, len_reg));          // compare the requested offset against the array length
     ctx.emitter.instruction(&format!("b.ge {}", null_label));                   // out-of-bounds offsets yield a null cell pointer
-    ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
     if elem_size == 16 {
         ctx.emitter.instruction(&format!("lsl {}, {}, #4", idx_reg, idx_reg));  // scale the offset by the 16-byte element slot width
     } else {
@@ -1272,8 +1272,7 @@ fn lower_load_array_elem_ref_cell_x86_64(
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);            // load the indexed-array logical length
     ctx.emitter.instruction(&format!("cmp {}, {}", idx_reg, len_reg));          // compare the requested offset against the array length
     ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-bounds offsets yield a null cell pointer
-    ctx.emitter
-        .instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg));      // skip the indexed-array header to reach element payloads
+    elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
     if elem_size == 16 {
         ctx.emitter.instruction(&format!("shl {}, 4", idx_reg));                // scale the offset by the 16-byte element slot width
     } else {
@@ -2660,7 +2659,7 @@ fn emit_array_get_in_bounds_aarch64(
         );
         ctx.emitter.instruction("cmp x11, #7");                                 // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("b.ne {}", typed));                    // preserve the ordinary typed-slot fast path
-        ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
+        elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
         let load_widened = format!(
             "ldr x0, [{}, {}, lsl #3]",
             array_reg, index_reg
@@ -2800,7 +2799,7 @@ fn emit_array_get_in_bounds_x86_64(
         );
         ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("jne {}", typed));                     // preserve the ordinary typed-slot fast path
-        ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
+        elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
         let load_widened = format!(
             "mov rax, QWORD PTR [{} + {} * 8]",
             array_reg, index_reg
@@ -2823,10 +2822,7 @@ fn emit_array_get_in_bounds_x86_64(
         | PhpType::Callable
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
-            ctx.emitter
-                .instruction(
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach element payloads
+            packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
             ctx.emitter
                 .instruction(
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)
@@ -2839,10 +2835,7 @@ fn emit_array_get_in_bounds_x86_64(
             }
         }
         PhpType::Float => {
-            ctx.emitter
-                .instruction(
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach float payloads
+            packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
             ctx.emitter
                 .instruction(
                 &format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
@@ -2855,7 +2848,7 @@ fn emit_array_get_in_bounds_x86_64(
                 .instruction(
                 &format!("add {}, {}", array_reg, index_reg)
             );                                                                  // move to the selected string slot within the indexed array
-            ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
+            elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
@@ -2866,15 +2859,12 @@ fn emit_array_get_in_bounds_x86_64(
                 .instruction(
                 &format!("add {}, {}", array_reg, index_reg)
             );                                                                  // move to the selected tagged-scalar slot within the indexed array
-            ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the tagged-scalar slot
+            elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
             abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
         PhpType::Mixed => {
-            ctx.emitter
-                .instruction(
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach Mixed cell payloads
+            packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
             ctx.emitter
                 .instruction(
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)
@@ -2882,10 +2872,7 @@ fn emit_array_get_in_bounds_x86_64(
             emit_mixed_array_get_deref_invoker_ref_cell(ctx, index_reg);
         }
         other if other.is_refcounted() => {
-            ctx.emitter
-                .instruction(
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach pointer payloads
+            packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
             ctx.emitter
                 .instruction(
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)
@@ -2996,7 +2983,7 @@ fn emit_array_get_for_write_in_bounds_aarch64(
     helper: &str,
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    elephc_memoir::values::packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
     ctx.emitter
         .instruction(
         &format!("add {}, {}, {}, lsl #3", array_reg, array_reg, index_reg)
@@ -3016,10 +3003,7 @@ fn emit_array_get_for_write_in_bounds_x86_64(
     helper: &str,
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    ctx.emitter
-        .instruction(
-        &format!("lea {}, [{} + 24]", array_reg, array_reg)
-    );                                                                          // skip the indexed-array header to reach element payloads
+    packed_slots::emit_packed_payload(ctx.emitter, array_reg, array_reg);
     ctx.emitter
         .instruction(
         &format!("lea {}, [{} + {} * 8]", array_reg, array_reg, index_reg)
@@ -3741,7 +3725,7 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
 
     ctx.emitter.instruction("cmp x1, #0");                                      // reject negative indexes before checking for by-reference markers
     ctx.emitter.instruction(&format!("b.lt {}", runtime_label));                // let the runtime setter drop ignored negative-index writes
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length of the indexed array
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x0");
     ctx.emitter.instruction("cmp x1, x9");                                      // only existing slots can hold by-reference marker cells
     ctx.emitter.instruction(&format!("b.hs {}", runtime_label));                // delegate appends and gap writes to the runtime setter
     elephc_memoir::values::packed_slots::emit_load_indexed_word(ctx.emitter, "x0", "x1", "x11", "x10");
@@ -3851,7 +3835,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
 
     ctx.emitter.instruction("cmp rsi, 0");                                      // reject negative indexes before checking for by-reference markers
     ctx.emitter.instruction(&format!("jl {}", runtime_label));                  // let the runtime setter drop ignored negative-index writes
-    ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                         // load the current logical length of the indexed array
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r9", "rdi");
     ctx.emitter.instruction("cmp rsi, r9");                                     // only existing slots can hold by-reference marker cells
     ctx.emitter.instruction(&format!("jae {}", runtime_label));                 // delegate appends and gap writes to the runtime setter
     elephc_memoir::values::packed_slots::emit_load_indexed_word(ctx.emitter, "rdi", "rsi", "r10", "r9");
@@ -4227,12 +4211,12 @@ fn emit_array_elem_addr_result_aarch64(
     ctx.emitter.instruction("csel x10, xzr, x10, lt");                          // clamp unsupported negative offsets to the safe slot
     match elem_size {
         8 => {
-            ctx.emitter.instruction("add x0, x9, #24");                         // compute the base address of pointer-sized indexed-array slots
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x0", "x9");
             ctx.emitter.instruction("add x0, x0, x10, lsl #3");                 // return the selected by-reference element slot address
         }
         16 => {
             ctx.emitter.instruction("lsl x10, x10, #4");                        // scale the element index by the two-word slot size
-            ctx.emitter.instruction("add x0, x9, #24");                         // compute the base address of two-word indexed-array slots
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x0", "x9");
             ctx.emitter.instruction("add x0, x0, x10");                         // return the selected by-reference element slot address
         }
         other => {
@@ -4259,7 +4243,7 @@ fn emit_array_elem_addr_result_x86_64(
     ctx.emitter.instruction("cmovl r11, r12");                                  // clamp unsupported negative offsets to the safe slot
     match elem_size {
         8 => {
-            ctx.emitter.instruction("lea rax, [r10 + 24 + r11 * 8]");           // return the selected pointer-sized by-reference slot address
+            elephc_memoir::values::packed_slots::emit_indexed_word_address(ctx.emitter, "r10", "r11", "rax");
         }
         16 => {
             ctx.emitter.instruction("shl r11, 4");                              // scale the element index by the two-word slot size

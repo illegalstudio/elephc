@@ -148,8 +148,9 @@ pub(super) fn emit_borrowed_argument(
             emitter.instruction("ldr x9, [x0]");                                // read the number of bound arguments
             emitter.instruction("cmp x10, x9");                                 // check the requested argument before loading its slot
             emitter.instruction(&format!("b.hs {fail_label}"));                 // reject a missing argument without reading past the array
-            emitter.instruction("add x0, x0, #24");                             // address the packed Mixed pointer slots
-            emitter.instruction("ldr x0, [x0, x10, lsl #3]");                   // borrow the argument cell without incrementing its refcount
+            elephc_memoir::values::packed_slots::emit_load_indexed_word(
+                emitter, "x0", "x10", "x0", "x9",
+            );
             emitter.instruction(&format!("str x0, [x29, #-{result_frame_offset}]")); // keep the borrow available for coercion and reference writeback
         }
         Arch::X86_64 => {
@@ -167,7 +168,9 @@ pub(super) fn emit_borrowed_argument(
             abi::emit_load_int_immediate(emitter, "r11", index as i64);
             emitter.instruction("cmp r11, QWORD PTR [rax]");                    // check the argument index against the logical length
             emitter.instruction(&format!("jae {fail_label}"));                  // reject a missing argument without reading past the array
-            emitter.instruction("mov rax, QWORD PTR [rax + r11 * 8 + 24]");     // borrow the argument cell without incrementing its refcount
+            elephc_memoir::values::packed_slots::emit_load_indexed_word(
+                emitter, "rax", "r11", "rax", "r10",
+            );
             emitter.instruction(&format!("mov QWORD PTR [rbp - {result_frame_offset}], rax")); // preserve the borrow for coercion and reference writeback
         }
     }

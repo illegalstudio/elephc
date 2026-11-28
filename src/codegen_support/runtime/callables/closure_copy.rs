@@ -20,12 +20,14 @@
 //! - The caller rejects a missing descriptor (null or the in-band null sentinel) first.
 
 use crate::codegen_support::callable_descriptor::{
-    CALLABLE_DESC_ENVIRONMENT_OFFSET,
     CALLABLE_DESC_KIND_INSTANCE_METHOD, CALLABLE_DESC_KIND_MASK, CALLABLE_DESC_KIND_OBJECT_INVOKE,
     CALLABLE_DESC_ORIGIN_ARRAY, CALLABLE_DESC_ORIGIN_STRING, CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::callables::layout::{
+    self as callable_layout, BindingField, DescriptorField, EnvironmentField,
+};
 use elephc_memoir::callables::storage::{
     ObjectHandle, emit_allocate_initialized_descriptor_from_result_size,
 };
@@ -42,7 +44,6 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
         emit_callable_closure_copy_x86_64(emitter);
         return;
     }
-    let env = CALLABLE_DESC_ENVIRONMENT_OFFSET;
     let capture = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
     let origin = CALLABLE_DESC_ORIGIN_STRING | CALLABLE_DESC_ORIGIN_ARRAY;
     emitter.blank();
@@ -66,21 +67,36 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
     emitter.label("__rt_callable_closure_copy_shape");
     emitter.instruction("str xzr, [sp, #8]");                                   // default to a descriptor without captures
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source descriptor
-    emitter.instruction(&format!("ldr x10, [x9, #{env}]"));                     // x10 = environment record
+    callable_layout::emit_load_descriptor_field(
+        emitter,
+        "x10",
+        "x9",
+        DescriptorField::Environment,
+    );
     emitter.instruction("cbz x10, __rt_callable_closure_copy_alloc");           // no environment, no captures
-    emitter.instruction("ldr x11, [x10]");                                      // x11 = capture count
+    callable_layout::emit_load_environment_field(
+        emitter,
+        "x11",
+        "x10",
+        EnvironmentField::CaptureCount,
+    );
     emitter.instruction("str x11, [sp, #8]");                                   // remember how many slots to copy
     emitter.instruction("cbz x11, __rt_callable_closure_copy_alloc");           // no captures to copy
-    emitter.instruction("ldr x12, [x10, #16]");                                 // x12 = capture binding metadata table
+    callable_layout::emit_load_environment_field(
+        emitter,
+        "x12",
+        "x10",
+        EnvironmentField::Captures,
+    );
     emitter.instruction("cbz x12, __rt_callable_closure_copy_retain");          // untyped captures cannot be retained safely
     emitter.instruction("mov x13, #0");                                         // start with the first capture
     emitter.label("__rt_callable_closure_copy_check");
     emitter.instruction("cmp x13, x11");                                        // has every capture been checked?
     emitter.instruction("b.hs __rt_callable_closure_copy_alloc");               // the shape can be copied
-    emitter.instruction("add x14, x12, x13, lsl #5");                           // x14 = this capture's 32-byte binding entry
-    emitter.instruction("ldr x15, [x14, #24]");                                 // load the capture's reference flag
+    callable_layout::emit_binding_row_address(emitter, "x14", "x12", "x13", "x15");
+    callable_layout::emit_load_binding_field(emitter, "x15", "x14", BindingField::ByRef);
     emitter.instruction("cbnz x15, __rt_callable_closure_copy_retain");         // a reference capture owns a cell lease
-    emitter.instruction("ldr x15, [x14, #16]");                                 // x15 = capture type tag
+    callable_layout::emit_load_binding_field(emitter, "x15", "x14", BindingField::Tag);
     emitter.instruction("cmp x15, #1");                                         // is it an owned string copy?
     emitter.instruction("b.eq __rt_callable_closure_copy_retain");              // a string capture would need its own copy
     emitter.instruction("add x13, x13, #1");                                    // check the next capture
@@ -132,10 +148,20 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, x10");                                        // has every capture been retained?
     emitter.instruction("b.hs __rt_callable_closure_copy_done");                // return the Closure
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source descriptor
-    emitter.instruction(&format!("ldr x10, [x9, #{env}]"));                     // reload its environment record
-    emitter.instruction("ldr x12, [x10, #16]");                                 // reload the capture binding table
-    emitter.instruction("add x14, x12, x13, lsl #5");                           // x14 = this capture's binding entry
-    emitter.instruction("ldr x15, [x14, #16]");                                 // x15 = capture type tag
+    callable_layout::emit_load_descriptor_field(
+        emitter,
+        "x10",
+        "x9",
+        DescriptorField::Environment,
+    );
+    callable_layout::emit_load_environment_field(
+        emitter,
+        "x12",
+        "x10",
+        EnvironmentField::Captures,
+    );
+    callable_layout::emit_binding_row_address(emitter, "x14", "x12", "x13", "x15");
+    callable_layout::emit_load_binding_field(emitter, "x15", "x14", BindingField::Tag);
     for tag in HEAP_CAPTURE_TAGS {
         emitter.instruction(&format!("cmp x15, #{tag}"));                       // is the capture a refcounted heap value?
         emitter.instruction("b.eq __rt_callable_closure_copy_owned");           // retain it
@@ -163,7 +189,6 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 `__rt_callable_closure_copy` helper (mirror of the AArch64 path).
 fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
-    let env = CALLABLE_DESC_ENVIRONMENT_OFFSET;
     let capture = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
     let origin = CALLABLE_DESC_ORIGIN_STRING | CALLABLE_DESC_ORIGIN_ARRAY;
     emitter.blank();
@@ -188,26 +213,41 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_callable_closure_copy_shape");
     emitter.instruction("mov QWORD PTR [rsp+8], 0");                            // default to a descriptor without captures
     emitter.instruction("mov r9, [rsp]");                                       // reload the source descriptor
-    emitter.instruction(&format!("mov r10, [r9+{env}]"));                       // r10 = environment record
+    callable_layout::emit_load_descriptor_field(
+        emitter,
+        "r10",
+        "r9",
+        DescriptorField::Environment,
+    );
     emitter.instruction("test r10, r10");                                       // is there an environment?
     emitter.instruction("jz __rt_callable_closure_copy_alloc");                 // no environment, no captures
-    emitter.instruction("mov r11, [r10]");                                      // r11 = capture count
+    callable_layout::emit_load_environment_field(
+        emitter,
+        "r11",
+        "r10",
+        EnvironmentField::CaptureCount,
+    );
     emitter.instruction("mov [rsp+8], r11");                                    // remember how many slots to copy
     emitter.instruction("test r11, r11");                                       // are there captures?
     emitter.instruction("jz __rt_callable_closure_copy_alloc");                 // no captures to copy
-    emitter.instruction("mov r10, [r10+16]");                                   // r10 = capture binding metadata table
+    callable_layout::emit_load_environment_field(
+        emitter,
+        "r10",
+        "r10",
+        EnvironmentField::Captures,
+    );
     emitter.instruction("test r10, r10");                                       // are the captures typed?
     emitter.instruction("jz __rt_callable_closure_copy_retain");                // untyped captures cannot be retained safely
     emitter.instruction("xor ecx, ecx");                                        // start with the first capture
     emitter.label("__rt_callable_closure_copy_check");
     emitter.instruction("cmp rcx, r11");                                        // has every capture been checked?
     emitter.instruction("jae __rt_callable_closure_copy_alloc");                // the shape can be copied
-    emitter.instruction("mov rdx, rcx");                                        // copy the capture index
-    emitter.instruction("shl rdx, 5");                                          // each binding entry is 32 bytes
-    emitter.instruction("add rdx, r10");                                        // rdx = this capture's binding entry
-    emitter.instruction("cmp QWORD PTR [rdx+24], 0");                           // is it a reference capture?
+    callable_layout::emit_binding_row_address(emitter, "rdx", "r10", "rcx", "rax");
+    callable_layout::emit_load_binding_field(emitter, "rax", "rdx", BindingField::ByRef);
+    emitter.instruction("cmp rax, 0");                                          // is it a reference capture?
     emitter.instruction("jne __rt_callable_closure_copy_retain");               // a reference capture owns a cell lease
-    emitter.instruction("cmp QWORD PTR [rdx+16], 1");                           // is it an owned string copy?
+    callable_layout::emit_load_binding_field(emitter, "rax", "rdx", BindingField::Tag);
+    emitter.instruction("cmp rax, 1");                                          // is it an owned string copy?
     emitter.instruction("je __rt_callable_closure_copy_retain");                // a string capture would need its own copy
     emitter.instruction("inc rcx");                                             // check the next capture
     emitter.instruction("jmp __rt_callable_closure_copy_check");                // continue the shape check
@@ -258,11 +298,20 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, [rsp+8]");                                    // has every capture been retained?
     emitter.instruction("jae __rt_callable_closure_copy_done");                 // return the Closure
     emitter.instruction("mov r9, [rsp]");                                       // reload the source descriptor
-    emitter.instruction(&format!("mov r10, [r9+{env}]"));                       // reload its environment record
-    emitter.instruction("mov r10, [r10+16]");                                   // reload the capture binding table
-    emitter.instruction("mov rdx, rcx");                                        // copy the capture index
-    emitter.instruction("shl rdx, 5");                                          // each binding entry is 32 bytes
-    emitter.instruction("mov rdx, [r10+rdx+16]");                               // rdx = capture type tag
+    callable_layout::emit_load_descriptor_field(
+        emitter,
+        "r10",
+        "r9",
+        DescriptorField::Environment,
+    );
+    callable_layout::emit_load_environment_field(
+        emitter,
+        "r10",
+        "r10",
+        EnvironmentField::Captures,
+    );
+    callable_layout::emit_binding_row_address(emitter, "rdx", "r10", "rcx", "rax");
+    callable_layout::emit_load_binding_field(emitter, "rdx", "rdx", BindingField::Tag);
     for tag in HEAP_CAPTURE_TAGS {
         emitter.instruction(&format!("cmp rdx, {tag}"));                        // is the capture a refcounted heap value?
         emitter.instruction("je __rt_callable_closure_copy_owned");             // retain it

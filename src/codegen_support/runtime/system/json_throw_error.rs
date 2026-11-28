@@ -70,7 +70,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     // Stamp the per-program JsonException class id into [obj+0].
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_exception_class_id");
     emitter.instruction("ldr x9, [x9]");                                        // load JsonException's runtime class id (-1 when absent)
-    emitter.instruction("str x9, [x0]");                                        // store the class id at the object header slot
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
     emitter.instruction("str x0, [sp, #8]");                                    // save the exception object while formatting its message
 
     // Look up and optionally suffix the message for this error code.
@@ -222,7 +222,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     throwable_storage::emit_allocate(emitter);
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_exception_class_id", 0); // load JsonException's runtime class id (-1 when absent)
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at the object header slot
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the exception object while formatting its message
 
     emitter.instruction("call __rt_json_error_message");                        // format the JSON error message, including decode location when present

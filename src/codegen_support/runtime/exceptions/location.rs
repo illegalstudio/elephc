@@ -70,7 +70,7 @@ fn emit_borrowed_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x12", "_class_gc_desc_count");
     emitter.instruction("ldr x12, [x12]");                                      // bound the ancestry walk before indexing parent metadata
     abi::emit_symbol_address(emitter, "x13", "_class_parent_ids");
-    emitter.instruction("ldr x10, [x9]");                                       // begin ancestry lookup at the receiver's runtime class
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x9");
     emitter.label("__rt_location_ancestry");
     emitter.instruction("cmp x10, x12");                                        // negative parents and absent ids are outside the emitted table
     emitter.instruction("b.hs __rt_location_return");                           // ordinary roots retain the default location
@@ -128,7 +128,7 @@ fn emit_borrowed_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rdi", "_class_gc_desc_count");
     emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // bound the ancestry walk before indexing parent metadata
     abi::emit_symbol_address(emitter, "rsi", "_class_parent_ids");
-    emitter.instruction("mov r9, QWORD PTR [r10]");                             // begin ancestry lookup at the receiver's runtime class
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r10");
     emitter.label("__rt_location_ancestry");
     emitter.instruction("cmp r9, rdi");                                         // negative parents and absent ids are outside the emitted table
     emitter.instruction("jae __rt_location_return");                            // ordinary roots retain the default location
@@ -175,7 +175,11 @@ pub(crate) fn emit_creation_line_load(
             elephc_memoir::heap_kind::emit_load_kind_byte(emitter, &scratch.replacen('x', "w", 1), object);
             emitter.instruction(&format!("cmp {scratch}, #6"));                 // compact runtime Throwables retain their fixed metadata word
             emitter.instruction(&format!("b.eq {compact}"));                    // select the compact payload layout
-            emitter.instruction(&format!("ldr {scratch}, [{object}]"));         // resolve the ordinary class id
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                emitter,
+                scratch,
+                object,
+            );
             abi::emit_symbol_address(emitter, result, "_class_throwable_line_offsets");
             emitter.instruction(&format!("ldr {result}, [{result}, {scratch}, lsl #3]")); // locate metadata beyond PHP property and hash storage
             emitter.instruction(&format!("cbz {result}, {done}"));              // absent metadata reports an unknown origin
@@ -188,7 +192,11 @@ pub(crate) fn emit_creation_line_load(
             elephc_memoir::heap_kind::emit_load_kind_byte(emitter, scratch, object);
             emitter.instruction(&format!("cmp {scratch}, 6"));                  // compact runtime Throwables retain their fixed metadata word
             emitter.instruction(&format!("je {compact}"));                      // select the compact payload layout
-            emitter.instruction(&format!("mov {scratch}, QWORD PTR [{object}]")); // resolve the ordinary class id
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                emitter,
+                scratch,
+                object,
+            );
             abi::emit_symbol_address(emitter, result, "_class_throwable_line_offsets");
             emitter.instruction(&format!("mov {result}, QWORD PTR [{result} + {scratch} * 8]")); // locate metadata beyond PHP property and hash storage
             emitter.instruction(&format!("test {result}, {result}"));           // test whether this layout reserves construction metadata

@@ -53,7 +53,7 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
 
     // -- read the array length and runtime value_type --
     emitter.instruction("cbz x0, __rt_vsprintf_empty");                         // null array → format with zero args
-    emitter.instruction("ldr x9, [x0]");                                        // array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // array logical length
     emitter.instruction("str x9, [x29, #32]");                                  // save the argument count
     packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("str x10, [x29, #40]");                                 // save the slot base pointer
@@ -194,9 +194,9 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     // -- read the array length and runtime value_type (array ptr in rdi) --
     emitter.instruction("test rdi, rdi");                                       // null array?
     emitter.instruction("jz __rt_vsprintf_empty_x86");                          // → format with zero args
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r9", "rdi"); // array logical length
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save the argument count
-    emitter.instruction("lea r10, [rdi + 24]");                                 // slot base = array + 24-byte header
+    elephc_memoir::values::packed_slots::emit_packed_payload(emitter, "r10", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the slot base
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");

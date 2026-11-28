@@ -15,6 +15,31 @@ pub mod property;
 pub mod validation_pins;
 use validation_pins::subtract as subtract_validation_pins;
 
+/// Loads the low payload word from a managed or borrowed reference cell.
+pub fn emit_load_low(emitter: &mut impl crate::TargetAbi, destination: &str, cell: &str) {
+    emitter.emit_load_from_address(destination, cell, 0);
+}
+
+/// Loads the high payload word from a managed or borrowed reference cell.
+pub fn emit_load_high(emitter: &mut impl crate::TargetAbi, destination: &str, cell: &str) {
+    emitter.emit_load_from_address(destination, cell, 8);
+}
+
+/// Stores the low payload word in a managed or borrowed reference cell.
+pub fn emit_store_low(emitter: &mut impl crate::TargetAbi, value: &str, cell: &str) {
+    emitter.emit_store_to_address(value, cell, 0);
+}
+
+/// Stores the high payload word in a managed or borrowed reference cell.
+pub fn emit_store_high(emitter: &mut impl crate::TargetAbi, value: &str, cell: &str) {
+    emitter.emit_store_to_address(value, cell, 8);
+}
+
+/// Clears the high payload word of a managed or borrowed reference cell.
+pub fn emit_clear_high(emitter: &mut impl crate::TargetAbi, cell: &str) {
+    emitter.emit_store_zero_to_address(cell, 8);
+}
+
 /// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.
 pub fn emit_new(emitter: &mut impl Emitter) {
     let result = abi::int_result_reg(emitter);

@@ -37,8 +37,7 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed seek
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
-    abi::emit_symbol_address(ctx.emitter, "x10", "_eof_flags");
-    ctx.emitter.instruction("strb wzr, [x10, x9]");                             // clear EOF state for the successfully repositioned stream
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_clear_indexed_byte(ctx.emitter, "x9", "x10");
     ctx.emitter.instruction("mov x0, #0");                                      // fseek returns 0 after a successful seek
     ctx.emitter.label(done_label);
     ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip wrapper stream_seek after the native path
@@ -70,8 +69,7 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed seek
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
-    ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state for the successfully repositioned stream
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_clear_indexed_byte(ctx.emitter, "r10", "r11");
     ctx.emitter.instruction("xor eax, eax");                                    // fseek returns 0 after a successful seek
     ctx.emitter.label(done_label);
     ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip wrapper stream_seek after the native path
@@ -107,8 +105,7 @@ pub(super) fn lower_rewind_aarch64(
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed rewind
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
-    abi::emit_symbol_address(ctx.emitter, "x10", "_eof_flags");
-    ctx.emitter.instruction("strb wzr, [x10, x9]");                             // clear EOF state after rewinding the stream
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_clear_indexed_byte(ctx.emitter, "x9", "x10");
     ctx.emitter.instruction("mov x0, #1");                                      // rewind returns true after a successful seek
     ctx.emitter.label(done_label);
     ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip wrapper stream_seek after the native path
@@ -144,8 +141,7 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed rewind
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
-    ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state after rewinding the stream
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_clear_indexed_byte(ctx.emitter, "r10", "r11");
     ctx.emitter.instruction("mov rax, 1");                                      // rewind returns true after a successful seek
     ctx.emitter.label(done_label);
     ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip wrapper stream_seek after the native path

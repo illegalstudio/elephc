@@ -102,13 +102,18 @@ fn emit_aarch64(e: &mut Emitter) {
     e.instruction("mov x10, #5");                                               // select the Closure class row
     e.instruction("b __rt_mixed_bit_not_row");                                  // build the catchable TypeError
     e.label("__rt_mixed_bit_not_object");
-    e.instruction("ldr x13, [x1]");                                             // read the concrete runtime class id
-    abi::emit_load_symbol_to_reg(e, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(e, "x13", "x1");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(e, "x10");
     e.instruction("cmp x13, x10");                                              // reject ids outside the metadata table
     e.instruction("b.hs __rt_mixed_bit_not_object_fallback");                   // malformed classes use the object spelling
-    abi::emit_symbol_address(e, "x11", "_class_name_entries");
-    e.instruction("add x2, x11, x13, lsl #4");                                  // select the persistent concrete class-name row
-    e.instruction("ldr x12, [x2, #8]");                                         // inspect the concrete name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(e, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(e, "x2", "x11", "x13", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        e,
+        "x12",
+        "x2",
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
     e.instruction("cbnz x12, __rt_mixed_bit_not_error");                        // use the declared class name when available
     e.label("__rt_mixed_bit_not_object_fallback");
     e.instruction("mov x10, #6");                                               // select the generic object spelling
@@ -211,14 +216,19 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("mov r10, 5");                                                // select the Closure class row
     e.instruction("jmp __rt_mixed_bit_not_row");                                // build the catchable TypeError
     e.label("__rt_mixed_bit_not_object");
-    e.instruction("mov r9, QWORD PTR [rdi]");                                   // read the concrete runtime class id
-    abi::emit_load_symbol_to_reg(e, "r10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(e, "r9", "rdi");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(e, "r10");
     e.instruction("cmp r9, r10");                                               // reject ids outside the metadata table
     e.instruction("jae __rt_mixed_bit_not_object_fallback");                    // malformed classes use the object spelling
-    abi::emit_symbol_address(e, "r11", "_class_name_entries");
-    e.instruction("shl r9, 4");                                                 // compute the class-name row byte offset
-    e.instruction("lea rdx, [r11 + r9]");                                       // select the persistent concrete class-name row
-    e.instruction("cmp QWORD PTR [rdx + 8], 0");                                // inspect the concrete name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(e, "r11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(e, "rdx", "r11", "r9", "r10");
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        e,
+        "r10",
+        "rdx",
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
+    e.instruction("test r10, r10");                                            // inspect the concrete name length
     e.instruction("jne __rt_mixed_bit_not_error");                              // use the declared class name when available
     e.label("__rt_mixed_bit_not_object_fallback");
     e.instruction("mov r10, 6");                                                // select the generic object spelling

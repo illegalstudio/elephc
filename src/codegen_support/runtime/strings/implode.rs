@@ -329,7 +329,7 @@ fn emit_x86_64_scalar_slot_address(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a raw scalar slot offset
     emitter.instruction("shl rcx, 3");                                          // convert the loop cursor into the 8-byte scalar slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current scalar slot
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current scalar slot after the fixed array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
 }
 
 /// Reserves `MIXED_CAST_HEADROOM` destination bytes on x86_64, then re-addresses the current
@@ -425,7 +425,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
     elephc_memoir::strings::implode_buffer::emit_open_x86_64(emitter);
-    emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the implode loop
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r11", "rdx"); // load the indexed-array logical length once before entering the implode loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first element
 
@@ -472,7 +472,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the indexed-array loop cursor before scaling it into a string-slot byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the indexed-array loop cursor into the 16-byte offset of the current string slot
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current string slot
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current indexed-array string slot after the fixed array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the current indexed-array string pointer before copying the element bytes
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // load the current indexed-array string length before copying the element bytes
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor before copying the element bytes
@@ -482,7 +482,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
     emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the tagged slot address after the array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction(&format!("cmp QWORD PTR [rcx + 8], {}", TAGGED_SCALAR_TAG_NULL)); // is the nullable integer payload PHP null?
     emitter.instruction("je __rt_implode_tagged_scalar_null_x");                // null contributes an empty string
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // live destination cursor for the headroom check
@@ -493,7 +493,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
     emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // recompute the tagged slot address after the array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the non-null integer payload
     emitter.instruction("mov rdi, rax");                                        // pass the tagged integer to the destination formatter
     emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
@@ -519,7 +519,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the indexed-array loop cursor before scaling it to a Mixed slot offset
     emitter.instruction("shl rcx, 3");                                          // convert the indexed-array loop cursor into the 8-byte Mixed slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current Mixed slot
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current indexed-array Mixed slot
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the boxed Mixed element pointer for string casting
     // Publish the LIVE destination cursor as `_concat_off` before the nested cast. `__rt_ftoa`
     // (and `__rt_itoa`) format into `_concat_buf` at `_concat_off`; leaving the offset parked at

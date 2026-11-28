@@ -11,6 +11,82 @@
 use crate::layout::{OBJECT_HEAP_KIND, THROWABLE_HEAP_KIND, object_declared_slot_offset};
 use crate::{Arch, Emitter, HeapKind};
 
+/// Loads the class id from a borrowed native object.
+pub fn emit_load_class_id(
+    emitter: &mut impl crate::TargetAbi,
+    destination: &str,
+    object: &str,
+) {
+    emitter.emit_load_from_address(destination, object, 0);
+}
+
+/// Stores the class id in a freshly allocated native object.
+pub fn emit_store_class_id(
+    emitter: &mut impl crate::TargetAbi,
+    source: &str,
+    object: &str,
+) {
+    emitter.emit_store_to_address(source, object, 0);
+}
+
+/// Forms the address of a declared property slot selected by its metadata byte offset.
+pub fn emit_slot_address(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    object: &str,
+    byte_offset: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {destination}, {object}, {byte_offset}"));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("lea {destination}, [{object} + {byte_offset}]"));
+        }
+    }
+}
+
+/// Loads the low payload word from an already selected declared property slot.
+pub fn emit_load_slot_low(
+    emitter: &mut impl crate::TargetAbi,
+    destination: &str,
+    slot: &str,
+) {
+    emitter.emit_load_from_address(destination, slot, 0);
+}
+
+/// Loads the high payload word from an already selected declared property slot.
+pub fn emit_load_slot_high(
+    emitter: &mut impl crate::TargetAbi,
+    destination: &str,
+    slot: &str,
+) {
+    emitter.emit_load_from_address(destination, slot, 8);
+}
+
+/// Stores the low payload word into an already selected declared property slot.
+pub fn emit_store_slot_low(
+    emitter: &mut impl crate::TargetAbi,
+    source: &str,
+    slot: &str,
+) {
+    emitter.emit_store_to_address(source, slot, 0);
+}
+
+/// Stores the high payload word into an already selected declared property slot.
+pub fn emit_store_slot_high(
+    emitter: &mut impl crate::TargetAbi,
+    source: &str,
+    slot: &str,
+) {
+    emitter.emit_store_to_address(source, slot, 8);
+}
+
+/// Clears the high payload word in an already selected declared property slot.
+pub fn emit_clear_slot_high(emitter: &mut impl crate::TargetAbi, slot: &str) {
+    emitter.emit_store_zero_to_address(slot, 8);
+}
+
 /// Emits a C entry that projects the class id of a live borrowed native object.
 pub fn emit_c_class_id(emitter: &mut impl Emitter) {
     let symbol = emitter.extern_symbol("elephc_phpext_native_object_class_id");

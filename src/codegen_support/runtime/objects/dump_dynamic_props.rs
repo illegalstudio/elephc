@@ -79,7 +79,7 @@ pub(crate) fn emit_obj_dump_dyn_props(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cbz x0, __rt_obj_dump_dyn_props_none");        // a null instance has no dynamic properties
-            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("ldr x10, [x10]");                              // load the number of registered class ids
             emitter.instruction("cmp x9, x10");                                 // is the class id within the metadata tables?
@@ -93,7 +93,7 @@ pub(crate) fn emit_obj_dump_dyn_props(emitter: &mut Emitter) {
         Arch::X86_64 => {
             emitter.instruction("test rdi, rdi");                               // a null instance has no dynamic properties
             emitter.instruction("jz __rt_obj_dump_dyn_props_none_x86");         // report "no dynamic properties"
-            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
             abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("cmp r9, QWORD PTR [r10]");                     // is the class id within the metadata tables?
             emitter.instruction("jae __rt_obj_dump_dyn_props_none_x86");        // incomplete or unknown ids carry no dumpable tail

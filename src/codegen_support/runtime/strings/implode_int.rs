@@ -40,7 +40,7 @@ pub fn emit_implode_int(emitter: &mut Emitter) {
     emitter.instruction("stp x23, x24, [sp, #96]");                             // save callee-saved glue pointer and length
     emitter.instruction("mov x23, x1");                                         // keep the glue pointer in a callee-saved register
     emitter.instruction("mov x24, x2");                                         // keep the glue length in a callee-saved register
-    emitter.instruction("add x20, x3, #24");                                    // address the packed integer payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x20", "x3");
     emitter.instruction("ldr x21, [x3]");                                       // load the packed element count once
     emitter.instruction("mov x22, xzr");                                        // start at the first element
     elephc_memoir::strings::implode_buffer::emit_open_integer_aarch64(emitter);
@@ -145,7 +145,7 @@ fn emit_implode_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across integer conversion and copy helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across integer conversion and copy helper calls
     elephc_memoir::strings::implode_buffer::emit_open_integer_x86_64(emitter);
-    emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the integer implode loop
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r11", "rdx"); // load the indexed-array logical length once before entering the integer implode loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first integer element
 
@@ -182,7 +182,7 @@ fn emit_implode_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_implode_int_elem");
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before locating the next integer element slot
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the indexed-array pointer before addressing the current integer slot
-    emitter.instruction("mov rax, QWORD PTR [r10 + r11 * 8 + 24]");             // load the current indexed-array integer payload into the integer-to-string helper input register
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r10", "r11", "rax", "r9");
     // -- small non-negative values format without the scratch-backed itoa helper --
     emitter.instruction("cmp rax, 100");                                        // do the common small values fit the direct formatter?
     emitter.instruction("jae __rt_implode_int_small_slow_x86");                 // larger and negative values keep the generic itoa path

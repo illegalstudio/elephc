@@ -38,7 +38,7 @@ pub(super) fn emit_throw_state_error_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 24");                                         // FiberError object size (8 class_id + 16 message property)
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_error_class_id", 0);   // r10 = runtime class id of FiberError
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store FiberError class id at the object header
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     emitter.instruction("mov QWORD PTR [rax + 8], r12");                        // message property low half = bytes pointer
     emitter.instruction("mov QWORD PTR [rax + 16], r13");                       // message property high half = byte length
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // _exc_value = the freshly built FiberError

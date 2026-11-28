@@ -128,8 +128,8 @@ fn emit_aarch64_probe(emitter: &mut Emitter, missing_stat: bool) {
     emitter.instruction(&format!("b.hs __rt_finfo_{suffix}_empty"));            // unsigned comparison also rejects descriptors below the base
     stream_tables::emit_load_wrapper_owner(emitter, "x13", "x12", "x12");
     emitter.instruction(&format!("cbz x12, __rt_finfo_{suffix}_empty"));        // closed wrapper handles expose no metadata
-    emitter.instruction("ldr x12, [x12]");                                      // read the object's dense class ID
-    abi::emit_load_symbol_to_reg(emitter, "x13", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x13");
     emitter.instruction("cmp x12, x13");                                        // check the class metadata bounds before any table access
     emitter.instruction(&format!("b.hs __rt_finfo_{suffix}_empty"));            // reject unknown runtime class IDs
     abi::emit_symbol_address(emitter, "x13", "_user_wrapper_vtable_ptrs");
@@ -139,9 +139,8 @@ fn emit_aarch64_probe(emitter: &mut Emitter, missing_stat: bool) {
         emitter.instruction("ldr x14, [x13, #64]");                             // vtable slot eight is stream_stat
         emitter.instruction(&format!("cbnz x14, __rt_finfo_{suffix}_empty"));   // implemented methods need no missing-method warning
     }
-    abi::emit_symbol_address(emitter, "x13", "_class_name_entries");
-    emitter.instruction("lsl x12, x12, #4");                                    // scale the class ID by the 16-byte pointer/length row
-    emitter.instruction("add x0, x13, x12");                                    // return the immutable class-name metadata row
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x13");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x0", "x13", "x12", "x14");
     emitter.instruction("ret");                                                 // leave the class-name span available until program exit
     emitter.label(&format!("__rt_finfo_{suffix}_empty"));
     // -- return no class metadata when the resource has no matching wrapper --
@@ -171,8 +170,8 @@ fn emit_x86_probe(emitter: &mut Emitter, missing_stat: bool) {
     stream_tables::emit_load_wrapper_owner(emitter, "r8", "rax", "rax");
     emitter.instruction("test rax, rax");                                       // detect a cleared wrapper handle
     emitter.instruction(&format!("jz __rt_finfo_{suffix}_empty"));              // closed handles expose no metadata
-    emitter.instruction("mov rax, QWORD PTR [rax]");                            // read the object's dense class ID
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "rax");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r9");
     emitter.instruction("cmp rax, r9");                                         // check class metadata bounds before any table access
     emitter.instruction(&format!("jae __rt_finfo_{suffix}_empty"));             // reject unknown runtime class IDs
     abi::emit_symbol_address(emitter, "r8", "_user_wrapper_vtable_ptrs");
@@ -183,9 +182,8 @@ fn emit_x86_probe(emitter: &mut Emitter, missing_stat: bool) {
         emitter.instruction("cmp QWORD PTR [r8 + 64], 0");                      // vtable slot eight is stream_stat
         emitter.instruction(&format!("jne __rt_finfo_{suffix}_empty"));         // implemented methods need no missing-method warning
     }
-    abi::emit_symbol_address(emitter, "r8", "_class_name_entries");
-    emitter.instruction("shl rax, 4");                                          // scale the class ID by its 16-byte pointer/length row
-    emitter.instruction("add rax, r8");                                         // return the immutable class-name metadata row
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r8");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "rax", "r8", "rax", "r10");
     emitter.instruction("ret");                                                 // leave the class-name span available until program exit
     emitter.label(&format!("__rt_finfo_{suffix}_empty"));
     emitter.instruction("xor eax, eax");                                        // no missing stream_stat method was found

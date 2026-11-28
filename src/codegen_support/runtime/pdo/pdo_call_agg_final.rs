@@ -102,9 +102,9 @@ pub fn emit_pdo_call_agg_final(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed PHP null
     emitter.label("__rt_pdo_call_agg_final_slot0_store");
     emitter.instruction("ldr x10, [sp, #272]");                                 // args array pointer (caller-saved temp)
-    emitter.instruction("str x0, [x10, #24]");                                  // store the accumulator/null into slot 0
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "x10", "x0", 0);
     emitter.instruction("mov x11, #1");                                         // running element count = 1
-    emitter.instruction("str x11, [x10, #0]");                                  // update the array length field
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x10", "x11"); // update the array length field
 
     // -- slot 1: the row count boxed as a Mixed int --
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
@@ -114,7 +114,7 @@ pub fn emit_pdo_call_agg_final(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #272]");                                 // args array pointer
     emitter.instruction("str x0, [x10, #32]");                                  // store the row count into slot 1
     emitter.instruction("mov x11, #2");                                         // running element count = 2
-    emitter.instruction("str x11, [x10, #0]");                                  // update the array length field
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x10", "x11"); // update the array length field
 
     // -- box the indexed array as a Mixed cell (tag 4 increfs the array) --
     emitter.instruction("ldr x1, [sp, #272]");                                  // raw args array pointer → payload lo
@@ -267,8 +267,8 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed PHP null
     emitter.label("__rt_pdo_call_agg_final_slot0_store_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // args array pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // store the accumulator/null into slot 0
-    emitter.instruction("mov QWORD PTR [r10], 1");                              // update the array length field to 1
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "r10", "rax", 0);
+    elephc_memoir::values::packed_slots::emit_publish_length_immediate(emitter, "r10", 1); // update the array length field to 1
 
     // -- slot 1: the row count boxed as a Mixed int --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // value_lo = row count
@@ -277,7 +277,7 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed Mixed(int) row count
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // args array pointer
     emitter.instruction("mov QWORD PTR [r10 + 32], rax");                       // store the row count into slot 1
-    emitter.instruction("mov QWORD PTR [r10], 2");                              // update the array length field to 2
+    elephc_memoir::values::packed_slots::emit_publish_length_immediate(emitter, "r10", 2); // update the array length field to 2
 
     // -- box the indexed array as a Mixed cell (tag 4 increfs the array) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // raw args array pointer → payload lo

@@ -68,8 +68,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_fread_dest_scratch");                        // non-positive requests write nothing, so keep the current scratch tail
     emitter.instruction("cmp x0, #256");                                        // only registered descriptors can carry a read filter
     emitter.instruction("b.hs __rt_fread_size_ready");                          // invalid or untracked descriptors use the raw read length
-    stream_tables::READ_FILTERS.emit_address(emitter, "x9");
-    emitter.instruction("ldrb w9, [x9, x0]");                                   // inspect the current read filter before reserving
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "w9", "x0", "x9");
     emitter.instruction("cmp w9, #6");                                          // is this the Base64 expansion filter?
     emitter.instruction("b.eq __rt_fread_expand_size");                         // reserve additional space for padded output
     emitter.instruction("cmp w9, #8");                                          // is this the quoted-printable expansion filter?
@@ -140,9 +139,8 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_fread_done");                            // if bytes > 0, skip eof flag
     emitter.label("__rt_fread_mark_eof");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "w10", "x0", "x9");
 
     emitter.label("__rt_fread_would_block");
     emitter.instruction("str xzr, [sp, #24]");                                  // return an empty read without setting EOF for EAGAIN/EWOULDBLOCK
@@ -155,8 +153,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- apply an attached read filter to the bytes just read --
     emitter.instruction("cbz x2, __rt_fread_ret");                              // EOF and transient empty reads have no bucket to filter
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
-    stream_tables::READ_FILTERS.emit_address(emitter, "x9");
-    emitter.instruction("ldrb w3, [x9, x0]");                                   // read filter id for this descriptor
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "w3", "x0", "x9");
     emitter.instruction("cbz w3, __rt_fread_ret");                              // skip when no read filter is attached
     emitter.instruction("cmp w3, #128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
     emitter.instruction("b.lt __rt_fread_builtin_filter");                      // built-in filter: in-place transform
@@ -205,8 +202,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_fread_dest_scratch_x86");                      // non-positive requests write nothing, so keep the current scratch tail
     emitter.instruction("cmp rdi, 256");                                        // only registered descriptors can carry a read filter
     emitter.instruction("jae __rt_fread_size_ready_x86");                       // invalid or untracked descriptors use the raw read length
-    stream_tables::READ_FILTERS.emit_address(emitter, "r10");
-    emitter.instruction("movzx ecx, BYTE PTR [r10 + rdi]");                     // inspect the current read filter before reserving
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "ecx", "rdi", "r10");
     emitter.instruction("cmp ecx, 6");                                          // is this the Base64 expansion filter?
     emitter.instruction("je __rt_fread_expand_size_x86");                       // reserve additional space for padded output
     emitter.instruction("cmp ecx, 8");                                          // is this the quoted-printable expansion filter?
@@ -259,8 +255,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the reserved start pointer in the x86_64 elephc string-pointer result register
     emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed reads
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
-    stream_tables::READ_FILTERS.emit_address(emitter, "r11");
-    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "ecx", "r10", "r11");
     emitter.instruction("test rcx, rcx");                                       // is a read filter attached to this stream?
     emitter.instruction("jz __rt_fread_ret_x86");                               // skip when no read filter is attached
     emitter.instruction("cmp rcx, 128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
@@ -297,8 +292,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fread_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
-    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "1", "r10", "r11");
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when libc read() reports EOF or failure
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty-string result

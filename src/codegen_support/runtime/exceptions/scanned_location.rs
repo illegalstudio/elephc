@@ -25,7 +25,7 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction("mov x10, #32");                                // compact Throwables reserve the fixed creation-line word
             emitter.instruction("cmp w9, #6");                                  // kind six is the compact Throwable payload
             emitter.instruction("b.eq __rt_tokenizer_location_store");          // preserve the compact storage layout
-            emitter.instruction("ldr x9, [x0]");                                // ordinary objects carry a runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_throwable_line_offsets");
             emitter.instruction("ldr x10, [x10, x9, lsl #3]");                  // resolve the private line word after PHP properties
             emitter.instruction("cbz x10, __rt_tokenizer_location_done");       // non-Throwable objects have no location storage
@@ -46,7 +46,7 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction("mov r10, 32");                                 // compact Throwables reserve the fixed creation-line word
             emitter.instruction("cmp r9, 6");                                   // kind six is the compact Throwable payload
             emitter.instruction("je __rt_tokenizer_location_store");            // preserve the compact storage layout
-            emitter.instruction("mov r9, QWORD PTR [rax]");                     // resolve the ordinary runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rax");
             abi::emit_symbol_address(emitter, "r10", "_class_throwable_line_offsets");
             emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");           // locate private metadata after PHP properties
             emitter.instruction("test r10, r10");                               // non-Throwable objects have no location storage

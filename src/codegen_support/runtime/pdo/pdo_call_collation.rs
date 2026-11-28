@@ -102,9 +102,9 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #256]");                                  // value_hi = a_len
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed(string) a
     emitter.instruction("ldr x9, [sp, #280]");                                  // reload the args array pointer
-    emitter.instruction("str x0, [x9, #24]");                                   // store boxed a into slot 0 (data region + 0)
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "x9", "x0", 0);
     emitter.instruction("mov x10, #1");                                         // running element count = 1
-    emitter.instruction("str x10, [x9]");                                       // update the array length field
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x9", "x10"); // update the array length field
 
     // -- slot 1: string b --
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
@@ -114,7 +114,7 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #280]");                                  // reload the args array pointer
     emitter.instruction("str x0, [x9, #32]");                                   // store boxed b into slot 1 (data region + 8)
     emitter.instruction("mov x10, #2");                                         // running element count = 2
-    emitter.instruction("str x10, [x9]");                                       // update the array length field
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x9", "x10"); // update the array length field
 
     // -- box the indexed array as a Mixed cell (tag 4 increfs the array) --
     emitter.instruction("ldr x1, [sp, #280]");                                  // raw args array pointer → payload lo
@@ -216,8 +216,8 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string (tag goes in RAX)
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed Mixed(string) a
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the args array pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // store boxed a into slot 0 (data region + 0)
-    emitter.instruction("mov QWORD PTR [r10], 1");                              // update the array length field to 1
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "r10", "rax", 0);
+    elephc_memoir::values::packed_slots::emit_publish_length_immediate(emitter, "r10", 1); // update the array length field to 1
 
     // -- slot 1: string b --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // value_lo = b_ptr
@@ -226,7 +226,7 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed Mixed(string) b
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the args array pointer
     emitter.instruction("mov QWORD PTR [r10 + 32], rax");                       // store boxed b into slot 1 (data region + 8)
-    emitter.instruction("mov QWORD PTR [r10], 2");                              // update the array length field to 2
+    elephc_memoir::values::packed_slots::emit_publish_length_immediate(emitter, "r10", 2); // update the array length field to 2
 
     // -- box the indexed array as a Mixed cell (tag 4 increfs the array) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // raw args array pointer → payload lo

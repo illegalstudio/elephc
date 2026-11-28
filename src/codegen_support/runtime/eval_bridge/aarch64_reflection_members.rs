@@ -8,6 +8,7 @@
 //! - Method and property metadata use the existing table strides.
 
 use super::*;
+use elephc_memoir::values::reflection_metadata::{self, MemberField};
 
 /// Emits the ARM64 eval hook that returns AOT ReflectionMethod predicate flags.
 pub(super) fn emit_aarch64_eval_reflection_method_flags(emitter: &mut Emitter) {
@@ -31,39 +32,39 @@ pub(super) fn emit_aarch64_eval_reflection_method_flags(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, x9");                                         // have all method metadata rows been scanned?
     emitter.instruction("b.ge __elephc_eval_reflection_method_flags_miss");     // no row matched before the end of the table
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::ClassNameLength);
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_method_flags_skip");     // length mismatch means the class cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the class-name compare
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
-    emitter.instruction("ldr x3, [x10]");                                       // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::ClassName);
     emitter.instruction("mov x4, x12");                                         // pass the stored class-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the class-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested class name match this row?
     emitter.instruction("b.ne __elephc_eval_reflection_method_flags_skip");     // class mismatch means the row cannot match
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current row for the method-name compare
-    emitter.instruction("ldr x12, [x10, #24]");                                 // load the stored method-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::MemberNameLength);
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the requested method-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested method-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_method_flags_skip");     // length mismatch means the method cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the method-name compare
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the requested method-name pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass the requested method-name length
-    emitter.instruction("ldr x3, [x10, #16]");                                  // pass the stored method-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::MemberName);
     emitter.instruction("mov x4, x12");                                         // pass the stored method-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the method-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested method name match this row?
     emitter.instruction("b.ne __elephc_eval_reflection_method_flags_skip");     // method mismatch means scanning must continue
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the matched method metadata row
-    emitter.instruction("ldr x0, [x10, #32]");                                  // return the row's ReflectionMethod predicate flags
+    reflection_metadata::emit_load_member_field(emitter, "x0", "x10", MemberField::Flags);
     emitter.instruction("b __elephc_eval_reflection_method_flags_done");        // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_flags_skip");
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
-    emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte method metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "x10");
     emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
     emitter.instruction("b __elephc_eval_reflection_method_flags_loop");        // continue scanning method metadata rows
@@ -97,28 +98,28 @@ pub(super) fn emit_aarch64_eval_reflection_method_declaring_class(emitter: &mut 
     emitter.instruction("cmp x11, x9");                                         // have all method metadata rows been scanned?
     emitter.instruction("b.ge __elephc_eval_reflection_method_declaring_class_miss"); // no row matched before the end of the table
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::ClassNameLength);
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // length mismatch means the class cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the class-name compare
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
-    emitter.instruction("ldr x3, [x10]");                                       // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::ClassName);
     emitter.instruction("mov x4, x12");                                         // pass the stored class-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the class-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested class name match this row?
     emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // class mismatch means the row cannot match
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current row for the method-name compare
-    emitter.instruction("ldr x12, [x10, #24]");                                 // load the stored method-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::MemberNameLength);
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the requested method-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested method-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // length mismatch means the method cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the method-name compare
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the requested method-name pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass the requested method-name length
-    emitter.instruction("ldr x3, [x10, #16]");                                  // pass the stored method-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::MemberName);
     emitter.instruction("mov x4, x12");                                         // pass the stored method-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the method-name compare
@@ -126,13 +127,13 @@ pub(super) fn emit_aarch64_eval_reflection_method_declaring_class(emitter: &mut 
     emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // method mismatch means scanning must continue
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the matched method metadata row
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("ldr x1, [x10, #40]");                                  // load the declaring class-name pointer
-    emitter.instruction("ldr x2, [x10, #48]");                                  // load the declaring class-name length
+    reflection_metadata::emit_load_member_field(emitter, "x1", "x10", MemberField::DeclaringClass);
+    reflection_metadata::emit_load_member_field(emitter, "x2", "x10", MemberField::DeclaringClassLength);
     emitter.instruction("bl __rt_mixed_from_value");                            // box the declaring class name for Rust
     emitter.instruction("b __elephc_eval_reflection_method_declaring_class_done"); // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_declaring_class_skip");
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
-    emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte method metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "x10");
     emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
     emitter.instruction("b __elephc_eval_reflection_method_declaring_class_loop"); // continue scanning method metadata rows
@@ -166,28 +167,28 @@ pub(super) fn emit_aarch64_eval_reflection_property_declaring_class(emitter: &mu
     emitter.instruction("cmp x11, x9");                                         // have all property metadata rows been scanned?
     emitter.instruction("b.ge __elephc_eval_reflection_property_declaring_class_miss"); // no row matched before the end of the table
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current property metadata row
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::ClassNameLength);
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // length mismatch means the class cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the class-name compare
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
-    emitter.instruction("ldr x3, [x10]");                                       // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::ClassName);
     emitter.instruction("mov x4, x12");                                         // pass the stored class-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the class-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested class name match this row?
     emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // class mismatch means the row cannot match
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current row for the property-name compare
-    emitter.instruction("ldr x12, [x10, #24]");                                 // load the stored property-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::MemberNameLength);
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the requested property-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested property-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // length mismatch means the property cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the property-name compare
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the requested property-name pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass the requested property-name length
-    emitter.instruction("ldr x3, [x10, #16]");                                  // pass the stored property-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::MemberName);
     emitter.instruction("mov x4, x12");                                         // pass the stored property-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare property names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the property-name compare
@@ -195,13 +196,13 @@ pub(super) fn emit_aarch64_eval_reflection_property_declaring_class(emitter: &mu
     emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // property mismatch means scanning must continue
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the matched property metadata row
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("ldr x1, [x10, #40]");                                  // load the declaring class-name pointer
-    emitter.instruction("ldr x2, [x10, #48]");                                  // load the declaring class-name length
+    reflection_metadata::emit_load_member_field(emitter, "x1", "x10", MemberField::DeclaringClass);
+    reflection_metadata::emit_load_member_field(emitter, "x2", "x10", MemberField::DeclaringClassLength);
     emitter.instruction("bl __rt_mixed_from_value");                            // box the declaring class name for Rust
     emitter.instruction("b __elephc_eval_reflection_property_declaring_class_done"); // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_property_declaring_class_skip");
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current property metadata row
-    emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte property metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "x10");
     emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
     emitter.instruction("b __elephc_eval_reflection_property_declaring_class_loop"); // continue scanning property metadata rows
@@ -235,39 +236,39 @@ pub(super) fn emit_aarch64_eval_reflection_property_flags(emitter: &mut Emitter)
     emitter.instruction("cmp x11, x9");                                         // have all property metadata rows been scanned?
     emitter.instruction("b.ge __elephc_eval_reflection_property_flags_miss");   // no row matched before the end of the table
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current property metadata row
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::ClassNameLength);
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_property_flags_skip");   // length mismatch means the class cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the class-name compare
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
-    emitter.instruction("ldr x3, [x10]");                                       // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::ClassName);
     emitter.instruction("mov x4, x12");                                         // pass the stored class-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the class-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested class name match this row?
     emitter.instruction("b.ne __elephc_eval_reflection_property_flags_skip");   // class mismatch means the row cannot match
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current row for the property-name compare
-    emitter.instruction("ldr x12, [x10, #24]");                                 // load the stored property-name length
+    reflection_metadata::emit_load_member_field(emitter, "x12", "x10", MemberField::MemberNameLength);
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the requested property-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested property-name lengths
     emitter.instruction("b.ne __elephc_eval_reflection_property_flags_skip");   // length mismatch means the property cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the property-name compare
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the requested property-name pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass the requested property-name length
-    emitter.instruction("ldr x3, [x10, #16]");                                  // pass the stored property-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "x3", "x10", MemberField::MemberName);
     emitter.instruction("mov x4, x12");                                         // pass the stored property-name length
     emitter.instruction("bl __rt_str_eq");                                      // compare property names with PHP case-sensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the property-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested property name match this row?
     emitter.instruction("b.eq __elephc_eval_reflection_property_flags_skip");   // property mismatch means scanning must continue
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the matched property metadata row
-    emitter.instruction("ldr x0, [x10, #32]");                                  // return the row's ReflectionProperty predicate flags
+    reflection_metadata::emit_load_member_field(emitter, "x0", "x10", MemberField::Flags);
     emitter.instruction("b __elephc_eval_reflection_property_flags_done");      // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_property_flags_skip");
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current property metadata row
-    emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte property metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "x10");
     emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
     emitter.instruction("b __elephc_eval_reflection_property_flags_loop");      // continue scanning property metadata rows

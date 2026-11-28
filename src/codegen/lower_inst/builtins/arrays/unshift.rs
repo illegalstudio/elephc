@@ -114,11 +114,11 @@ fn load_array_unshift_length_to_result(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x0, [x0]");                            // read the indexed-array logical length as the int result
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x0", "x0"); // read the indexed-array logical length as the int result
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rax")?;
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // read the indexed-array logical length as the int result
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "rax", "rax"); // read the indexed-array logical length as the int result
         }
     }
     Ok(())

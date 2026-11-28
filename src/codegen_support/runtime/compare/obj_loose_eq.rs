@@ -52,8 +52,8 @@ fn emit_obj_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x1, __rt_ole_false");                              // a missing right receiver cannot match
     emitter.instruction("stp x0, x1, [sp, #0]");                                // save both receivers for the property walk
     emitter.instruction("str x2, [sp, #16]");                                   // save the current recursion depth
-    emitter.instruction("ldr x9, [x0]");                                        // load the left runtime class id
-    emitter.instruction("ldr x10, [x1]");                                       // load the right runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x1");
     emitter.instruction("cmp x9, x10");                                         // PHP requires the same class before comparing properties
     emitter.instruction("b.ne __rt_ole_false");                                 // different classes are never loosely equal
     emitter.instruction("bl __rt_obj_prop_count");                              // count the left receiver's renderable properties
@@ -130,8 +130,8 @@ fn emit_obj_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the left receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the right receiver
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the current recursion depth
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the left runtime class id
-    emitter.instruction("mov r11, QWORD PTR [rsi]");                            // load the right runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rsi");
     emitter.instruction("cmp r10, r11");                                        // PHP requires the same class before comparing properties
     emitter.instruction("jne __rt_ole_false");                                  // different classes are never loosely equal
     abi::emit_call_label(emitter, "__rt_obj_prop_count"); // count the left receiver's renderable properties

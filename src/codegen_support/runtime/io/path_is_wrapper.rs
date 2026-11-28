@@ -19,7 +19,7 @@
 use elephc_memoir::buffers::stream_tables;
 
 use super::MIN_WRAPPER_SCHEME_LEN;
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits `__rt_path_is_wrapper(path_ptr, path_len) -> 1/0`.
 ///
@@ -60,15 +60,14 @@ pub fn emit_path_is_wrapper(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_piw_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_piw_slot");
     emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_piw_no");                                    // no registered wrapper matched the scheme
-    emitter.instruction(&format!("add x12, x10, x11, lsl #{}", stream_tables::REGISTRATION_SHIFT));                           // slot base = table + index * 32
-    emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x12", "x11", "x10");
+    stream_tables::emit_load_registration_field(emitter, "x13", "x12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x13, __rt_piw_slot_next");                         // empty slot — skip it
-    emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x14", "x12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x14, x9");                                         // does the stored length match the scheme length?
     emitter.instruction("b.ne __rt_piw_slot_next");                             // length mismatch — try the next slot
     emitter.instruction("mov x15, #0");                                         // byte compare index
@@ -128,18 +127,15 @@ fn emit_path_is_wrapper_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_piw_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_piw_slot_x86");
     emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_piw_no_x86");                                 // no registered wrapper matched the scheme
-    emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction(&format!("shl r12, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
-    emitter.instruction("add r12, r10");                                        // slot base = table + offset
-    emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r12", "r11", "r10");
+    stream_tables::emit_load_registration_field(emitter, "r13", "r12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r13, r13");                                       // is this slot empty?
     emitter.instruction("jz __rt_piw_slot_next_x86");                           // skip empty slots
-    emitter.instruction("mov r14, QWORD PTR [r12 + 8]");                        // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "r14", "r12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp r14, r9");                                         // does the stored length match the scheme length?
     emitter.instruction("jne __rt_piw_slot_next_x86");                          // length mismatch — try the next slot
     emitter.instruction("xor r15, r15");                                        // byte compare index

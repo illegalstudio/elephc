@@ -23,6 +23,71 @@ const SPL_DLL_OBJECT_SIZE: i64 = 32;
 const SPL_FIXED_OBJECT_SIZE: i64 = 16;
 const SPL_DLL_INITIAL_CAPACITY: i64 = 4;
 
+/// Selects one native field in a doubly-linked-list-family object.
+#[derive(Clone, Copy)]
+pub enum DllField {
+    /// Owned Mixed backing array.
+    Storage,
+    /// Current iterator index.
+    IteratorIndex,
+    /// Iterator behavior flags.
+    IteratorMode,
+}
+
+impl DllField {
+    /// Returns the private object-field displacement.
+    const fn offset(self) -> usize {
+        match self {
+            Self::Storage => SPL_DLL_STORAGE_OFFSET,
+            Self::IteratorIndex => SPL_DLL_ITER_INDEX_OFFSET,
+            Self::IteratorMode => SPL_DLL_ITER_MODE_OFFSET,
+        }
+    }
+}
+
+/// Loads one SPL list object field without exposing its displacement.
+pub fn emit_load_dll_field(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    object: &str,
+    field: DllField,
+) {
+    emitter.emit_load_from_address(destination, object, field.offset());
+}
+
+/// Stores one SPL list object field without exposing its displacement.
+pub fn emit_store_dll_field(
+    emitter: &mut impl Emitter,
+    source: &str,
+    object: &str,
+    field: DllField,
+) {
+    emitter.emit_store_to_address(source, object, field.offset());
+}
+
+/// Clears one SPL list object field without exposing its displacement.
+pub fn emit_clear_dll_field(emitter: &mut impl Emitter, object: &str, field: DllField) {
+    emitter.emit_store_zero_to_address(object, field.offset());
+}
+
+/// Loads the owned backing array from a SplFixedArray object.
+pub fn emit_load_fixed_storage(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    object: &str,
+) {
+    emitter.emit_load_from_address(destination, object, SPL_FIXED_STORAGE_OFFSET);
+}
+
+/// Stores the owned backing array in a fresh SplFixedArray object.
+pub fn emit_store_fixed_storage(
+    emitter: &mut impl Emitter,
+    source: &str,
+    object: &str,
+) {
+    emitter.emit_store_to_address(source, object, SPL_FIXED_STORAGE_OFFSET);
+}
+
 /// Creates the native list with its class id and iterator mode staged in the constructor frame.
 pub fn emit_dll_storage(emitter: &mut impl Emitter) {
     match emitter.arch() {

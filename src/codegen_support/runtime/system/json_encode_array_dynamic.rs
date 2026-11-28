@@ -91,7 +91,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
 
     // -- cache array length and packed value_type tag --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // load the current array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // load the current array length
     emitter.instruction("str x3, [sp, #24]");                                   // save the array length for the element loop
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // move the packed value_type tag into the low bits
@@ -347,7 +347,7 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // persist the updated write pointer before entering the element loop
     emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the container opens
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source array pointer (depth_enter clobbered rax)
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array length from the first field of the array header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rax"); // load the indexed-array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the array length across nested JSON helper calls
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");

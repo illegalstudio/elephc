@@ -65,7 +65,7 @@ pub(crate) fn emit_tagged_scalar_ref_source(
             emitter.instruction(&format!("jne {ordinary_label}"));              // other source layouts keep their existing decoding
         }
     }
-    abi::emit_load_from_address(emitter, source_tag, storage, 8);
+    elephc_memoir::reference_cells::emit_load_high(emitter, source_tag, storage);
     abi::emit_jump(emitter, box_label);
     emitter.label(ordinary_label);
 }
@@ -88,8 +88,8 @@ pub(crate) fn emit_clone_runtime_mixed_invoker_arg_as_mixed(
         value: Box::new(PhpType::Mixed),
     };
 
-    abi::emit_load_from_address(emitter, tag_reg, dest_reg, 0);
-    abi::emit_load_from_address(emitter, payload_reg, dest_reg, 8);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag_reg, dest_reg);
+    elephc_memoir::layout::emit_load_mixed_low(emitter, payload_reg, dest_reg);
     abi::emit_push_reg(emitter, payload_reg);                                   // preserve the unboxed runtime argument container while normalizing by Mixed tag
     emit_branch_if_mixed_arg_tag(
         tag_reg,

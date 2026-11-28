@@ -11,6 +11,7 @@
 //! - String and integer fingerprints inspect at most 8 validated bytes without printing values.
 
 use crate::{abi, Emitter, Arch};
+use crate::values::class_metadata;
 
 /// Reports each live header's footprint, heap kind, and reference count without mutating owners.
 pub fn emit_live_blocks(emitter: &mut impl Emitter) {
@@ -160,12 +161,12 @@ fn emit_type_identity(emitter: &mut impl Emitter) {
     emit_first_payload_word(emitter);
     match emitter.arch() {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x9", "_class_name_count", 0);
+            class_metadata::emit_load_class_name_count(emitter, "x9");
             emitter.instruction("cmp x0, x9");                                  // accept only ids represented in this program's class table
             emitter.instruction("b.lo __rt_heap_debug_live_class_valid");       // prevent malformed metadata from exposing a pointer
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_class_name_count", 0);
+            class_metadata::emit_load_class_name_count(emitter, "r10");
             emitter.instruction("cmp rax, r10");                                // accept only ids represented in this program's class table
             emitter.instruction("jb __rt_heap_debug_live_class_valid");         // prevent malformed metadata from exposing a pointer
         }
@@ -345,12 +346,12 @@ fn emit_class_name(emitter: &mut impl Emitter) {
     emit_first_payload_word(emitter);
     match emitter.arch() {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x9", "_class_name_count", 0);
+            class_metadata::emit_load_class_name_count(emitter, "x9");
             emitter.instruction("cmp x0, x9");                                  // validate the id again after integer output clobbered its registers
             emitter.instruction("b.hs __rt_heap_debug_live_type_done");         // no class-name pointer is read for an invalid id
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_class_name_count", 0);
+            class_metadata::emit_load_class_name_count(emitter, "r10");
             emitter.instruction("cmp rax, r10");                                // validate the id again after integer output clobbered its registers
             emitter.instruction("jae __rt_heap_debug_live_type_done");          // no class-name pointer is read for an invalid id
         }
@@ -359,16 +360,14 @@ fn emit_class_name(emitter: &mut impl Emitter) {
     emit_first_payload_word(emitter);
     match emitter.arch() {
         Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x9", "_class_name_entries");
-            emitter.instruction("add x9, x9, x0, lsl #4");                      // address the validated sixteen-byte class-name row
-            emitter.instruction("ldp x1, x2, [x9]");                            // borrow the generated name pointer and exact length
+            class_metadata::emit_class_name_table_address(emitter, "x9");
+            class_metadata::emit_class_name_row_address(emitter, "x9", "x9", "x0", "x10");
+            class_metadata::emit_load_class_name_pair(emitter, "x1", "x2", "x9");
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "r10", "_class_name_entries");
-            emitter.instruction("shl rax, 4");                                  // scale the validated class id by the row size
-            emitter.instruction("add r10, rax");                                // select this program's static class-name row
-            emitter.instruction("mov rax, QWORD PTR [r10]");                    // borrow the generated name pointer
-            emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                // borrow the generated name length
+            class_metadata::emit_class_name_table_address(emitter, "r10");
+            class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "rax", "r11");
+            class_metadata::emit_load_class_name_pair(emitter, "rax", "rdx", "r10");
         }
     }
     write_string(emitter);

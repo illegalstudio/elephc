@@ -79,9 +79,8 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("b.gt __rt_opendir_glob_reject_fd");                    // can't register this fd
 
     // -- register the struct in _glob_handles[fd] --
-    stream_tables::GLOB_HANDLES.emit_address(emitter, "x9");
     emitter.instruction("ldr x10, [sp, #40]");                                  // struct pointer
-    emitter.instruction("str x10, [x9, x0, lsl #3]");                           // _glob_handles[fd] = struct ptr
+    stream_tables::GLOB_HANDLES.emit_store_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the freshly-minted fd
@@ -143,9 +142,8 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_opendir_glob_reject_fd_x86");                  // can't register this fd
 
     // -- register the struct in _glob_handles[fd] --
-    stream_tables::GLOB_HANDLES.emit_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // struct pointer
-    emitter.instruction("mov QWORD PTR [r9 + rax * 8], r10");                   // _glob_handles[fd] = struct ptr
+    stream_tables::GLOB_HANDLES.emit_store_indexed_word(emitter, "r10", "rax", "r9");
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the freshly-minted fd

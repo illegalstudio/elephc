@@ -38,7 +38,7 @@ pub fn emit_array_walk(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save source array pointer to stack
 
     // -- read source array length --
-    emitter.instruction("ldr x9, [x1]");                                        // x9 = source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // x9 = source array length
     emitter.instruction("str x9, [sp, #8]");                                    // save length to stack
 
     // -- set up loop counter --
@@ -95,7 +95,7 @@ fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the walk loop
     emitter.instruction("mov r14, rdx");                                        // keep the optional callback environment pointer across every callback invocation
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback calls
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rsi"); // load the source array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the source array length for loop termination checks
     emitter.instruction("xor r13d, r13d");                                      // start the source index at zero before walking the source array
 
@@ -103,7 +103,7 @@ fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r13, QWORD PTR [rbp - 40]");                       // stop once the source index reaches the saved source-array length
     emitter.instruction("jge __rt_array_walk_done");                            // finish walking once every source element has been passed to the callback
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the source array pointer after the previous callback invocation
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the first SysV integer argument register
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r10", "r13", "rdi", "r11");
     emitter.instruction("test r14, r14");                                       // check whether this runtime call carries a callback capture environment
     emitter.instruction("jz __rt_array_walk_call_linux_x86_64");                // keep legacy one-argument callback ABI when no environment is present
     emitter.instruction("mov rsi, r14");                                        // pass capture environment as the wrapper's second argument

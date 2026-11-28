@@ -147,7 +147,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #32]");                                   // preserve the target index across helper calls
     emitter.instruction("cmp x9, x11");                                         // is the requested index beyond the logical length?
     emitter.instruction("b.hs __rt_mixed_array_gfw_extend");                    // missing elements extend the array and autovivify
-    emitter.instruction("add x13, x0, #24");                                    // compute the indexed-array data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x13", "x0");
     emitter.instruction("ldr x0, [x13, x9, lsl #3]");                           // load the stored boxed cell from the slot
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_fill_slot");              // null gap slots autovivify in place
     emitter.instruction("ldr x11, [x0]");                                       // load the stored cell's payload tag
@@ -366,7 +366,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, r11");                                         // is the requested index beyond the logical length?
     emitter.instruction("jae __rt_mixed_array_gfw_extend");                     // missing elements extend the array and autovivify
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the unique array pointer
-    emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // load the stored boxed cell from the slot
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r10", "r9", "rax", "r11");
     emitter.instruction("test rax, rax");                                       // null gap slots autovivify in place
     emitter.instruction("je __rt_mixed_array_gfw_fill_slot");                   // branch to the slot-install path
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the stored cell's payload tag

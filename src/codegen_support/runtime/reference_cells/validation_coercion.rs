@@ -11,11 +11,10 @@
 //! - Only a successful validator transfers one owned Mixed candidate to its output slot.
 
 use super::*;
-
-/// Minimum context storage: caller flags followed by the owned contained Throwable.
-pub(crate) const CONTEXT_BYTES: usize = 16;
-/// Offset of the contained native Throwable, separate from the caller's active exception.
-pub(crate) const PENDING_THROWABLE: usize = CONTEXT_BYTES - 8;
+use elephc_memoir::owner_layout::{
+    NativePropertyValidator, NativeValidationContext, NativeValidationInvocation,
+    NativeValidationOutcome,
+};
 
 const FRAME: usize = 96;
 const ENTRY: usize = 64;
@@ -42,11 +41,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_store_zero_to_address(emitter, result, 0);
     abi::load_at_offset(emitter, result, CONTEXT);
     abi::emit_branch_if_int_result_zero(emitter, failed);
-    abi::emit_load_from_address(emitter, result, result, PENDING_THROWABLE);
+    abi::emit_load_from_address(
+        emitter,
+        result,
+        result,
+        NativeValidationContext::PENDING_THROWABLE,
+    );
     abi::emit_branch_if_int_result_nonzero(emitter, pending);
     abi::load_at_offset(emitter, result, ENTRY);
     abi::emit_branch_if_int_result_zero(emitter, failed);
-    abi::emit_load_from_address(emitter, result, result, 0);
+    abi::emit_load_from_address(emitter, result, result, NativePropertyValidator::ENTRY);
     abi::emit_branch_if_int_result_zero(emitter, failed);
     abi::store_at_offset(emitter, result, ENTRY);
     abi::load_at_offset(emitter, result, ORIGINAL);
@@ -66,7 +70,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_cleanup_invoke");
     abi::emit_branch_if_int_result_nonzero(emitter, pending);
     abi::load_at_offset(emitter, result, OUTPUT);
-    abi::emit_load_from_address(emitter, result, result, 0);
+    abi::emit_load_from_address(emitter, result, result, NativeValidationOutcome::CANDIDATE);
     abi::emit_branch_if_int_result_zero(emitter, failed);
     abi::emit_load_int_immediate(emitter, result, 0);
     abi::emit_jump(emitter, done);
@@ -91,13 +95,23 @@ fn emit_body(emitter: &mut Emitter) {
     abi::emit_frame_prologue(emitter, 32);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
     abi::emit_reg_move(emitter, record, abi::int_arg_reg_name(emitter.target, 0));
-    abi::emit_load_from_address(emitter, entry, record, 0);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 1), record, 16);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 0), record, 8);
+    abi::emit_load_from_address(emitter, entry, record, NativeValidationInvocation::ENTRY);
+    abi::emit_load_from_address(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        record,
+        NativeValidationInvocation::ORIGINAL,
+    );
+    abi::emit_load_from_address(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 0),
+        record,
+        NativeValidationInvocation::CONTEXT,
+    );
     abi::emit_call_reg(emitter, entry);
     abi::load_at_offset(emitter, record, 8);
-    abi::emit_load_from_address(emitter, entry, record, 24);
-    abi::emit_store_to_address(emitter, result, entry, 0);
+    abi::emit_load_from_address(emitter, entry, record, NativeValidationInvocation::OUTPUT);
+    abi::emit_store_to_address(emitter, result, entry, NativeValidationOutcome::CANDIDATE);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
 }

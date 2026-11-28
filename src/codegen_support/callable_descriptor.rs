@@ -25,7 +25,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 pub(crate) use elephc_memoir::callables::storage::{
-    HEADER_BYTES as CALLABLE_DESC_STATIC_SIZE, emit_copy_descriptor_header_to_runtime,
+    emit_copy_descriptor_header_to_runtime,
 };
 
 pub(crate) const CALLABLE_DESC_KIND_CLOSURE: u64 = CallableDescriptorShape::Closure as u64;
@@ -52,7 +52,6 @@ pub(crate) const CALLABLE_DESC_ORIGIN_ARRAY: u64 = 1 << 9;
 
 pub(crate) use elephc_memoir::callables::layout::{
     ENTRY_OFFSET as CALLABLE_DESC_ENTRY_OFFSET,
-    ENVIRONMENT_OFFSET as CALLABLE_DESC_ENVIRONMENT_OFFSET,
     INVOKER_OFFSET as CALLABLE_DESC_INVOKER_OFFSET,
     NAME_LENGTH_OFFSET as CALLABLE_DESC_NAME_LENGTH_OFFSET,
     NAME_OFFSET as CALLABLE_DESC_NAME_OFFSET,
@@ -62,7 +61,7 @@ use elephc_memoir::callables::layout::{
     BINDING_WORDS, NO_VARIADIC_PARAMETER, PARAM_NAME_WORDS, PARAM_TYPE_WORDS,
 };
 
-pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
+pub(crate) use elephc_memoir::callables::layout::RUNTIME_CAPTURE_OFFSET as CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
 
 /// Inline scalar pairs own no heap child, unlike the boxed Mixed binding tag 7.
 const CALLABLE_BINDING_TAG_TAGGED_SCALAR: u64 = 16;

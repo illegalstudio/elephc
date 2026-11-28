@@ -11,6 +11,7 @@
 //! - Every exit unlinks both roots and contains cleanup exceptions in the caller's context.
 
 use super::*;
+use elephc_memoir::owner_layout::{NativeValidationContext, NativeValidationOutcome};
 
 const FRAME: usize = 128;
 const CONTEXT: usize = 8;
@@ -45,7 +46,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
         abi::emit_branch_if_int_result_zero(emitter, failed);
     }
     abi::load_at_offset(emitter, result, OUTCOME);
-    abi::emit_store_zero_to_address(emitter, result, 0);
+    abi::emit_store_zero_to_address(emitter, result, NativeValidationOutcome::CANDIDATE);
     abi::load_at_offset(emitter, result, WRAPPER);
     abi::emit_call_label(emitter, "__rt_reference_is");
     abi::emit_branch_if_int_result_zero(emitter, refused);
@@ -71,14 +72,14 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, STATUS);
     abi::emit_branch_if_int_result_nonzero(emitter, validation_failure);
     abi::load_at_offset(emitter, scratch, OUTCOME);
-    abi::emit_load_from_address(emitter, result, scratch, 0);
+    abi::emit_load_from_address(emitter, result, scratch, NativeValidationOutcome::CANDIDATE);
     abi::emit_branch_if_int_result_nonzero(emitter, candidate_ready);
     // No type source constrained this assignment. The snapshot still needs a transfer owner.
     abi::load_at_offset(emitter, result, SNAPSHOT);
     abi::emit_call_label(emitter, "__rt_mixed_clone");
     emitter.label(candidate_ready);
     abi::load_at_offset(emitter, scratch, OUTCOME);
-    abi::emit_store_zero_to_address(emitter, scratch, 0);
+    abi::emit_store_zero_to_address(emitter, scratch, NativeValidationOutcome::CANDIDATE);
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 2), result);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CONTEXT);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), WRAPPER);
@@ -91,7 +92,12 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     // Establish the conflict before an RHS destructor can throw a replacement exception.
     abi::emit_call_label(emitter, "__rt_reference_conflict_error_new");
     abi::load_at_offset(emitter, scratch, CONTEXT);
-    abi::emit_store_to_address(emitter, result, scratch, 8);
+    abi::emit_store_to_address(
+        emitter,
+        result,
+        scratch,
+        NativeValidationContext::PENDING_THROWABLE,
+    );
     emitter.label(cleanup);
     for (record, label) in [(SNAPSHOT_PIN, "snapshot"), (WRAPPER_PIN, "wrapper")] {
         abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), record);
@@ -105,7 +111,12 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
         emitter.label(&released);
     }
     abi::load_at_offset(emitter, result, CONTEXT);
-    abi::emit_load_from_address(emitter, result, result, 8);
+    abi::emit_load_from_address(
+        emitter,
+        result,
+        result,
+        NativeValidationContext::PENDING_THROWABLE,
+    );
     let status_ready = "__rt_reference_publish_native_status_ready";
     abi::emit_branch_if_int_result_zero(emitter, status_ready);
     abi::load_at_offset(emitter, result, STATUS);

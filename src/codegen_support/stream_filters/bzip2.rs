@@ -81,8 +81,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("str x2, [sp, #8]");                                    // save the payload length as the return value
 
     // -- load this descriptor's bz_stream handle and seed the input window --
-    abi::emit_symbol_address(emitter, "x9", "_bzstream_handles");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // x10 = bz_stream pointer for this descriptor
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_load_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("str x10, [sp, #16]");                                  // save the bz_stream pointer across the calls
     emitter.instruction("str x1, [x10, #0]");                                   // bz_stream.next_in = payload pointer
     emitter.instruction("str w2, [x10, #8]");                                   // bz_stream.avail_in = payload length
@@ -128,8 +127,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("sub sp, sp, #48");                                     // frame: [0]=fd [8]=bz_stream [16]=ret code [32]=x29 [40]=x30
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_bzstream_handles");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // x10 = bz_stream pointer for this descriptor
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_load_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction(&format!("cbz x10, {}_done", close_label));             // nothing to flush when no filter is attached
     emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor across compress calls
     emitter.instruction("str x10, [sp, #8]");                                   // save the bz_stream pointer
@@ -166,8 +164,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("ldr x0, [sp, #8]");                                    // arg 0 = bz_stream pointer
     emitter.bl_c("BZ2_bzCompressEnd"); // release libbz2's internal compress state
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
-    abi::emit_symbol_address(emitter, "x9", "_bzstream_handles");
-    emitter.instruction("str xzr, [x9, x0, lsl #3]");                           // clear this descriptor's bz_stream handle
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_clear_indexed_word(emitter, "x0", "x9");
     emitter.label(&format!("{}_done", close_label));
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the helper frame
@@ -191,11 +188,9 @@ pub(crate) fn emit_compress_arm64(
     // -- register the handle and mark the descriptor's write filter as bzip2 --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the bz_stream pointer
-    abi::emit_symbol_address(emitter, "x9", "_bzstream_handles");
-    emitter.instruction("str x10, [x9, x0, lsl #3]");                           // store the bz_stream handle for this descriptor
-    stream_tables::WRITE_FILTERS.emit_address(emitter, "x9");
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_store_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("mov w11, #10");                                        // write-filter id 10 = bzip2.compress
-    emitter.instruction("strb w11, [x9, x0]");                                  // record the bzip2 write filter for this descriptor
+    stream_tables::WRITE_FILTERS.emit_store_indexed_byte(emitter, "w11", "x0", "x9");
 
     // -- publish the helper addresses so __rt_fwrite / fclose can call them --
     abi::emit_symbol_address(emitter, "x11", fwrite_label);
@@ -241,8 +236,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the payload length as the return value
 
     // -- load this descriptor's bz_stream handle and seed the input window --
-    abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // r10 = bz_stream pointer for this descriptor
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_load_indexed_word(emitter, "r10", "rdi", "r9");
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the bz_stream pointer
     emitter.instruction("mov QWORD PTR [r10 + 0], rsi");                        // bz_stream.next_in = payload pointer
     emitter.instruction("mov DWORD PTR [r10 + 8], edx");                        // bz_stream.avail_in = payload length
@@ -284,8 +278,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // frame: [-8]=fd [-16]=bz_stream [-24]=ret code
-    abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // r10 = bz_stream pointer for this descriptor
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_load_indexed_word(emitter, "r10", "rdi", "r9");
     emitter.instruction("test r10, r10");                                       // is a compress stream attached to this descriptor?
     emitter.instruction(&format!("jz {}_done", close_label));                   // nothing to flush when no filter is attached
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the file descriptor across compress calls
@@ -318,8 +311,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // arg 0 = bz_stream pointer
     emitter.instruction("call BZ2_bzCompressEnd");                              // release libbz2's internal compress state
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
-    abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov QWORD PTR [r9 + rdi*8], 0");                       // clear this descriptor's bz_stream handle
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_clear_indexed_word(emitter, "rdi", "r9");
     emitter.label(&format!("{}_done", close_label));
     emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -345,10 +337,8 @@ pub(crate) fn emit_compress_x86_64(
     // -- register the handle and mark the descriptor's write filter as bzip2 --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the bz_stream pointer
-    abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov QWORD PTR [r9 + rdi*8], r10");                     // store the bz_stream handle for this descriptor
-    stream_tables::WRITE_FILTERS.emit_address(emitter, "r9");
-    emitter.instruction("mov BYTE PTR [r9 + rdi], 10");                         // write-filter id 10 = bzip2.compress
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_store_indexed_word(emitter, "r10", "rdi", "r9");
+    stream_tables::WRITE_FILTERS.emit_store_indexed_byte(emitter, "10", "rdi", "r9");
 
     // -- publish the helper addresses so __rt_fwrite / fclose can call them --
     emitter.instruction(&format!("lea r10, [rip + {}]", fwrite_label));         // address of the compress fwrite helper

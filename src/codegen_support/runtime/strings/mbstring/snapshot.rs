@@ -61,7 +61,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mbstring_array_next_value");                    // normalize the value before returning it
     emitter.label("__rt_mbstring_array_next_indexed");
     emitter.instruction("ldr x9, [x2]");                                        // read the next logical indexed position
-    emitter.instruction("ldr x10, [x0]");                                       // read the indexed array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x0"); // read the indexed array length
     emitter.instruction("cmp x9, x10");                                         // check the live bounds before loading a slot
     emitter.instruction("b.hs __rt_mbstring_array_next_end");                   // finish without reading beyond the indexed payload
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x12", "x0");
@@ -81,7 +81,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #16]");                                  // recover the key output descriptor
     emitter.instruction("stp xzr, x9, [x11]");                                  // publish the integer index without allocating a key cell
     emitter.instruction("str xzr, [x11, #16]");                                 // clear the unused key high word
-    emitter.instruction("add x11, x0, #24");                                    // address the indexed payload after its header
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x0");
     emitter.instruction("madd x11, x9, x13, x11");                              // address the selected typed slot
     emitter.instruction("add x9, x9, #1");                                      // advance to the next logical position
     emitter.instruction("str x9, [x2]");                                        // publish the next indexed cursor
@@ -204,7 +204,12 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rcx + 8], r11");                        // publish the logical index without allocating a key cell
     emitter.instruction("mov QWORD PTR [rcx + 16], 0");                         // clear the unused key high word
     emitter.instruction("imul r8, r11");                                        // scale the index by the validated physical slot width
-    emitter.instruction("lea r8, [rdi + r8 + 24]");                             // address the indexed slot after its header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(
+        emitter,
+        "r8",
+        "rdi",
+        "r8",
+    );
     emitter.instruction("inc r11");                                             // advance to the next logical position
     emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the next indexed cursor
     emitter.instruction("mov rdi, QWORD PTR [r8]");                             // borrow the low payload word

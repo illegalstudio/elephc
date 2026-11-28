@@ -188,13 +188,13 @@ fn emit_object_entry_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow, labe
     emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
     emitter.instruction("add x29, sp, #32");                                    // establish a stable Throwable-construction frame
 
-    emitter.instruction("ldr x13, [x0]");                                       // keep the class id outside the symbol helper's x9 scratch
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x13", "x0");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10");
     emitter.instruction("cmp x13, x10");                                        // is the class id within the dense name table?
     emitter.instruction(&format!("b.hs {fallback}"));                           // malformed ids use the generic spelling
-    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-    emitter.instruction("add x10, x10, x13, lsl #4");                           // select the 16-byte class-name row
-    emitter.instruction("ldp x11, x12, [x10]");                                 // borrow the class-name pointer and byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x10", "x13", "x14");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x11", "x12", "x10");
     emitter.instruction(&format!("cbnz x12, {ready}"));                         // a non-empty name is what PHP prints
     emitter.label(&fallback);
     abi::emit_symbol_address(emitter, "x11", "_unser_type_object");
@@ -268,13 +268,12 @@ fn emit_object_entry_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow, label
     emitter.instruction("mov rbp, rsp");                                        // establish a Throwable-construction frame
     emitter.instruction("sub rsp, 32");                                         // reserve the message pair, keeping rsp aligned
 
-    emitter.instruction("mov r13, QWORD PTR [rdi]");                            // runtime class id
-    emitter.instruction("cmp r13, QWORD PTR [rip + _class_name_count]");        // is the class id within the dense name table?
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r13", "rdi");
+    elephc_memoir::values::class_metadata::emit_cmp_class_id_to_name_count(emitter, "r13"); // is the class id within the dense name table?
     emitter.instruction(&format!("jae {fallback}"));                            // malformed ids use the generic spelling
-    emitter.instruction("lea r10, [rip + _class_name_entries]");                // dense class-name metadata table
-    emitter.instruction("shl r13, 4");                                          // scale the class id to the 16-byte row
-    emitter.instruction("mov r11, QWORD PTR [r10 + r13]");                      // borrow the class-name pointer
-    emitter.instruction("mov r12, QWORD PTR [r10 + r13 + 8]");                  // borrow the class-name byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r13", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "r11", "r12", "r10");
     emitter.instruction("test r12, r12");                                       // is the name non-empty?
     emitter.instruction(&format!("jnz {ready}"));                               // a non-empty name is what PHP prints
     emitter.label(&fallback);

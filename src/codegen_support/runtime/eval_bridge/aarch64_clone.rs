@@ -34,7 +34,7 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter, n
         "__rt_object_clone_shallow_boxed_null",
     );
     emitter.instruction("str x9, [sp, #0]");                                    // save the source object payload pointer
-    emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x9");
     emitter.instruction("str x11, [sp, #56]");                                  // save class id across allocation and ownership calls
     emit_aarch64_reject_runtime_managed_clone_classes(emitter, "x11", "__rt_object_clone_shallow_boxed_null");
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");
@@ -52,7 +52,7 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter, n
     emitter.instruction("ldr x0, [x10, x11, lsl #3]");                          // include ordinary Throwable construction metadata in the allocation
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("ldr x11, [sp, #56]");                                  // reload the source class id
-    emitter.instruction("str x11, [x0]");                                       // store the class id at the clone payload head
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x11", "x0");
     emitter.instruction("str x0, [sp, #8]");                                    // save the clone object payload pointer
     abi::emit_symbol_address(emitter, "x10", "_class_throwable_line_offsets");
     emitter.instruction("ldr x13, [x10, x11, lsl #3]");                         // locate optional ordinary Throwable construction metadata

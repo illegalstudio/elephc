@@ -53,7 +53,7 @@ fn body_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("b.ne {unsupported}"));                        // only object receivers can use the private selector
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the native object payload pointer
     emit_branch_if_null_container(emitter, "x9", "x10", unsupported);
-    emitter.instruction("ldr x11, [x9]");                                       // load the concrete native class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x9");
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");
     emitter.instruction("ldr x10, [x10]");                                      // load the dense class metadata extent
     emitter.instruction("cmp x11, x10");                                        // is this class represented by the private table?
@@ -130,7 +130,7 @@ fn body_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("jne {unsupported}"));                         // only object receivers can use the private selector
     emitter.instruction("mov r9, QWORD PTR [rax + 8]");                         // load the native object payload pointer
     emit_branch_if_null_container(emitter, "r9", "r10", unsupported);
-    emitter.instruction("mov r11, QWORD PTR [r9]");                             // load the concrete native class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r9");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_class_gc_desc_count", 0);
     emitter.instruction("cmp r11, r10");                                        // is this class represented by the private table?
     emitter.instruction(&format!("jae {unsupported}"));                         // eval-only class ids must never use native selectors

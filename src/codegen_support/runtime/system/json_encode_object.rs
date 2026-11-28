@@ -10,6 +10,9 @@
 //! - A serializer returning its enum receiver walks its persistent properties once.
 
 use elephc_memoir::strings::concat_checkpoint::PrefixCheckpoint;
+use elephc_memoir::values::property_descriptor::{
+    self, JsonHeaderField, JsonPropertyField,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
@@ -76,7 +79,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer the helper call clobbered
 
     // -- bounds-check the class id and resolve the JSON descriptor --
-    emitter.instruction("ldr x12, [x0]");                                       // load class_id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x0");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_class_gc_desc_count");
     emitter.instruction("ldr x13, [x13]");                                      // load the total number of registered class descriptors
     emitter.instruction("cmp x12, x13");                                        // is the class_id within the descriptor table?
@@ -87,10 +90,15 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("str x13, [sp, #24]");                                  // save the descriptor pointer for downstream loads
 
     // -- check the JsonSerializable flag --
-    emitter.instruction("ldr x12, [x13]");                                      // load the class JSON descriptor flags word
+    property_descriptor::emit_load_json_header_field(emitter, "x12", "x13", JsonHeaderField::Flags);
     emitter.instruction("tst x12, #1");                                         // is JsonSerializable bit set on the descriptor?
     emitter.instruction("b.eq __rt_json_obj_walk_props");                       // ordinary classes walk public properties directly
-    emitter.instruction("ldr x14, [x13, #8]");                                  // load the jsonSerialize method symbol from the descriptor
+    property_descriptor::emit_load_json_header_field(
+        emitter,
+        "x14",
+        "x13",
+        JsonHeaderField::ProjectionTarget,
+    );
     emitter.instruction("cbz x14, __rt_json_obj_walk_props");                   // missing method targets fall through to the property walker
     emitter.instruction("str x14, [sp, #32]");                                  // park the jsonSerialize target across helper calls that clobber x14
     let prefix = PrefixCheckpoint { length: "[sp, #24]", owner: "[sp, #40]" };
@@ -141,13 +149,13 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #0]");                                   // load the original receiver identity
     emitter.instruction("cmp x9, x10");                                         // did jsonSerialize return its own receiver?
     emitter.instruction("b.ne __rt_json_obj_jsonserialize_mixed");              // distinct objects retain recursive encoding
-    emitter.instruction("ldr x12, [x10]");                                      // load the receiver class id after identity comparison
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x10");
     abi::emit_symbol_address(emitter, "x13", "_class_enum_kinds");
     emitter.instruction("ldr x13, [x13, x12, lsl #3]");                         // identify persistent enum receivers
     emitter.instruction("cbz x13, __rt_json_obj_jsonserialize_mixed");          // ordinary classes retain their existing recursive path
     emitter.instruction("bl __rt_decref_mixed");                                // retire the owned result box while its enum receiver remains persistent
     emitter.instruction("ldr x12, [sp, #0]");                                   // reload the still-owned receiver after cleanup
-    emitter.instruction("ldr x12, [x12]");                                      // recover its class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x12");
     abi::emit_symbol_address(emitter, "x13", "_class_json_desc_ptrs");
     emitter.instruction("ldr x13, [x13, x12, lsl #3]");                         // recover the descriptor overwritten by prefix storage
     emitter.instruction("str x13, [sp, #24]");                                  // restore the descriptor for the property walker
@@ -180,7 +188,12 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // -- walk public properties from the descriptor --
     emitter.label("__rt_json_obj_walk_props");
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload the descriptor pointer
-    emitter.instruction("ldr x14, [x13, #16]");                                 // load the public property count
+    property_descriptor::emit_load_json_header_field(
+        emitter,
+        "x14",
+        "x13",
+        JsonHeaderField::PropertyCount,
+    );
     emitter.instruction("str x14, [sp, #40]");                                  // save the public property count for the loop guard
 
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
@@ -200,18 +213,29 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x14");                                        // are there more properties to encode?
     emitter.instruction("b.ge __rt_json_obj_close");                            // emit the closing brace once every property is encoded
 
-    // Compute descriptor entry address: descriptor + 24 + index * 32
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload the descriptor pointer for the current iteration
-    emitter.instruction("add x13, x13, #24");                                   // skip the leading flags / jsonSerialize / count words
-    emitter.instruction("mov x9, #32");                                         // each descriptor entry occupies 32 bytes
-    emitter.instruction("mul x9, x10, x9");                                     // compute the byte offset of the current entry
-    emitter.instruction("add x13, x13, x9");                                    // advance to the requested property descriptor entry
+    property_descriptor::emit_json_property_row_address(emitter, "x13", "x13", "x10", "x9");
 
     // Save name_ptr / name_len / prop_index / type_tag in scratch slots
-    emitter.instruction("ldr x14, [x13]");                                      // load the property name pointer
-    emitter.instruction("ldr x15, [x13, #8]");                                  // load the property name length
-    emitter.instruction("ldr x16, [x13, #16]");                                 // load the property runtime slot index
-    emitter.instruction("ldr x17, [x13, #24]");                                 // load the property compile-time type tag
+    property_descriptor::emit_load_json_property_field(emitter, "x14", "x13", JsonPropertyField::Name);
+    property_descriptor::emit_load_json_property_field(
+        emitter,
+        "x15",
+        "x13",
+        JsonPropertyField::NameLength,
+    );
+    property_descriptor::emit_load_json_property_field(
+        emitter,
+        "x16",
+        "x13",
+        JsonPropertyField::ObjectIndex,
+    );
+    property_descriptor::emit_load_json_property_field(
+        emitter,
+        "x17",
+        "x13",
+        JsonPropertyField::ValueTag,
+    );
     emitter.instruction("str x16, [sp, #48]");                                  // save the property slot index for value loading
     emitter.instruction("str x17, [sp, #56]");                                  // save the property type tag for runtime dispatch
     property_presence::emit_skip_uninitialized(emitter);
@@ -243,11 +267,15 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // legally contain JSON-significant control or escape chars). The append grows
     // the buffer first, so a long name cannot run past it.
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload the descriptor pointer
-    emitter.instruction("add x13, x13, #24");                                   // skip the leading flags / jsonSerialize / count words
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property loop index
-    emitter.instruction("add x13, x13, x10, lsl #5");                           // advance to the current 32-byte property descriptor entry
-    emitter.instruction("ldr x1, [x13]");                                       // property name pointer
-    emitter.instruction("ldr x2, [x13, #8]");                                   // property name length
+    property_descriptor::emit_json_property_row_address(emitter, "x13", "x13", "x10", "x9");
+    property_descriptor::emit_load_json_property_field(emitter, "x1", "x13", JsonPropertyField::Name);
+    property_descriptor::emit_load_json_property_field(
+        emitter,
+        "x2",
+        "x13",
+        JsonPropertyField::NameLength,
+    );
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
     emitter.instruction("bl __rt_json_buf_append");                             // copy the name to the cursor; x11 = advanced cursor
     emitter.instruction("mov w12, #34");                                        // ASCII '"'
@@ -458,7 +486,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
 
     // Bounds-check the class id and resolve the JSON descriptor.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the receiver for descriptor lookup
-    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load class_id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rcx", "rax");
     abi::emit_load_symbol_to_reg(emitter, "rdi", "_class_gc_desc_count", 0);    // load the total number of registered class descriptors
     emitter.instruction("cmp rcx, rdi");                                        // is the class_id within the descriptor table?
     emitter.instruction("jae __rt_json_obj_open_only_x");                       // an out-of-range class_id falls back to an empty object literal
@@ -467,10 +495,20 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the descriptor pointer for downstream loads
 
     // Check the JsonSerializable flag.
-    emitter.instruction("mov rcx, QWORD PTR [rdi]");                            // load the class JSON descriptor flags word
+    property_descriptor::emit_load_json_header_field(
+        emitter,
+        "rcx",
+        "rdi",
+        JsonHeaderField::Flags,
+    );
     emitter.instruction("test rcx, 1");                                         // is JsonSerializable bit set?
     emitter.instruction("je __rt_json_obj_walk_props_x");                       // ordinary classes walk public properties directly
-    emitter.instruction("mov rdx, QWORD PTR [rdi + 8]");                        // load the jsonSerialize method symbol from the descriptor
+    property_descriptor::emit_load_json_header_field(
+        emitter,
+        "rdx",
+        "rdi",
+        JsonHeaderField::ProjectionTarget,
+    );
     emitter.instruction("test rdx, rdx");                                       // is the method target populated?
     emitter.instruction("je __rt_json_obj_walk_props_x");                       // missing method targets fall through to the property walker
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // park the jsonSerialize target across helper calls that clobber rdx
@@ -511,13 +549,13 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                        // load the returned object identity
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 8]");                        // compare against the original receiver identity
     emitter.instruction("jne __rt_json_obj_jsonserialize_mixed_x");             // distinct objects retain recursive encoding
-    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the receiver class id after identity comparison
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rcx", "rcx");
     abi::emit_symbol_address(emitter, "rdi", "_class_enum_kinds");
     emitter.instruction("cmp QWORD PTR [rdi + rcx*8], 0");                      // identify persistent enum receivers
     emitter.instruction("je __rt_json_obj_jsonserialize_mixed_x");              // ordinary classes retain their existing recursive path
     emitter.instruction("call __rt_decref_mixed");                              // retire the owned result box while its enum receiver remains persistent
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the still-owned receiver after cleanup
-    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // recover its class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rcx", "rax");
     abi::emit_symbol_address(emitter, "rdi", "_class_json_desc_ptrs");
     emitter.instruction("mov rdi, QWORD PTR [rdi + rcx*8]");                    // recover the descriptor overwritten by prefix storage
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // restore the descriptor for the property walker
@@ -549,7 +587,12 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_obj_walk_props_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the descriptor pointer
-    emitter.instruction("mov rcx, QWORD PTR [rdi + 16]");                       // load the public property count
+    property_descriptor::emit_load_json_header_field(
+        emitter,
+        "rcx",
+        "rdi",
+        JsonHeaderField::PropertyCount,
+    );
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the public property count for the loop guard
 
     emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
@@ -568,18 +611,29 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, rdx");                                        // are there more properties to encode?
     emitter.instruction("jae __rt_json_obj_close_x");                           // emit the closing brace once every property is encoded
 
-    // Compute descriptor entry address: descriptor + 24 + index * 32
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the descriptor pointer for the current iteration
-    emitter.instruction("add rdi, 24");                                         // skip the leading flags / jsonSerialize / count words
-    emitter.instruction("mov rax, rcx");                                        // copy the loop index for the byte-offset computation
-    emitter.instruction("shl rax, 5");                                          // multiply the index by 32 (entry stride)
-    emitter.instruction("add rdi, rax");                                        // advance to the requested property descriptor entry
+    property_descriptor::emit_json_property_row_address(emitter, "rdi", "rdi", "rcx", "rax");
 
     // Save name_ptr / name_len / prop_index / type_tag in scratch slots.
-    emitter.instruction("mov rsi, QWORD PTR [rdi]");                            // load the property name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rdi + 8]");                        // load the property name length
-    emitter.instruction("mov r8, QWORD PTR [rdi + 16]");                        // load the property runtime slot index
-    emitter.instruction("mov r9, QWORD PTR [rdi + 24]");                        // load the property compile-time type tag
+    property_descriptor::emit_load_json_property_field(emitter, "rsi", "rdi", JsonPropertyField::Name);
+    property_descriptor::emit_load_json_property_field(
+        emitter,
+        "rdx",
+        "rdi",
+        JsonPropertyField::NameLength,
+    );
+    property_descriptor::emit_load_json_property_field(
+        emitter,
+        "r8",
+        "rdi",
+        JsonPropertyField::ObjectIndex,
+    );
+    property_descriptor::emit_load_json_property_field(
+        emitter,
+        "r9",
+        "rdi",
+        JsonPropertyField::ValueTag,
+    );
     emitter.instruction("mov QWORD PTR [rbp - 88], rsi");                       // save the property name pointer for the key copy loop
     emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // save the property name length for the key copy loop
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save the property slot index for value loading

@@ -149,8 +149,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter, user_stream_wrapper: boo
 
     // -- end-of-file flag from the _eof_flags table --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the stream descriptor
-    abi::emit_symbol_address(emitter, "x9", "_eof_flags");                      // load page of the EOF flag table
-    emitter.instruction("ldrb w10, [x9, x0]");                                  // load _eof_flags[fd]
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_load_indexed_byte(emitter, "w10", "x0", "x9");
     emitter.instruction("cmp w10, #0");                                         // has end-of-file been observed?
     emitter.instruction("cset x10, ne");                                        // eof = 1 when the flag byte is set
     emitter.instruction("str x10, [sp, #32]");                                  // save the eof flag
@@ -370,8 +369,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter, user_stream_wra
 
     // -- end-of-file flag from the _eof_flags table --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the stream descriptor
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // address of the EOF flag table
-    emitter.instruction("movzx r11, BYTE PTR [r10 + rdi]");                     // load _eof_flags[fd]
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_load_indexed_byte(emitter, "r11", "rdi", "r10");
     emitter.instruction("test r11, r11");                                       // has end-of-file been observed?
     emitter.instruction("setne r11b");                                          // eof = 1 when the flag byte is set
     emitter.instruction("movzx r11, r11b");                                     // widen the eof flag to a full word

@@ -1195,7 +1195,7 @@ fn emit_uninitialized_static_property_fatal(
             throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_error_class_id");   // load Error's runtime class id symbol
             ctx.emitter.instruction("ldr x9, [x9]");                            // load Error's runtime class id for this program
-            ctx.emitter.instruction("str x9, [x0]");                            // store class id at the object header
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", &message_label);          // materialize static Error message pointer
             abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             ctx.emitter.instruction(&format!("mov x9, #{}", message_len));      // load Error message length
@@ -1211,7 +1211,7 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer
             abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             ctx.emitter.instruction(                                            // store Error message length

@@ -437,14 +437,32 @@ fn emit_splice_replacement_pointer(
             abi::emit_pop_reg(ctx.emitter, scratch);
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction("str x10, [x0, #24]");              // store the scalar replacement into the one-element array
+                    elephc_memoir::values::packed_slots::emit_store_packed_word(
+                        ctx.emitter,
+                        "x0",
+                        "x10",
+                        0,
+                    );
                     ctx.emitter.instruction("mov x10, #1");                     // the synthesized replacement array holds exactly one element
-                    ctx.emitter.instruction("str x10, [x0]");                   // publish the one-element logical length
+                    elephc_memoir::values::packed_slots::emit_publish_length(
+                        ctx.emitter,
+                        "x0",
+                        "x10",
+                    );
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");   // store the scalar replacement into the one-element array
+                    elephc_memoir::values::packed_slots::emit_store_packed_word(
+                        ctx.emitter,
+                        "rax",
+                        "r10",
+                        0,
+                    );
                     ctx.emitter.instruction("mov r10, 1");                      // the synthesized replacement array holds exactly one element
-                    ctx.emitter.instruction("mov QWORD PTR [rax], r10");        // publish the one-element logical length
+                    elephc_memoir::values::packed_slots::emit_publish_length(
+                        ctx.emitter,
+                        "rax",
+                        "r10",
+                    );
                 }
             }
             Ok(())
@@ -799,18 +817,45 @@ fn emit_splice_one_element_string_array(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldp x10, x11, [sp], #16");                 // pop the borrowed string pointer/length pair after the constructor
-            ctx.emitter.instruction("stp x10, x11, [x0, #24]");                 // store the borrowed pair into the one-element string array
-            ctx.emitter.instruction("mov x10, #1");                             // the synthesized replacement array holds exactly one element
-            ctx.emitter.instruction("str x10, [x0]");                           // publish the one-element logical length
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "x0",
+                "x10",
+                0,
+            );
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "x0",
+                "x11",
+                1,
+            );
+            elephc_memoir::values::packed_slots::emit_publish_length_immediate(
+                ctx.emitter,
+                "x0",
+                1,
+            );
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the borrowed string pointer after the constructor
             ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");            // reload the borrowed string length after the constructor
             ctx.emitter.instruction("add rsp, 16");                             // release the borrowed string pointer/length staging slot
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");           // store the borrowed string pointer into the one-element string array
-            ctx.emitter.instruction("mov QWORD PTR [rax + 32], r11");           // store the borrowed string length into the one-element string array
-            ctx.emitter.instruction("mov r10, 1");                              // the synthesized replacement array holds exactly one element
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // publish the one-element logical length
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "rax",
+                "r10",
+                0,
+            );
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "rax",
+                "r11",
+                1,
+            );
+            elephc_memoir::values::packed_slots::emit_publish_length_immediate(
+                ctx.emitter,
+                "rax",
+                1,
+            );
         }
     }
     Ok(())

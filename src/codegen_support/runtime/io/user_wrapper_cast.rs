@@ -107,7 +107,7 @@ fn emit_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
 /// AArch64: resolve the stream_cast method pointer for the object in `x0` into
 /// `x11`. Branches to `missing_label` when the wrapper class omits the method.
 fn emit_method_lookup(emitter: &mut Emitter, missing_label: &str) {
-    emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_SLOT_CAST * 8)); // load the stream_cast method pointer (slot 10)
@@ -132,7 +132,7 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
     stream_tables::emit_load_wrapper_owner(emitter, "r10", "rdi", "rdi");
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // fclose'd or never registered: not selectable
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SLOT_CAST * 8)); // load the stream_cast method pointer (slot 10)

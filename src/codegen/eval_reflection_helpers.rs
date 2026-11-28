@@ -216,7 +216,7 @@ fn emit_alloc_reflection_attribute_object_aarch64(
     emitter.instruction(&format!("mov x0, #{}", payload_size));                 // request ReflectionAttribute object payload storage
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the ReflectionAttribute class id
-    emitter.instruction("str x10, [x0]");                                       // store the class id at object payload offset zero
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x10", "x0");
     elephc_memoir::values::object_storage::emit_zero_declared_slots(
         emitter, "x0", layout.property_count,
     );
@@ -231,7 +231,7 @@ fn emit_alloc_reflection_attribute_object_x86_64(
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request ReflectionAttribute object payload storage
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the ReflectionAttribute class id
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     elephc_memoir::values::object_storage::emit_zero_declared_slots(
         emitter, "rax", layout.property_count,
     );

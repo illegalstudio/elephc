@@ -434,7 +434,7 @@ fn emit_throw_value_error_from_string_result(ctx: &mut FunctionContext<'_>) {
 fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'_>) {
     throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_value_error_class_id", 0);
-    ctx.emitter.instruction("str x9, [x0]");                                    // store ValueError class id at object header
+    elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
     abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
@@ -449,7 +449,7 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
 fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_>) {
     throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_value_error_class_id", 0);
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store ValueError class id at object header
+    elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
     abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
     abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
@@ -681,7 +681,7 @@ pub(super) fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext
         Arch::AArch64 => {
             throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
-            ctx.emitter.instruction("str x9, [x0]");                            // store TypeError class id at object header
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
             abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
@@ -694,7 +694,7 @@ pub(super) fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext
         Arch::X86_64 => {
             throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store TypeError class id at object header
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
             abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
@@ -715,7 +715,7 @@ fn emit_throw_enum_from_type_error_aarch64(
 ) {
     throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
-    ctx.emitter.instruction("str x9, [x0]");                                    // store TypeError class id at object header
+    elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
     abi::emit_symbol_address(ctx.emitter, "x9", message_label);
     abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
@@ -733,7 +733,7 @@ fn emit_throw_enum_from_type_error_x86_64(
 ) {
     throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store TypeError class id at object header
+    elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
     abi::emit_symbol_address(ctx.emitter, "r10", message_label);
     abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);

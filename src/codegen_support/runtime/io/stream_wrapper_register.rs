@@ -88,16 +88,15 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
 
     // -- one pass over _user_wrappers: reject a duplicate, remember the first free slot --
     emitter.label("__rt_swr_scan_start");
-    abi::emit_symbol_address(emitter, "x4", "_user_wrappers");
     emitter.instruction("mov x5, #0");                                          // wrapper slot index
     emitter.instruction("mov x7, #-1");                                         // first free slot, -1 until one is seen
     emitter.label("__rt_swr_scan");
     emitter.instruction(&format!("cmp x5, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_swr_scanned");                               // the table has been walked end to end
-    emitter.instruction(&format!("add x6, x4, x5, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base = table + index * 32
-    emitter.instruction("ldr x12, [x6]");                                       // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x6", "x5", "x4");
+    stream_tables::emit_load_registration_field(emitter, "x12", "x6", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x12, __rt_swr_free");                              // a null pointer marks an empty slot
-    emitter.instruction("ldr x13, [x6, #8]");                                   // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x13", "x6", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x13, x1");                                         // same length as the protocol being registered?
     emitter.instruction("b.ne __rt_swr_scan_next");                             // different length — cannot be the same protocol
     emitter.instruction("mov x14, #0");                                         // byte compare index
@@ -120,7 +119,7 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.label("__rt_swr_scanned");
     emitter.instruction("cmn x7, #1");                                          // did the walk find a free slot?
     emitter.instruction("b.eq __rt_swr_full");                                  // table full
-    emitter.instruction(&format!("add x6, x4, x7, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base of the first free slot
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x6", "x7", "x4");
 
     // -- take ownership of both strings, then store the registration --
     emitter.label("__rt_swr_store");
@@ -203,19 +202,17 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
 
     // -- one pass over _user_wrappers: reject a duplicate, remember the first free slot --
     emitter.label("__rt_swr_scan_start_x86");
-    abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
     emitter.instruction("mov rax, -1");                                         // first free slot, -1 until one is seen
     emitter.label("__rt_swr_scan_x86");
     emitter.instruction(&format!("cmp r9, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                          // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_swr_scanned_x86");                            // the table has been walked end to end
-    emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r10", "r9", "r8");
+    stream_tables::emit_load_registration_field(emitter, "r11", "r10", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
     emitter.instruction("jz __rt_swr_free_x86");                                // remember it and move on
-    emitter.instruction("cmp QWORD PTR [r10 + 8], rsi");                        // same length as the protocol being registered?
+    stream_tables::emit_load_registration_field(emitter, "r10", "r10", stream_tables::RegistrationField::NameLength);
+    emitter.instruction("cmp r10, rsi");                                        // same length as the protocol being registered?
     emitter.instruction("jne __rt_swr_scan_next_x86");                          // different length — cannot be the same protocol
     emitter.instruction("xor rcx, rcx");                                        // byte compare index
     emitter.label("__rt_swr_cmp_x86");
@@ -236,9 +233,7 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_swr_scanned_x86");
     emitter.instruction("cmp rax, -1");                                         // did the walk find a free slot?
     emitter.instruction("je __rt_swr_full_x86");                                // table full
-    emitter.instruction("mov r10, rax");                                        // first free slot index
-    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r10", "rax", "r8");
 
     // -- take ownership of both strings, then store the registration --
     emitter.label("__rt_swr_store_x86");

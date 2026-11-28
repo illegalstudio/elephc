@@ -94,15 +94,13 @@ pub(super) fn finish_builtin_stream_filter_attach(
             abi::emit_pop_reg(ctx.emitter, "x1");
             ctx.emitter.instruction("tst x0, #1");                              // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("b.eq {}", skip_read));            // skip the read-filter table when the read bit is clear
-            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "x9");
             ctx.emitter.instruction(&format!("mov w10, #{}", id));              // materialize the built-in stream-filter id
-            ctx.emitter.instruction("strb w10, [x9, x1]");                      // record the read filter for this descriptor
+            stream_tables::READ_FILTERS.emit_store_indexed_byte(ctx.emitter, "w10", "x1", "x9");
             ctx.emitter.label(&skip_read);
             ctx.emitter.instruction("tst x0, #2");                              // test whether STREAM_FILTER_WRITE is enabled
             ctx.emitter.instruction(&format!("b.eq {}", skip_write));           // skip the write-filter table when the write bit is clear
-            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "x9");
             ctx.emitter.instruction(&format!("mov w10, #{}", id));              // materialize the built-in stream-filter id
-            ctx.emitter.instruction("strb w10, [x9, x1]");                      // record the write filter for this descriptor
+            stream_tables::WRITE_FILTERS.emit_store_indexed_byte(ctx.emitter, "w10", "x1", "x9");
             ctx.emitter.label(&skip_write);
             ctx.emitter.instruction("mov x0, x1");                              // move the descriptor into the resource payload register
         }
@@ -110,17 +108,15 @@ pub(super) fn finish_builtin_stream_filter_attach(
             abi::emit_pop_reg(ctx.emitter, "rcx");
             ctx.emitter.instruction("test rax, 1");                             // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_read));              // skip the read-filter table when the read bit is clear
-            stream_tables::READ_FILTERS.emit_address(ctx.emitter, "r9");
-            ctx.emitter.instruction(
-                &format!("mov BYTE PTR [r9 + rcx], {}", id)
-            );                                                                  // record the read filter for this descriptor
+            stream_tables::READ_FILTERS.emit_store_indexed_byte(
+                ctx.emitter, &id.to_string(), "rcx", "r9",
+            );
             ctx.emitter.label(&skip_read);
             ctx.emitter.instruction("test rax, 2");                             // test whether STREAM_FILTER_WRITE is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_write));             // skip the write-filter table when the write bit is clear
-            stream_tables::WRITE_FILTERS.emit_address(ctx.emitter, "r9");
-            ctx.emitter.instruction(
-                &format!("mov BYTE PTR [r9 + rcx], {}", id)
-            );                                                                  // record the write filter for this descriptor
+            stream_tables::WRITE_FILTERS.emit_store_indexed_byte(
+                ctx.emitter, &id.to_string(), "rcx", "r9",
+            );
             ctx.emitter.label(&skip_write);
             ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
         }

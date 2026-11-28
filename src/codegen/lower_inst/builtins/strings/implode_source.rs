@@ -212,7 +212,11 @@ fn emit_implode_stringable_separator(ctx: &mut FunctionContext<'_>, array: Value
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_tostring_count", 0);
-            ctx.emitter.instruction("ldr x9, [x1]");                            // read the class id after the symbol helper has used x9 as scratch
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                "x9",
+                "x1",
+            );
             ctx.emitter.instruction("cmp x9, x10");                             // reject synthetic and out-of-range class ids before indexing
             ctx.emitter.instruction(&format!("b.hs {}", intrinsic));            // an unknown class has no callable native hook
             abi::emit_symbol_address(ctx.emitter, "x10", "_class_tostring_ptrs");
@@ -244,10 +248,10 @@ fn emit_implode_stringable_separator(ctx: &mut FunctionContext<'_>, array: Value
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("ldr x0, [x1]");                        // test the receiver's actual class for intrinsic Throwable conversion
+                elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x0", "x1");
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");            // test the receiver's actual class for intrinsic Throwable conversion
+                elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "rdi", "rdi");
             }
         }
         abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), interface_id as i64);

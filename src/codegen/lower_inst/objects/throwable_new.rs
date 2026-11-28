@@ -153,7 +153,7 @@ pub(super) fn emit_throwable_allocation(
         Arch::AArch64 => {
             throwable_storage::emit_allocate(ctx.emitter);
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
-            ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
             if runtime_line {
                 emit_throwable_runtime_line_aarch64(ctx, "x0", "x9");
             } else {
@@ -164,7 +164,7 @@ pub(super) fn emit_throwable_allocation(
         Arch::X86_64 => {
             throwable_storage::emit_allocate(ctx.emitter);
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
             if runtime_line {
                 emit_throwable_runtime_line_x86_64(ctx, "rax", "r10");
             } else {

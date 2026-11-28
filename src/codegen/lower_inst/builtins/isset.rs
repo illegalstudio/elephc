@@ -636,9 +636,11 @@ fn emit_isset_array_in_bounds_missing_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
         PhpType::Mixed => {
-            ctx.emitter.instruction(
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach boxed Mixed elements
+            elephc_memoir::values::packed_slots::emit_packed_payload(
+                ctx.emitter,
+                array_reg,
+                array_reg,
+            );
             ctx.emitter.instruction(
                 &format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
             );                                                                  // load the boxed Mixed element pointer for null inspection
@@ -660,9 +662,11 @@ fn emit_isset_array_in_bounds_missing_x86_64(
                 array_reg,
                 tag_reg,
             );
-            ctx.emitter.instruction(
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach the elements
+            elephc_memoir::values::packed_slots::emit_packed_payload(
+                ctx.emitter,
+                array_reg,
+                array_reg,
+            );
             ctx.emitter.instruction(
                 &format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
             );                                                                  // load the element word for its null check

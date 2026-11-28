@@ -28,9 +28,6 @@ use elephc_memoir::values::packed_slots;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Byte offset of the first payload slot inside an indexed-array allocation.
-const ARRAY_DATA_OFFSET: i64 = packed_slots::PACKED_PAYLOAD_OFFSET as i64;
-
 /// Emits `__rt_min_max_mixed`: reduces an indexed array of boxed `Mixed` cells.
 ///
 /// Input: AArch64 `x0` = array pointer, `x1` = 1 for `max()` and 0 for `min()`;
@@ -64,7 +61,7 @@ pub fn emit_min_max_mixed(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_mmm_done");                               // an empty array yields the sentinel tag
 
     // -- seed the reduction with the first element --
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", ARRAY_DATA_OFFSET));      // load the borrowed Mixed cell of element zero
+    packed_slots::emit_load_packed_word(emitter, "x0", "x0", 0);
     emitter.instruction("bl __rt_mixed_unbox");                                 // peel the cell into a concrete tag/lo/hi triple
     emitter.instruction("str x0, [sp, #32]");                                   // seed the running runtime tag
     emitter.instruction("str x1, [sp, #40]");                                   // seed the running low payload word
@@ -79,7 +76,7 @@ pub fn emit_min_max_mixed(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // has every element been folded in?
     emitter.instruction("b.ge __rt_mmm_done");                                  // finish once the payload slots are exhausted
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the source indexed-array pointer
-    emitter.instruction(&format!("add x10, x10, #{}", ARRAY_DATA_OFFSET));      // advance from the header to the payload slots
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the borrowed Mixed cell the cursor points at
     emitter.instruction("bl __rt_mixed_unbox");                                 // peel the candidate into a concrete tag/lo/hi triple
     emitter.instruction("str x0, [sp, #56]");                                   // save the candidate runtime tag
@@ -143,7 +140,7 @@ fn emit_min_max_mixed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_mmm_done_x86");                                // an empty array yields the sentinel tag
 
     // -- seed the reduction with the first element --
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", ARRAY_DATA_OFFSET)); // load the borrowed Mixed cell of element zero
+    packed_slots::emit_load_packed_word(emitter, "rax", "rdi", 0);
     emitter.instruction("call __rt_mixed_unbox");                               // peel the cell into a concrete tag/lo/hi triple
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // seed the running runtime tag
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // seed the running low payload word
@@ -156,7 +153,7 @@ fn emit_min_max_mixed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 16]");                       // has every element been folded in?
     emitter.instruction("jge __rt_mmm_done_x86");                               // finish once the payload slots are exhausted
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rax + r10 * 8 + {}]", ARRAY_DATA_OFFSET)); // load the borrowed Mixed cell the cursor points at
+    packed_slots::emit_load_indexed_word(emitter, "rax", "r10", "rax", "r11");
     emitter.instruction("call __rt_mixed_unbox");                               // peel the candidate into a concrete tag/lo/hi triple
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the candidate runtime tag
     emitter.instruction("mov QWORD PTR [rbp - 72], rdi");                       // save the candidate low payload word
@@ -229,7 +226,7 @@ pub fn emit_min_max_str(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_mms_done");                               // an empty array yields the sentinel tag
 
     // -- seed the reduction with the first string slot --
-    emitter.instruction(&format!("add x10, x0, #{}", ARRAY_DATA_OFFSET));       // advance from the header to the 16-byte string slots
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("ldr x11, [x10]");                                      // load the first element's borrowed string pointer
     emitter.instruction("ldr x12, [x10, #8]");                                  // load the first element's string length
     emitter.instruction("mov x9, #1");                                          // runtime tag 1 = string
@@ -245,7 +242,7 @@ pub fn emit_min_max_str(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // has every element been folded in?
     emitter.instruction("b.ge __rt_mms_done");                                  // finish once the payload slots are exhausted
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the source indexed-array pointer
-    emitter.instruction(&format!("add x10, x10, #{}", ARRAY_DATA_OFFSET));      // advance from the header to the string slots
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x10");
     emitter.instruction("add x10, x10, x9, lsl #4");                            // address the 16-byte slot the cursor points at
     emitter.instruction("mov x0, #1");                                          // the candidate is a string
     emitter.instruction("ldr x1, [x10]");                                       // load the candidate's borrowed string pointer
@@ -309,7 +306,7 @@ fn emit_min_max_str_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_mms_done_x86");                                // an empty array yields the sentinel tag
 
     // -- seed the reduction with the first string slot --
-    emitter.instruction(&format!("lea r10, [rdi + {}]", ARRAY_DATA_OFFSET));    // advance from the header to the 16-byte string slots
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 40], 1");                         // runtime tag 1 = string
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the first element's borrowed string pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // seed the running string pointer
@@ -324,7 +321,7 @@ fn emit_min_max_str_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_mms_done_x86");                               // finish once the payload slots are exhausted
     emitter.instruction("shl r10, 4");                                          // convert the cursor into a 16-byte slot offset
     emitter.instruction("add r10, QWORD PTR [rbp - 8]");                        // address the payload slot inside the source array
-    emitter.instruction(&format!("add r10, {}", ARRAY_DATA_OFFSET));            // skip the indexed-array header
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rdi, 1");                                          // the candidate is a string
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the candidate's borrowed string pointer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the candidate's string length
