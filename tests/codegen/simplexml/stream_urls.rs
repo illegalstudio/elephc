@@ -454,7 +454,7 @@ foreach (['SimpleXMLIterator', 'SimpleXMLElement'] as $index => $class) {
     );
     assert!(
         out.stderr
-            .contains("Warning: file_get_contents(): Failed to open stream"),
+            .contains("Warning: file_get_contents(plain://x): Failed to open stream"),
         "{}",
         out.stderr
     );

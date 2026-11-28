@@ -448,6 +448,16 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`stream_wrapper_restore()`](./builtins/io/stream_wrapper_restore.md) | `(string $protocol): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_unregister()`](./builtins/io/stream_wrapper_unregister.md) | `(string $protocol): bool` | `bool` | ✓ | ✓ |
 | [`vfprintf()`](./builtins/io/vfprintf.md) | `(resource $stream, string $format, array $values): int` | `int` | ✓ | ✓ |
+| [`zip_close()`](./builtins/io/zip_close.md) | `(mixed $zip): void` | `void` | ✓ | - |
+| [`zip_entry_close()`](./builtins/io/zip_entry_close.md) | `(mixed $zip_entry): bool` | `bool` | ✓ | - |
+| [`zip_entry_compressedsize()`](./builtins/io/zip_entry_compressedsize.md) | `(mixed $zip_entry): int|false` | `int|false` | ✓ | - |
+| [`zip_entry_compressionmethod()`](./builtins/io/zip_entry_compressionmethod.md) | `(mixed $zip_entry): string|false` | `string|false` | ✓ | - |
+| [`zip_entry_filesize()`](./builtins/io/zip_entry_filesize.md) | `(mixed $zip_entry): int|false` | `int|false` | ✓ | - |
+| [`zip_entry_name()`](./builtins/io/zip_entry_name.md) | `(mixed $zip_entry): string|false` | `string|false` | ✓ | - |
+| [`zip_entry_open()`](./builtins/io/zip_entry_open.md) | `(mixed $zip_dp, mixed $zip_entry, string $mode = 'rb'): bool` | `bool` | ✓ | - |
+| [`zip_entry_read()`](./builtins/io/zip_entry_read.md) | `(mixed $zip_entry, int $len = 1024): string|false` | `string|false` | ✓ | - |
+| [`zip_open()`](./builtins/io/zip_open.md) | `(string $filename): mixed` | `mixed` | ✓ | - |
+| [`zip_read()`](./builtins/io/zip_read.md) | `(mixed $zip): mixed` | `mixed` | ✓ | - |
 | [`cairo_arc()`](./builtins/image/cairo_arc.md) | `(mixed $context, float $xc, float $yc, float $radius, float $angle1, float $angle2): void` | `void` | ✓ | - |
 | [`cairo_arc_negative()`](./builtins/image/cairo_arc_negative.md) | `(mixed $context, float $xc, float $yc, float $radius, float $angle1, float $angle2): void` | `void` | ✓ | - |
 | [`cairo_close_path()`](./builtins/image/cairo_close_path.md) | `(mixed $context): void` | `void` | ✓ | - |

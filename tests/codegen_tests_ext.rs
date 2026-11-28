@@ -81,6 +81,8 @@ mod codegen {
     mod simplexml_php_src;
     mod tidy_php_src;
     mod tidy;
+    mod zip_php_src;
+    mod zip;
     mod preg_replace_callback_throw;
     mod autoload_preludes;
     mod autoload_files_functions;

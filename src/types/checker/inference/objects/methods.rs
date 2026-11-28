@@ -19,6 +19,59 @@ use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
+    /// Returns the resource-or-false shape of the inherited `ZipArchive` stream getters.
+    ///
+    /// The prelude implements `getStream*` in PHP over `fopen()`, but a method with no
+    /// declared return type infers the codegen representation (`int|false`) and loses
+    /// the stream resource kind that `feof()`/`fread()` require. PHP has no `resource`
+    /// return type syntax to spell this, so the built-in class contract lives here.
+    ///
+    /// Applying it to a subclass override would be wrong: the parent declares no return
+    /// type, so a subclass may legally narrow `getStream()` to `string` or another type.
+    /// The special case therefore requires the selected method's declaring class to be
+    /// `ZipArchive` itself; an inherited method still reports `ZipArchive` as its owner.
+    fn zip_stream_method_return(&self, class_name: &str, method: &str) -> Option<PhpType> {
+        let class_name = class_name.trim_start_matches('\\');
+        let method_key = php_symbol_key(method);
+        if !matches!(method_key.as_str(), "getstream" | "getstreamname" | "getstreamindex") {
+            return None;
+        }
+        if !self.class_is_or_extends_zip_archive(class_name) {
+            return None;
+        }
+        let declaring_class = self
+            .classes
+            .get(class_name)
+            .and_then(|info| info.method_declaring_classes.get(&method_key))
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        if declaring_class != "ZipArchive" {
+            return None;
+        }
+        Some(PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]))
+    }
+
+    /// Returns whether a class is `ZipArchive` or one of its declared subclasses.
+    ///
+    /// The stream-getter return-shape contract has to cover subclasses too: an inherited
+    /// `getStream*` on `class MyZip extends ZipArchive` would otherwise infer the codegen
+    /// representation (`int|false`) and make `fread()`/`feof()` on it a type error.
+    fn class_is_or_extends_zip_archive(&self, class_name: &str) -> bool {
+        let mut current = Some(class_name);
+        let mut depth = 0usize;
+        while let Some(name) = current {
+            if name == "ZipArchive" {
+                return true;
+            }
+            if depth >= 64 {
+                return false;
+            }
+            current = self.classes.get(name).and_then(|info| info.parent.as_deref());
+            depth += 1;
+        }
+        false
+    }
+
     /// Infers the type of a method call expression (`$obj->method(...)`).
     ///
     /// Dispatches to `infer_method_call_on_class_type` for concrete `Object`
@@ -48,6 +101,10 @@ impl Checker {
         self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             if !class_name.is_empty() {
+                if let Some(stream_type) = self.zip_stream_method_return(class_name, method) {
+                    self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+                    return Ok(stream_type);
+                }
                 if self.interfaces.contains_key(class_name) {
                     return self
                         .infer_method_call_on_interface_type(class_name, method, args, expr, env);
@@ -58,6 +115,9 @@ impl Checker {
                     .tracked_reflection_class_method_return_type(object, method)
                     .unwrap_or(return_ty));
             }
+            // An empty class name is the `object` type hint: fall through to the generic
+            // mixed-receiver handling below so it keeps the candidate union instead of the
+            // historical `Int` fallback, which coerced boxed results to `0`.
         }
         // Method calls on a union object type are allowed when the union has a
         // single object class. `?Foo` / `Foo|null` faults on a null receiver as in
@@ -80,6 +140,10 @@ impl Checker {
                         expr,
                         env,
                     );
+                }
+                if let Some(stream_type) = self.zip_stream_method_return(&class_name, method) {
+                    self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+                    return Ok(stream_type);
                 }
                 let return_ty =
                     self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
@@ -261,6 +325,9 @@ impl Checker {
         };
         let return_ty = if self.interfaces.contains_key(&class_name) {
             self.infer_method_call_on_interface_type(&class_name, method, args, expr, env)?
+        } else if let Some(stream_type) = self.zip_stream_method_return(&class_name, method) {
+            self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+            stream_type
         } else {
             self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?
         };

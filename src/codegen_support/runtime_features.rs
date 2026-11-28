@@ -117,6 +117,13 @@ pub struct RuntimeFeatures {
     /// True when lowered EIR can call `addcslashes()`, either directly or through the
     /// descriptor invoker's builtin table.
     pub addcslashes: bool,
+    /// True when the program can register or reach a user-space stream wrapper.
+    ///
+    /// The zip prelude's `zip://` and `elephc-zip-memory://` wrappers, PDO's blob
+    /// wrappers, SimpleXML's wrapper, and any direct `stream_wrapper_register()` call
+    /// all route through `__rt_fopen` and the synthetic-wrapper metadata tables. When
+    /// false those helpers and their ~74 KiB of `.bss` are omitted.
+    pub user_stream_wrapper: bool,
 }
 
 impl RuntimeFeatures {
@@ -155,6 +162,7 @@ impl RuntimeFeatures {
             | ((self.native_reference_validation as u64) << 16)
             | ((self.filter as u64) << 17)
             | ((self.addcslashes as u64) << 18)
+            | ((self.user_stream_wrapper as u64) << 19)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -179,6 +187,7 @@ impl RuntimeFeatures {
             native_reference_validation: false,
             filter: false,
             addcslashes: false,
+            user_stream_wrapper: false,
         }
     }
 
@@ -205,6 +214,7 @@ impl RuntimeFeatures {
             native_reference_validation: true,
             filter: true,
             addcslashes: true,
+            user_stream_wrapper: true,
         }
     }
 }

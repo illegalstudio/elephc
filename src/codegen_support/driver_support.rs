@@ -140,6 +140,7 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
         heap_size,
         target,
         crate::codegen_support::compile_php_version(),
+        features,
     ));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.

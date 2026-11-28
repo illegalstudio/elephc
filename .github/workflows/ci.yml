@@ -51,6 +51,7 @@ env:
     -p elephc-xml
     -p elephc-tidy
     -p elephc-fileinfo
+    -p elephc-zip
     -p elephc-tokenizer
     -p elephc-filter
     -p elephc-magician
@@ -1327,6 +1328,66 @@ jobs:
         if: always()
         uses: ./.github/actions/assert-consumer-builds
 
+  zip-ios-compile-link:
+    name: Zip iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: [plan, build-archive-macos-aarch64, build-ios]
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
+
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
+
+      - name: Cache managed native libzip for iOS
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: zip-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            zip-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link zip with the managed libzip
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_zip_link.sh \
+            "${{ matrix.elephc_target }}" \
+            "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" \
+            "${{ matrix.clang_target }}"
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   fileinfo-ios-compile-link:
     name: Fileinfo iOS Compile & Link (${{ matrix.elephc_target }})
     needs: [plan, build-archive-macos-aarch64, build-ios]
@@ -2220,6 +2281,7 @@ jobs:
       - curl-native-linux-aarch64
       - curl-ios-compile-link
       - xml-ios-compile-link
+      - zip-ios-compile-link
       - fileinfo-ios-compile-link
       - tokenizer-ios-compile-link
       - gmp-ios-compile-link
@@ -2284,7 +2346,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link uri-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link zip-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link uri-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

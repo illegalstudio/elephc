@@ -105,3 +105,13 @@ sidebar:
 | [`stream_wrapper_restore()`](./io/stream_wrapper_restore.md) | `(string $protocol): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_unregister()`](./io/stream_wrapper_unregister.md) | `(string $protocol): bool` | `bool` | ✓ | ✓ |
 | [`vfprintf()`](./io/vfprintf.md) | `(resource $stream, string $format, array $values): int` | `int` | ✓ | ✓ |
+| [`zip_close()`](./io/zip_close.md) | `(mixed $zip): void` | `void` | ✓ | - |
+| [`zip_entry_close()`](./io/zip_entry_close.md) | `(mixed $zip_entry): bool` | `bool` | ✓ | - |
+| [`zip_entry_compressedsize()`](./io/zip_entry_compressedsize.md) | `(mixed $zip_entry): int|false` | `int|false` | ✓ | - |
+| [`zip_entry_compressionmethod()`](./io/zip_entry_compressionmethod.md) | `(mixed $zip_entry): string|false` | `string|false` | ✓ | - |
+| [`zip_entry_filesize()`](./io/zip_entry_filesize.md) | `(mixed $zip_entry): int|false` | `int|false` | ✓ | - |
+| [`zip_entry_name()`](./io/zip_entry_name.md) | `(mixed $zip_entry): string|false` | `string|false` | ✓ | - |
+| [`zip_entry_open()`](./io/zip_entry_open.md) | `(mixed $zip_dp, mixed $zip_entry, string $mode = 'rb'): bool` | `bool` | ✓ | - |
+| [`zip_entry_read()`](./io/zip_entry_read.md) | `(mixed $zip_entry, int $len = 1024): string|false` | `string|false` | ✓ | - |
+| [`zip_open()`](./io/zip_open.md) | `(string $filename): mixed` | `mixed` | ✓ | - |
+| [`zip_read()`](./io/zip_read.md) | `(mixed $zip): mixed` | `mixed` | ✓ | - |

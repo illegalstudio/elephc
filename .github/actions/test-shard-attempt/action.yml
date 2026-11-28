@@ -70,6 +70,19 @@ runs:
         CURL_STATUS: ${{ steps.curl.outputs.status || 'skipped' }}
         FAMILY: ${{ inputs.family }}
       run: python3 -B scripts/ci/shard_recovery.py prepare
+    - name: Ensure cmake for the managed libzip build
+      # Cached native artifacts are restored from the host build. Expose the same
+      # pinned CMake directory through PATH so the toolchain fingerprint matches
+      # the producer, and a cold or evicted cache can rebuild libzip in this shard.
+      if: inputs.family == 'codegen' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        cmake_bin="$(sh scripts/ci/ensure_cmake.sh --print-path)"
+        if [ -n "$cmake_bin" ]; then
+          test -x "$cmake_bin/cmake"
+          echo "PATH=$cmake_bin:$PATH" >> "$GITHUB_ENV"
+          echo "ELEPHC_CMAKE=$cmake_bin/cmake" >> "$GITHUB_ENV"
+        fi
     - name: Install macOS test-only native providers
       if: steps.prepare.outputs.status == 'ready' && inputs.target == 'macos-aarch64'
       shell: bash

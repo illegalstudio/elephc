@@ -369,6 +369,21 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_zip",
+        env_var: "ELEPHC_ZIP_LIB_DIR",
+        crate_name: "elephc-zip",
+        flag_name: "zip",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge is a thin FFI layer over libzip (the managed `libzip` catalog package,
+        // whose bzip2/LZMA/zlib/OpenSSL archives `src/pipeline/backend.rs` splices in whenever
+        // this bridge is planned).
+        php_extensions: &["zip"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_magician",
         env_var: "ELEPHC_MAGICIAN_LIB_DIR",
         crate_name: "elephc-magician",

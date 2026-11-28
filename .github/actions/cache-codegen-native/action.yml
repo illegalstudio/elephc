@@ -22,6 +22,17 @@ runs:
           ~/.cache/elephc/native/artifacts/libtidy
           ~/.cache/elephc/native/sources
         key: libtidy-native-${{ inputs.target }}-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+    - name: Cache managed native libzip
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/elephc/native/artifacts/libzip
+          ~/.cache/elephc/native/artifacts/bzip2
+          ~/.cache/elephc/native/artifacts/xz
+          ~/.cache/elephc/native/artifacts/zlib
+          ~/.cache/elephc/native/artifacts/openssl
+          ~/.cache/elephc/native/sources
+        key: libzip-native-${{ inputs.target }}-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
     - name: Cache managed native gmp
       uses: actions/cache@v6
       with:

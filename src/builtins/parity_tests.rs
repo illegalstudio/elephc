@@ -90,6 +90,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
         ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations(134_217_728, crate::tokenizer_prelude::IniMemorySource::None)),
+        ("zip_prelude", crate::zip_prelude::zip_declarations()),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",

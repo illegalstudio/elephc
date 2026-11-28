@@ -45,10 +45,10 @@
 //!   it: the checker resolves a method-body variable's type against top-level variables of the
 //!   same name, so a user global named `$node` would otherwise clash with a plain method-local
 //!   `$node`.
-//! - Most nodes use `Span::dummy()` because a synthetic declaration has no source location.
-//!   Free-function call nodes and loops that serve as checker/lowering map keys use distinct
-//!   `Span::synthetic()` identities instead; those spans still identify generated nodes rather
-//!   than PHP source.
+//! - Most nodes use `node_span()`: dummy for the built-in catalogs, distinct synthetic spans
+//!   when a prelude opts in through `with_synthetic_spans`. Free-function call nodes and loops
+//!   that serve as checker/lowering map keys always use distinct `Span::synthetic()`
+//!   identities instead; those spans still identify generated nodes rather than PHP source.
 
 #[cfg(test)]
 pub mod transcribe;
@@ -67,6 +67,37 @@ use crate::parser::ast::{
 };
 use crate::source::{SourceMode, SourceProfile};
 use crate::span::Span;
+
+thread_local! {
+    /// Whether the current builder call should give every node a DISTINCT synthetic span.
+    /// Preludes whose type-checking depends on node identity opt in; the default keeps the
+    /// historical `node_span()` shape for the compiler's built-in class catalogs.
+    static SYNTHETIC_SPANS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `build` with distinct synthetic spans for every node it creates, restoring the
+/// previous mode even if construction panics.
+pub fn with_synthetic_spans<R>(build: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        /// Restores the caller's span mode on normal return and unwind.
+        fn drop(&mut self) {
+            SYNTHETIC_SPANS.with(|flag| flag.set(self.0));
+        }
+    }
+    let previous = SYNTHETIC_SPANS.with(|flag| flag.replace(true));
+    let _restore = Restore(previous);
+    build()
+}
+
+/// Returns the span new builder nodes should use: dummy by default, synthetic when opted in.
+fn node_span() -> Span {
+    if SYNTHETIC_SPANS.with(std::cell::Cell::get) {
+        Span::synthetic()
+    } else {
+        Span::dummy()
+    }
+}
 
 /// Builds a prelude's declarations under the internal source mode.
 ///
@@ -179,9 +210,9 @@ pub fn attr(name: &str, args: Vec<Expr>) -> AttributeGroup {
         attributes: vec![Attribute {
             name: class_name(name),
             args,
-            span: Span::dummy(),
+            span: node_span(),
         }],
-        span: Span::dummy(),
+        span: node_span(),
     }
 }
 
@@ -199,12 +230,12 @@ fn name_parts(name: &str) -> Vec<String> {
 
 /// The `null` literal.
 pub fn e_null() -> Expr {
-    Expr::new(ExprKind::Null, Span::dummy())
+    Expr::new(ExprKind::Null, node_span())
 }
 
 /// A `true`/`false` literal.
 pub fn e_bool(value: bool) -> Expr {
-    Expr::new(ExprKind::BoolLiteral(value), Span::dummy())
+    Expr::new(ExprKind::BoolLiteral(value), node_span())
 }
 
 /// An integer literal.
@@ -224,7 +255,7 @@ pub fn e_var(name: &str) -> Expr {
 
 /// `$this`.
 pub fn e_this() -> Expr {
-    Expr::new(ExprKind::This, Span::dummy())
+    Expr::new(ExprKind::This, node_span())
 }
 
 /// `new C(args)`.
@@ -234,7 +265,7 @@ pub fn e_new(class_name: &str, args: Vec<Expr>) -> Expr {
             class_name: class_name_spelled(class_name),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -245,7 +276,7 @@ pub fn e_new_fq(class_name: &str, args: Vec<Expr>) -> Expr {
             class_name: fq_name(class_name),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -256,7 +287,7 @@ pub fn e_new_dynamic(name_expr: Expr, args: Vec<Expr>) -> Expr {
             name_expr: Box::new(name_expr),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -268,7 +299,7 @@ pub fn e_new_self(args: Vec<Expr>) -> Expr {
             receiver: StaticReceiver::Self_,
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -282,7 +313,7 @@ pub fn e_new_static(args: Vec<Expr>) -> Expr {
             receiver: StaticReceiver::Static,
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -330,7 +361,7 @@ pub fn e_static_call(class_name: &str, method_name: &str, args: Vec<Expr>) -> Ex
             method: method_name.to_string(),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -342,7 +373,7 @@ pub fn e_self_call(method_name: &str, args: Vec<Expr>) -> Expr {
             method: method_name.to_string(),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -354,7 +385,7 @@ pub fn e_method_call(object: Expr, method_name: &str, args: Vec<Expr>) -> Expr {
             method: method_name.to_string(),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -365,7 +396,7 @@ pub fn e_null_coalesce(value: Expr, default: Expr) -> Expr {
             value: Box::new(value),
             default: Box::new(default),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -376,7 +407,7 @@ pub fn e_prop(object: Expr, property: &str) -> Expr {
             object: Box::new(object),
             property: property.to_string(),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -392,7 +423,7 @@ pub fn e_dyn_prop(object: Expr, property: Expr) -> Expr {
             object: Box::new(object),
             property: Box::new(property),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -402,6 +433,9 @@ pub fn e_dyn_prop(object: Expr, property: Expr) -> Expr {
 /// `StmtKind` (`s_assign`, `s_prop_assign`); this is the general form the parser falls back to
 /// for targets those do not cover, such as a dynamic property.
 pub fn e_assign(target: Expr, value: Expr) -> Expr {
+    // Assignment lowering derives its hidden capture names from the span. Two independent
+    // builder calls must never mint the same name, so this helper always uses a distinct
+    // synthetic span even when the enclosing declaration keeps the default dummy spans.
     crate::parser::expr::plain_assignment_expression(target, value, Span::synthetic())
 }
 
@@ -409,7 +443,7 @@ pub fn e_assign(target: Expr, value: Expr) -> Expr {
 pub fn e_const(name: &str) -> Expr {
     Expr::new(
         ExprKind::ConstRef(Name::unqualified(name)),
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -447,7 +481,7 @@ pub fn e_class_const(class_name: &str, name: &str) -> Expr {
             receiver: StaticReceiver::Named(class_name_spelled(class_name)),
             name: name.to_string(),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -458,7 +492,7 @@ pub fn e_self_const(name: &str) -> Expr {
             receiver: StaticReceiver::Self_,
             name: name.to_string(),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -469,7 +503,7 @@ pub fn e_instance_of(value: Expr, class_name: &str) -> Expr {
 
 /// `!value`.
 pub fn e_not(value: Expr) -> Expr {
-    Expr::new(ExprKind::Not(Box::new(value)), Span::dummy())
+    Expr::new(ExprKind::Not(Box::new(value)), node_span())
 }
 
 /// `@value` — evaluates `value` while suppressing PHP diagnostics.
@@ -500,7 +534,7 @@ pub fn e_ternary(condition: Expr, then_value: Expr, else_value: Expr) -> Expr {
             then_expr: Box::new(then_value),
             else_expr: Box::new(else_value),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -512,7 +546,7 @@ pub fn e_match(subject: Expr, arms: Vec<(Vec<Expr>, Expr)>, default: Option<Expr
             arms,
             default: default.map(Box::new),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -523,7 +557,7 @@ pub fn e_cast(target: CastType, value: Expr) -> Expr {
             target,
             expr: Box::new(value),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -534,13 +568,13 @@ pub fn e_index(array: Expr, index: Expr) -> Expr {
             array: Box::new(array),
             index: Box::new(index),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
 /// `$name++` in expression position.
 pub fn e_post_inc(name: &str) -> Expr {
-    Expr::new(ExprKind::PostIncrement(name.to_string()), Span::dummy())
+    Expr::new(ExprKind::PostIncrement(name.to_string()), node_span())
 }
 
 /// `++$name` in expression position; the expression evaluates to the incremented value.
@@ -560,12 +594,12 @@ pub fn e_pre_dec(name: &str) -> Expr {
 
 /// A list array literal `[a, b, c]`.
 pub fn e_array(items: Vec<Expr>) -> Expr {
-    Expr::new(ExprKind::ArrayLiteral(items), Span::dummy())
+    Expr::new(ExprKind::ArrayLiteral(items), node_span())
 }
 
 /// A keyed array literal `['k' => v, …]`.
 pub fn e_array_assoc(entries: Vec<(Expr, Expr)>) -> Expr {
-    Expr::new(ExprKind::ArrayLiteralAssoc(entries), Span::dummy())
+    Expr::new(ExprKind::ArrayLiteralAssoc(entries), node_span())
 }
 
 // ---------------------------------------------------------------------------
@@ -587,18 +621,18 @@ pub fn s_namespace(name: &str, body: Vec<Stmt>) -> Stmt {
             name: Some(class_name(name)),
             body,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
 /// `return <value>;`
 pub fn s_return(value: Expr) -> Stmt {
-    Stmt::new(StmtKind::Return(Some(value)), Span::dummy())
+    Stmt::new(StmtKind::Return(Some(value)), node_span())
 }
 
 /// A bare `return;`.
 pub fn s_return_void() -> Stmt {
-    Stmt::new(StmtKind::Return(None), Span::dummy())
+    Stmt::new(StmtKind::Return(None), node_span())
 }
 
 /// `$name = <value>;` in statement position.
@@ -611,7 +645,7 @@ pub fn s_assign(name: &str, value: Expr) -> Stmt {
             name: name.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -627,7 +661,7 @@ pub fn s_typed_assign(ty: TypeExpr, name: &str, value: Expr) -> Stmt {
             name: name.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -639,7 +673,7 @@ pub fn s_prop_array_push(object: Expr, property: &str, value: Expr) -> Stmt {
             property: property.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -652,7 +686,7 @@ pub fn s_prop_array_assign(object: Expr, property: &str, index: Expr, value: Exp
             index,
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -663,7 +697,7 @@ pub fn e_static_prop(class_name: &str, property: &str) -> Expr {
             receiver: StaticReceiver::Named(class_name_spelled(class_name)),
             property: property.to_string(),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -679,7 +713,7 @@ pub fn e_self_static_prop(property: &str) -> Expr {
             receiver: StaticReceiver::Self_,
             property: property.to_string(),
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -691,7 +725,7 @@ pub fn s_self_static_prop_assign(property: &str, value: Expr) -> Stmt {
             property: property.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -700,7 +734,7 @@ pub fn s_self_static_prop_assign(property: &str, value: Expr) -> Stmt {
 /// An argument-position node, not an operator on the value: it says how the callee receives
 /// the array, which is why it wraps the expression rather than transforming it.
 pub fn e_spread(value: Expr) -> Expr {
-    Expr::new(ExprKind::Spread(Box::new(value)), Span::dummy())
+    Expr::new(ExprKind::Spread(Box::new(value)), node_span())
 }
 
 /// `$closure(<args>)` — calling a closure held in a variable.
@@ -713,7 +747,7 @@ pub fn e_closure_call(var: &str, args: Vec<Expr>) -> Expr {
             var: var.to_string(),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -825,7 +859,7 @@ impl ClosureBuilder {
                 captures: self.captures,
                 capture_refs: self.capture_refs,
             },
-            Span::dummy(),
+            node_span(),
         )
     }
 }
@@ -838,7 +872,7 @@ impl ClosureBuilder {
 /// lines of each other to build its "called class" diagnostics, so the receiver is a parameter
 /// rather than three helpers.
 pub fn e_class_name_of(receiver: StaticReceiver) -> Expr {
-    Expr::new(ExprKind::ClassConstant { receiver }, Span::dummy())
+    Expr::new(ExprKind::ClassConstant { receiver }, node_span())
 }
 
 /// `self::class`.
@@ -868,7 +902,7 @@ pub fn e_parent_call(method_name: &str, args: Vec<Expr>) -> Expr {
             method: method_name.to_string(),
             args,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -880,7 +914,7 @@ pub fn s_static_prop_assign(class_name: &str, property: &str, value: Expr) -> St
             property: property.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -898,7 +932,7 @@ pub fn s_static_prop_array_assign(
             index,
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -945,7 +979,7 @@ pub fn s_static_prop_array_push(class_name: &str, property: &str, value: Expr) -
             property: property.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -957,7 +991,7 @@ pub fn s_prop_assign(object: Expr, property: &str, value: Expr) -> Stmt {
             property: property.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -971,7 +1005,7 @@ pub fn s_static(name: &str, init: Expr) -> Stmt {
             name: name.to_string(),
             init,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -982,23 +1016,23 @@ pub fn s_const(name: &str, value: Expr) -> Stmt {
             name: name.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
 /// `throw <value>;`
 pub fn s_throw(value: Expr) -> Stmt {
-    Stmt::new(StmtKind::Throw(value), Span::dummy())
+    Stmt::new(StmtKind::Throw(value), node_span())
 }
 
 /// An expression evaluated for its effect.
 pub fn s_expr(value: Expr) -> Stmt {
-    Stmt::new(StmtKind::ExprStmt(value), Span::dummy())
+    Stmt::new(StmtKind::ExprStmt(value), node_span())
 }
 
 /// `echo <value>;`
 pub fn s_echo(value: Expr) -> Stmt {
-    Stmt::new(StmtKind::Echo(value), Span::dummy())
+    Stmt::new(StmtKind::Echo(value), node_span())
 }
 
 /// `$array[] = <value>;` where `array` is a plain variable name.
@@ -1008,7 +1042,7 @@ pub fn s_array_push(array: &str, value: Expr) -> Stmt {
             array: array.to_string(),
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -1020,13 +1054,18 @@ pub fn s_array_assign(array: &str, index: Expr, value: Expr) -> Stmt {
             index,
             value,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
 /// Builds a parser-generated synthetic statement group (nested append lowering).
 pub fn s_synthetic(body: Vec<Stmt>) -> Stmt {
     Stmt::new(StmtKind::Synthetic(body), Span::dummy())
+}
+
+/// `global $name;` — imports a global variable into the current function scope.
+pub fn s_global(name: &str) -> Stmt {
+    Stmt::new(StmtKind::Global { vars: vec![name.to_string()] }, node_span())
 }
 
 /// `if (…) { … } elseif (…) { … } else { … }`.
@@ -1048,7 +1087,7 @@ pub fn s_if(
             elseif_clauses,
             else_body,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -1124,7 +1163,7 @@ pub fn s_try(
             catches,
             finally_body,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -1143,7 +1182,7 @@ pub fn s_switch(
             cases,
             default,
         },
-        Span::dummy(),
+        node_span(),
     )
 }
 
@@ -1160,12 +1199,12 @@ pub fn s_while(condition: Expr, body: Vec<Stmt>) -> Stmt {
 
 /// `break;` (one level) or `break N;`.
 pub fn s_break(levels: usize) -> Stmt {
-    Stmt::new(StmtKind::Break(levels), Span::dummy())
+    Stmt::new(StmtKind::Break(levels), node_span())
 }
 
 /// `continue;` (one level) or `continue N;`.
 pub fn s_continue(levels: usize) -> Stmt {
-    Stmt::new(StmtKind::Continue(levels), Span::dummy())
+    Stmt::new(StmtKind::Continue(levels), node_span())
 }
 
 // ---------------------------------------------------------------------------
@@ -1570,9 +1609,9 @@ impl MethodBuilder {
             attributes: vec![Attribute {
                 name: class_name(name),
                 args: Vec::new(),
-                span: Span::dummy(),
+                span: node_span(),
             }],
-            span: Span::dummy(),
+            span: node_span(),
         });
         self
     }
@@ -1742,7 +1781,7 @@ impl MethodBuilder {
             return_type: self.signature.return_type,
             by_ref_return: false,
             body: Vec::new(),
-            span: Span::dummy(),
+            span: node_span(),
             attributes: Vec::new(),
         }
     }
@@ -1782,7 +1821,7 @@ impl MethodBuilder {
             return_type,
             by_ref_return: false,
             body,
-            span: Span::dummy(),
+            span: node_span(),
             attributes: Vec::new(),
         }
     }
@@ -1926,7 +1965,7 @@ impl FunctionBuilder {
                 by_ref_return: false,
                 body,
             },
-            Span::dummy(),
+            node_span(),
         )
     }
 }
@@ -1992,6 +2031,10 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
             audit_expr(value, out);
         }
         StmtKind::ArrayPush { value, .. } => audit_expr(value, out),
+        StmtKind::NestedArrayAssign { target, value } => {
+            audit_expr(target, out);
+            audit_expr(value, out);
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             audit_expr(object, out);
             audit_expr(value, out);
@@ -2147,8 +2190,8 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
                 audit_stmt(inner, out);
             }
         }
-        // Extern declarations carry types and no expressions.
-        StmtKind::ExternFunctionDecl { .. } => {}
+        // Extern declarations carry types and no expressions; `global` has no calls.
+        StmtKind::ExternFunctionDecl { .. } | StmtKind::Global { .. } => {}
         other => panic!(
             "synthetic_class::called_function_names met an unmodelled statement: {}",
             format!("{:?}", other).chars().take(120).collect::<String>()
@@ -2364,7 +2407,7 @@ impl ExternFnBuilder {
                 return_type: self.return_type,
                 library: self.library,
             },
-            Span::dummy(),
+            node_span(),
         )
     }
 }
@@ -2466,7 +2509,7 @@ impl ClassBuilder {
             is_final: false,
             type_expr: None,
             value,
-            span: Span::dummy(),
+            span: node_span(),
             attributes,
         });
         self
@@ -2480,7 +2523,7 @@ impl ClassBuilder {
             is_final: false,
             type_expr: None,
             value,
-            span: Span::dummy(),
+            span: node_span(),
             attributes: Vec::new(),
         });
         self
@@ -2618,7 +2661,7 @@ impl ClassBuilder {
             by_ref: false,
             is_promoted: false,
             default,
-            span: Span::dummy(),
+            span: node_span(),
             attributes: Vec::new(),
         });
         self
@@ -2695,7 +2738,7 @@ impl InterfaceBuilder {
             visibility: Visibility::Public,
             is_final: false,
             type_expr: None,
-            span: Span::dummy(),
+            span: node_span(),
             attributes: Vec::new(),
         });
         self
@@ -2718,7 +2761,7 @@ impl InterfaceBuilder {
                 methods: self.methods,
                 constants: self.constants,
             },
-            Span::dummy(),
+            node_span(),
         )
     }
 }
@@ -3331,7 +3374,7 @@ function ignore_mode(int $mode = 0): bool {
         ));
     }
 
-    /// Renders a statement without its spans so a synthetic node (`Span::dummy()`) and a parsed
+    /// Renders a statement without its spans so a synthetic node (`node_span()`) and a parsed
     /// node (real line/column) compare on structure alone.
     ///
     /// `PartialEq` on `Stmt` already ignores spans, but it also ignores method PARAMS, RETURN

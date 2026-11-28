@@ -379,6 +379,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
         (with_crates.contains("tidy"), "tidy"),
+        (with_crates.contains("zip"), "zip"),
         (with_crates.contains("bcmath"), "bcmath"),
         (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
@@ -709,6 +710,19 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         &mut prelude_inventory,
     );
     timings.record_since("tidy-prelude", phase_started);
+
+    // Inject the `ext/zip` prelude (the `ZipArchive` class and the deprecated `zip_*`
+    // wrappers over the `elephc_zip` extern block) only when the program references that
+    // surface, so zip-free binaries never declare the class and never link the bridge.
+    crate::progress::phase("zip-prelude");
+    let zip_phase_started = Instant::now();
+    let ast = crate::zip_prelude::inject_if_used(
+        ast,
+        with_crates.contains("zip") || autoloaded("zip"),
+        web,
+        &mut prelude_inventory,
+    );
+    timings.record_since("zip-prelude", zip_phase_started);
     let phase_started = Instant::now();
     let fileinfo_force = with_crates.contains("fileinfo") || autoloaded("fileinfo");
     let ast = if php_version == crate::php_version::PhpVersion::default() {

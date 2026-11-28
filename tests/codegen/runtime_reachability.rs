@@ -92,6 +92,68 @@ fn test_dynamic_path_keeps_the_url_reader() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a program without wrappers omits the synthetic wrapper runtime.
+///
+/// The zip prelude registers `zip://` and its memory wrapper, so a zip program needs the
+/// kind/URI/mode tables and the wrapper-backed `file_get_contents()` helper. A program that
+/// cannot register a wrapper must not carry the ~74 KiB of zeroed `.bss` or those helpers.
+#[test]
+fn test_plain_program_omits_user_wrapper_runtime() {
+    let dir = make_cli_test_dir("elephc_user_wrapper_plain");
+    let (user_asm, runtime_asm, _) =
+        compile_source_to_asm_with_options("<?php echo 1;", &dir, 8_388_608, false, false);
+    assert!(
+        !runtime_asm.contains("_zip_stream_uri"),
+        "a plain program must not emit the user-wrapper metadata tables"
+    );
+    assert!(
+        !runtime_asm.contains("__rt_file_get_contents_wrapper"),
+        "a plain program must not emit the wrapper-backed reader"
+    );
+    assert!(
+        !runtime_asm.contains("__rt_zip_register_stream_meta"),
+        "a plain program must not emit the wrapper metadata helper"
+    );
+    assert!(
+        !user_asm.contains("_zip_stream_uri"),
+        "a plain program's user assembly must not name the wrapper metadata tables"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the zip prelude enables the synthetic wrapper runtime.
+#[test]
+fn test_zip_program_emits_user_wrapper_runtime() {
+    if crate::support::zip_native::skip_without_zip_native("test_zip_program_emits_user_wrapper_runtime") {
+        return;
+    }
+    let dir = make_cli_test_dir("elephc_user_wrapper_zip");
+    let (user_asm, runtime_asm, _) = compile_source_to_asm_with_options(
+        "<?php $zip = new ZipArchive();",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        runtime_asm.contains("_zip_stream_uri"),
+        "the zip prelude registers wrappers and needs the metadata tables"
+    );
+    assert!(
+        runtime_asm.contains("__rt_file_get_contents_wrapper"),
+        "the zip prelude needs the wrapper-backed reader"
+    );
+    assert!(
+        runtime_asm.contains("__rt_zip_register_stream_meta"),
+        "the zip prelude needs the wrapper metadata helper"
+    );
+    assert!(
+        user_asm.contains("__rt_stream_wrapper_register"),
+        "the zip prelude should register its wrappers explicitly"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies an executable exports its entry point and nothing else.
 ///
 /// Every other global is `.globl` only so the user and runtime objects can find each other. On

@@ -14,7 +14,10 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, gmp, libmagic, libssh2, libtidy, libxml2, nghttp2, oniguruma, openssl, openssl_crypto, pcre2, zlib};
+use super::recipes::{
+    bzip2, curl, gmp, libmagic, libssh2, libtidy, libxml2, libzip, nghttp2, oniguruma, openssl,
+    openssl_crypto, pcre2, xz, zlib,
+};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -54,6 +57,9 @@ enum BuiltInRecipe {
     Gmp,
     Libmagic,
     Libtidy,
+    Bzip2,
+    Xz,
+    Libzip,
 }
 
 /// Resolves a package and immutable recipe revision to its built-in executor.
@@ -62,8 +68,8 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
         ("pcre2", 10) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
-        ("openssl", 1) => Some(BuiltInRecipe::Openssl),
-        ("openssl-crypto", 1) => Some(BuiltInRecipe::OpensslCrypto),
+        ("openssl", 2) => Some(BuiltInRecipe::Openssl),
+        ("openssl-crypto", 2) => Some(BuiltInRecipe::OpensslCrypto),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
         ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
         ("curl", 4) => Some(BuiltInRecipe::Curl),
@@ -71,6 +77,9 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("libxml2", 11) => Some(BuiltInRecipe::Libxml2),
         ("gmp", 2) => Some(BuiltInRecipe::Gmp),
         ("libtidy", 1) => Some(BuiltInRecipe::Libtidy),
+        ("bzip2", 1) => Some(BuiltInRecipe::Bzip2),
+        ("xz", 1) => Some(BuiltInRecipe::Xz),
+        ("libzip", 1) => Some(BuiltInRecipe::Libzip),
         _ => None,
     }
 }
@@ -91,6 +100,9 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Libxml2) => libxml2::build(request),
             Some(BuiltInRecipe::Gmp) => gmp::build(request),
             Some(BuiltInRecipe::Libtidy) => libtidy::build(request),
+            Some(BuiltInRecipe::Bzip2) => bzip2::build(request),
+            Some(BuiltInRecipe::Xz) => xz::build(request),
+            Some(BuiltInRecipe::Libzip) => libzip::build(request),
             None => Err(NativeError::new(
                 NativeErrorKind::Build,
                 format!(
@@ -142,8 +154,8 @@ mod tests {
     #[test]
     fn curl_and_its_dependency_recipe_revisions_have_dispatchers() {
         assert!(
-            built_in_recipe("openssl", 1).is_some(),
-            "missing built-in recipe for openssl revision 1"
+            built_in_recipe("openssl", 2).is_some(),
+            "missing built-in recipe for openssl revision 2"
         );
         assert!(
             built_in_recipe("nghttp2", 2).is_some(),
@@ -189,6 +201,20 @@ mod tests {
             "missing built-in recipe for gmp revision 2"
         );
         assert!(built_in_recipe("gmp", 1).is_none());
+    }
+
+    /// Verifies the dispatcher recognizes libzip and every compression/crypto recipe it
+    /// depends on by exact catalog revision, and that no earlier revision is silently reused.
+    #[test]
+    fn libzip_and_its_dependency_recipe_revisions_have_dispatchers() {
+        assert!(matches!(built_in_recipe("libzip", 1), Some(BuiltInRecipe::Libzip)));
+        assert!(matches!(built_in_recipe("bzip2", 1), Some(BuiltInRecipe::Bzip2)));
+        assert!(matches!(built_in_recipe("xz", 1), Some(BuiltInRecipe::Xz)));
+        assert!(matches!(built_in_recipe("zlib", 1), Some(BuiltInRecipe::Zlib)));
+        assert!(matches!(built_in_recipe("openssl", 2), Some(BuiltInRecipe::Openssl)));
+        assert!(built_in_recipe("libzip", 2).is_none());
+        assert!(built_in_recipe("bzip2", 2).is_none());
+        assert!(built_in_recipe("xz", 2).is_none());
     }
 
     /// Verifies the HTTP/1.1-only curl build (revision 1, no nghttp2/libssh2 and a wall of

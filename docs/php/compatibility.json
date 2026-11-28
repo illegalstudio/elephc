@@ -187,7 +187,7 @@
   ],
   "coverage": {
     "classes": {
-      "have": 204,
+      "have": 205,
       "total": 329
     },
     "constants": {
@@ -195,7 +195,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1130,
+      "have": 1140,
       "total": 2169
     }
   },
@@ -375,6 +375,14 @@
       ],
       "notes": "Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use.",
       "php": "https://www.php.net/manual/en/book.fileinfo.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/zip.md",
+      "feature": "Zip",
+      "modules": null,
+      "notes": "ZipArchive and the deprecated procedural zip_* API on libzip 1.11.4, built from the managed `libzip` catalog package (with bzip2, XZ/LZMA, zlib, and OpenSSL): stored/deflate/bzip2/LZMA/XZ reads, PPMd entry metadata, AES and ZipCrypto reads/writes, ZIP64, comments, mtimes, external attributes, glob/pattern adds, extraction, and callbacks. The project declares the package with `elephc native add libzip`; there is no system `-lzip` fallback. --with-zip forces the surface for opaque eval. The zip:// wrapper, PHP-shaped stream metadata, CRC-on-read, stream-context passwords, archive-close invalidation, AES and ZipCrypto writes are implemented. The module coverage table counts the ten procedural zip_* functions as shared `PreludeProvided` contracts (10/10 compiled) and ZipArchive as a prelude class (1/1 compiled); with the prelude injected (`--with-zip` or static zip use), both surfaces are also callable from `eval()`. Every runnable php-src fixture except gh17319 is migrated; gh17319 expects false from PHP's own freed archive resource. bug51353 carries an unconditional php-src SKIPIF for its 100,000-entry stress run.",
+      "php": "https://www.php.net/manual/en/book.zip.php",
       "status": "supported"
     }
   ],
@@ -1710,8 +1718,8 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 1,
+        "have": 1,
         "total": 1
       },
       "constants": null,
@@ -1719,7 +1727,7 @@
       "extension": "zip",
       "functions": {
         "eval": 0,
-        "have": 0,
+        "have": 10,
         "total": 10
       },
       "name": "zip",

@@ -53,6 +53,7 @@ env:
     -p elephc-pcntl
     -p elephc-xml
     -p elephc-tidy
+    -p elephc-zip
     -p elephc-fileinfo
     -p elephc-tokenizer
     -p elephc-filter
@@ -146,6 +147,20 @@ jobs:
           set -o pipefail
           cargo build --locked --bin elephc 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Ensure cmake for managed native fingerprints
+        # PATH participates in every native artifact's toolchain fingerprint. The
+        # codegen shards expose the same pinned CMake directory, so materialize
+        # every cached package here with it rather than only in the libzip step.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake_bin="$(sh scripts/ci/ensure_cmake.sh --print-path)"
+          if [ -n "$cmake_bin" ]; then
+            test -x "$cmake_bin/cmake"
+            echo "PATH=$cmake_bin:$PATH" >> "$GITHUB_ENV"
+            echo "ELEPHC_CMAKE=$cmake_bin/cmake" >> "$GITHUB_ENV"
+          fi
 
       - name: Build combined optional PDO driver profile
         if: inputs.scope == 'tests'
@@ -290,6 +305,23 @@ jobs:
             ~/.cache/elephc/native/sources
           key: libtidy-native-macos-aarch64-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
 
+      - name: Cache managed native libzip
+        if: inputs.scope == 'tests'
+        # The zip bridge's engine is libzip itself plus its bzip2/XZ/zlib/OpenSSL
+        # dependency chain (see src/native_deps/recipes/libzip.rs). Separate package
+        # artifacts, keyed on the committed lock plus every recipe that decides what
+        # gets built; the codegen shards restore the same key.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libzip
+            ~/.cache/elephc/native/artifacts/bzip2
+            ~/.cache/elephc/native/artifacts/xz
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/artifacts/openssl
+            ~/.cache/elephc/native/sources
+          key: libzip-native-macos-aarch64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+
       - name: Cache managed native gmp
         if: inputs.scope == 'tests'
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
@@ -332,6 +364,26 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/tidy/elephc.toml
+
+      - name: Materialize managed native libzip
+        if: inputs.scope == 'tests'
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            # The pinned image predates the Dockerfile's cmake entry. Fetch the
+            # pinned Kitware binary into RUNNER_TEMP instead of mutating that
+            # image with a package install.
+            if [ "$(uname -s)" = Linux ]; then
+              export PATH="$(sh scripts/ci/ensure_cmake.sh --print-path):$PATH"
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
@@ -405,6 +457,16 @@ jobs:
           ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-tidy
 
+      - name: Test the zip bridge against managed libzip
+        if: inputs.scope == 'tests'
+        # crates/elephc-zip/build.rs reads ELEPHC_ZIP_NATIVE_LIB_DIRS (the libzip,
+        # bzip2, xz, zlib, and openssl lib/ directories in link order), links the six
+        # archives into the crate's test binary and compiles the libzip-calling tests
+        # in behind cfg(elephc_zip_native).
+        run: |
+          ELEPHC_ZIP_NATIVE_LIB_DIRS="$(sh scripts/ci/zip_lib_dirs.sh macos-aarch64)" \
+            cargo test -p elephc-zip
+
       - name: Upload test archive
         if: inputs.scope == 'tests'
         uses: actions/upload-artifact@v7
@@ -470,6 +532,20 @@ jobs:
           set -o pipefail
           cargo build --locked --bin elephc 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Ensure cmake for managed native fingerprints
+        # PATH participates in every native artifact's toolchain fingerprint. The
+        # codegen shards expose the same pinned CMake directory, so materialize
+        # every cached package here with it rather than only in the libzip step.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake_bin="$(sh scripts/ci/ensure_cmake.sh --print-path)"
+          if [ -n "$cmake_bin" ]; then
+            test -x "$cmake_bin/cmake"
+            echo "PATH=$cmake_bin:$PATH" >> "$GITHUB_ENV"
+            echo "ELEPHC_CMAKE=$cmake_bin/cmake" >> "$GITHUB_ENV"
+          fi
 
       - name: Build combined optional PDO driver profile
         if: inputs.scope == 'tests'
@@ -613,6 +689,23 @@ jobs:
             ~/.cache/elephc/native/sources
           key: libtidy-native-linux-x86_64-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
 
+      - name: Cache managed native libzip
+        if: inputs.scope == 'tests'
+        # The zip bridge's engine is libzip itself plus its bzip2/XZ/zlib/OpenSSL
+        # dependency chain (see src/native_deps/recipes/libzip.rs). Separate package
+        # artifacts, keyed on the committed lock plus every recipe that decides what
+        # gets built; the codegen shards restore the same key.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libzip
+            ~/.cache/elephc/native/artifacts/bzip2
+            ~/.cache/elephc/native/artifacts/xz
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/artifacts/openssl
+            ~/.cache/elephc/native/sources
+          key: libzip-native-linux-x86_64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+
       - name: Cache managed native gmp
         if: inputs.scope == 'tests'
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
@@ -655,6 +748,26 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/tidy/elephc.toml
+
+      - name: Materialize managed native libzip
+        if: inputs.scope == 'tests'
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            # The pinned image predates the Dockerfile's cmake entry. Fetch the
+            # pinned Kitware binary into RUNNER_TEMP instead of mutating that
+            # image with a package install.
+            if [ "$(uname -s)" = Linux ]; then
+              export PATH="$(sh scripts/ci/ensure_cmake.sh --print-path):$PATH"
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
@@ -728,6 +841,16 @@ jobs:
           ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-tidy
 
+      - name: Test the zip bridge against managed libzip
+        if: inputs.scope == 'tests'
+        # crates/elephc-zip/build.rs reads ELEPHC_ZIP_NATIVE_LIB_DIRS (the libzip,
+        # bzip2, xz, zlib, and openssl lib/ directories in link order), links the six
+        # archives into the crate's test binary and compiles the libzip-calling tests
+        # in behind cfg(elephc_zip_native).
+        run: |
+          ELEPHC_ZIP_NATIVE_LIB_DIRS="$(sh scripts/ci/zip_lib_dirs.sh linux-x86_64)" \
+            cargo test -p elephc-zip
+
       - name: Upload test archive
         if: inputs.scope == 'tests'
         uses: actions/upload-artifact@v7
@@ -788,6 +911,20 @@ jobs:
           set -o pipefail
           cargo build --locked --bin elephc 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Ensure cmake for managed native fingerprints
+        # PATH participates in every native artifact's toolchain fingerprint. The
+        # codegen shards expose the same pinned CMake directory, so materialize
+        # every cached package here with it rather than only in the libzip step.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake_bin="$(sh scripts/ci/ensure_cmake.sh --print-path)"
+          if [ -n "$cmake_bin" ]; then
+            test -x "$cmake_bin/cmake"
+            echo "PATH=$cmake_bin:$PATH" >> "$GITHUB_ENV"
+            echo "ELEPHC_CMAKE=$cmake_bin/cmake" >> "$GITHUB_ENV"
+          fi
 
       - name: Build combined optional PDO driver profile
         if: inputs.scope == 'tests'
@@ -931,6 +1068,23 @@ jobs:
             ~/.cache/elephc/native/sources
           key: libtidy-native-linux-aarch64-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
 
+      - name: Cache managed native libzip
+        if: inputs.scope == 'tests'
+        # The zip bridge's engine is libzip itself plus its bzip2/XZ/zlib/OpenSSL
+        # dependency chain (see src/native_deps/recipes/libzip.rs). Separate package
+        # artifacts, keyed on the committed lock plus every recipe that decides what
+        # gets built; the codegen shards restore the same key.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libzip
+            ~/.cache/elephc/native/artifacts/bzip2
+            ~/.cache/elephc/native/artifacts/xz
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/artifacts/openssl
+            ~/.cache/elephc/native/sources
+          key: libzip-native-linux-aarch64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+
       - name: Cache managed native gmp
         if: inputs.scope == 'tests'
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
@@ -973,6 +1127,26 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/tidy/elephc.toml
+
+      - name: Materialize managed native libzip
+        if: inputs.scope == 'tests'
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            # The pinned image predates the Dockerfile's cmake entry. Fetch the
+            # pinned Kitware binary into RUNNER_TEMP instead of mutating that
+            # image with a package install.
+            if [ "$(uname -s)" = Linux ]; then
+              export PATH="$(sh scripts/ci/ensure_cmake.sh --print-path):$PATH"
+            else
+              echo "cmake is required to build the managed libzip package" >&2
+              exit 1
+            fi
+          fi
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
@@ -1045,6 +1219,16 @@ jobs:
         run: |
           ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-tidy
+
+      - name: Test the zip bridge against managed libzip
+        if: inputs.scope == 'tests'
+        # crates/elephc-zip/build.rs reads ELEPHC_ZIP_NATIVE_LIB_DIRS (the libzip,
+        # bzip2, xz, zlib, and openssl lib/ directories in link order), links the six
+        # archives into the crate's test binary and compiles the libzip-calling tests
+        # in behind cfg(elephc_zip_native).
+        run: |
+          ELEPHC_ZIP_NATIVE_LIB_DIRS="$(sh scripts/ci/zip_lib_dirs.sh linux-aarch64)" \
+            cargo test -p elephc-zip
 
       - name: Upload test archive
         if: inputs.scope == 'tests'

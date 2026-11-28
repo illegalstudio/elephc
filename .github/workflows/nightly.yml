@@ -358,6 +358,17 @@ jobs:
           path: ${{ runner.temp }}/verify-native
           key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/**') }}
 
+      - name: Ensure cmake for the managed libzip probe
+        if: runner.os == 'Linux'
+        shell: elephc-ci-shell {0}
+        run: |
+          cmake_bin="$(sh scripts/ci/ensure_cmake.sh --print-path)"
+          if [ -n "$cmake_bin" ]; then
+            test -x "$cmake_bin/cmake"
+            echo "ELEPHC_CI_EXTRA_PATH=$cmake_bin" >> "$GITHUB_ENV"
+            echo "ELEPHC_CMAKE=$cmake_bin/cmake" >> "$GITHUB_ENV"
+          fi
+
       - name: Download the built tarball
         uses: actions/download-artifact@v8
         with:

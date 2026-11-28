@@ -185,6 +185,60 @@
         "kind": "prelude",
         "supported": true
       },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": false,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "__ElephcZipMemoryStream",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": false,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "__ElephcZipProcedural",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": false,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "__ElephcZipStreamWrapper",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
       "bundled": true,
       "eval": {
         "kind": "prelude",
@@ -4842,6 +4896,24 @@
       "kind": "class",
       "module": "xmlwriter",
       "name": "XMLWriter",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "zip",
+      "name": "ZipArchive",
       "php_manual": null,
       "since": null
     }

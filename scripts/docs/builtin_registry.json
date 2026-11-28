@@ -165653,6 +165653,658 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_close",
+    "description": "Closes a zip directory resource opened by zip_open().",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_close",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_close",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_close",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_entry_close",
+    "description": "Closes an open zip entry resource.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_entry_close",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_entry_close",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_entry_close",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_entry_compressedsize",
+    "description": "Returns the compressed size of a zip entry.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_entry_compressedsize",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_entry_compressedsize",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_entry_compressedsize",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_entry_compressionmethod",
+    "description": "Returns the compression method of a zip entry.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_entry_compressionmethod",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_entry_compressionmethod",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_entry_compressionmethod",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_entry_filesize",
+    "description": "Returns the uncompressed size of a zip entry.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_entry_filesize",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_entry_filesize",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_entry_filesize",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_entry_name",
+    "description": "Returns the name of a zip entry.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_entry_name",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_entry_name",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_entry_name",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_dp",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "rb",
+          "name": "mode",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_entry_open",
+    "description": "Opens a zip entry for reading.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_entry_open",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_entry_open",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_dp",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "'rb'",
+          "name": "mode",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_entry_open",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": 1024,
+          "name": "len",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_entry_read",
+    "description": "Reads up to len bytes from an open zip entry.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_entry_read",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_entry_read",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip_entry",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "1024",
+          "name": "len",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_entry_read",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_open",
+    "description": "Opens a zip archive and returns a directory resource, or a libzip error code.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_open",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_open",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_open",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "zip_read",
+    "description": "Returns the next entry resource in an open zip directory, or false at the end.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/zip_prelude/build.rs",
+      "codegen_function": "zip_read",
+      "notes": [
+        "Implemented by the compiler-injected zip prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_zip.rs"
+    },
+    "module": "zip",
+    "name": "zip_read",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zip",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "zip_read",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {

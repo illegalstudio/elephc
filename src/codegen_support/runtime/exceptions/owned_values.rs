@@ -23,6 +23,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
         "__rt_exception_release_unconstructed_object",
         release_unconstructed_object_body,
     );
+    super::emit_protected(
+        emitter,
+        "__rt_exception_release_wrapper_fd",
+        release_wrapper_fd_body,
+    );
 }
 
 /// Unlinks an AArch64 guard from the activation chain and transfers exceptional owners to the GC.
@@ -83,6 +88,31 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_exception_unguard_owned_done");
     emitter.instruction("ret");                                                 // complete guard removal without retaining or releasing a heap value
 
+}
+
+/// Closes a guarded synthetic user-wrapper descriptor during exception unwinding.
+///
+/// `file_get_contents()` opens a wrapper through `__rt_fopen` and normally closes it with
+/// `__rt_user_wrapper_fclose`; a throwing `stream_read()`/`stream_eof()` would otherwise
+/// abandon the handle slot. The guard stores the synthetic fd as its owner, and this
+/// protected callback clears it before invoking `stream_close` so a nested throw cannot
+/// close the same descriptor twice.
+fn release_wrapper_fd_body(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction("ldr x9, [sp, #224]");                               // recover the guard record passed as the C argument
+        emitter.instruction("ldr x0, [x9, #24]");                                // load the guarded synthetic descriptor
+        emitter.instruction("str xzr, [x9, #24]");                               // clear ownership before stream_close can throw
+        emitter.instruction("cbz x0, __rt_exception_release_wrapper_fd_skip");   // an already-cleared guard has nothing to close
+    } else {
+        emitter.instruction("mov r10, QWORD PTR [rsp + 224]");                    // recover the guard record passed as the C argument
+        emitter.instruction("mov rax, QWORD PTR [r10 + 24]");                     // load the guarded synthetic descriptor
+        emitter.instruction("mov QWORD PTR [r10 + 24], 0");                       // clear ownership before stream_close can throw
+        emitter.instruction("test rax, rax");                                     // has the guard already been consumed?
+        emitter.instruction("jz __rt_exception_release_wrapper_fd_skip");         // an already-cleared guard has nothing to close
+        emitter.instruction("mov rdi, rax");                                      // pass the synthetic descriptor to the close helper
+    }
+    abi::emit_call_label(emitter, "__rt_user_wrapper_fclose");
+    emitter.label("__rt_exception_release_wrapper_fd_skip");
 }
 
 /// Consumes the guard's owner while the shared protected callback restores handler and GC state.
@@ -163,6 +193,28 @@ mod tests {
 
             assert!(cleanup.find(mark).unwrap() < cleanup.find("__rt_decref_any").unwrap(), "{name}");
             assert_eq!(cleanup.matches("__rt_decref_any").count(), 1, "{name}");
+        }
+    }
+
+    /// The wrapper-descriptor cleanup callback closes exactly the guarded synthetic fd.
+    #[test]
+    fn wrapper_fd_cleanup_is_emitted_once_per_target() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit(&mut emitter);
+            let assembly = emitter.output();
+            assert_eq!(
+                assembly.matches("__rt_exception_release_wrapper_fd_skip:").count(),
+                1,
+                "{name}"
+            );
+            assert_eq!(assembly.matches("__rt_user_wrapper_fclose").count(), 1, "{name}");
         }
     }
 }

@@ -90,6 +90,7 @@ use super::*;
             RuntimeFeatures { native_reference_validation: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { filter: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { addcslashes: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { user_stream_wrapper: true, ..RuntimeFeatures::none() },
         ];
 
         let mut keys = std::collections::HashSet::from([baseline]);

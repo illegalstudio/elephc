@@ -73,6 +73,9 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("__ElephcSessionState", "__elephcsessionstate", Class, Elephc, Prelude, internal: true),
     class!("__ElephcSimpleXMLLease", "__elephcsimplexmllease", Class, Elephc, Prelude, internal: true),
     class!("__ElephcWeakMapIterator", "__elephcweakmapiterator", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcZipMemoryStream", "__elephczipmemorystream", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcZipProcedural", "__elephczipprocedural", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcZipStreamWrapper", "__elephczipstreamwrapper", Class, Elephc, Prelude, internal: true),
     class!("AllowDynamicProperties", "allowdynamicproperties", Class, Core, Prelude, since: Php82),
     class!("AppendIterator", "appenditerator", Class, Spl, CheckerInjected),
     class!("ArgumentCountError", "argumentcounterror", Class, Core, CheckerInjected),
@@ -329,4 +332,5 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("WeakReference", "weakreference", Class, Core, Prelude),
     class!("XMLParser", "xmlparser", Class, Xml, Prelude),
     class!("XMLWriter", "xmlwriter", Class, Xmlwriter, Prelude),
+    class!("ZipArchive", "ziparchive", Class, Zip, Prelude),
 ];

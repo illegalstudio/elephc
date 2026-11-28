@@ -57,13 +57,13 @@ class ShardExecution(unittest.TestCase):
             self.assertIn("--no-run", self.calls[0][0])
             native = [args for args, _ in self.calls if "--manifest-path" in args]
             self.assertEqual([args[-1] for args in native], [f"examples/{name}/elephc.toml"
-                             for name in ("xml", "gmp", "openssl-cipher", "fileinfo", "tidy")])
+                             for name in ("xml", "gmp", "openssl-cipher", "fileinfo", "tidy", "zip")])
             self.assertTrue(all(args[args.index("--target") + 1] == target for args in native))
             args, env = self.calls[-1]
             query = args[args.index("-E") + 1]
             for family in ("eval", "pdo", "curl"):
                 self.assertIn(f"not test(~codegen::{family})", query)
-            for package in ("XML", "GMP", "FILEINFO", "OPENSSL", "TIDY"):
+            for package in ("XML", "GMP", "FILEINFO", "OPENSSL", "TIDY", "ZIP"):
                 self.assertEqual(env[f"ELEPHC_TEST_REQUIRE_{package}_NATIVE"], "1")
             self.assertEqual(env["ELEPHC_TEST_PREBUILT_BRIDGES"], "1")
             self.assertEqual(args[-1], "3" if target.startswith("macos") else "4")

@@ -53,6 +53,7 @@ mod openssl_native;
 mod projects;
 pub(crate) mod xml_native;
 pub(crate) mod tidy_native;
+pub(crate) mod zip_native;
 
 pub(crate) use platform::*;
 pub(crate) use runner::*;
@@ -78,3 +79,6 @@ pub(crate) use xml_native::{
     XML_APPLE_LIBRARIES, XML_NATIVE_ARCHIVES, XML_NATIVE_PACKAGE,
 };
 pub(crate) use tidy_native::skip_without_tidy_native;
+pub(crate) use zip_native::{
+    skip_without_zip_native, zip_native_packages, ZipNativePackage,
+};

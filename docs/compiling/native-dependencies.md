@@ -12,7 +12,8 @@ archives into a target- and toolchain-specific cache.
 
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
 libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, libtidy 5.8.0, GMP 6.3.0,
-libmagic 5.46, and the libcrypto-only `openssl-crypto` 3.6.4 package.
+libmagic 5.46, the libcrypto-only `openssl-crypto` 3.6.4 package, bzip2 1.0.8,
+XZ Utils 5.8.1, and libzip 1.11.4.
 Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
 PCRE2 at final link time. Mbstring uses the same managed package only when a
 program selects its custom output MIME-pattern provider. The contract-owned
@@ -59,6 +60,25 @@ used by symmetric `openssl_*` calls, with zlib as its catalog dependency.
 Declare them with `elephc native add libmagic` or
 `elephc native add openssl-crypto`; their force-enable flags are
 `--with-fileinfo` and `--with-openssl`.
+
+libzip is the engine behind PHP's `ext/zip`: `--with-zip`, or any program whose
+link plan pulls in `elephc_zip`, requires the managed `libzip.a` plus its
+`bzip2`, `xz` (LZMA), `zlib`, and OpenSSL dependency archives at final link
+time. The resolver orders every managed archive after the packages that
+reference it, so a program combining zip with curl or the cipher bridge keeps
+each shared zlib/OpenSSL archive behind all of its dependents. `elephc native
+add libzip` declares the whole chain; its recipe builds libzip with CMake, so
+`cmake` must be available when the package is first materialized. The build is
+hermetic: every compression and crypto backend is resolved from the catalog
+prefixes, never a system `-lzip`, `-lbz2`, `-llzma`, or `-lcrypto`. libzip pins
+OpenSSL 3.5.8 (`libssl.a` + `libcrypto.a`); the OpenSSL cipher bridge pins its
+separate 3.6.4 `libcrypto.a`. A program that selects both links both static
+OpenSSL builds; they are not merged. The CMake version is not part of the
+libzip artifact identity; CI pins 3.28.3 through the image and
+`scripts/ci/ensure_cmake.sh`, while a developer's local CMake can differ. That
+PATH is part of the native toolchain fingerprint, so a producer and its consumers
+must expose CMake from the same directory or they rebuild instead of reusing the
+cache.
 
 `elephc native add oniguruma` installs the pinned Oniguruma library and the
 versioned mbregex provider, with the provider archive before `libonig.a` in link

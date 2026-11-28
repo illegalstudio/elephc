@@ -30,6 +30,7 @@ mod catalog_mbstring;
 mod catalog_pcntl;
 mod catalog_tidy;
 mod catalog_xml;
+mod catalog_zip;
 #[cfg(feature = "curl")]
 mod catalog_curl;
 mod catalog_surfaces;

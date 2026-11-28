@@ -27,6 +27,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.handler_state |= features.handler_state;
     module.required_runtime_features.object_clone |= features.object_clone;
     module.required_runtime_features.addcslashes |= features.addcslashes;
+    module.required_runtime_features.user_stream_wrapper |= features.user_stream_wrapper;
     // The descriptor invoker emits a wrapper for every PHP-visible builtin it can dispatch,
     // including `addcslashes()`, so the helper must exist even when no direct call is present.
     module.required_runtime_features.addcslashes |= module.required_runtime_features.descriptor_invoker;
@@ -187,6 +188,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                         }
                         features.object_clone |= target == RuntimeFnId::CloneWith;
                         features.addcslashes |= target == RuntimeFnId::Addcslashes;
+                        features.user_stream_wrapper |= target == RuntimeFnId::StreamWrapperRegister;
                     }
                 }
                 Op::CoreBuiltin => {
@@ -239,6 +241,10 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
             }
         }
     }
+    // Opaque eval and the dynamic builtin dispatcher can call
+    // `stream_wrapper_register()` without a visible direct call, so keep the
+    // wrapper helpers available for those programs.
+    features.user_stream_wrapper |= features.eval_bridge || features.descriptor_invoker;
     features
 }
 

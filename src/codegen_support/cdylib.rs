@@ -435,6 +435,7 @@ mod tests {
             for (heap, capacity) in [(16_384, 65_536), (524_288, 524_288), (1usize << 31, 1usize << 30)] {
                 let data = crate::codegen_support::runtime::emit_runtime_data_fixed(
                     heap, target, crate::codegen::compile_php_version(),
+                    crate::codegen_support::RuntimeFeatures::all(),
                 );
                 assert!(data.contains(&format!("_concat_capacity:\n    .quad {capacity}\n")),
                     "{target:?}: heap size {heap} must publish capacity {capacity}");

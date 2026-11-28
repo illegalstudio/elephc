@@ -139,6 +139,7 @@ pub mod xml_prelude;
 mod simplexml_prelude;
 pub mod tidy_prelude;
 pub mod fileinfo_prelude;
+pub mod zip_prelude;
 pub mod tokenizer_prelude;
 /// TOKEN_PARSE validation through the compiler AST parser.
 pub use elephc_chopper::syntax::tokenizer_validation;
