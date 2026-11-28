@@ -756,7 +756,7 @@ fn mixed_named_string_and_callable_evaluation_owners_linux_x86_64() {
     assert_mixed_named_string_and_callable_evaluation_owners("linux-x86_64");
 }
 
-/// The runtime-key binder publishes its spread source through later argument evaluation.
+/// The runtime-key binder publishes a detached spread snapshot through later argument evaluation.
 #[test]
 fn boxed_spread_source_stays_published_through_later_argument_evaluation() {
     use crate::ir::{Immediate, LocalKind, Op};
@@ -800,15 +800,19 @@ function exerciseOwnedSpread(string $text): void {
         };
         let (source_call, source) = call("createOwnedSpread");
         let (later_call, _) = call("createOwnedSpreadLater");
-        let (acquire, lease) = function
-            .instructions
-            .iter()
-            .enumerate()
-            .find_map(|(index, inst)| {
-                (index > source_call && inst.op == Op::Acquire && inst.operands == [source])
-                    .then_some((index, inst.result?))
-            })
-            .expect("spread source must be retained by the runtime-key binder");
+        let owner_value = |op, operand, after| {
+            function
+                .instructions
+                .iter()
+                .enumerate()
+                .find_map(|(index, inst)| {
+                    (index > after && inst.op == op && inst.operands == [operand])
+                        .then_some((index, inst.result?))
+                })
+                .unwrap_or_else(|| panic!("{target}: spread source must pass through {op:?}"))
+        };
+        let (clone, snapshot) = owner_value(Op::MixedClone, source, source_call);
+        let (acquire, lease) = owner_value(Op::Acquire, snapshot, clone);
         let (store, slot) = function
             .instructions
             .iter()
@@ -849,7 +853,8 @@ function exerciseOwnedSpread(string $text): void {
             })
             .unwrap();
         assert!(
-            source_call < acquire
+            source_call < clone
+                && clone < acquire
                 && acquire < store
                 && store < push
                 && push < later_call

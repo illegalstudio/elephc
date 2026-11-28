@@ -1118,9 +1118,21 @@ unset($factory, $first, $second, $third);
     let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let expected = "2:4:5|2:x:y|6:a:b|";
+    let mixed = r###"<?php
+$prior = SplFixedArray::fromArray([2 => 'a', 5 => 'b']);
+echo $prior->getSize(), ':', $prior[2], ':', $prior[5], '|';
+$source = $argc > 0 ? ' $next = SplFixedArray::fromArray([8, 9]); echo $next->getSize(), ":", $next[0], ":", $next[1], "|"; unset($next); ' : '';
+eval($source);
+unset($prior);
+"###;
     assert_bundle_with(&[
         BundleCase { name: "fixed_factory_aot", source, expected },
         BundleCase { name: "fixed_factory_eval", source: &eval, expected },
+        BundleCase {
+            name: "fixed_factory_aot_then_eval",
+            source: mixed,
+            expected: "6:a:b|2:8:9|",
+        },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

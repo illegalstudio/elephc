@@ -99,11 +99,11 @@ fn spread_after_named_error(span: crate::span::Span, callee_desc: &str) -> Compi
 
 /// Returns a boolean vector indicating which argument positions contain assoc-spread sources
 /// (arrays with string keys that map to named arguments after spread expansion).
-fn assoc_spread_sources(args: &[Expr], env: &TypeEnv) -> Vec<bool> {
-    call_args::expand_static_assoc_spread_args(args)
+fn assoc_spread_sources(args: &[Expr], env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> Vec<bool> {
+    call_args::expand_static_assoc_spread_args(args, profile)
         .iter()
         .map(|arg| match &arg.kind {
-            ExprKind::Spread(inner) => is_assoc_spread_source(inner, env),
+            ExprKind::Spread(inner) => is_assoc_spread_source(inner, env, profile),
             _ => false,
         })
         .collect()
@@ -115,8 +115,8 @@ fn assoc_spread_sources(args: &[Expr], env: &TypeEnv) -> Vec<bool> {
 /// and decides positional versus named binding while iterating. A statically indexed source can
 /// still provide only positional keys, but treating an unresolved spread as positional during
 /// checking would incorrectly report missing or duplicate parameters before that runtime walk.
-fn descriptor_spread_sources(args: &[Expr]) -> Vec<bool> {
-    call_args::expand_static_assoc_spread_args(args)
+fn descriptor_spread_sources(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<bool> {
+    call_args::expand_static_assoc_spread_args(args, profile)
         .iter()
         .map(|arg| matches!(arg.kind, ExprKind::Spread(_)))
         .collect()
@@ -124,20 +124,44 @@ fn descriptor_spread_sources(args: &[Expr]) -> Vec<bool> {
 
 /// Returns true if the expression is or expands to an assoc-array at runtime,
 /// which means spread arguments from it should be treated as named arguments.
-fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
+fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(env.get(name), Some(PhpType::AssocArray { .. })),
         ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
         _ => matches!(
-            crate::types::checker::infer_expr_type_syntactic(expr),
+            crate::types::checker::infer_expr_type_syntactic(expr, profile),
             PhpType::AssocArray { .. }
         ),
     }
 }
 
 /// Maps shared signature-independent ordering rules for checker and parser call surfaces.
-pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc: &str) -> Result<(), CompileError> {
-    elephc_chopper::syntax::call_args::validate_call_argument_order(args, callee_desc)
+pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc: &str,
+    profile: elephc_semantics::SemanticProfile) -> Result<(), CompileError> {
+    call_args::validate_unresolved_call_argument_order(args, profile)
+        .map_err(|err| unresolved_call_order_error(err, callee_desc))
+}
+
+/// Keeps parser and checker diagnostics identical for their shared syntax rules.
+fn unresolved_call_order_error(err: CallArgPlanError, callee_desc: &str) -> CompileError {
+    match err {
+        CallArgPlanError::SpreadAfterNamed { span } => {
+            spread_after_named_error(span, callee_desc)
+        }
+        CallArgPlanError::PositionalAfterNamed { span } => CompileError::new(span,
+            &format!("{} cannot use positional arguments after named arguments", callee_desc)),
+        CallArgPlanError::PositionalAfterSpread { span } => CompileError::new(span,
+            &format!("{} cannot use positional arguments after spread arguments", callee_desc)),
+        CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(span,
+            &format!("{} cannot use positional argument after named argument during unpacking", callee_desc)),
+        // The remaining variants need a signature and cannot originate here. Keep
+        // the match exhaustive so a future rule still reports a real span.
+        CallArgPlanError::UnknownNamed { span, .. }
+        | CallArgPlanError::Duplicate { span, .. }
+        | CallArgPlanError::MissingRequired { span, .. } => {
+            CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
+        }
+    }
 }
 
 /// Strips the named/spread wrappers from a by-reference argument so its storage place is visible.
@@ -160,7 +184,7 @@ impl Checker {
         args: &[Expr],
         callee_desc: &str,
     ) -> Result<(), CompileError> {
-        validate_unresolved_call_argument_order(args, callee_desc)
+        validate_unresolved_call_argument_order(args, callee_desc, self.semantic_profile)
     }
 
     /// Returns true when a by-reference argument is an object-property place whose declared
@@ -190,33 +214,44 @@ impl Checker {
         }
         let property_ty = self.infer_type(arg, env)?;
         let compatible = crate::types::param_binding::by_ref_property_storage_compatible(expected_ty, &property_ty);
-        if compatible && *expected_ty == PhpType::Mixed && property_ty == PhpType::Mixed {
-            self.promote_live_mixed_property_argument(arg, env)?;
+        if compatible && *expected_ty == PhpType::Mixed {
+            self.promote_live_property_reference_argument(arg, env)?;
         }
         Ok(compatible)
     }
 
-    /// Gives plain Mixed property arguments stable cell storage before EIR call lowering.
-    fn promote_live_mixed_property_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
-        let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(()); };
+    /// Gives reviewed writable property arguments managed cells before reference call lowering.
+    pub(crate) fn promote_live_property_reference_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<bool, CompileError> {
+        if matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
+            && crate::types::checked_property_references(self.semantic_profile)
+        {
+            let ty = self.infer_type(arg, env)?;
+            return Ok(crate::types::canonical_property_reference_payload(&ty).is_some());
+        }
+        let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(false); };
         let Some((class_name, true)) = self.ref_property_slot_addressability(object, property, env)? else {
-            return Ok(());
+            return Ok(false);
         };
         let (access_class, index) = match crate::types::resolve_property_name(
             &self.classes, &class_name, property, self.current_class.as_deref(),
         ) {
             crate::types::PropertyNameResolution::ScopePrivate { scope, index } => (scope, index),
             crate::types::PropertyNameResolution::Visible => {
-                let Some(index) = self.classes[&class_name].visible_property_index(property) else { return Ok(()); };
+                let Some(index) = self.classes[&class_name].visible_property_index(property) else { return Ok(false); };
                 (class_name, index)
             }
-            _ => return Ok(()),
+            _ => return Ok(false),
         };
         let info = &self.classes[&access_class];
-        if info.properties.get(index).is_none_or(|(_, ty)| *ty != PhpType::Mixed)
-            || info.is_internal || info.readonly_properties.contains(property)
+        let Some((_, property_ty)) = info.properties.get(index) else { return Ok(false); };
+        let supported = *property_ty == PhpType::Mixed || (crate::types::checked_property_references(self.semantic_profile)
+            && crate::types::canonical_property_reference_payload(property_ty).is_some());
+        let borrowed_constructor = *property_ty != PhpType::Mixed
+            && info.reference_properties.contains(property) && info.promoted_properties.contains(property)
+            && !info.property_slot_owns_reference(index);
+        if !supported || borrowed_constructor || info.is_internal || info.readonly_properties.contains(property)
             || info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
-        { return Ok(()); }
+        { return Ok(false); }
         let mut owner = info.property_declaring_classes.get(property).cloned().unwrap_or(access_class);
         // Public/protected redeclarations reuse their ancestor's physical slot. Every view
         // of that storage must agree on indirection before inherited method bodies are emitted.
@@ -224,12 +259,12 @@ impl Checker {
             let Some(parent) = self.classes.get(&owner).and_then(|info| info.parent.clone()) else { break; };
             let Some(info) = self.classes.get(&parent) else { break; };
             if info.visible_property_index(property) != Some(index)
-                || info.properties.get(index).is_none_or(|(_, ty)| *ty != PhpType::Mixed) { break; }
-            if info.is_internal { return Ok(()); }
+                || info.properties.get(index).is_none_or(|(_, ty)| ty != property_ty) { break; }
+            if info.is_internal { return Ok(false); }
             owner = parent;
         }
         self.reference_property_promotions.insert((owner, property.clone()));
-        Ok(())
+        Ok(true)
     }
 
     /// Returns whether a direct property argument can bind a by-reference parameter.
@@ -751,7 +786,7 @@ impl Checker {
     ) -> Result<call_args::CallArgPlan, CompileError> {
         let allow_unknown_named_variadic =
             sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
-        let descriptor_spread_sources = descriptor_spread_sources(args);
+        let descriptor_spread_sources = descriptor_spread_sources(args, self.semantic_profile);
         call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
             sig,
             args,
@@ -760,6 +795,7 @@ impl Checker {
             false,
             allow_unknown_named_variadic,
             &descriptor_spread_sources,
+            self.semantic_profile,
         )
         .map_err(|err| call_arg_plan_error(sig, callee_desc, err))
     }
@@ -787,7 +823,7 @@ impl Checker {
         allow_unknown_named_variadic: bool,
         env: &TypeEnv,
     ) -> Result<call_args::CallArgPlan, CompileError> {
-        let assoc_spread_sources = assoc_spread_sources(args, env);
+        let assoc_spread_sources = assoc_spread_sources(args, env, self.semantic_profile);
         call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
             sig,
             args,
@@ -796,6 +832,7 @@ impl Checker {
             trim_trailing_defaults,
             allow_unknown_named_variadic,
             &assoc_spread_sources,
+            self.semantic_profile,
         )
         .map_err(|err| call_arg_plan_error(sig, callee_desc, err))
     }
@@ -888,6 +925,7 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        self.require_mixed_value_type(expected, actual, self.semantic_source_mode, span, context)?;
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
         } else {
@@ -1108,7 +1146,7 @@ impl Checker {
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let source_has_spread = plan.has_spread_args();
         let supports_literal_search_rewrite = !source_has_spread
-            && !call_args::has_named_args(args);
+            && !call_args::has_named_args(args, self.semantic_profile);
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
@@ -1227,6 +1265,7 @@ impl Checker {
                     && sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !defaults.get(param_idx).copied().unwrap_or(false);
                 if supplied_reference && !self.internal_callback_binding {
+                    self.record_reference_argument_contract(arg, &actual_ty);
                     if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. })
                         && !self.is_native_selection_reference_argument(arg, caller_env)? {
                         let param_name = sig
@@ -1300,7 +1339,7 @@ impl Checker {
                     let tracks_boxed_reference_output = supplied_reference
                         && !self.internal_callback_binding
                         && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
-                            || matches!(expected_ty, PhpType::Mixed));
+                            || crate::types::uses_boxed_reference_payload(expected_ty));
                     if tracks_boxed_reference_output {
                         let layout_contract = crate::types::is_written_reference_array_param(
                             &sig.ref_params,
@@ -1574,6 +1613,7 @@ impl Checker {
         if !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
             return Ok(());
         }
+        self.validate_noncoercive_static_spread(sig, args, caller_env, callee_desc)?;
         let regular_param_count = call_args::regular_param_count(sig);
         let spread_span = args
             .iter()

@@ -206,7 +206,7 @@ pub(super) fn lower_method_call_with_receiver_direct(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr,
 ) -> LoweredValue {
-    lower_method_call_with_binding(ctx, object, method, args, op, expr, false)
+    lower_method_call_with_binding(ctx, object, method, args, op, expr, false, None)
 }
 
 /// Checks the selected enum signature without changing direct reference-return adoption.
@@ -214,13 +214,22 @@ pub(super) fn lower_selected_enum_method_call(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr,
 ) -> LoweredValue {
-    lower_method_call_with_binding(ctx, object, method, args, op, expr, true)
+    lower_method_call_with_binding(ctx, object, method, args, op, expr, true, None)
+}
+
+/// Shares method argument, reference and owner lowering with an initialized getter guard.
+pub(super) fn lower_initialized_getter(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
+    property: &str, expr: &Expr,
+) -> LoweredValue {
+    let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+    let data = ctx.intern_string(property);
+    lower_method_call_with_binding(ctx, object, "__get", &[name], Op::MethodCall, expr, false, Some(data))
 }
 
 /// Keeps selected parameter validation inside the published argument and result-owner scope.
 fn lower_method_call_with_binding(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
-    args: &[Expr], op: Op, expr: &Expr, selected_enum: bool,
+    args: &[Expr], op: Op, expr: &Expr, selected_enum: bool, getter: Option<crate::ir::DataId>,
 ) -> LoweredValue {
     if let Some(call) = magic_method_calls::lower(ctx, object, method, args, op, expr) {
         return call;
@@ -317,9 +326,10 @@ fn lower_method_call_with_binding(
     let call = ctx.emit_value(
         op,
         operands,
-        Some(Immediate::Data(data)),
+        Some(getter.map_or(Immediate::Data(data), |property| Immediate::InitializedGetter { method: data, property })),
         result_type,
-        op.default_effects(),
+        op.default_effects() | if getter.is_some() { crate::ir::Effects::READS_GLOBAL | crate::ir::Effects::WRITES_GLOBAL }
+            else { crate::ir::Effects::PURE },
         Some(expr.span),
     );
     let call = finish_reference_return_call(

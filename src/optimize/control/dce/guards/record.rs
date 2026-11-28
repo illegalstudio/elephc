@@ -168,7 +168,7 @@ fn collect_trackable_condition_names(expr: &Expr, names: &mut Vec<String>) -> bo
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::StringLiteral(_) => true,
-        ExprKind::Not(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::Not(inner) | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             collect_trackable_condition_names(inner, names)
         }
         ExprKind::BinaryOp { left, right, .. } => {

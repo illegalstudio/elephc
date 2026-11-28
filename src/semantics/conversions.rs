@@ -1,0 +1,203 @@
+//! Purpose:
+//! Projects full checker declarations into shared implicit value-conversion plans.
+//!
+//! Called from:
+//! - Parameter checking and EIR value boundaries before storage adaptation.
+//!
+//! Key details:
+//! - Scalar unions retain exact PHP kinds; nominal assignability stays with the checker.
+//! - Trusted implementation operations keep their existing conversion contracts.
+
+use crate::{source::SourceMode, types::PhpType};
+use elephc_semantics::{SemanticProfile, conversions::{AllowedKinds, ConversionPlan, ValueKind}};
+
+/// Selects explicit user cast checks without changing reviewed implementation operations.
+pub(crate) fn checked_casts(profile: SemanticProfile, source: SourceMode) -> bool {
+    source != SourceMode::Internal && profile.contains(elephc_semantics::StrictFeature::Casts)
+}
+
+/// Keeps live reference argument protocols independent from explicit cast-domain checks.
+pub(crate) fn checked_references(profile: SemanticProfile, source: SourceMode) -> bool {
+    source != SourceMode::Internal && (profile.contains(elephc_semantics::StrictFeature::Locals)
+        || crate::types::checked_property_references(profile))
+}
+
+/// Projects only scalar source annotations whose meaning needs no class or generic context.
+pub(crate) fn scalar_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
+    use crate::parser::ast::TypeExpr;
+    Some(match hint {
+        TypeExpr::Int => PhpType::Int, TypeExpr::Float => PhpType::Float,
+        TypeExpr::Bool => PhpType::Bool, TypeExpr::False => PhpType::False,
+        TypeExpr::Str => PhpType::Str, TypeExpr::Void => PhpType::Void,
+        TypeExpr::Nullable(inner) => PhpType::Union(vec![scalar_hint(inner)?, PhpType::Void]),
+        TypeExpr::Union(members) => PhpType::Union(members.iter().map(scalar_hint).collect::<Option<Vec<_>>>()?),
+        TypeExpr::Named(name) => match name.as_str().to_ascii_lowercase().as_str() {
+            "int" => PhpType::Int, "float" => PhpType::Float, "bool" => PhpType::Bool,
+            "false" => PhpType::False, "string" => PhpType::Str, "null" | "void" => PhpType::Void,
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
+/// Projects contracts whose outer PHP kind needs no generic or lexical name resolution.
+pub(crate) fn context_free_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
+    use crate::parser::ast::TypeExpr;
+    if let Some(scalar) = scalar_hint(hint) { return Some(scalar); }
+    Some(match hint {
+        TypeExpr::Named(name) => match name.as_str().to_ascii_lowercase().as_str() {
+            "mixed" => PhpType::Mixed, "object" => PhpType::Object(String::new()),
+            "array" => PhpType::php_array(), "iterable" => PhpType::Iterable,
+            "callable" => PhpType::DeclaredCallable, _ => return None,
+        },
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } | TypeExpr::CallableSig { .. } =>
+            crate::types::constant_binding::declared_type(hint),
+        TypeExpr::Iterable => PhpType::Iterable,
+        TypeExpr::Nullable(inner) => PhpType::Union(vec![context_free_hint(inner)?, PhpType::Void]),
+        TypeExpr::Union(members) => PhpType::Union(members.iter().map(context_free_hint)
+            .collect::<Option<Vec<_>>>()?),
+        _ => return None,
+    })
+}
+
+/// Extracts a scalar declaration without flattening its PHP identity into physical storage.
+pub(crate) fn scalar_contract(ty: &PhpType) -> Option<AllowedKinds> {
+    Some(match ty {
+        PhpType::Int => AllowedKinds::one(ValueKind::Integer),
+        PhpType::Float => AllowedKinds::one(ValueKind::Float),
+        PhpType::Bool | PhpType::False => AllowedKinds::one(ValueKind::Boolean),
+        PhpType::Str => AllowedKinds::one(ValueKind::String),
+        PhpType::Void => AllowedKinds::one(ValueKind::Null),
+        PhpType::Union(members) => members.iter().try_fold(AllowedKinds::EMPTY,
+            |allowed, member| Some(allowed.union(scalar_contract(member)?)))?,
+        _ => return None,
+    })
+}
+
+/// Projects scalar or nominal declarations while leaving nominal membership to typed adapters.
+pub(crate) fn implicit_contract(ty: &PhpType) -> Option<AllowedKinds> {
+    match ty {
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+        | PhpType::Iterable | PhpType::Callable | PhpType::DeclaredCallable | PhpType::Resource(_) =>
+            Some(AllowedKinds::one(ValueKind::NonScalar)),
+        PhpType::Union(members) => members.iter().try_fold(AllowedKinds::EMPTY,
+            |allowed, member| Some(allowed.union(implicit_contract(member)?))),
+        _ => scalar_contract(ty),
+    }
+}
+
+/// Retains nominal syntax for conservative effects without resolving it to an ABI representation.
+pub(crate) fn implicit_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
+    let ty = crate::types::constant_binding::declared_type(hint);
+    implicit_contract(&ty).map(|_| ty)
+}
+
+/// Collects nominal alternatives separately from the neutral scalar kind projection.
+pub(crate) fn nominal_members(ty: &PhpType) -> Vec<&str> {
+    match ty {
+        PhpType::Object(name) => vec![name],
+        PhpType::Union(members) => members.iter().flat_map(nominal_members).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Runtime predicates that refine non-scalar alternatives without describing their storage ABI.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeConstraint { Array, Iterable, Callable, Resource }
+
+/// Collects distinct structural contracts in source order, independently of scalar alternatives.
+pub(crate) fn runtime_constraints(ty: &PhpType) -> Vec<RuntimeConstraint> {
+    let constraints = match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => vec![RuntimeConstraint::Array],
+        PhpType::Iterable => vec![RuntimeConstraint::Iterable],
+        PhpType::Callable | PhpType::DeclaredCallable => vec![RuntimeConstraint::Callable],
+        PhpType::Resource(_) => vec![RuntimeConstraint::Resource],
+        PhpType::Union(members) => members.iter().flat_map(runtime_constraints).collect(),
+        _ => Vec::new(),
+    };
+    constraints.into_iter().fold(Vec::new(), |mut unique, constraint| {
+        if !unique.contains(&constraint) { unique.push(constraint); }
+        unique
+    })
+}
+
+/// Limits dynamic declaration admission to contracts with a complete value-level guard.
+/// Generic element contracts still require the checker's existing element/layout proof.
+pub(crate) fn permits_guarded_unknown(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(element) => **element == PhpType::Mixed,
+        PhpType::AssocArray { key, value } => **key == PhpType::Mixed && **value == PhpType::Mixed,
+        PhpType::Union(members) => members.iter().all(permits_guarded_unknown),
+        _ => implicit_contract(ty).is_some(),
+    }
+}
+
+/// Keeps inferred PHP value contracts independent from physical layout and array element policy.
+pub(crate) fn inferred_binding_contract(ty: &PhpType) -> Option<PhpType> {
+    Some(match ty {
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        | PhpType::Void | PhpType::Object(_) | PhpType::Callable | PhpType::DeclaredCallable
+        | PhpType::Iterable => ty.clone(),
+        PhpType::Resource(_) => PhpType::Resource(None),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
+        PhpType::Union(members) if !members.is_empty() => crate::types::checker::normalize_union_members(
+            members.iter().map(inferred_binding_contract).collect::<Option<Vec<_>>>()?),
+        _ => return None,
+    })
+}
+
+/// Distinguishes the literal false declaration from a contract accepting every boolean.
+pub(crate) fn only_false(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::False => true,
+        PhpType::Union(members) => members.iter().any(only_false) && !members.contains(&PhpType::Bool),
+        _ => false,
+    }
+}
+
+/// Preserves original scalar alternatives when an inferred result has no coercive declaration.
+pub(crate) fn inferred_scalar_join(profile: SemanticProfile, source: SourceMode,
+    left: &PhpType, right: &PhpType) -> Option<PhpType> {
+    if source == SourceMode::Internal || !profile.contains(elephc_semantics::StrictFeature::Coercions)
+        || scalar_contract(left).is_none() || scalar_contract(right).is_none() { return None; }
+    Some(crate::types::checker::normalize_union_members(vec![left.clone(), right.clone()]))
+}
+
+/// Resolves one implicit scalar boundary independently of PHP's strict_types directive.
+pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &PhpType,
+    actual: &PhpType) -> ConversionPlan {
+    membership(profile, source, elephc_semantics::StrictFeature::Coercions, expected, actual)
+}
+
+/// Projects an exact value contract without borrowing another guarantee's activation or diagnostics.
+pub(crate) fn membership(profile: SemanticProfile, source: SourceMode,
+    feature: elephc_semantics::StrictFeature, expected: &PhpType, actual: &PhpType) -> ConversionPlan {
+    if source == SourceMode::Internal { return ConversionPlan::ExistingBehavior; }
+    let Some(allowed) = implicit_contract(expected) else { return ConversionPlan::ExistingBehavior; };
+    if let PhpType::Union(members) = actual {
+        let plans: Vec<_> = members.iter().map(|member| membership(profile, source, feature, expected, member)).collect();
+        if plans.iter().all(|plan| *plan == ConversionPlan::Identity) { return ConversionPlan::Identity; }
+        if plans.iter().all(|plan| matches!(plan, ConversionPlan::Reject(_))) {
+            return ConversionPlan::Reject(feature);
+        }
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
+    }
+    if *actual == PhpType::Never { return ConversionPlan::Identity; }
+    // Concrete string storage can carry logical null after a missing typed-array read.
+    // A declaration excluding null must test the logical kind before storage adaptation.
+    if super::numeric::value_kind(actual) == ValueKind::String
+        && allowed.allows(ValueKind::String) && !allowed.allows(ValueKind::Null)
+    {
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
+    }
+    let constraints = runtime_constraints(expected);
+    if ((!nominal_members(expected).is_empty() || !constraints.is_empty())
+            && super::numeric::value_kind(actual) == ValueKind::NonScalar)
+        || (constraints.contains(&RuntimeConstraint::Callable) && *actual == PhpType::Str) {
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
+    }
+    if only_false(expected) && *actual == PhpType::Bool {
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
+    }
+    elephc_semantics::conversions::plan_membership(profile, feature, super::numeric::value_kind(actual), allowed)
+}

@@ -12,12 +12,16 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod array_entry_copies;
+mod array_reference_contracts;
 mod argument_value_owners;
+mod array_argument_sources;
 mod call_argument_owners;
 
 use argument_value_owners::*;
 use call_argument_owners::*;
 pub(crate) mod array_references;
+mod reference_keys;
 pub mod builtin_metadata;
 mod builtin_interfaces;
 mod builtins;
@@ -32,17 +36,46 @@ mod expressions;
 mod generics;
 mod include_exec;
 mod operands;
+mod checked_numeric;
+mod checked_comparisons;
+mod checked_strings;
+mod checked_array_keys;
+mod checked_nullability;
+mod checked_cast;
+mod native_results;
+mod numeric_domains;
 mod libc_shims;
 mod null_object_boundaries;
+mod nullsafe_chains;
 mod reflection;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;
 mod return_type_compat;
 mod return_values;
+mod value_contracts;
+mod property_value_contracts;
+mod write_source_domains;
+mod member_write_sources;
+mod property_reference_contracts;
+mod property_reference_candidates;
 mod runtime_ops;
 pub(crate) use runtime_ops::{EVAL_TAG_BOOL, EVAL_TAG_FLOAT, EVAL_TAG_INT, EVAL_TAG_NULL, EVAL_TAG_STRING};
 mod scope_cells;
+mod local_binding_origins;
+mod mixed_source_proofs;
+mod mixed_eval;
+mod mixed_result_sources;
+mod mixed_callable_sources;
+mod mixed_method_results;
+mod mixed_foreach_sources;
+mod mixed_class_sources;
+mod mixed_guards;
+mod initialization;
+mod probe_reads;
+use local_binding_origins::{bind_parameter_origin, local_producer_contract, store_local_with_origin};
 mod persistent_references;
+mod static_locals;
+mod global_bindings;
 mod superglobals;
 mod statements;
 #[cfg(not(test))]
@@ -78,7 +111,7 @@ use constants::*;
 pub(crate) use bytecode::with_executable_cache_key;
 pub use control::EvalOutcome;
 use control::{
-    BoundMethodArg, BoundNativeFunctionArgs, BoundNativeFunctionRefSlot, EvalArraySpliceDirectArgs,
+    ArgumentSource, BoundMethodArg, BoundNativeFunctionArgs, BoundNativeFunctionRefSlot, EvalArraySpliceDirectArgs,
     EvalByRefBindingMode, EvalControl, EvalPredefinedConstant, EvalSprintfSpec,
     EvaluatedCallArg, EvaluatedCallable,
 };
@@ -92,6 +125,15 @@ use null_object_boundaries::*;
 use reflection::*;
 use return_type_compat::*;
 use return_values::*;
+use value_contracts::*;
+use property_value_contracts::*;
+use member_write_sources::*;
+use property_reference_contracts::*;
+#[cfg(not(test))]
+pub(crate) use property_reference_contracts::eval_validate_property_reference;
+pub(crate) use property_reference_candidates::{prepare_property_reference_candidates,
+    coerce_property_reference_candidates};
+use property_reference_candidates::coerce_property_value_candidate;
 pub use runtime_ops::{
     NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
 };
@@ -146,6 +188,21 @@ pub fn execute_program_with_context(
     }
 }
 
+/// Validates immutable parser/context compatibility before either execution engine runs.
+pub(crate) fn validate_program_semantics(
+    context: &mut ElephcEvalContext, program: &EvalProgram, values: &impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let profile = context.activate_semantic_profile();
+    if profile.bits() & !elephc_semantics::INTEGRATED_FEATURE_BITS != 0 {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    if !program.matches_semantic_profile(profile) { return Err(EvalStatus::AbiMismatch); }
+    if values.fixed_semantic_profile()?.is_some_and(|runtime| runtime != profile) {
+        return Err(EvalStatus::AbiMismatch);
+    }
+    Ok(())
+}
+
 /// Executes an EvalIR program and preserves escaping Throwable cells.
 ///
 /// A fragment that fits the bytecode slice runs there. Any named gap, or a cached
@@ -156,6 +213,15 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    with_source_return_contract(None, None, None, context, |context|
+        execute_program_in_return_scope(context, program, scope, values))
+}
+
+/// Runs one program after its return declaration has been separated from its caller's scope.
+fn execute_program_in_return_scope(context: &mut ElephcEvalContext, program: &EvalProgram,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    validate_program_semantics(context, program, values)?;
     let previous_strict_types = context.strict_types();
     context.set_strict_types(program.strict_types());
     let executed = match bytecode::try_execute(context, program, scope, values) {

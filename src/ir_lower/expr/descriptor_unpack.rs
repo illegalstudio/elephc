@@ -307,10 +307,7 @@ fn root_descriptor_binding_value(
     let value = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Callable {
         ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
     } else { value };
-    let ty = ctx.builder.value_php_type(value.value);
-    let (value, owner) = root_owned_call_operand(ctx, value, span);
-    let borrowed = owner.map(|slot| load_published_container(ctx, slot, ty, span)).unwrap_or(value);
-    (borrowed, owner)
+    root_borrowed_call_operand(ctx, value, span)
 }
 
 /// Rejects an integer-keyed argument that follows a name, like PHP's unpack ordering rule.

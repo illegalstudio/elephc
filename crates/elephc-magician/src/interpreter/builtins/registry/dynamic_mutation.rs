@@ -22,6 +22,7 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    validate_builtin_call_arguments(name, evaluated_args, context, values)?;
     let result = match name {
         "settype" => eval_dynamic_settype_call(evaluated_args, context, values)?,
         "array_walk" => eval_dynamic_array_walk_call(evaluated_args, context, values)?,
@@ -149,17 +150,19 @@ fn eval_dynamic_settype_call(
     let Some(target) = var.ref_target.as_ref() else {
         return Ok(None);
     };
-    let Some(converted) = eval_settype_cast_value(var.value, type_name.value, values)? else {
-        return values.bool_value(false).map(Some);
-    };
-    eval_write_direct_ref_target(
-        target,
-        converted,
-        context,
-        values,
-        Some(ScopeCellOwnership::Owned),
-    )?;
-    values.bool_value(true).map(Some)
+    with_direct_ref_target(target.clone(), context, values, |target, context, values| {
+        let Some(converted) = eval_settype_cast_value(var.value, type_name.value, context, values)? else {
+            return values.bool_value(false);
+        };
+        if matches!(target, EvalReferenceTarget::Variable { .. }) {
+            eval_write_direct_ref_target(target, converted, context, values, Some(ScopeCellOwnership::Owned))?;
+            values.bool_value(true)
+        } else {
+            let result = eval_write_direct_ref_target(target, converted, context, values, None)
+                .and_then(|()| values.bool_value(true));
+            finish_synthesized_method_arguments(result, [converted], context, values)
+        }
+    }).map(Some)
 }
 
 /// Evaluates a dynamic `array_walk()` call when the array argument is writable.
@@ -191,8 +194,7 @@ fn eval_dynamic_array_pop_shift_call(
         return Ok(None);
     };
     let (result, replacement) = eval_array_pop_shift_replacement(name, array.value, values)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
 }
 
 /// Evaluates dynamic `array_push()` or `array_unshift()` calls against a writable array.
@@ -212,11 +214,23 @@ fn eval_dynamic_array_push_unshift_call(
         return Err(EvalStatus::RuntimeFatal);
     }
     let inserted_values = inserted.iter().map(|arg| arg.value).collect::<Vec<_>>();
-    let replacement =
-        eval_array_push_unshift_replacement(name, array.value, &inserted_values, values)?;
-    let result = eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    let mut element = None;
+    for argument in &inserted {
+        let ty = local_binding_origins::element_value_source_type(argument.source_type.as_ref().map(|source| &source.ty),
+            argument.value, context, values)?;
+        element = Some(match element { None => ty,
+            Some(previous) => crate::eval_ir::merge_array_element_sources(previous, ty) });
+    }
+    let element = element.unwrap_or_else(|| elephc_generics::Type::atom("never"));
+    let result = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(
+        eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?);
+    crate::runtime_hooks::owner_frames::with_runtime_owners(&result, || {
+        let outcome = (|| {
+            let replacement = eval_array_push_unshift_replacement(name, array.value, &inserted_values, context, values)?;
+            local_binding_origins::finish_array_mutation(target, array.value, replacement, result.take(), element, context, values)
+        })();
+        finish_eval_argument_values(outcome, [result.take()], context, values).map(Some)
+    })
 }
 
 /// Evaluates a dynamic `array_splice()` call against a writable array.
@@ -242,10 +256,12 @@ fn eval_dynamic_array_splice_call(
         offset.value,
         length,
         replacement_arg,
+        context,
         values,
     )?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(removed))
+    let element = local_binding_origins::replacement_element_source(
+        optional_evaluated_ref_arg(&bound, 3).and_then(|arg| arg.source_type.as_ref().map(|source| &source.ty)));
+    local_binding_origins::finish_array_mutation(target, array.value, replacement, removed, element, context, values).map(Some)
 }
 
 /// Evaluates a dynamic internal array pointer call against a writable array.
@@ -286,10 +302,9 @@ fn eval_dynamic_array_sort_call(
     let Some(target) = array.ref_target.as_ref() else {
         return Ok(None);
     };
-    let replacement = eval_array_sort_replacement(name, array.value, flags, values)?;
+    let replacement = eval_array_sort_replacement(name, array.value, flags, context, values)?;
     let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
 }
 
 /// Evaluates a dynamic user-comparator sort call against a writable array.
@@ -309,8 +324,7 @@ fn eval_dynamic_user_sort_call(
     let replacement =
         eval_user_sort_replacement(name, array.value, callback.value, context, values)?;
     let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
 }
 
 /// Evaluates a dynamic `preg_match()` call when `$matches` is a writable lvalue.

@@ -418,7 +418,7 @@ fn eval_apply_clone_properties(
             // arrays eval itself built. An override array generated code built carries its
             // state in the native hash entry instead. Both are read for every entry, and
             // either one refusing throws at this exact point in php's iteration order.
-            let alias_is_shared = eval_array_reference_key(key, values)?
+            let alias_is_shared = eval_array_reference_key(key, context.semantic_profile(), values)?
                 .and_then(|key| context.array_element_alias(properties, &key).cloned())
                 .is_some_and(|reference| eval_clone_property_reference_is_shared(&reference, scope));
             let entry_is_shared = crate::runtime_hooks::array_entry_is_shared_reference(
@@ -780,9 +780,9 @@ fn eval_dynamic_class_allocate_object_inner(
                         Some(cell) => Some(cell),
                         None => {
                             context.begin_deprecation_silence();
-                            let value = eval_class_like_member_default(
+                            let value = eval_property_default(
                                 class.name(),
-                                property.trait_origin(),
+                                property,
                                 default,
                                 context,
                                 caller_scope,
@@ -799,10 +799,15 @@ fn eval_dynamic_class_allocate_object_inner(
                 };
                 let storage_name = eval_instance_property_storage_name(class.name(), property);
                 if let Some(value) = value {
+                    let origin = eval_default_property_array_origin(class.name(), property, value, context, values)?;
                     let written = eval_with_native_property_storage_scope(
                         class.name(), &storage_name, context, values,
                         |values| values.property_set(object, &storage_name, value),
                     );
+                    if written.is_ok() {
+                        if let Some(origin) = origin { context.set_dynamic_property_array_type(identity, &storage_name, origin); }
+                        eval_note_instance_property_array_value(identity, &storage_name, value, context, values)?;
+                    }
                     let released = release_expr_result(value, context, values);
                     written.and(released)?;
                     context.mark_dynamic_property_initialized(identity, &storage_name);

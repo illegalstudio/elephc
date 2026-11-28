@@ -28,6 +28,7 @@ description: "Compiler internals for array_combine(): lowering path, type checks
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+- **Original array key input**: values of argument #1; validated before key conversion.
 
 ## EIR and runtime boundary
 

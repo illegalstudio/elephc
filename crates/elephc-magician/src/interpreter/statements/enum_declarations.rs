@@ -328,6 +328,22 @@ pub(super) fn eval_class_like_member_default(
     result
 }
 
+/// Evaluates a declared default with the scalar representation required by its declaration.
+pub(super) fn eval_property_default(
+    owner: &str, property: &EvalClassProperty, default: &EvalExpr,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_class_like_member_default(owner, property.trait_origin(), default, context, scope, values)?;
+    let float_only = property.property_type().is_some_and(|ty| !ty.is_intersection()
+        && ty.variants() == [EvalParameterTypeVariant::Float]);
+    if float_only && values.type_tag(value)? == EVAL_TAG_INT {
+        let converted = values.cast_float(value);
+        return finish_synthesized_method_arguments(converted, [value], context, values);
+    }
+    Ok(value)
+}
+
 /// Initializes static property cells for a newly declared eval class.
 pub(super) fn initialize_eval_static_properties(
     class: &EvalClass,
@@ -350,7 +366,11 @@ pub(super) fn initialize_eval_static_properties(
             None
         };
         if let Some(value) = value {
+            let origin = eval_default_property_array_origin(class.name(), property, value, context, values)?;
             store_static_property_value(class.name(), property.name(), value, context, values)?;
+            if let Some(origin) = origin { context.set_static_property_array_type(class.name(), property.name(), origin); }
+            let stored = context.static_property(class.name(), property.name()).ok_or(EvalStatus::RuntimeFatal)?;
+            eval_note_static_property_array_value(class.name(), property.name(), stored, context, values)?;
         }
     }
     Ok(())

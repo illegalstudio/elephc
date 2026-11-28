@@ -385,7 +385,16 @@ switches do not update the operating-system thread's stack bounds. Parsing calls
 no PHP and returns its owned program before interpreter execution begins; PHP
 suspension and saved-frame ownership continue on the native coroutine stack.
 
-The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. The main context also saves its magic-setter guard and deep-release GC suppression. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, `own_call_frame`, `own_magic_set_guard`, and `own_gc_release_suppressed`), so `__rt_fiber_switch` restores the execution context belonging to the selected stack.
+The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. The main context also saves its magic-accessor guard and deep-release GC suppression. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, `own_call_frame`, `own_magic_set_guard`, and `own_gc_release_suppressed`), so `__rt_fiber_switch` restores the execution context belonging to the selected stack.
+
+The existing `_magic_set_guard_head` chain also carries initialized getter
+guards. Setter nodes store the aligned native receiver identity; getter nodes
+set its reserved low bit. The remaining key is the exact property byte sequence.
+The guard only compares identities, never dereferences the tagged key. Both
+kinds retain the same four-word stack-node ABI and Fiber switching state. A
+local exception boundary unlinks the exact node before its stack storage leaves
+scope, and getter results are saved while the nonallocating pop runs.
+
 
 Every compiled function prologue also consults `_stack_limit`. The main-thread
 floor, derived from `RLIMIT_STACK`, is retained in `_stack_limit_main`; Fiber and
@@ -639,25 +648,41 @@ that never export the property to eval. A singleton reference projects an
 independent value when neither the native cell nor its PHP wrapper has another
 visible owner.
 The serialization row separately marks eligible exact `mixed` backing storage.
-Projection uses that capability before creating a wrapper; a constrained union
-that also uses boxed storage retains its existing representation until its
-property type sources can accompany the shared reference.
+Projection uses that capability before creating a wrapper. A constrained union
+that also uses boxed storage retains its existing promotion gate. When its
+property type sources already accompany a canonical reference, the projection
+shares that wrapper. It verifies the resolved child address differs from the
+native cell, so a raw boxed union cannot acquire a new wrapper through this path.
 
-Scalar reference readers authenticate a canonical cell through the allocator's
+Reference readers authenticate a canonical cell through the allocator's
 exact live-base index, heap kind `8`, descriptor `7`, and a live kind-`5` wrapper
 with nested tag `7` and reference marker `1`. Raw frames, interior addresses,
 uninitialized cells and raw `Iterable` payloads retain their existing ABI.
 The shape probe returns a borrowed wrapper and runs again on every read rather
 than caching a result across PHP callbacks. Typed scalar and union promotion
 still requires the matching assignment validators and property-source lifecycle.
-JSON and serialization/rendering rows separately mark owned scalar cells eligible
-for that shape check. Borrowed constructor slots have no such flag. These leaf
-walkers preserve their raw payload path and resolve a canonical scalar child as
+JSON and serialization/rendering rows separately mark reviewed owned scalar, object,
+array and constrained-union cells eligible for that shape check. Borrowed constructor
+slots have no such flag. These leaf walkers preserve their raw payload path and resolve a canonical child as
 Mixed, without calls or unrelated register clobbers. Object projections recover
 the original managed cell before testing its visible owners; an interior wrapper
-child address must never be used as a cell header. Shared canonical scalars then
-retain the wrapper, while singleton wrappers copy their PHP value. Raw scalar
-projection never creates a wrapper through this path.
+child address must never be used as a cell header. Shared canonical references then
+retain the wrapper, while singleton wrappers copy their PHP value. Raw constrained
+projection never creates a wrapper through this path. Generic mutation receiver
+reloads use the same canonical-aware reader as EIR reference loads. Referenced
+arrays can therefore split their container during mutation while aliases and
+projected references continue to follow the stable wrapper child; ordinary value
+copies keep their previous container.
+Raw Iterable property rows use the layout marker `ITERABLE_PROPERTY_TAG` (13),
+which is separate from boxed runtime value tags and GC descriptor numbers. A leaf
+reader checks the original initialization marker and absent payload sentinels,
+then maps array/hash/object heap kinds 2/3/4 to runtime value tags 4/5/6. It preserves
+the payload address and caller's initialization marker without runtime calls or
+extra scratch registers. A canonical child has already become boxed tag 7 and
+bypasses this raw adapter. JSON, projection, dump, print and serialization share
+this distinction. Hydration stores a raw Iterable payload and uniformly releases
+a previous container owner; its parsed box retains the existing ownership finisher.
+
 A separated canonical cell contains a new persistent wrapper. Its descriptor
 remains `7`, so flattening the wrapper into a scalar value box would violate the
 physical shape required by scalar readers.
@@ -1387,7 +1412,7 @@ usage. It cannot shrink the arena, so the reserved-byte peak stays constant.
 The elephc extensions `memory_get_allocations(): int` and `memory_get_frees(): int`
 read cumulative successful allocation and release counts. Reusing a cached or
 free-list block counts as an allocation. These counters survive peak resets and
-are hidden by `--strict-php`. All five native operations take constant time and
+are hidden by `--php-only`. All five native operations take constant time and
 allocate no memory, allowing before/after samples around frame phases. See
 `examples/memory-phases/main.php` for a 10,000-entity example.
 
@@ -1841,7 +1866,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_vd_ref_prefix` is a one-value flag for `var_dump()`. The hash walker sets it before printing a shared reference, and the padding helper consumes it to print `_vd_amp` after the indentation.
 - `elephc_probe_trace_fn`, `elephc_trace_active`, and `elephc_instr_live_ptr` hold the profiling trace handoff, the active trace flag, and the address of the live-heap byte counter.
 - `_debuginfo_guard`, `_debuginfo_pad` — set around a run-time `__debugInfo()` call made by `var_dump()`/`print_r()`. `_debuginfo_guard` holds the exception-handler top at the call (tagged with bit 0): a throw that reaches it without a newer handler is reported as PHP's uncaught warning, then `__debuginfo() must return an array`, exit 255, as in PHP. `_debuginfo_pad` says whether `var_dump()` had already written the value's indent before that report. `__rt_obj_debuginfo_fetch` saves both, with `_debuginfo_call_line`, in its frame and restores them after the call, so a dump nested inside `__debugInfo()` does not leak its values into the enclosing one.
-- `_callable_strict_profile` — selects the strict-PHP callable builtin table when `--strict-php` is active
+- `_callable_strict_profile` - selects the strict-PHP callable builtin table when `--php-only` is active
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_tmpfile_template` — file metadata, path, stat-array, and temporary-file lookup strings used by I/O helpers
 - `_locale_utf8_name`, `_locale_env_name` — locale selectors used by runtime helpers that need host locale fallback
@@ -2063,7 +2088,7 @@ read the same uniform heap header, including on the iOS targets.
 | Weak-reference identity index | `_obj_weak_reference_index` = `(heap_size / 16 + 2) * 8` bytes, or 64 MiB plus 16 bytes for the default 128 MiB heap | One non-owning wrapper pointer per heap granule; it neither keeps keys alive nor acts as a collector root |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
 | Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
-| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |
+| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-accessor recursion guard |
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |

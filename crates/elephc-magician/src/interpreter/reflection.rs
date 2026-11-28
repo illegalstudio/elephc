@@ -363,3 +363,6 @@ pub(in crate::interpreter) fn eval_reflection_owner_new_object(
         None => Ok(None),
     }
 }
+
+mod invocation_sources;
+pub(in crate::interpreter) use invocation_sources::*;

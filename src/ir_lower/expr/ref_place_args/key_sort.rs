@@ -47,7 +47,7 @@ pub(super) fn lower_key_sort_ref_place_call(
         "krsort" => ArrayKeySort::Descending,
         _ => return None,
     };
-    let plan = plan_key_sort_args(sig, args)?;
+    let plan = plan_key_sort_args(sig, args, ctx.semantic_profile)?;
     let mut receiver = None;
     let mut flags = None;
     for (slot, arg) in &plan {
@@ -297,7 +297,7 @@ fn lower_mixed_array_element_key_sort(
     };
     if value_repr != PhpType::Mixed {
         let parent = ctx.load_local(parent_name, Some(array.span));
-        ctx.prepare_mutated_local_owner(
+        let parent = ctx.prepare_mutated_local_owner(
             parent_name,
             parent,
             mixed_parent_ty.clone(),
@@ -486,7 +486,7 @@ fn lower_mixed_packed_array_element_key_sort(
     let mixed_parent_ty = PhpType::Array(Box::new(PhpType::Mixed));
     if element_repr != PhpType::Mixed {
         let parent = ctx.load_local(parent_name, Some(array.span));
-        ctx.prepare_mutated_local_owner(
+        let parent = ctx.prepare_mutated_local_owner(
             parent_name,
             parent,
             mixed_parent_ty.clone(),

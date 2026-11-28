@@ -29,7 +29,7 @@ pub(crate) struct CompileGap {
 
 impl CompileGap {
     /// Names one unsupported EvalIR construct.
-    const fn new(what: &'static str) -> Self {
+    pub(super) const fn new(what: &'static str) -> Self {
         Self { what }
     }
 
@@ -71,6 +71,7 @@ struct Compiler<'a> {
     strings: Vec<String>,
     string_index: HashMap<String, u16>,
     calls: Vec<CompiledCall>,
+    store_sources: Vec<EvalExpr>,
     ops: Vec<Op>,
     loops: Vec<OpenLoop>,
     shapes: &'a HashMap<String, usize>,
@@ -103,6 +104,7 @@ impl<'a> Compiler<'a> {
             strings: Vec::new(),
             string_index: HashMap::new(),
             calls: Vec::new(),
+            store_sources: Vec::new(),
             ops: Vec::new(),
             loops: Vec::new(),
             shapes,
@@ -318,6 +320,7 @@ impl<'a> Compiler<'a> {
                 None => self.emit(Op::ReturnVoid),
             },
             EvalStmt::StoreVar { name, value } => {
+                self.prepare_store(value)?;
                 self.compile_expr(value)?;
                 let slot = self.local(name)?;
                 self.emit(Op::Store(slot))
@@ -395,6 +398,13 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// Records an immutable producer expression before its operand effects run.
+    fn prepare_store(&mut self, value: &EvalExpr) -> Result<(), CompileGap> {
+        let index = u16::try_from(self.store_sources.len()).map_err(|_| CompileGap::new("TooManyStores"))?;
+        self.store_sources.push(value.clone());
+        self.emit(Op::PrepareStore(index))
+    }
+
     /// Compiles an expression whose value is discarded, without retaining an assignment.
     fn compile_discarded(&mut self, expr: &EvalExpr) -> Result<(), CompileGap> {
         if let EvalExpr::Call { name, args } = expr {
@@ -403,6 +413,7 @@ impl<'a> Compiler<'a> {
             return self.emit(Op::PopDiscardedCall(index));
         }
         if let EvalExpr::Assign { name, value } = expr {
+            self.prepare_store(value)?;
             self.compile_expr(value)?;
             let slot = self.local(name)?;
             return self.emit(Op::Store(slot));
@@ -422,6 +433,7 @@ impl<'a> Compiler<'a> {
                     EvalCastType::Int => self.emit(Op::CastInt),
                     EvalCastType::Float => self.emit(Op::CastFloat),
                     EvalCastType::String => self.emit(Op::CastString),
+                    EvalCastType::StringFormat => self.emit(Op::FormatString),
                     EvalCastType::Bool => self.emit(Op::CastBool),
                 }
             }
@@ -441,6 +453,7 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::Load(slot))
             }
             EvalExpr::Assign { name, value } => {
+                self.prepare_store(value)?;
                 self.compile_expr(value)?;
                 let slot = self.local(name)?;
                 self.emit(Op::Store(slot))?;
@@ -609,6 +622,7 @@ impl<'a> Compiler<'a> {
             locals: self.locals,
             strings: self.strings,
             calls: self.calls,
+            store_sources: self.store_sources,
             ops: self.ops,
             fast_positional: fast,
             defined,

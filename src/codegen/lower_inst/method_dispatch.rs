@@ -39,6 +39,9 @@ fn static_receiver_declares_method(
 /// implementation. Generic final declarations also select the runtime instantiation's
 /// diagnostic name, even though object-only variance preserves literal parameter types.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(Immediate::InitializedGetter { method, property }) = inst.immediate {
+        return super::magic_property_guards::lower_initialized_getter(ctx, inst, method, property);
+    }
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
     if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? {

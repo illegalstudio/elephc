@@ -52,6 +52,10 @@ impl FakeOps {
                     properties.push(("code".to_string(), code));
                 }
             }
+            if let Some(previous) = args.get(2).copied() {
+                if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "previous") { *value = previous; }
+                else { properties.push(("previous".into(), previous)); }
+            }
             return Ok(());
         }
         if class_name
@@ -279,10 +283,14 @@ impl FakeOps {
     /// Reports fake class relations for eval `is_a` and `is_subclass_of` unit tests.
     pub(in crate::interpreter::tests::support) fn runtime_object_is_a(
         &mut self,
-        object_or_class: RuntimeCellHandle,
+        mut object_or_class: RuntimeCellHandle,
         target_class: &str,
         exclude_self: bool,
     ) -> Result<bool, EvalStatus> {
+        // Class metadata belongs to the referenced object, not its persistent cell wrapper.
+        while let Some(value) = self.references.get(&(object_or_class.as_ptr() as usize)) {
+            object_or_class = *value;
+        }
         let object_id = object_or_class.as_ptr() as usize;
         match self.get(object_or_class) {
             FakeValue::Object(_) if self.object_classes.contains_key(&object_id) => Ok(self
@@ -335,11 +343,12 @@ impl FakeOps {
             _ => self.string(""),
         }
     }
-    /// Returns the fake object handle as a stable object identity.
+    /// Returns the underlying fake object identity across PHP reference wrappers.
     pub(in crate::interpreter::tests::support) fn runtime_object_identity(
         &mut self,
-        object: RuntimeCellHandle,
+        mut object: RuntimeCellHandle,
     ) -> Result<u64, EvalStatus> {
+        while let Some(value) = self.references.get(&(object.as_ptr() as usize)) { object = *value; }
         match self.get(object) {
             FakeValue::Object(_) | FakeValue::Iterator { .. } => Ok(object.as_ptr() as u64),
             _ => Err(EvalStatus::RuntimeFatal),

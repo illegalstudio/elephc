@@ -61,8 +61,9 @@ pub(super) fn build<T: SourceToken>(
     } else {
         Vec::new()
     };
-    let mut cursor = Cursor::new_in_source(text, 0);
-    let mut literal_cursor = Cursor::new_in_source(text, 0);
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE;
+    let mut cursor = Cursor::new_in_source(text, 0, profile);
+    let mut literal_cursor = Cursor::new_in_source(text, 0, profile);
     let mut projected = Vec::with_capacity(tokens.len() + 2);
     let mut previous_significant = tok::T_OPEN_TAG;
     let mut pending_label = false;

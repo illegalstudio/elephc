@@ -101,6 +101,8 @@ pub struct Function {
     /// (passes neutralize or relocate instructions rather than renumbering them), and passes
     /// that copy a body into another function carry the entries along.
     pub inlined_scopes: std::collections::HashMap<InstId, String>,
+    /// Exact local binding accepted by a native reference validator, separate from storage.
+    pub native_local_reference_contract: Option<PhpType>,
 }
 
 impl Function {
@@ -157,6 +159,7 @@ impl Function {
             display_name: None,
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
             inlined_scopes: std::collections::HashMap::new(),
+            native_local_reference_contract: None,
         }
     }
 
@@ -309,6 +312,8 @@ pub enum LocalKind {
 pub struct FunctionFlags {
     /// Whether compiler-internal source declared this function rather than the user's program.
     pub is_internal: bool,
+    /// Generated implementation statements invoke a public builtin contract for caller values.
+    pub is_builtin_contract_wrapper: bool,
     pub is_main: bool,
     pub is_method: bool,
     pub is_closure: bool,
@@ -327,4 +332,6 @@ pub struct FunctionFlags {
     pub is_native_reference_validator: bool,
     /// Eager generator guard borrows arguments before the constructor captures their bindings.
     pub is_eager_parameter_validator: bool,
+    /// Runtime binding presence is distinct from frame storage for eval and scope enumeration.
+    pub tracks_local_binding_state: bool,
 }

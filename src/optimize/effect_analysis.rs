@@ -119,7 +119,8 @@ pub(super) fn compute_program_callable_effects(
                             for (name, function) in &function_bodies {
                                 let effect = never_declared_effect(
                                     function.declared_never,
-                                    parameter_guard_effect(function.parameter_guard_may_throw,
+                                    parameter_binding_effect(function.parameter_guard_may_throw,
+                                        !function.reference_parameters.is_empty(),
                                         with_reference_parameter_scope(false, function.reference_parameters.clone(), ||
                                             with_return_boundary_facts(Some(&function.return_boundary), || block_effect(function.body)))),
                                 );
@@ -135,7 +136,8 @@ pub(super) fn compute_program_callable_effects(
                                         with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body))),
                                 );
                                 let effect = never_declared_effect(method.declared_never,
-                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
+                                    parameter_binding_effect(method.parameter_guard_may_throw,
+                                        !method.reference_parameters.is_empty(), effect));
                                 if static_method_effects.get(name).copied() != Some(effect) {
                                     static_method_updates.push((name.clone(), effect));
                                 }
@@ -148,7 +150,8 @@ pub(super) fn compute_program_callable_effects(
                                         with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body))),
                                 );
                                 let effect = never_declared_effect(method.declared_never,
-                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
+                                    parameter_binding_effect(method.parameter_guard_may_throw,
+                                        !method.reference_parameters.is_empty(), effect));
                                 if instance_method_effects.get(name).copied() != Some(effect) {
                                     instance_method_updates.push((name.clone(), effect));
                                 }
@@ -462,11 +465,8 @@ fn type_expr_is_builtin(ty: &TypeExpr) -> bool {
     }
 }
 
-/// Keeps call-boundary literal-type guards observable even when the callable body is pure.
-fn parameter_guard_effect(may_throw: bool, effect: Effect) -> Effect {
-    if may_throw {
-        effect.with_may_throw()
-    } else {
-        effect
-    }
+/// Preserves argument guards and caller reference formation independently of a pure callable body.
+pub(super) fn parameter_binding_effect(may_throw: bool, forms_references: bool, effect: Effect) -> Effect {
+    let effect = if forms_references { effect.with_side_effects() } else { effect };
+    if may_throw { effect.with_may_throw() } else { effect }
 }

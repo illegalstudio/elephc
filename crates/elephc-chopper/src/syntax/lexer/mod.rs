@@ -10,6 +10,8 @@
 //! - A reserved word glued into a qualified name (`Default\Palette`) is emitted as an
 //!   identifier, as PHP 8 lexes the whole name as one token (see `qualified_names`).
 
+#[cfg(test)]
+mod strict_literals;
 mod cursor;
 mod literals;
 /// Rewrites reserved words that are segments of a qualified name into identifiers.
@@ -50,6 +52,16 @@ pub fn tokenize_with_mode(
     mode: SourceMode,
 ) -> Result<Vec<SpannedToken>, CompileError> {
     scan::scan_tokens_in_source(source, mode, 0)
+}
+
+/// Tokenizes user source without losing profile-dependent literal evidence.
+pub fn tokenize_with_semantics(
+    source: &str,
+    mode: SourceMode,
+    source_id: u32,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<SpannedToken>, CompileError> {
+    scan::scan_tokens_with_semantics(source, mode, source_id, profile)
 }
 
 /// Tokenizes an included physical file with a source identity carried by every span.

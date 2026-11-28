@@ -18,6 +18,12 @@ pub(in crate::interpreter) fn eval_binary_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = super::super::checked_comparisons::binary(op, left, right, context, values)? {
+        return Ok(result);
+    }
+    if let Some(result) = super::super::checked_numeric::binary(op, left, right, context, values)? {
+        return Ok(result);
+    }
     match op {
         EvalBinOp::Add => values.add(left, right),
         EvalBinOp::Sub => values.sub(left, right),
@@ -32,8 +38,8 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::ShiftRight => values.bitwise_dispatch(op, left, right),
         EvalBinOp::Concat => eval_concat_result(left, right, context, values),
         EvalBinOp::LogicalXor => {
-            let left_truthy = values.truthy(left)?;
-            let right_truthy = values.truthy(right)?;
+            let left_truthy = eval_boolean_condition(left, context, values)?;
+            let right_truthy = eval_boolean_condition(right, context, values)?;
             values.bool_value(left_truthy ^ right_truthy)
         }
         EvalBinOp::LooseEq
@@ -56,6 +62,7 @@ fn eval_concat_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    super::super::checked_strings::concatenation(left, right, context, values)?;
     let left_string = eval_string_context_value(left, context, values)?;
     let right_string = match eval_string_context_value(right, context, values) {
         Ok(value) => value,
@@ -90,8 +97,14 @@ pub(in crate::interpreter) fn eval_dynamic_member_name(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let source = eval_owned_expr(expr, context, scope, values)?;
+    let (source,evidence)=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        mixed_eval::evaluate(expr,context,scope,values)?
+    } else {(eval_owned_expr(expr,context,scope,values)?,None)};
     let result = (|| {
+        let evidence=evidence.map(mixed_source_proofs::value_source)
+            .unwrap_or_else(||elephc_generics::Type::atom("mixed"));
+        mixed_source_proofs::require_source(&evidence,"member name selection",context,values,
+            mixed_source_proofs::string_context_source)?;
         let value = eval_string_context_value(source, context, values)?;
         let bytes = values.string_bytes(value);
         let released = if value != source {
@@ -111,13 +124,49 @@ pub(in crate::interpreter) fn eval_array_get_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if values.type_tag(array)? != EVAL_TAG_OBJECT {
-        if let Some(target) = eval_array_reference_key(index, values)?
+    eval_array_get_with_reference(array, index, false, true, context, values)
+}
+
+/// Selects an array argument without separating an already stored PHP reference cell.
+pub(in crate::interpreter) fn eval_array_get_reference_result(
+    array: RuntimeCellHandle, index: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_array_get_with_reference(array, index, true, false, context, values)
+}
+
+/// Reads an intentional probe or slot-creation receiver without a missing-element exception.
+pub(in crate::interpreter) fn eval_array_get_quiet_result(
+    array: RuntimeCellHandle, index: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_array_get_with_reference(array, index, false, false, context, values)
+}
+
+/// Shares original-key guards and alias resolution before choosing value or reference storage.
+fn eval_array_get_with_reference(
+    array: RuntimeCellHandle, index: RuntimeCellHandle, preserve: bool, checked: bool,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if checked { super::super::checked_nullability::require_non_null(array, context, values)?; }
+    let tag = values.type_tag(array)?;
+    if tag != EVAL_TAG_OBJECT {
+        checked_array_keys::for_receiver(array, index, context, values)?;
+        if let Some(target) = eval_array_reference_key(index, context.semantic_profile(), values)?
             .and_then(|key| context.array_element_alias(array, &key).cloned())
         {
             return eval_reference_target_value(&target, context, values);
         }
-        return values.array_get(array, index);
+        if checked && context.semantic_profile().contains(elephc_semantics::StrictFeature::Indexing)
+            && matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_STRING) {
+            if let Some(value) = values.array_get_checked(array, index, preserve)? { return Ok(value); }
+            let message = if tag == EVAL_TAG_STRING { elephc_semantics::indexing::MISSING_STRING_OFFSET }
+                else { elephc_semantics::indexing::MISSING_ARRAY_KEY };
+            return super::super::throwables::eval_throw_builtin_exception("OutOfBoundsException", message, context, values);
+        }
+        return if preserve && matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            values.array_get_preserving_references(array, index)
+        } else { values.array_get(array, index) };
     }
     if !eval_array_access_object_matches(array, context, values)? {
         let class_name = eval_closure_bound_object_class_name(array, context, values)?;
@@ -162,7 +211,15 @@ pub(in crate::interpreter) fn eval_cast_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match target {
+    if *target == EvalCastType::StringFormat {
+        super::super::checked_strings::formatting(value, context, values)?;
+        return eval_cast_value(&EvalCastType::String, value, context, values);
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts)
+        && matches!(target, EvalCastType::Int | EvalCastType::Float) {
+        return super::super::checked_cast::numeric(target, value, context, values);
+    }
+    let result = (|| match target {
         EvalCastType::Array => {
             if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Array)? { return Ok(result); }
             values.cast_array(value)
@@ -181,27 +238,27 @@ pub(in crate::interpreter) fn eval_cast_value(
                 None => values.cast_float(value),
             }
         }
-        EvalCastType::String => {
+        EvalCastType::String | EvalCastType::StringFormat => {
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts)
+                && values.is_array_like(value)? {
+                eval_dispatch_php_error("Array to string conversion", E_WARNING, context, values)?;
+                return values.string("Array");
+            }
             let converted = eval_string_context_value(value, context, values)?;
             let result = values.cast_string(converted);
             if converted != value {
                 finish_synthesized_method_arguments(result, [converted], context, values)
             } else { result }
         }
-        EvalCastType::Bool => match eval_object_scalar_adapter(
-            value,
-            "__elephc_to_bool",
-            context,
-            values,
-        )? {
-            Some(value) => Ok(value),
-            None => values.cast_bool(value),
+        EvalCastType::Bool => match eval_object_scalar_adapter(value, "__elephc_to_bool", context, values)? {
+            Some(value) => Ok(value), None => values.cast_bool(value),
         },
-    }
+    })();
+    native_results::finish(result, context, values)
 }
 
 /// Constructs an object after the target class name and constructor arguments have been evaluated.
-pub(super) fn eval_new_object_result(
+pub(in crate::interpreter) fn eval_new_object_result(
     class_name: &str,
     args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
@@ -278,7 +335,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_name(
 }
 
 /// Returns the runtime class name for `$object::class` and rejects non-object dynamic receivers.
-pub(super) fn eval_dynamic_class_name_fetch_result(
+pub(in crate::interpreter) fn eval_dynamic_class_name_fetch_result(
     class_name: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

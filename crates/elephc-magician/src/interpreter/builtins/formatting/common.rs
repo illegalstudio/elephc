@@ -16,9 +16,13 @@ pub(in crate::interpreter) fn eval_float_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<f64, EvalStatus> {
     let value = values.cast_float(value)?;
-    let bytes = values.string_bytes(value)?;
-    std::str::from_utf8(&bytes)
-        .map_err(|_| EvalStatus::RuntimeFatal)?
-        .parse::<f64>()
-        .map_err(|_| EvalStatus::RuntimeFatal)
+    let result = (|| {
+        let bytes = values.string_bytes(value)?;
+        std::str::from_utf8(&bytes)
+            .map_err(|_| EvalStatus::RuntimeFatal)?
+            .parse::<f64>()
+            .map_err(|_| EvalStatus::RuntimeFatal)
+    })();
+    let released = values.release(value);
+    result.and_then(|result| released.map(|()| result))
 }

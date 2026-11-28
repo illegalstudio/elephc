@@ -309,7 +309,7 @@ fn stable_expr(
         ExprKind::BinaryOp { left, right, .. } => {
             stable_expr(ctx, local, arguments, left) && stable_expr(ctx, local, arguments, right)
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::Cast { expr: value, .. } => stable_expr(ctx, local, arguments, value),
         ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {

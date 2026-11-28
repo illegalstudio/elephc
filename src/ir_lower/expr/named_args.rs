@@ -78,6 +78,7 @@ pub(super) fn lower_named_args_with_signature_options(
         trim_trailing_defaults,
         true,
         &assoc_spread_sources,
+        ctx.semantic_profile,
     ) else {
         return lower_args(ctx, args);
     };

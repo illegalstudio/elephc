@@ -131,6 +131,13 @@ const STATIC_METHOD_HELPER_FRAME_SIZE: usize =
     STATIC_METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
 const X86_64_METHOD_CONTEXT_FRAME_OFFSET: usize = 64;
 const X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET: usize = 72;
+const X86_64_HOST_CALLEE_SAVED: [(&str, usize); 5] = [
+    ("rbx", 88),
+    ("r12", 96),
+    ("r13", 104),
+    ("r14", 112),
+    ("r15", 120),
+];
 
 /// Emits eval method-call helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_method_helpers(
@@ -662,6 +669,7 @@ fn emit_static_method_call_x86_64(
     emitter.instruction(                                                        // reserve aligned slots plus a boundary exception handler
         &format!("sub rsp, {}", STATIC_METHOD_HELPER_FRAME_SIZE)
     );
+    emit_x86_64_host_callee_saved_saves(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested method-name pointer
@@ -690,6 +698,7 @@ fn emit_static_method_call_x86_64(
     super::eval_callable_helpers::argument_owners::finish(
         emitter, 72, 64, STATIC_METHOD_HELPER_FRAME_SIZE, true, done_label,
     );
+    emit_x86_64_host_callee_saved_restores(emitter);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
@@ -764,6 +773,7 @@ fn emit_method_call_x86_64(
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction(&format!("sub rsp, {}", METHOD_HELPER_FRAME_SIZE));     // reserve aligned slots plus a boundary exception handler
+    emit_x86_64_host_callee_saved_saves(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested method-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested method-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
@@ -803,9 +813,24 @@ fn emit_method_call_x86_64(
     super::eval_callable_helpers::argument_owners::finish(
         emitter, 64, 48, METHOD_HELPER_FRAME_SIZE, true, done_label,
     );
+    emit_x86_64_host_callee_saved_restores(emitter);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
+}
+
+/// Saves every SysV callee-saved register that generated PHP/runtime methods may scratch.
+fn emit_x86_64_host_callee_saved_saves(emitter: &mut Emitter) {
+    for (register, offset) in X86_64_HOST_CALLEE_SAVED {
+        abi::store_at_offset(emitter, register, offset);
+    }
+}
+
+/// Restores Rust's SysV callee-saved registers after all bridge cleanup has completed.
+fn emit_x86_64_host_callee_saved_restores(emitter: &mut Emitter) {
+    for (register, offset) in X86_64_HOST_CALLEE_SAVED {
+        abi::load_at_offset(emitter, register, offset);
+    }
 }
 
 /// Emits an ARM64 boundary handler so native method throws return to magician.
@@ -2773,7 +2798,7 @@ mod catalog_tests {
                         }
                         PhpType::Str => {
                             assert!(asm.contains("__rt_mixed_from_value"), "{target:?}: {asm}");
-                            assert!(asm.contains("__rt_heap_alloc"), "{target:?}: {asm}");
+                            assert!(asm.contains("__rt_mixed_from_owned_string"), "{target:?}: {asm}");
                         }
                         _ => unreachable!(),
                     }
@@ -2885,6 +2910,50 @@ mod source_entry_tests {
             assert_eq!(slot.params.len(), 2, "{name}: caller-visible arguments");
             assert_eq!(slot.entry_symbol, static_method_symbol("SplFixedArray", "fromarray"), "{name}");
             assert!(slot.return_uses_marker && !slot.by_ref_return, "{name}: owned native result ABI");
+        }
+    }
+
+    /// Native method bridges preserve Rust's SysV callee-saved state around PHP runtime calls.
+    #[test]
+    fn eval_method_bridges_preserve_sysv_callee_saved_registers() {
+        let target = Target::parse("linux-x86_64").unwrap();
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            "<?php $source = $argc > 0 ? 'SplFixedArray::fromArray([1]);' : ''; eval($source);",
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            target,
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        for symbol in [
+            "__elephc_eval_value_method_call",
+            "__elephc_eval_value_static_method_call",
+        ] {
+            let entry = format!("{symbol}:");
+            let body_entry = format!("{symbol}_sysv_body:");
+            let after_export = assembly
+                .split_once(&entry)
+                .unwrap_or_else(|| panic!("missing {entry}"))
+                .1;
+            let (wrapper, body) = after_export
+                .split_once(&body_entry)
+                .unwrap_or_else(|| panic!("missing {body_entry}"));
+            assert!(
+                wrapper.contains(&format!("call {symbol}_sysv_body")),
+                "{entry} must dispatch through its SysV preservation shim"
+            );
+            let body = assembly
+                .split_once(&body_entry)
+                .map_or(body, |(_, body)| body)
+                .split_once("    ret")
+                .expect("bridge return")
+                .0;
+            for (register, offset) in X86_64_HOST_CALLEE_SAVED {
+                let save = format!("mov QWORD PTR [rbp - {offset}], {register}");
+                let restore = format!("mov {register}, QWORD PTR [rbp - {offset}]");
+                assert!(body.contains(&save), "{body_entry} must save {register}");
+                assert!(body.contains(&restore), "{body_entry} must restore {register}");
+                assert!(body.find(&save).unwrap() < body.rfind(&restore).unwrap());
+            }
         }
     }
 

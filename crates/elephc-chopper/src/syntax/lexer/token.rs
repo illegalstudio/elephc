@@ -70,7 +70,11 @@ pub enum Token {
 
     // Literals
     StringLiteral(String),
+    /// Internal interpolation prefix, never produced by an identifier in user source.
+    StringFormat,
     IntLiteral(i64),
+    /// Exact unsigned 2^63 under strict overflow, pending a direct unary minus.
+    MinimumIntegerMagnitude,
     FloatLiteral(f64),
 
     // Identifiers
@@ -271,7 +275,9 @@ impl Token {
             Token::DollarBrace => "DollarBrace",
             Token::RBrace => "RBrace",
             Token::StringLiteral(..) => "StringLiteral",
+            Token::StringFormat => "StringFormat",
             Token::IntLiteral(..) => "IntLiteral",
+            Token::MinimumIntegerMagnitude => "MinimumIntegerMagnitude",
             Token::FloatLiteral(..) => "FloatLiteral",
             Token::Variable(..) => "Variable",
             Token::Identifier(..) => "Identifier",

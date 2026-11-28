@@ -26,7 +26,7 @@ sidebar:
 | [`finfo_open()`](./io/finfo_open.md) | `(int $flags = 0, ?string $magic_database = null): finfo|false` | `finfo|false` | ✓ | ✓ |
 | [`finfo_set_flags()`](./io/finfo_set_flags.md) | `(finfo $finfo, int $flags): bool` | `bool` | ✓ | ✓ |
 | [`flock()`](./io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
-| [`fopen()`](./io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
+| [`fopen()`](./io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): resource|false` | `resource|false` | ✓ | ✓ |
 | [`fpassthru()`](./io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int` | `int` | ✓ | ✓ |
@@ -60,17 +60,17 @@ sidebar:
 | [`ob_implicit_flush()`](./io/ob_implicit_flush.md) | `(bool $enable = true): bool` | `bool` | ✓ | ✓ |
 | [`ob_list_handlers()`](./io/ob_list_handlers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`ob_start()`](./io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
-| [`opendir()`](./io/opendir.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
+| [`opendir()`](./io/opendir.md) | `(string $directory): resource|false` | `resource|false` | ✓ | ✓ |
 | [`readdir()`](./io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`rewinddir()`](./io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
 | [`stream_bucket_make_writeable()`](./io/stream_bucket_make_writeable.md) | `(mixed $brigade): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_new()`](./io/stream_bucket_new.md) | `(resource $stream, string $buffer): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_context_create()`](./io/stream_context_create.md) | `(array $options = null, array $params = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_context_get_default()`](./io/stream_context_get_default.md) | `(array $options = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_context_create()`](./io/stream_context_create.md) | `(array $options = null, array $params = null): resource` | `resource` | ✓ | ✓ |
+| [`stream_context_get_default()`](./io/stream_context_get_default.md) | `(array $options = null): resource` | `resource` | ✓ | ✓ |
 | [`stream_context_get_options()`](./io/stream_context_get_options.md) | `(resource $context): array` | `array` | ✓ | ✓ |
 | [`stream_context_get_params()`](./io/stream_context_get_params.md) | `(resource $context): array` | `array` | ✓ | ✓ |
-| [`stream_context_set_default()`](./io/stream_context_set_default.md) | `(array $options): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_context_set_default()`](./io/stream_context_set_default.md) | `(array $options): resource` | `resource` | ✓ | ✓ |
 | [`stream_context_set_option()`](./io/stream_context_set_option.md) | `(resource $context, string $wrapper_or_options, ?string $option_name = null, mixed $value = null): bool` | `bool` | ✓ | ✓ |
 | [`stream_context_set_params()`](./io/stream_context_set_params.md) | `(resource $context, array $params): bool` | `bool` | ✓ | ✓ |
 | [`stream_copy_to_stream()`](./io/stream_copy_to_stream.md) | `(resource $from, resource $to, ?int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
@@ -91,14 +91,14 @@ sidebar:
 | [`stream_set_read_buffer()`](./io/stream_set_read_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_timeout()`](./io/stream_set_timeout.md) | `(resource $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_write_buffer()`](./io/stream_set_write_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
-| [`stream_socket_accept()`](./io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string $peer_name = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_client()`](./io/stream_socket_client.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_accept()`](./io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string $peer_name = null): resource|false` | `resource|false` | ✓ | ✓ |
+| [`stream_socket_client()`](./io/stream_socket_client.md) | `(string $address): resource|false` | `resource|false` | ✓ | ✓ |
 | [`stream_socket_enable_crypto()`](./io/stream_socket_enable_crypto.md) | `(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | `bool` | ✓ | ✓ |
 | [`stream_socket_get_name()`](./io/stream_socket_get_name.md) | `(resource $socket, bool $remote): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_pair()`](./io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_recvfrom()`](./io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_sendto()`](./io/stream_socket_sendto.md) | `(resource $socket, string $data, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_server()`](./io/stream_socket_server.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_server()`](./io/stream_socket_server.md) | `(string $address): resource|false` | `resource|false` | ✓ | ✓ |
 | [`stream_socket_shutdown()`](./io/stream_socket_shutdown.md) | `(resource $stream, int $mode): bool` | `bool` | ✓ | ✓ |
 | [`stream_supports_lock()`](./io/stream_supports_lock.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_register()`](./io/stream_wrapper_register.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |

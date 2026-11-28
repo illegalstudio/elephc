@@ -9,6 +9,7 @@
 //! - Root recounting discounts pins, so destructor resurrection is observed without false roots.
 //! - Finished destructors use kind bit 14; temporary collector pins use kind bit 18.
 //!   Bit 17 marks the current scan's original nodes and cannot mean completion.
+//! - Before executable global cleanup, reachable objects also need their shutdown destructors.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use super::gc_candidates::scans;
@@ -36,6 +37,7 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     let loop_label = format!("__rt_gc_destructors_{phase}");
     let next = format!("{loop_label}_next");
     let ready = format!("{loop_label}_ready");
+    let unreachable = format!("{loop_label}_unreachable");
     let done = format!("{loop_label}_done");
     abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_off", 0);
@@ -52,9 +54,16 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("ldr w14, [x9, #4]");                                   // inspect the live owner count
     emitter.instruction(&format!("cbz w14, {next}"));                           // free-list blocks cannot be pinned
     emitter.instruction("ldr x12, [x9, #8]");                                   // inspect kind, reachability, and existing pins together
-    emitter.instruction(&format!("tbnz x12, #16, {next}"));                     // externally reachable nodes need no destructor snapshot
     emitter.instruction(&format!("tbnz x12, #18, {next}"));                     // earlier snapshots already own this candidate
     emitter.instruction("and x13, x12, #0xff");                                 // isolate the heap kind
+    emitter.instruction(&format!("tbz x12, #16, {unreachable}"));               // preserve the ordinary unreachable graph selection
+    emitter.instruction("ldr x15, [sp, #32]");                                  // read the shutdown mode before the receiver slot is used
+    emitter.instruction(&format!("cbz x15, {next}"));                           // reachable nodes normally keep their existing owners
+    emitter.instruction("cmp x13, #4");                                         // only reachable objects need shutdown callbacks
+    emitter.instruction(&format!("b.ne {next}"));                               // reachable containers stay owned by their live roots
+    emitter.instruction(&format!("tbnz x12, #14, {next}"));                     // skip objects that already ran their destructor
+    emitter.instruction(&format!("b {ready}"));                                 // pin the live object before callbacks can remove its owners
+    emitter.label(&unreachable);
     emitter.instruction("cmp x13, #2");                                         // candidates start at indexed-array storage
     emitter.instruction(&format!("b.lo {next}"));                               // raw allocations and strings are not cycle candidates
     emitter.instruction("cmp x13, #5");                                         // candidates end at boxed Mixed storage
@@ -112,6 +121,7 @@ fn emit_destructors_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve chunk, count, flag, index, receiver, and saved frame slots
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the caller across PHP and C callbacks
     emitter.instruction("add x29, sp, #48");                                    // establish a stable callback frame
+    emitter.instruction("str x0, [sp, #32]");                                   // keep the shutdown selector through the snapshot count and fill
     emitter.instruction("str xzr, [sp, #8]");                                   // begin with no candidate nodes
     emitter.instruction("str xzr, [sp, #16]");                                  // begin with no pending object destructors
     emit_scan_aarch64(emitter, false);
@@ -223,6 +233,7 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     let loop_label = format!("__rt_gc_destructors_{phase}");
     let next = format!("{loop_label}_next");
     let ready = format!("{loop_label}_ready");
+    let unreachable = format!("{loop_label}_unreachable");
     let done = format!("{loop_label}_done");
     abi::emit_symbol_address(emitter, "r8", "_heap_buf");
     abi::emit_load_symbol_to_reg(emitter, "r9", "_heap_off", 0);
@@ -237,10 +248,20 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("cmp DWORD PTR [r8 + 4], 0");                           // distinguish live graph nodes from free-list entries
     emitter.instruction(&format!("je {next}"));                                 // free storage owns no destructor data
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // retain the full kind word including collector flags
-    emitter.instruction("test r11, 0x50000");                                   // inspect reachability and an existing snapshot pin
-    emitter.instruction(&format!("jnz {next}"));                                // root-reachable and already pinned nodes need no new pin
+    emitter.instruction("test r11, 0x40000");                                   // inspect an existing snapshot pin
+    emitter.instruction(&format!("jnz {next}"));                                // earlier snapshots already own this candidate
     emitter.instruction("mov rcx, r11");                                        // preserve the full kind while inspecting its low byte
     emitter.instruction("and ecx, 0xff");                                       // isolate the uniform heap kind
+    emitter.instruction("test r11, 0x10000");                                   // distinguish a reachable node from ordinary garbage
+    emitter.instruction(&format!("jz {unreachable}"));                          // preserve the ordinary unreachable graph selection
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // read the caller's shutdown mode
+    emitter.instruction(&format!("je {next}"));                                 // reachable nodes normally keep their existing owners
+    emitter.instruction("cmp ecx, 4");                                          // only reachable objects need shutdown callbacks
+    emitter.instruction(&format!("jne {next}"));                                // reachable containers stay owned by their live roots
+    emitter.instruction("test r11, 0x4000");                                    // check whether the object already ran its destructor
+    emitter.instruction(&format!("jz {ready}"));                                // pin the live object before callbacks can remove its owners
+    emitter.instruction(&format!("jmp {next}"));                                // completed destructors need no new pin
+    emitter.label(&unreachable);
     emitter.instruction("cmp ecx, 2");                                          // graph candidates start at indexed arrays
     emitter.instruction(&format!("jb {next}"));                                 // raw storage and strings are not cycle candidates
     emitter.instruction("cmp ecx, 5");                                          // graph candidates end at boxed Mixed cells
@@ -293,6 +314,7 @@ fn emit_destructors_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve and align the caller's frame
     emitter.instruction("mov rbp, rsp");                                        // establish stable slots across C and PHP calls
     emitter.instruction("sub rsp, 48");                                         // reserve chunk, count, flag, index, and receiver slots
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // keep the shutdown selector through the snapshot count and fill
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the candidate count
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the pending-destructor flag
     emit_scan_x86_64(emitter, false);
@@ -393,7 +415,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
-    /// Every target pins before callbacks and recounts before unpinning or freeing graph nodes.
+    /// Every target selects shutdown objects, pins before callbacks, and recounts before release.
     #[test]
     fn gc_destructor_snapshots_cover_every_supported_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -405,6 +427,9 @@ mod tests {
                 assert!(assembly.contains(&format!("{symbol}:")), "{name}: {symbol}");
             }
             let destructor_loop = assembly.split("__rt_gc_destructors:\n").nth(1).unwrap();
+            let selector = if target.arch == Arch::AArch64 { "ldr x15, [sp, #32]" }
+                else { "cmp QWORD PTR [rbp - 48], 0" };
+            assert!(destructor_loop.contains(selector), "{name}: reachable node gating");
             assert!(destructor_loop.find("__rt_gc_destructors_fill_done:").unwrap()
                 < destructor_loop.find("__rt_gc_protected_destructor").unwrap(), "{name}");
             assert!(assembly.contains(&target.extern_symbol("malloc")), "{name}");
@@ -416,7 +441,11 @@ mod tests {
             let mut emitter = Emitter::new(target);
             super::super::emit_gc_collect_cycles(&mut emitter);
             let assembly = emitter.output();
+            assert!(assembly.contains("__rt_gc_finalize_before_global_cleanup:"), "{name}");
+            let selector = if target.arch == Arch::AArch64 { "ldr x0, [sp, #120]" }
+                else { "mov rdi, QWORD PTR [rbp - 64]" };
             let destroy = assembly.find("__rt_gc_destructors").unwrap();
+            assert!(assembly[..destroy].contains(selector), "{name}: shutdown selector");
             let after_destroy = &assembly[destroy..];
             assert!(after_destroy.find("__rt_gc_collect_cycles_recount").unwrap()
                 < after_destroy.find("__rt_gc_unpin_reachable").unwrap(), "{name}");

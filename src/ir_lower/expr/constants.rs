@@ -19,6 +19,7 @@ use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::PhpType;
+use crate::builtins::semantics::BuiltinLoweringContext;
 
 /// Emits php-src's `E_DEPRECATED` for a `MT_RAND_PHP` constant-expression read.
 ///
@@ -105,23 +106,25 @@ pub(crate) fn emit_mt_rand_php_deprecation(
     ctx.builder.position_at_end(done);
 }
 
-/// Records `define("NAME", value)` constants for later source-order references.
+/// Records `define("NAME", value)` and prepares its declaration value for runtime storage.
 pub(super) fn register_static_define_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
     args: &[Expr],
-) {
+) -> Option<Vec<Expr>> {
     if php_symbol_key(name.as_str().trim_start_matches('\\')) != "define" || args.len() != 2 {
-        return;
+        return None;
     }
     let ExprKind::StringLiteral(constant_name) = &args[0].kind else {
-        return;
+        return None;
     };
+    let value = crate::types::constant_binding::bind_value(args[1].clone(), &PhpType::Mixed);
     ctx.register_constant(
         constant_name.clone(),
-        args[1].kind.clone(),
+        value.clone(),
         constant_expr_type(&args[1].kind),
     );
+    Some(vec![args[0].clone(), value])
 }
 
 /// Lowers `defined("NAME")` to a compile-time boolean when the name is literal.
@@ -489,7 +492,7 @@ pub(super) fn lower_const_ref(
                 Op::LoadGlobal,
                 Vec::new(),
                 Some(Immediate::GlobalName(data)),
-                super::fallback_expr_type(expr),
+                super::fallback_expr_type(expr, ctx.semantic_profile()),
                 Op::LoadGlobal.default_effects(),
                 Some(expr.span),
             );
@@ -516,7 +519,7 @@ pub(super) fn lower_const_ref(
         Op::LoadGlobal,
         Vec::new(),
         Some(Immediate::GlobalName(data)),
-        super::fallback_expr_type(expr),
+        super::fallback_expr_type(expr, ctx.semantic_profile),
         Op::LoadGlobal.default_effects(),
         Some(expr.span),
     )
@@ -525,11 +528,11 @@ pub(super) fn lower_const_ref(
 /// Lowers a prescanned constant value using its checker-visible PHP type.
 fn lower_constant_value(
     ctx: &mut LoweringContext<'_, '_>,
-    value: ExprKind,
+    value: Expr,
     php_type: PhpType,
     expr: &Expr,
 ) -> LoweredValue {
-    match value {
+    match value.kind {
         ExprKind::IntLiteral(value) => emit_typed_constant(
             ctx,
             Op::ConstI64,
@@ -556,8 +559,8 @@ fn lower_constant_value(
             expr,
         ),
         ExprKind::Null => emit_typed_constant(ctx, Op::ConstNull, None, php_type, expr),
-        other => {
-            let synthetic = Expr::new(other, expr.span);
+        _ => {
+            let synthetic = value;
             // This re-evaluates a user constant's stored initializer at a read. php-src
             // evaluated it once, when the `const` statement or `define()` ran, and reported any
             // deprecated constant inside it then; the read itself reports nothing, including

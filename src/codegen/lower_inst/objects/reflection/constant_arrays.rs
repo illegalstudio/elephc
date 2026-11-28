@@ -222,11 +222,11 @@ pub(super) fn reflection_constant_array_key_expr(
     key: &Expr,
     depth: usize,
 ) -> Result<ReflectionDefaultArrayKey> {
-    if let Some(key) = reflection_default_array_key(key) {
+    if let Some(key) = reflection_default_array_key(key, ctx.module.semantic_profile) {
         return Ok(key);
     }
     let value = reflection_constant_value(ctx, current_class, current_info, key, depth)?;
-    reflection_constant_array_key(&value).ok_or_else(|| {
+    reflection_constant_array_key(&value, ctx.module.semantic_profile).ok_or_else(|| {
         CodegenIrError::unsupported(
             "ReflectionClass constant metadata array key that is not a scalar",
         )
@@ -236,7 +236,10 @@ pub(super) fn reflection_constant_array_key_expr(
 /// Returns the PHP array key form of one evaluated constant value.
 pub(super) fn reflection_constant_array_key(
     value: &ReflectionConstantValue,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ReflectionDefaultArrayKey> {
+    if profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        && matches!(value, ReflectionConstantValue::Bool(_) | ReflectionConstantValue::Float(_) | ReflectionConstantValue::Null) { return None; }
     match value {
         ReflectionConstantValue::Int(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ReflectionConstantValue::Bool(value) => {
@@ -246,7 +249,7 @@ pub(super) fn reflection_constant_array_key(
             let key = crate::types::php_float_array_key(*value);
             Some(ReflectionDefaultArrayKey::Int(key))
         }
-        ReflectionConstantValue::Str(value) => reflection_default_string_array_key(value),
+        ReflectionConstantValue::Str(value) => reflection_default_string_array_key(value, profile),
         ReflectionConstantValue::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
         _ => None,
     }

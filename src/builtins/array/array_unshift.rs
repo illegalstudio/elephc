@@ -35,7 +35,8 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     for index in 1..cx.args.len() {
-        cx.checker.infer_type(&cx.args[index], cx.env)?;
+        let value_ty = cx.checker.infer_type(&cx.args[index], cx.env)?;
+        cx.checker.require_array_write_contract(&arr_ty, &PhpType::Int, &value_ty, cx.args[index].span)?;
     }
     if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
         && !arr_ty.is_php_array()

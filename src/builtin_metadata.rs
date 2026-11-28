@@ -51,7 +51,7 @@ pub fn php_visible_builtin_names_for_target(
 }
 
 /// Returns the compiler's PHP-visible extension builtin names (elephc-only
-/// builtins hidden by `--strict-php`), in stable sorted order. Reads the
+/// builtins hidden by `--php-only`), in stable sorted order. Reads the
 /// registry's `extension` flags directly — never the strict-filtered catalog —
 /// so the snapshot is independent of the thread's strict-mode state. Includes
 /// the catalog-name-only `buffer_new` entry.

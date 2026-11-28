@@ -41,13 +41,18 @@ fn context_offset(slot: usize) -> usize {
 /// # Output registers
 /// - `x0`/`rax`: pointer to the new mapped array
 pub fn emit_array_map(emitter: &mut Emitter) {
+    emit_guarded_map(emitter, "__rt_array_map", false);
+}
+
+/// Shares exceptional partial-result ownership while retaining the callback and result ABIs.
+pub(super) fn emit_guarded_map(emitter: &mut Emitter, prefix: &str, mixed: bool) {
     let result = abi::int_result_reg(emitter);
     let arg0 = abi::int_arg_reg_name(emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(emitter.target, 1);
     let arg2 = abi::int_arg_reg_name(emitter.target, 2);
     emitter.blank();
     emitter.comment("--- runtime: array_map ---");
-    emitter.label_global("__rt_array_map");
+    emitter.label_global(prefix);
 
     // -- preserve the callback contract and source metadata in the context frame --
     abi::emit_frame_prologue(emitter, FRAME);
@@ -67,15 +72,18 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, arg0, LENGTH);
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
+    if mixed {
+        crate::codegen_support::arrays::emit_array_value_type_stamp(emitter, result, &crate::types::PhpType::Mixed);
+    }
     abi::store_at_offset(emitter, result, RESULT);
 
     // -- protect the partial result across callback throws --
     abi::emit_temporary_stack_address(emitter, arg1, 0);
-    abi::emit_symbol_address(emitter, arg0, "__rt_array_map_body");
+    abi::emit_symbol_address(emitter, arg0, &format!("{prefix}_body"));
     abi::emit_frame_slot_address(emitter, arg2, PENDING);
     abi::emit_call_label(emitter, "__rt_cleanup_invoke");
     abi::load_at_offset(emitter, result, PENDING);
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_map_throw");
+    abi::emit_branch_if_int_result_nonzero(emitter, &format!("{prefix}_throw"));
 
     // -- publish the mapped length and return the completed array --
     abi::load_at_offset(emitter, result, RESULT);
@@ -85,7 +93,7 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 
     // -- release the partial result, then rethrow the callback exception --
-    emitter.label("__rt_array_map_throw");
+    emitter.label(&format!("{prefix}_throw"));
     abi::load_at_offset(emitter, result, RESULT);
     abi::emit_reg_move(emitter, arg1, result);
     abi::emit_symbol_address(emitter, arg0, "__rt_decref_any");
@@ -101,105 +109,116 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_jump(emitter, "__rt_throw_current");
 
-    emit_body(emitter);
+    emit_body(emitter, prefix, mixed);
 }
 
 /// Emits the guarded callback loop. The cleanup invoker passes the context pointer in
 /// `x0`/`rax`; a callback throw longjmps back to the invoker, which releases the partial
 /// result and rethrows from the caller.
-fn emit_body(emitter: &mut Emitter) {
+fn emit_body(emitter: &mut Emitter, prefix: &str, mixed: bool) {
     emitter.blank();
-    emitter.label_global("__rt_array_map_body");
+    emitter.label_global(&format!("{prefix}_body"));
     match emitter.target.arch {
-        Arch::AArch64 => emit_body_aarch64(emitter),
-        Arch::X86_64 => emit_body_x86_64(emitter),
+        Arch::AArch64 => emit_body_aarch64(emitter, prefix, mixed),
+        Arch::X86_64 => emit_body_x86_64(emitter, prefix, mixed),
     }
 }
 
 /// Emits the AArch64 callback loop with the context in x19 and the index in x20.
-fn emit_body_aarch64(emitter: &mut Emitter) {
+fn emit_body_aarch64(emitter: &mut Emitter, prefix: &str, mixed: bool) {
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve body linkage
     emitter.instruction("mov x29, sp");                                         // establish a stable body frame
     emitter.instruction("stp x19, x20, [sp, #-16]!");                           // preserve the context and index registers
     emitter.instruction("mov x19, x0");                                         // x19 = caller-owned context pointer
     emitter.instruction("mov x20, xzr");                                        // x20 = current source index
-    emitter.label("__rt_array_map_body_loop");
+    emitter.label(&format!("{prefix}_body_loop"));
     emitter.instruction(&format!("ldr x9, [x19, #{}]", context_offset(LENGTH)));// load the source element count
     emitter.instruction("cmp x20, x9");                                         // has every source element been mapped?
-    emitter.instruction("b.ge __rt_array_map_body_done");                       // finish the loop
+    emitter.instruction(&format!("b.ge {prefix}_body_done"));                   // finish the loop
     emitter.instruction(&format!("ldr x1, [x19, #{}]", context_offset(SOURCE)));// load the source array pointer
     emitter.instruction("add x1, x1, #24");                                     // skip the indexed-array header to the payload base
     emitter.instruction(&format!("ldr x10, [x19, #{}]", context_offset(WIDTH)));// load the source element width
     emitter.instruction("cmp x10, #16");                                        // does the source hold string pointer/length pairs?
-    emitter.instruction("b.eq __rt_array_map_body_str");                        // use the string callback ABI
+    emitter.instruction(&format!("b.eq {prefix}_body_str"));                    // use the string callback ABI
     emitter.instruction("ldr x0, [x1, x20, lsl #3]");                           // load the scalar source element
     emitter.instruction(&format!("ldr x9, [x19, #{}]", context_offset(ENV)));   // load the optional capture environment
-    emitter.instruction("cbz x9, __rt_array_map_body_call");                    // keep the one-argument callback ABI without captures
+    if !mixed {
+        emitter.instruction(&format!("cbz x9, {prefix}_body_call"));            // keep the one-argument callback ABI without captures
+    }
     emitter.instruction("mov x1, x9");                                          // pass the capture environment as the second argument
-    emitter.instruction("b __rt_array_map_body_call");                          // invoke the callback
-    emitter.label("__rt_array_map_body_str");
+    emitter.instruction(&format!("b {prefix}_body_call"));                      // invoke the callback
+    emitter.label(&format!("{prefix}_body_str"));
     emitter.instruction("lsl x11, x20, #4");                                    // convert the logical index into a 16-byte string-slot offset
     emitter.instruction("add x11, x1, x11");                                    // address the current source string slot
     emitter.instruction("ldr x0, [x11]");                                       // load the source string pointer
     emitter.instruction("ldr x1, [x11, #8]");                                   // load the source string length
     emitter.instruction(&format!("ldr x9, [x19, #{}]", context_offset(ENV)));   // load the optional capture environment
-    emitter.instruction("cbz x9, __rt_array_map_body_call");                    // keep the string callback ABI without captures
+    if !mixed {
+        emitter.instruction(&format!("cbz x9, {prefix}_body_call"));            // keep the string callback ABI without captures
+    }
     emitter.instruction("mov x2, x9");                                          // pass the capture environment after ptr/len
-    emitter.label("__rt_array_map_body_call");
+    emitter.label(&format!("{prefix}_body_call"));
     emitter.instruction(&format!("ldr x9, [x19, #{}]", context_offset(CALLBACK))); // load the callback address
     emitter.instruction("blr x9");                                              // invoke the user callback
     emitter.instruction(&format!("ldr x1, [x19, #{}]", context_offset(RESULT)));// reload the destination array pointer
     emitter.instruction("add x1, x1, #24");                                     // skip the destination header to the payload base
     emitter.instruction("str x0, [x1, x20, lsl #3]");                           // store the mapped value at the matching index
+    emitter.instruction(&format!("ldr x1, [x19, #{}]", context_offset(RESULT))); // reload the destination header before publishing its initialized prefix
     emitter.instruction("add x20, x20, #1");                                    // advance the mapping index
-    emitter.instruction("b __rt_array_map_body_loop");                          // continue until every element is mapped
-    emitter.label("__rt_array_map_body_done");
+    emitter.instruction("str x20, [x1]");                                       // publish each transferred owner before the next callback can throw
+    emitter.instruction(&format!("b {prefix}_body_loop"));                      // continue until every element is mapped
+    emitter.label(&format!("{prefix}_body_done"));
     emitter.instruction("ldp x19, x20, [sp], #16");                             // restore the context and index registers
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore body linkage
     emitter.instruction("ret");                                                 // return to the cleanup invoker
 }
 
 /// Emits the x86_64 callback loop with the context in r12 and the index in r13.
-fn emit_body_x86_64(emitter: &mut Emitter) {
+fn emit_body_x86_64(emitter: &mut Emitter, prefix: &str, mixed: bool) {
     emitter.instruction("push rbp");                                            // preserve body linkage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable body frame
     emitter.instruction("push r12");                                            // preserve the context register
     emitter.instruction("push r13");                                            // preserve the index register
     emitter.instruction("mov r12, rax");                                        // r12 = caller-owned context pointer
     emitter.instruction("xor r13d, r13d");                                      // r13 = current source index
-    emitter.label("__rt_array_map_body_loop");
+    emitter.label(&format!("{prefix}_body_loop"));
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", context_offset(LENGTH))); // load the source element count
     emitter.instruction("cmp r13, r10");                                        // has every source element been mapped?
-    emitter.instruction("jge __rt_array_map_body_done");                        // finish the loop
+    emitter.instruction(&format!("jge {prefix}_body_done"));                    // finish the loop
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", context_offset(SOURCE))); // load the source array pointer
     emitter.instruction("add r10, 24");                                         // skip the indexed-array header to the payload base
     emitter.instruction(&format!("mov r11, QWORD PTR [r12 + {}]", context_offset(WIDTH))); // load the source element width
     emitter.instruction("cmp r11, 16");                                         // does the source hold string pointer/length pairs?
-    emitter.instruction("je __rt_array_map_body_str");                          // use the string callback ABI
+    emitter.instruction(&format!("je {prefix}_body_str"));                      // use the string callback ABI
     emitter.instruction("mov rdi, QWORD PTR [r10 + r13 * 8]");                  // load the scalar source element
     emitter.instruction(&format!("mov r11, QWORD PTR [r12 + {}]", context_offset(ENV))); // load the optional capture environment
-    emitter.instruction("test r11, r11");                                       // is a capture environment present?
-    emitter.instruction("jz __rt_array_map_body_call");                         // keep the one-argument callback ABI without captures
+    if !mixed {
+        emitter.instruction("test r11, r11");                                   // is a capture environment present?
+        emitter.instruction(&format!("jz {prefix}_body_call"));                 // keep the one-argument callback ABI without captures
+    }
     emitter.instruction("mov rsi, r11");                                        // pass the capture environment as the second argument
-    emitter.instruction("jmp __rt_array_map_body_call");                        // invoke the callback
-    emitter.label("__rt_array_map_body_str");
+    emitter.instruction(&format!("jmp {prefix}_body_call"));                    // invoke the callback
+    emitter.label(&format!("{prefix}_body_str"));
     emitter.instruction("mov rcx, r13");                                        // copy the logical source index
     emitter.instruction("shl rcx, 4");                                          // convert it into a 16-byte string-slot offset
     emitter.instruction("lea rcx, [r10 + rcx]");                                // address the current source string slot
     emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // load the source string pointer
     emitter.instruction("mov rsi, QWORD PTR [rcx + 8]");                        // load the source string length
     emitter.instruction(&format!("mov r11, QWORD PTR [r12 + {}]", context_offset(ENV))); // load the optional capture environment
-    emitter.instruction("test r11, r11");                                       // is a capture environment present?
-    emitter.instruction("jz __rt_array_map_body_call");                         // keep the string callback ABI without captures
+    if !mixed {
+        emitter.instruction("test r11, r11");                                   // is a capture environment present?
+        emitter.instruction(&format!("jz {prefix}_body_call"));                 // keep the string callback ABI without captures
+    }
     emitter.instruction("mov rdx, r11");                                        // pass the capture environment after ptr/len
-    emitter.label("__rt_array_map_body_call");
+    emitter.label(&format!("{prefix}_body_call"));
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", context_offset(CALLBACK))); // load the callback address
     emitter.instruction("call r10");                                            // invoke the user callback
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", context_offset(RESULT))); // reload the destination array pointer
     emitter.instruction("mov QWORD PTR [r10 + r13 * 8 + 24], rax");             // store the mapped value at the matching index
     emitter.instruction("inc r13");                                             // advance the mapping index
-    emitter.instruction("jmp __rt_array_map_body_loop");                        // continue until every element is mapped
-    emitter.label("__rt_array_map_body_done");
+    emitter.instruction("mov QWORD PTR [r10], r13");                            // publish each transferred owner before the next callback can throw
+    emitter.instruction(&format!("jmp {prefix}_body_loop"));                    // continue until every element is mapped
+    emitter.label(&format!("{prefix}_body_done"));
     emitter.instruction("pop r13");                                             // restore the index register
     emitter.instruction("pop r12");                                             // restore the context register
     emitter.instruction("pop rbp");                                             // restore body linkage

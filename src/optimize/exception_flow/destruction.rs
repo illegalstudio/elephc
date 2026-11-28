@@ -211,7 +211,7 @@ impl ExceptionFlowAnalysis {
             | ExprKind::InstanceOf { .. }
             | ExprKind::Not(_)
             | ExprKind::BitNot(_)
-            | ExprKind::Negate(_)
+            | ExprKind::UnaryPlus(_) | ExprKind::Negate(_)
             | ExprKind::PreIncrement(_)
             | ExprKind::PostIncrement(_)
             | ExprKind::PreDecrement(_)
@@ -603,7 +603,7 @@ fn expr_binds_no_frame_storage(expr: &Expr) -> bool {
         | ExprKind::PostDecrement(name) => {
             named_local_increment_binds_no_frame_storage(name)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)

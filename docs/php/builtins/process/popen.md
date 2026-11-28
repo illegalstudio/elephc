@@ -6,7 +6,7 @@ description: "Opens process file pointer."
 ## popen()
 
 ```php
-function popen(string $command, string $mode): mixed
+function popen(string $command, string $mode): resource|false
 ```
 
 Opens process file pointer.
@@ -15,7 +15,7 @@ Opens process file pointer.
 - `$command` (`string`)
 - `$mode` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

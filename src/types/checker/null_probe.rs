@@ -108,9 +108,12 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        let quiet_start = self.null_probe_operations.len();
+        crate::semantics::nullability::quiet_spine(expr, &mut self.null_probe_operations);
         self.null_probe_depth += 1;
         let result = self.infer_type(expr, env);
         self.null_probe_depth -= 1;
+        self.null_probe_operations.truncate(quiet_start);
         result
     }
 
@@ -122,9 +125,12 @@ impl Checker {
         expr: &Expr,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        let quiet_start = self.null_probe_operations.len();
+        crate::semantics::nullability::quiet_spine(expr, &mut self.null_probe_operations);
         self.null_probe_depth += 1;
         let result = self.infer_type_with_assignment_effects(expr, env);
         self.null_probe_depth -= 1;
+        self.null_probe_operations.truncate(quiet_start);
         result
     }
 }

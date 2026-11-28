@@ -23,12 +23,13 @@ pub(super) fn lower_arguments(
         || (signature.variadic.is_some()
             && !crate::types::signatures::variadic_storage_accepts_named_entries(signature))
         || !args.iter().any(is_spread_arg)
-        || crate::types::call_args::expand_planned_positional_spreads(args).is_some()
+        || crate::types::call_args::expand_planned_positional_spreads(args, ctx.semantic_profile).is_some()
     { return None; }
     crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
         signature, args, span, crate::types::call_args::regular_param_count(signature),
         false, signature.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(signature),
         &assoc_spread_sources(ctx, args),
+        ctx.semantic_profile,
     ).expect("selected enum runtime binding consumes the validated shared plan");
     // The plan validates last-wins binding, but its projection can omit overwritten
     // array values. Construct the original arrays so every source effect still runs.
@@ -95,8 +96,8 @@ pub(super) fn lower_arguments(
         if index < required {
             throw_missing(ctx, signature, class, method, index, required,
                 &argc, &named, span);
-        } else if let Some(default) = signature.defaults.get(index).and_then(Option::as_ref) {
-            store_expr_into_temp(ctx, &slot, PhpType::Mixed, default, span);
+        } else if let Some(default) = signature.default_value(index) {
+            store_expr_into_temp(ctx, &slot, PhpType::Mixed, &default, span);
             branch(ctx, ready);
         } else {
             unreachable!("every required selected enum parameter has an omission check");

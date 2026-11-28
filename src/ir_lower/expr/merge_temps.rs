@@ -184,7 +184,7 @@ pub(super) fn branch_merge_result_type(
     {
         return branch_ty;
     }
-    let fallback_ty = fallback_expr_type(expr).codegen_repr();
+    let fallback_ty = fallback_expr_type(expr, ctx.semantic_profile).codegen_repr();
     wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
 }
 
@@ -218,7 +218,7 @@ pub(super) fn match_merge_result_type(
         });
     }
     let Some(merged) = merged else {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     // As for a ternary, an exact pointer merge must not be widened by the syntactic fallback.
     if php_type_allows_null(&merged)
@@ -226,7 +226,7 @@ pub(super) fn match_merge_result_type(
     {
         return merged;
     }
-    let fallback_ty = fallback_expr_type(expr).codegen_repr();
+    let fallback_ty = fallback_expr_type(expr, ctx.semantic_profile).codegen_repr();
     wider_type_for_merge(&fallback_ty, &merged.codegen_repr())
 }
 
@@ -397,6 +397,11 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
 
 /// Estimates the value type an expression will materialize during branch lowering.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    crate::types::constant_binding::bound_result_type(unbound_materialized_expr_type(ctx, expr), expr.producer_binding)
+}
+
+/// Predicts original materialization before a prepared declaration applies its producer binding.
+fn unbound_materialized_expr_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
     // A nullsafe postfix chain lowers to its boxed chain temp whatever its last segment reads,
     // so `$o?->floats[0]` must not be predicted as the syntactic `int` and cast back.
     if let Some(storage) = super::nullsafe_chain::result_storage_type(expr) {
@@ -427,7 +432,7 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             {
                 PhpType::Mixed
             } else {
-                fallback_expr_type(expr)
+                fallback_expr_type(expr, ctx.semantic_profile)
             }
         }
         ExprKind::Ternary {
@@ -454,7 +459,7 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             assignment_result_expr(value, result_target.as_deref(), prelude),
         ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
+            .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile)),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_merge_type(ctx, receiver, name, expr)
         }
@@ -466,14 +471,14 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::PropertyAccess { object, property } => {
             nullable_pointer_property_type(ctx, object, property)
                 .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
-                .unwrap_or_else(|| fallback_expr_type(expr))
+                .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile))
         }
         // A static property holding one raw word is resolved here: a `?ptr<T>` keeps its null
         // member through the merge, and a `buffer<T>` or `ptr<T>` keeps its handle or address
         // instead of the syntactic `int`. Other static reads keep the syntactic answer.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, expr)
-                .unwrap_or_else(|| fallback_expr_type(expr))
+                .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile))
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
@@ -502,7 +507,7 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ArrayLiteralAssoc(pairs) => {
             super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, expr)
         }
-        _ => fallback_expr_type(expr),
+        _ => fallback_expr_type(expr, ctx.semantic_profile),
     }
 }
 
@@ -530,7 +535,7 @@ fn scoped_constant_merge_type(
             return merge_arm_type(ctx, &value);
         }
     }
-    fallback_expr_type(expr)
+    fallback_expr_type(expr, ctx.semantic_profile)
 }
 
 /// Returns the expression an assignment expression evaluates to, for type prediction.
@@ -635,7 +640,7 @@ fn function_call_type_for_merge(ctx: &LoweringContext<'_, '_>, canonical: &str, 
             .expect("registered pop/shift builtin must resolve its result type");
         }
     }
-    let syntactic = fallback_expr_type(expr);
+    let syntactic = fallback_expr_type(expr, ctx.semantic_profile);
     if syntactic != PhpType::Int {
         return syntactic;
     }
@@ -975,8 +980,8 @@ pub(super) fn callable_target_name(target: &CallableTarget) -> String {
 }
 
 /// Returns a syntactic fallback PHP type for an expression.
-pub(super) fn fallback_expr_type(expr: &Expr) -> PhpType {
-    normalize_value_php_type(infer_expr_type_syntactic(expr))
+pub(super) fn fallback_expr_type(expr: &Expr, profile: elephc_semantics::SemanticProfile) -> PhpType {
+    normalize_value_php_type(infer_expr_type_syntactic(expr, profile))
 }
 
 /// Normalizes non-materializable expression types to the EIR null sentinel.

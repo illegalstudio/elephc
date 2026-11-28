@@ -21,10 +21,20 @@ mod token;
 
 use crate::errors::EvalParseError;
 
+#[cfg(test)]
 pub(crate) use shared::tokenize_script;
+pub(crate) use shared::tokenize_script_with_semantics;
 pub(crate) use token::{Token, TokenKind};
 
 /// Tokenizes a complete runtime fragment with Chopper.
 pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
     shared::tokenize_fragment(source)
+}
+
+/// Tokenizes a runtime fragment under the selected semantic profile.
+pub(crate) fn tokenize_with_semantics(
+    source: &str,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<Token>, EvalParseError> {
+    shared::tokenize_fragment_with_semantics(source, profile)
 }

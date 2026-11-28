@@ -127,7 +127,11 @@ fn check_types_pass(
     generics: &crate::generics::GenericContext,
 ) -> Result<TypeEnv, CompileError> {
     let mut checker = checker;
-    checker.strict_locals = options.strict_locals;
+    checker.semantic_profile = options.semantic_profile.with(
+        elephc_semantics::StrictFeature::Locals,
+        options.strict_locals || options.semantic_profile.contains(elephc_semantics::StrictFeature::Locals),
+    );
+    checker.strict_locals = checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals);
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those
     // paths behave exactly as they did before this feature.
@@ -247,7 +251,7 @@ fn check_types_pass(
     // computed here and reused at their own injection sites below.
     let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
     let register_reflection = program_may_reference_reflection(program);
-    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection);
+    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection, checker.semantic_profile);
     // Fiber and FiberError ride in the same set because `inject_builtin_throwables` owns their
     // declarations. Nothing raises a FiberError without a Fiber, so one answer covers both.
     if program_may_reference_fiber(program) {
@@ -333,6 +337,7 @@ fn check_types_pass(
         &mut class_map,
         &declared_traits,
         register_reflection,
+        checker.semantic_profile,
     ) {
         errors.extend(error.flatten());
     }
@@ -577,6 +582,10 @@ fn check_types_pass(
         &flattened_enums,
         program,
     ));
+    errors.extend(super::schema::validate_noncoercive_defaults(&mut checker, program));
+    for class in checker.classes.values_mut() {
+        crate::types::constant_binding::bind_property_defaults(class);
+    }
     // All class/interface/enum metadata now exists, so deferred symbolic
     // attribute-argument references can be checked for resolvability. Drop any
     // the EIR backend cannot lower (e.g. built-in `Attribute::TARGET_CLASS`) so
@@ -630,6 +639,10 @@ fn check_types_pass(
     let failed_body_errors = checker.recheck_failed_function_bodies(&initial_top_level_errors);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
+    // The final top-level walk is allowed to specialize ordinary method array parameters. Restore
+    // builtin physical ABI contracts after that last mutation so EIR and eval bridge generation
+    // consume the stable storage shape rather than whichever call site happened to run last.
+    patch_builtin_spl_storage_signatures(&mut checker);
     for (initial_errors, final_errors) in initial_top_level_errors
         .into_iter()
         .zip(final_top_level_errors.into_iter())
@@ -875,6 +888,8 @@ var_dump((new Mw())->check(new Req()));
     }
 }
 
+#[cfg(test)]
+mod strict_abs_tests;
 /// The errors PHP raises while compiling the class declarations, in source order and each with its
 /// `LinkOrder`: for each class, its private final constants (PHP compiles the class body first),
 /// then, when PHP

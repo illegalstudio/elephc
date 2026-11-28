@@ -352,6 +352,22 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
     }
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    emit_object_relation_target(ctx, target_class, exclude_self);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+
+    ctx.emitter.label(&done_label);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the shared named-relation ABI after context and borrowed object arguments are set.
+pub(in crate::codegen::lower_inst) fn emit_object_relation_target(
+    ctx: &mut FunctionContext<'_>, target_class: &str, exclude_self: bool,
+) {
     let (target_label, target_len) = ctx.data.add_string(target_class.as_bytes());
     let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, target_arg, &target_label);
@@ -370,15 +386,6 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
         .target
         .extern_symbol("__elephc_eval_object_is_a");
     abi::emit_call_label(ctx.emitter, &symbol);
-    abi::emit_jump(ctx.emitter, &done_label);
-
-    ctx.emitter.label(&false_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-
-    ctx.emitter.label(&done_label);
-    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
-    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    store_if_result(ctx, inst)
 }
 
 /// Lowers object/class relation predicates whose target is a runtime string or object cell.

@@ -16,7 +16,7 @@ impl Detector {
     pub(super) fn reflection_constructor_refs_xml(&self, class: &Name, args: &[Expr]) -> bool {
         if php_symbol_key(class.as_str()) != "reflectionmethod" { return false; }
         match args {
-            [target, method] if !crate::types::call_args::has_named_args(args)
+            [target, method] if !crate::types::call_args::has_named_args(args, elephc_semantics::SemanticProfile::PERMISSIVE)
                 && !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) =>
                 self.callback_method_refs_xml(target, method),
             [target] => match &target.kind {

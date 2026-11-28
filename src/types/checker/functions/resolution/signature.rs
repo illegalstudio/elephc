@@ -176,8 +176,12 @@ impl Checker {
         // The storage this frame already holds on entry: the parameters, with the types this
         // call site specialized them to. The superglobals `local_env` also carries are not the
         // frame's own storage and are excluded from marking outright, so they are left out.
-        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
-            param_types.iter().cloned().collect();
+        let pre_bound_own_storage: crate::types::checker::PreBoundLocals = param_types.iter()
+            .enumerate().map(|(index, (name, ty))| {
+                let declared = decl.variadic.as_ref() == Some(name)
+                    || decl.param_types.get(index).is_some_and(Option::is_some);
+                (name.clone(), crate::types::checker::PreBoundLocal::parameter(ty, declared))
+            }).collect();
         let return_facts = crate::optimize::ReturnBoundaryFacts::new(decl.return_type.as_ref(),
             decl.params.iter().zip(&decl.param_types).map(|(name, hint)| (name.as_str(), hint.as_ref())), &decl.body);
         let body_check_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
@@ -286,11 +290,10 @@ impl Checker {
             )?;
             if !all_return_infos.is_empty() {
                 for return_info in &all_return_infos {
-                    self.require_compatible_return_hint(
+                    self.require_return_info_hint(
                         type_ann,
                         &declared_ret,
-                        &return_info.ty,
-                        return_info.has_value,
+                        return_info,
                         decl.span,
                         &format!("Function '{}' return type", name),
                     )?;
@@ -304,10 +307,8 @@ impl Checker {
                 declared_ret
             };
         } else if !all_return_infos.is_empty() {
-            return_type = all_return_infos[0].ty.clone();
-            for return_info in &all_return_infos[1..] {
-                return_type = Self::wider_type(&return_type, &return_info.ty);
-            }
+            return_type = self.inferred_return_contract(&all_return_infos, Self::wider_type)
+                .expect("nonempty inferred returns");
         }
 
         let sig = FunctionSig {

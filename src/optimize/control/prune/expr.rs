@@ -18,6 +18,8 @@ use super::statements::prune_stmt;
 /// subexpressions even when their result is unused.
 pub(crate) fn prune_expr(expr: Expr) -> Expr {
     let span = expr.span;
+    let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         kind @ ExprKind::Runtime(_) => kind,
         ExprKind::Reference(inner) => ExprKind::Reference(Box::new(prune_expr(*inner))),
@@ -41,6 +43,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(prune_expr(*inner))),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(prune_expr(*inner))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(prune_expr(*inner))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(prune_expr(*inner))),
@@ -288,7 +291,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         }
     };
     let kind = prune_unused_pure_subexpressions(kind);
-    Expr { kind, span }
+    Expr { kind, span, source_profile, producer_binding }
 }
 
 /// Lowers an instanceof target expression or name, applying prune_expr recursively
@@ -328,7 +331,7 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             condition,
             then_expr,
             else_expr,
-        } => match scalar_value(&condition) {
+        } => match condition_scalar_value(&condition) {
             Some(value) if value.truthy() && !expr_has_side_effects(&else_expr)
                 && !array_read_needs_merge_context(&then_expr) => then_expr.kind,
             Some(value) if !value.truthy() && !expr_has_side_effects(&then_expr)
@@ -339,7 +342,7 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
                 else_expr,
             },
         },
-        ExprKind::ShortTernary { value, default } => match scalar_value(&value) {
+        ExprKind::ShortTernary { value, default } => match condition_scalar_value(&value) {
             Some(value_scalar) if value_scalar.truthy() && !expr_has_side_effects(&default) => {
                 value.kind
             }
@@ -356,13 +359,13 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             _ => ExprKind::NullCoalesce { value, default },
         },
         ExprKind::BinaryOp { left, op, right } => match op {
-            BinOp::And => match scalar_value(&left) {
+            BinOp::And => match condition_scalar_value(&left) {
                 Some(value) if !value.truthy() && !expr_has_side_effects(&right) => {
                     ExprKind::BoolLiteral(false)
                 }
                 _ => ExprKind::BinaryOp { left, op, right },
             },
-            BinOp::Or => match scalar_value(&left) {
+            BinOp::Or => match condition_scalar_value(&left) {
                 Some(value) if value.truthy() && !expr_has_side_effects(&right) => {
                     ExprKind::BoolLiteral(true)
                 }

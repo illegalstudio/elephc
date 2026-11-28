@@ -64,6 +64,41 @@ impl FakeOps {
                 self.null()
             }
             (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
+            (FakeValue::Object(properties), "__elephc_property_update_read") if args.len() == 1 => {
+                let current = Self::object_property(&properties, "__xml_update_operand")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                self.output.push('G');
+                self.retain(current)
+            }
+            (FakeValue::Object(properties), "__elephc_property_update") if args.len() == 4 => {
+                if Self::object_property(&properties, "__xml_update_operand").is_none() {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                }
+                self.output.push('W');
+                self.int(900)
+            }
+            (FakeValue::Object(properties), "__elephc_bool") if args.is_empty() => {
+                if Self::object_property(&properties, "__bool_failure").is_some() {
+                    let thrown = self.new_object("ValueError")?;
+                    self.pending_runtime_throwable = Some(thrown);
+                    return Err(EvalStatus::UncaughtThrowable);
+                }
+                let source = Self::object_property(&properties, "__boolean")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                self.retain(source)
+            }
+            (FakeValue::Object(properties), "__elephc_numeric_source") if args.is_empty() => {
+                let source = Self::object_property(&properties, "__elephc_num")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                self.retain(source)
+            }
+            (FakeValue::Object(properties), "__elephc_to_float") if args.is_empty() => {
+                let source = Self::object_property(&properties, "__elephc_num")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                let bytes = self.string_bytes(source)?;
+                let text = std::str::from_utf8(&bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+                self.float(text.parse().map_err(|_| EvalStatus::RuntimeFatal)?)
+            }
             (FakeValue::Object(properties), "__tostring") if args.is_empty() => {
                 let class_name = self.object_classes.get(&(object.as_ptr() as usize)).cloned();
                 self.reflection_type_to_string(class_name.as_deref(), &properties)
@@ -428,6 +463,11 @@ impl FakeOps {
             (FakeValue::Object(properties), "getattributes") if args.is_empty() => {
                 Self::object_property(&properties, "__attrs")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "getprevious") if args.is_empty() => {
+                match Self::object_property(&properties, "previous") {
+                    Some(previous) => self.retain(previous), None => self.null(),
+                }
             }
             (FakeValue::Object(properties), "getmessage") if args.is_empty() => {
                 Self::object_property(&properties, "message").map_or_else(|| self.string(""), Ok)

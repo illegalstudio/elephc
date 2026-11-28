@@ -22,10 +22,10 @@
 use crate::names::php_symbol_key;
 use crate::ir::Module;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
-use crate::types::{is_php_integer_array_key, ClassInfo, InterfaceInfo};
+use crate::types::{ClassInfo, InterfaceInfo};
 
 mod arrays;
-pub(in crate::codegen) use arrays::resolve_array_const_default;
+pub(in crate::codegen) use arrays::{resolve_array_const_default, resolve_literal_array_const_default_key};
 
 #[cfg(test)]
 mod tests;
@@ -100,15 +100,18 @@ pub(in crate::codegen) struct ConstDefaultObjectArg {
 pub(in crate::codegen) struct ConstDefaultContext<'a> {
     pub(in crate::codegen) module: &'a Module,
     pub(in crate::codegen) current_class: Option<&'a str>,
+    literal_only: bool,
 }
 
 impl<'a> ConstDefaultContext<'a> {
+    /// Builds a resolution context for a global or class-like declaration.
+    pub(in crate::codegen) fn new(module: &'a Module, current_class: Option<&'a str>) -> Self {
+        Self { module, current_class, literal_only: false }
+    }
+
     /// Builds a resolution context for a class-like member default.
     pub(in crate::codegen) fn for_class(module: &'a Module, class_name: &'a str) -> Self {
-        Self {
-            module,
-            current_class: Some(class_name),
-        }
+        Self::new(module, Some(class_name))
     }
 }
 
@@ -118,6 +121,23 @@ pub(in crate::codegen) fn resolve_const_default(
     context: &ConstDefaultContext<'_>,
 ) -> Option<ConstDefaultValue> {
     resolve_const_default_at(expr, context, 0)
+}
+
+/// Evaluates literal expressions, stopping at a reached constant read or object construction.
+pub(in crate::codegen) fn resolve_literal_expression(
+    expr: &Expr,
+    module: &Module,
+    current_class: Option<&str>,
+) -> Option<ExprKind> {
+    let context = ConstDefaultContext { module, current_class, literal_only: true };
+    resolve_const_default(expr, &context).and_then(resolved_scalar_literal)
+}
+
+/// Resolves scalar global producers while preserving compound and opaque consumer contracts.
+pub(in crate::codegen) fn materialized_global_constant(module: &Module, value: &Expr) -> Expr {
+    let context = ConstDefaultContext::new(module, None);
+    resolve_const_default(value, &context).and_then(resolved_scalar_literal)
+        .map(|kind| value.with_kind(kind)).unwrap_or_else(|| value.clone())
 }
 
 /// Resolves an enum singleton default through bounded aliases in their declaration scope.
@@ -253,10 +273,31 @@ pub(in crate::codegen) fn resolve_const_default_at(
     if depth > MAX_CONST_DEFAULT_DEPTH {
         return None;
     }
+    if let Some(binding) = expr.producer_binding {
+        let mut original = expr.clone();
+        original.producer_binding = None;
+        let value = crate::optimize::with_expression_semantics(context.module.semantic_profile,
+            expr.source_profile, || resolve_const_default_at(&original, context, depth))?;
+        return Some(bind_producer_value(value, binding));
+    }
     resolve_literal_const_default(expr)
         .or_else(|| resolve_object_const_default(expr, context, depth))
         .or_else(|| resolve_array_const_default(expr, context, depth))
         .or_else(|| resolve_constant_expression_const_default(expr, context, depth))
+}
+
+/// Applies the same producer integer widening to compact metadata without changing other kinds.
+fn bind_producer_value(value: ConstDefaultValue, binding: crate::parser::ast::ProducerBinding) -> ConstDefaultValue {
+    if binding != crate::parser::ast::ProducerBinding::IntegerToFloat { return value; }
+    match value {
+        ConstDefaultValue::Scalar { kind: CONST_DEFAULT_INT, payload } => ConstDefaultValue::Scalar {
+            kind: CONST_DEFAULT_FLOAT, payload: (payload as f64).to_bits() as i64,
+        },
+        ConstDefaultValue::Evaluated { value, enum_cases } => ConstDefaultValue::Evaluated {
+            value: Box::new(bind_producer_value(*value, binding)), enum_cases,
+        },
+        other => other,
+    }
 }
 
 /// Resolves representable pure constant expressions into a constant value.
@@ -266,12 +307,14 @@ fn resolve_constant_expression_const_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     match &expr.kind {
-        ExprKind::ConstRef(name) => resolve_global_constant_default(context, name, depth + 1),
+        ExprKind::ConstRef(name) if !context.literal_only => {
+            resolve_global_constant_default(context, name, depth + 1)
+        }
         ExprKind::ClassConstant { receiver } => {
             resolve_static_receiver_name(context, receiver)
                 .map(|name| ConstDefaultValue::String(crate::names::class_name_literal(&name)))
         }
-        ExprKind::ScopedConstantAccess { receiver, name } => {
+        ExprKind::ScopedConstantAccess { receiver, name } if !context.literal_only => {
             resolve_scoped_constant_default(context, receiver, name, depth + 1)
         }
         ExprKind::ArrayAccess { array, index } => {
@@ -279,6 +322,14 @@ fn resolve_constant_expression_const_default(
         }
         ExprKind::BinaryOp { left, op, right } => {
             resolve_binary_expression_default(left, op, right, context, depth + 1)
+        }
+        ExprKind::UnaryPlus(inner) => {
+            let value = resolve_const_default_at(inner, context, depth + 1)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&value, &mut reads);
+            let kind = resolved_scalar_literal(without_enum_effects(value))?;
+            let number = crate::semantics::numeric::literal_unary_plus(&Expr::new(kind, inner.span))?;
+            Some(with_enum_reads(resolve_literal_const_default(&number)?, reads))
         }
         ExprKind::Not(inner) => {
             let value = resolve_const_default_at(inner, context, depth + 1)?;
@@ -404,13 +455,14 @@ fn resolve_numeric_binary_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     let literal = |expr: &Expr| {
-        let kind = match resolve_const_default_at(expr, context, depth + 1)? {
-            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_INT, payload } => ExprKind::IntLiteral(payload),
-            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_FLOAT, payload } =>
-                ExprKind::FloatLiteral(f64::from_bits(payload as u64)),
-            _ => return None,
-        };
-        Some(Expr::new(kind, expr.span))
+        let kind = resolved_scalar_literal(resolve_const_default_at(expr, context, depth + 1)?)?;
+        let literal = expr.with_kind(kind);
+        if let Some(rule) = crate::semantics::numeric::operand_rule(context.module.semantic_profile, expr.source_profile.mode, op) {
+            let actual = crate::types::checker::infer_expr_type_syntactic(&literal, elephc_semantics::SemanticProfile::PERMISSIVE);
+            if !rule.domain.allows(crate::semantics::numeric::value_kind(&actual)) { return None; }
+        }
+        // Full numeric strings, booleans and null normalize without warnings after domain checks.
+        crate::semantics::numeric::literal_unary_plus(&literal)
     };
     let expression = Expr::new(ExprKind::BinaryOp {
         left: Box::new(literal(left)?), op: op.clone(), right: Box::new(literal(right)?),
@@ -536,6 +588,8 @@ pub(in crate::codegen) fn resolve_literal_const_default(expr: &Expr) -> Option<C
                 payload: 0,
             })
         }
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| resolve_literal_const_default(&number)),
         ExprKind::Negate(inner) => resolve_negated_literal_default(inner),
         _ => None,
     }
@@ -556,6 +610,7 @@ fn resolve_object_const_default(
     context: &ConstDefaultContext<'_>,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
+    if context.literal_only { return None; }
     let ExprKind::NewObject { class_name, args } = &expr.kind else {
         return None;
     };
@@ -591,15 +646,15 @@ fn resolve_object_const_default_arg(
     }
 }
 
-/// Normalizes one string array key to PHP's integer-key rules.
+/// Classifies one string array key under the selected immutable profile.
 pub(in crate::codegen) fn const_default_string_array_key(
     value: &str,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ConstDefaultArrayKey> {
     let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
-    if let Ok(decoded) = std::str::from_utf8(&bytes) {
-        if is_php_integer_array_key(decoded) {
-            return decoded.parse::<i64>().ok().map(ConstDefaultArrayKey::Int);
-        }
+    if let elephc_semantics::array_keys::StringKey::Integer(value) =
+        elephc_semantics::array_keys::classify_string_key(profile, &bytes) {
+        return Some(ConstDefaultArrayKey::Int(value));
     }
     Some(ConstDefaultArrayKey::String(value.to_string()))
 }
@@ -613,7 +668,7 @@ fn resolve_global_constant_default(
     if elephc_builtin_contract::canonical_constant_name(name) == "PHP_BINARY" {
         return Some(ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, payload: 0 });
     }
-    let expr_kind = context
+    let expr = context
         .module
         .global_constants
         .get(name)
@@ -623,8 +678,9 @@ fn resolve_global_constant_default(
                 .global_constants
                 .get(name.trim_start_matches('\\'))
         })
-        .map(|(expr_kind, _)| expr_kind.clone())?;
-    let expr = Expr::new(expr_kind, crate::span::Span::dummy());
+        // Compact defaults have no resource tag; retain the alias for native resource materializers.
+        .filter(|(_, ty)| !matches!(ty, crate::types::PhpType::Resource(_)))
+        .map(|(expr, _)| expr.clone())?;
     resolve_const_default_at(&expr, context, depth + 1)
 }
 

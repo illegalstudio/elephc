@@ -92,10 +92,16 @@ impl InvokerArgumentOwners {
 
     /// Adopts a managed reference cell or heap value whose pointer is the top pushed word.
     pub(super) fn record_pushed_reference(&mut self, index: usize, emitter: &mut Emitter) {
+        self.record_pushed_reference_at_offset(index, 0, emitter);
+    }
+
+    /// Refreshes a managed owner after a growing container replaces its pushed payload.
+    pub(super) fn record_pushed_reference_at_offset(&mut self, index: usize,
+        stack_offset: usize, emitter: &mut Emitter) {
         assert!(index < self.count, "invoker argument owner exceeds its frame layout");
         self.descriptor_slots[index] = false;
         let scratch = abi::secondary_scratch_reg(emitter);
-        abi::emit_load_temporary_stack_slot(emitter, scratch, 0);
+        abi::emit_load_temporary_stack_slot(emitter, scratch, stack_offset);
         abi::store_at_offset(emitter, scratch, self.offset(index));
     }
 

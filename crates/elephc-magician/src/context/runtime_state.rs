@@ -107,9 +107,10 @@ impl ElephcEvalContext {
 
     /// Detaches persistent value owners before native releases can reenter the context.
     pub(crate) fn take_persistent_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
-        self.static_locals.drain().map(|(_, cell)| cell)
+        self.static_locals.drain().map(|(_, entry)| entry.value)
             .chain(self.static_properties.drain().map(|(_, cell)| cell))
             .chain(self.class_constants.drain().map(|(_, cell)| cell))
+            .chain(self.constants.drain().map(|(_, cell)| cell))
             .chain(self.instance_defaults.drain().map(|(_, cell)| cell))
             .collect()
     }
@@ -131,8 +132,20 @@ impl ElephcEvalContext {
     pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
         self.static_locals
             .get(&(function_name.to_string(), name.to_string()))
-            .copied()
-            .map(RuntimeCellHandle::borrowed)
+            .map(|entry| entry.value.borrowed())
+    }
+
+    /// Returns the immutable contract established by successful static initialization.
+    pub(crate) fn static_local_origin(&self, function_name: &str, name: &str) -> Option<&EvalParameterType> {
+        self.static_locals.get(&(function_name.to_string(), name.to_string())).and_then(|entry| entry.origin.as_ref())
+    }
+
+    /// Stores a newly initialized static cell and its producer contract.
+    pub(crate) fn initialize_static_local(&mut self, function_name: &str, name: &str,
+        value: RuntimeCellHandle, origin: Option<EvalParameterType>,
+    ) -> Option<RuntimeCellHandle> {
+        self.static_locals.insert((function_name.to_string(), name.to_string()), EvalStaticLocal { value, origin })
+            .map(|entry| entry.value).filter(|previous| *previous != value)
     }
 
     /// Stores one static local cell and returns any replaced distinct cell.
@@ -142,10 +155,10 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .static_locals
-            .insert((function_name.into(), name.into()), cell);
-        previous.filter(|previous| *previous != cell)
+        let key = (function_name.into(), name.into());
+        let origin = self.static_locals.get(&key).and_then(|entry| entry.origin.clone());
+        self.static_locals.insert(key, EvalStaticLocal { value: cell, origin })
+            .map(|entry| entry.value).filter(|previous| *previous != cell)
     }
 
     /// Returns a stored static property cell for an eval-declared class.
@@ -178,6 +191,11 @@ impl ElephcEvalContext {
     ) -> Option<EvalReferenceTarget> {
         self.static_property_aliases
             .insert((normalize_class_name(class_name), name.to_string()), target)
+    }
+
+    /// Removes interpreter-only indirection after the native binding itself becomes authoritative.
+    pub fn clear_static_property_alias(&mut self, class_name: &str, name: &str) {
+        self.static_property_aliases.remove(&(normalize_class_name(class_name), name.to_string()));
     }
 
     /// Returns the persistent reference target bound to one eval static property slot.
@@ -432,6 +450,7 @@ impl ElephcEvalContext {
 
     /// Pushes an eval-executed function name for magic-constant resolution.
     pub fn push_function(&mut self, name: impl Into<String>) {
+        self.invalidate_member_source_views();
         self.function_stack.push(name.into());
     }
 
@@ -839,12 +858,14 @@ mod persistent_owner_tests {
         context.set_static_local("function", "local", first);
         context.set_static_property("Owner", "value", first);
         context.set_class_constant_cell("Owner", "TOKEN", second);
+        assert!(context.define_constant("DYNAMIC_TOKEN", second));
         let cells = context.take_persistent_cell_owners();
         assert_eq!(cells.iter().filter(|cell| **cell == first).count(), 2);
-        assert_eq!(cells.iter().filter(|cell| **cell == second).count(), 1);
+        assert_eq!(cells.iter().filter(|cell| **cell == second).count(), 2);
         assert!(context.static_local("function", "local").is_none());
         assert!(context.static_property("Owner", "value").is_none());
         assert!(context.class_constant_cell("Owner", "TOKEN").is_none());
+        assert!(context.constant("DYNAMIC_TOKEN").is_none());
         assert!(context.take_persistent_cell_owners().is_empty());
         context.set_static_property("Owner", "replacement", second);
         assert_eq!(context.take_persistent_cell_owners(), vec![second]);

@@ -24,14 +24,23 @@ const PREFIX: &str = "_eir_shared_property_read_";
 pub(super) struct ReadHelper {
     scope: Option<String>,
     mode: PropertyFetchMode,
+    profile: Option<crate::source::EvalSourceProfile>,
     label: String,
 }
 
 /// Returns the instruction's fetch mode without changing the ordinary-read default.
 fn fetch_mode(inst: &Instruction) -> PropertyFetchMode {
     match inst.immediate {
-        Some(Immediate::PropertyFetchMode(mode)) => mode,
+        Some(Immediate::PropertyFetchMode(mode) | Immediate::ProfiledPropertyFetch { mode, .. }) => mode,
         _ => PropertyFetchMode::Read,
+    }
+}
+
+/// Preserves the complete original policy while keeping unprofiled trusted reads distinct.
+fn source_profile(inst: &Instruction) -> Option<crate::source::EvalSourceProfile> {
+    match inst.immediate {
+        Some(Immediate::ProfiledPropertyFetch { profile, .. }) => Some(profile),
+        _ => None,
     }
 }
 
@@ -62,14 +71,15 @@ fn prepare(module: &Module, shared: &mut SharedCodegenState) {
             if !is_shared_site(function, inst) { continue; }
             let scope = function.inlined_scopes.get(&InstId::from_raw(index as u32))
                 .cloned().or_else(|| function.lexical_class.clone());
-            *counts.entry((scope, fetch_mode(inst))).or_insert(0_usize) += 1;
+            *counts.entry((scope, fetch_mode(inst), source_profile(inst))).or_insert(0_usize) += 1;
         }
     }
     let mut keys = counts.into_iter().filter_map(|(key, count)| (count >= 2).then_some(key))
         .collect::<Vec<_>>();
-    keys.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.as_eir().cmp(right.1.as_eir())));
-    shared.property_read_helpers = Some(keys.into_iter().enumerate().map(|(index, (scope, mode))|
-        ReadHelper { scope, mode, label: format!("{PREFIX}{index}") }).collect());
+    keys.sort_by_key(|(scope, mode, profile)| (scope.clone(), mode.as_eir(),
+        profile.map(|profile| (profile.semantics().bits(), profile.php_only()))));
+    shared.property_read_helpers = Some(keys.into_iter().enumerate().map(|(index, (scope, mode, profile))|
+        ReadHelper { scope, mode, profile, label: format!("{PREFIX}{index}") }).collect());
 }
 
 /// Finds the same preplanned helper at every eligible call site, excluding helper recursion.
@@ -78,7 +88,8 @@ pub(super) fn helper_label(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     prepare(ctx.module, ctx.shared);
     let scope = ctx.lexical_class();
     ctx.shared.property_read_helpers.as_ref()?.iter().find(|helper|
-        helper.scope.as_deref() == scope && helper.mode == fetch_mode(inst)).map(|helper| helper.label.clone())
+        helper.scope.as_deref() == scope && helper.mode == fetch_mode(inst)
+            && helper.profile == source_profile(inst)).map(|helper| helper.label.clone())
 }
 
 /// Calls the ordinary PHP ABI after staging operands without re-evaluating either expression.
@@ -118,7 +129,10 @@ fn helper_function(helper: &ReadHelper) -> Function {
     let name = builder.emit_load_local(crate::ir::LocalSlotId::from_raw(1), IrType::Str, PhpType::Str);
     builder.set_value_ownership(object, Ownership::Borrowed);
     builder.set_value_ownership(name, Ownership::Borrowed);
-    let result = builder.emit(Op::DynamicPropGet, vec![object, name], Some(Immediate::PropertyFetchMode(helper.mode)),
+    let result = builder.emit(Op::DynamicPropGet, vec![object, name], Some(match helper.profile {
+        Some(profile) => Immediate::ProfiledPropertyFetch { mode: helper.mode, profile },
+        None => Immediate::PropertyFetchMode(helper.mode),
+    }),
         mixed, PhpType::Mixed, Ownership::Owned).expect("property read produces a value");
     builder.terminate(Terminator::Return { value: Some(result) });
     function
@@ -139,4 +153,38 @@ pub(super) fn emit_helpers(module: &Module, emitter: &mut Emitter, data: &mut Da
             emitter, data, shared, false)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+    use crate::source::EvalSourceProfile;
+    use elephc_semantics::{SemanticProfile, StrictFeature};
+
+    /// Shared helpers preserve probe modes and the full immutable original source profile.
+    #[test]
+    fn shared_property_reads_keep_original_modes_and_profiles() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Initialization, true);
+        let mut module = Module::new(Target::parse("linux-x86_64").unwrap());
+        for (group, (mode, policy)) in [
+            (PropertyFetchMode::Read, None),
+            (PropertyFetchMode::Read, Some(EvalSourceProfile::new(false, profile))),
+            (PropertyFetchMode::Read, Some(EvalSourceProfile::new(true, profile))),
+            (PropertyFetchMode::Probe, Some(EvalSourceProfile::new(false, profile))),
+        ].into_iter().enumerate() {
+            let helper = ReadHelper { scope: None, mode, profile: policy, label: "shared_policy_probe".into() };
+            for index in 0..2 {
+                let mut function = helper_function(&helper);
+                function.name = format!("source_{group}_{index}");
+                let inst = function.instructions.iter().find(|inst| inst.op == Op::DynamicPropGet).unwrap();
+                assert_eq!(fetch_mode(inst), mode);
+                assert_eq!(source_profile(inst), policy);
+                module.add_function(function);
+            }
+        }
+        let mut shared = SharedCodegenState::default();
+        prepare(&module, &mut shared);
+        assert_eq!(shared.property_read_helpers.unwrap().len(), 4);
+    }
 }

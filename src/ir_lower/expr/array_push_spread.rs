@@ -20,14 +20,14 @@ pub(super) fn lower_array_push_spread(
             def.spec.semantics.lowering,
             crate::builtins::semantics::BuiltinLowering::Runtime(
                 crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayPush))))
-        || !args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args)
+        || !args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
     { return None; }
     let ExprKind::Variable(receiver) = &args.first()?.kind else { return None; };
     if !matches!(ctx.local_type(receiver).codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_))
     { return None; }
-    let sig = crate::types::builtin_call_sig(canonical)?;
-    let plan = crate::types::call_args::plan_call_args(&sig, args, expr.span, false, false).ok()?;
+    let sig = crate::types::builtin_call_sig_with_semantics(canonical, ctx.semantic_profile, ctx.source_mode)?;
+    let plan = crate::types::call_args::plan_call_args(&sig, args, expr.span, false, false, ctx.semantic_profile).ok()?;
     begin_call_argument_evaluation(ctx);
     let named = ctx.declare_synthetic_php_local(PhpType::Bool);
     let no_names = lower_expr(ctx, &Expr::new(ExprKind::BoolLiteral(false), expr.span));

@@ -325,7 +325,7 @@ pub(super) fn reflection_property_slot_default_value(
             .or_else(|| crate::types::deferred_defaults::unconditional_error_message(default)
                 .map(|message| ReflectionParameterDefaultValue::DeferredError(message.to_string())))
             .or_else(|| reflection_folded_property_default(ctx, declaring_class, default))
-            .or_else(|| reflection_literal_parameter_default_value(default)),
+            .or_else(|| reflection_literal_parameter_default_value(default, ctx.module.semantic_profile)),
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
     }

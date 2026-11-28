@@ -13,6 +13,11 @@
 use crate::parser::ast::*;
 use crate::synthetic_class::*;
 
+/// Keeps projection maps hash-backed while allowing PHP to normalize numeric keys.
+fn projection_map_type() -> TypeExpr {
+    TypeExpr::AssocArray { key: Box::new(t_mixed()), value: Box::new(t_mixed()) }
+}
+
 /// `elephc_xml_sx_load` — transcribed from the PHP form.
 fn decl_extern_elephc_xml_sx_load() -> Stmt {
     extern_fn("elephc_xml_sx_load", "elephc_xml")
@@ -784,6 +789,15 @@ fn decl_class_simplexmlelement() -> Stmt {
                 ]),
         )
         .method(
+            method("__elephc_numeric_source")
+                .final_()
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_assign("handle", e_this_prop("__elephc_handle")),
+                    s_return(e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(0)])),
+                ]),
+        )
+        .method(
             method("__elephc_int")
                 .final_()
                 .returns(TypeExpr::Int)
@@ -1114,6 +1128,21 @@ fn decl_class_simplexmlelement() -> Stmt {
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "__elephc_property_write", vec![e_var("name"), e_var("value"), e_str("")])),
+                ]),
+        )
+        .method(
+            method("__elephc_property_update_read")
+                .final_()
+                .param("name", TypeExpr::Str)
+                .returns(t_nullable(t_class("static")))
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("name"), BinOp::StrictEq, e_str("")),
+                        vec![s_throw(e_new("ValueError", vec![e_str("Cannot create element with an empty name")]))],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_method_call(e_this(), "__elephc_property_get", vec![e_var("name")])),
                 ]),
         )
         .method(
@@ -2069,7 +2098,10 @@ fn decl_class_simplexmlelement() -> Stmt {
         .method(
             method("getNamespaces")
                 .param_default("recursive", TypeExpr::Bool, e_bool(false))
-                .returns(t_array())
+                .returns(TypeExpr::AssocArray {
+                    key: Box::new(TypeExpr::Str),
+                    value: Box::new(TypeExpr::Str),
+                })
                 .body(vec![
                     s_if(
                         e_this_prop("__elephc_recovered"),
@@ -2087,7 +2119,10 @@ fn decl_class_simplexmlelement() -> Stmt {
             method("getDocNamespaces")
                 .param_default("recursive", TypeExpr::Bool, e_bool(false))
                 .param_default("fromRoot", TypeExpr::Bool, e_bool(true))
-                .returns(t_union(vec![t_array(), TypeExpr::False]))
+                .returns(t_union(vec![TypeExpr::AssocArray {
+                    key: Box::new(TypeExpr::Str),
+                    value: Box::new(TypeExpr::Str),
+                }, TypeExpr::False]))
                 .body(vec![
                     s_if(
                         e_this_prop("__elephc_recovered"),
@@ -2115,7 +2150,10 @@ fn decl_class_simplexmlelement() -> Stmt {
                 .param("declared", TypeExpr::Bool)
                 .param("recursive", TypeExpr::Bool)
                 .param("root", TypeExpr::Bool)
-                .returns(t_array())
+                .returns(TypeExpr::AssocArray {
+                    key: Box::new(TypeExpr::Str),
+                    value: Box::new(TypeExpr::Str),
+                })
                 .body(vec![
                     s_assign("handle", e_this_prop("__elephc_handle")),
                     s_assign("packed", e_call("elephc_xml_sx_namespace", vec![e_var("handle"), e_cast(CastType::Int, e_var("declared")), e_cast(CastType::Int, e_var("recursive")), e_cast(CastType::Int, e_var("root")), e_neg(e_int(2)), e_int(0)])),
@@ -2123,14 +2161,14 @@ fn decl_class_simplexmlelement() -> Stmt {
                     s_assign("length", e_call("count", vec![e_var("parts")])),
                     s_assign("namespaces", e_array(vec![])),
                     s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_binop(e_var("i"), BinOp::Add, e_int(1)), BinOp::Lt, e_var("length"))), Some(s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(2)))), vec![
-                        s_array_assign("namespaces", e_index(e_var("parts"), e_var("i")), e_index(e_var("parts"), e_binop(e_var("i"), BinOp::Add, e_int(1)))),
+                        s_array_assign("namespaces", e_cast(CastType::String, e_index(e_var("parts"), e_var("i"))), e_cast(CastType::String, e_index(e_var("parts"), e_binop(e_var("i"), BinOp::Add, e_int(1))))),
                     ]),
                     s_return(e_var("namespaces")),
                 ]),
         )
         .method(
             method("__elephc_array")
-                .returns(TypeExpr::AssocArray { key: Box::new(TypeExpr::Str), value: Box::new(t_mixed()) })
+                .returns(projection_map_type())
                 .body(vec![
                     s_prop_assign(e_this(), "__elephc_projection_cache", e_null()),
                     s_assign("result", e_method_call(e_this(), "__elephc_projection", vec![e_bool(false)])),
@@ -2142,7 +2180,7 @@ fn decl_class_simplexmlelement() -> Stmt {
             method("__elephc_projection")
                 .private()
                 .param("debug", TypeExpr::Bool)
-                .returns(TypeExpr::AssocArray { key: Box::new(TypeExpr::Str), value: Box::new(t_mixed()) })
+                .returns(projection_map_type())
                 .body(vec![
                     s_assign("handle", e_method_call(e_this(), "__elephc_initialized_handle", vec![])),
                     s_assign("mode", e_call("elephc_xml_sx_int", vec![e_var("handle"), e_int(5)])),
@@ -2285,7 +2323,7 @@ fn decl_class_simplexmlelement() -> Stmt {
             method("__elephc_projection_values")
                 .private()
                 .param("attributes", TypeExpr::Bool)
-                .returns(TypeExpr::AssocArray { key: Box::new(TypeExpr::Str), value: Box::new(t_mixed()) })
+                .returns(projection_map_type())
                 .body(vec![
                     s_assign("handle", e_this_prop("__elephc_handle")),
                     s_assign("selection", e_call("elephc_xml_sx_alias", vec![e_var("handle")])),
@@ -2361,7 +2399,7 @@ fn decl_class_simplexmlelement() -> Stmt {
         .method(
             method("__elephc_debug_projection")
                 .param("projection", t_mixed())
-                .returns(TypeExpr::AssocArray { key: Box::new(TypeExpr::Str), value: Box::new(t_mixed()) })
+                .returns(projection_map_type())
                 .body(vec![
                     s_return(e_self_call("__elephc_debug_project", vec![e_var("projection"), e_call("get_class", vec![e_this()])])),
                 ]),
@@ -2371,7 +2409,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                 .static_()
                 .param("projection", t_mixed())
                 .param("class", TypeExpr::Str)
-                .returns(TypeExpr::AssocArray { key: Box::new(TypeExpr::Str), value: Box::new(t_mixed()) })
+                .returns(projection_map_type())
                 .body(vec![
                     s_assign("result", e_array_assoc(vec![(e_str("__elephc_projection_seed"), e_null())])),
                     s_expr(e_call("unset", vec![e_index(e_var("result"), e_str("__elephc_projection_seed"))])),

@@ -99,17 +99,19 @@ impl ArgumentValueOwner {
         release_expr_result(value, context, values)
     }
 
+    /// Transfers an exact source lease before a converted-argument publisher can retire it.
+    pub(super) fn take(&self, values: &mut impl RuntimeValueOps) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let Some(lease) = self.0.borrow_mut().take() else { return Ok(None); };
+        if let Some(pin) = lease.pin {
+            values.take_native_reference_argument_owner(pin.get().cast())
+        } else { Ok(Some(lease.value)) }
+    }
+
     /// Clears shared metadata before releasing its unique foreign owner, including on failure.
     pub(super) fn release(&self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
-        let lease = self.0.borrow_mut().take();
-        let Some(lease) = lease else { return Ok(()); };
-        if let Some(pin) = lease.pin {
-            match values.take_native_reference_argument_owner(pin.get().cast())? {
-                Some(value) => release_expr_result(value, context, values),
-                None => Ok(()),
-            }
-        } else {
-            release_expr_result(lease.value, context, values)
+        match self.take(values)? {
+            Some(value) => release_expr_result(value, context, values),
+            None => Ok(()),
         }
     }
 }
@@ -213,11 +215,11 @@ mod tests {
         let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
         let key = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
         let arguments = vec![
-            BoundMethodArg { value, ref_target: None, variadic_ref_targets: vec![
+            BoundMethodArg { source_type: None, value, ref_target: None, variadic_ref_targets: vec![
                 (key, EvalReferenceTarget::Cell { cell: value.borrowed() }),
             ] },
-            BoundMethodArg { value, ref_target: None, variadic_ref_targets: Vec::new() },
-            BoundMethodArg { value: value.borrowed(), ref_target: None, variadic_ref_targets: Vec::new() },
+            BoundMethodArg { source_type: None, value, ref_target: None, variadic_ref_targets: Vec::new() },
+            BoundMethodArg { source_type: None, value: value.borrowed(), ref_target: None, variadic_ref_targets: Vec::new() },
         ];
         let mut slots = Vec::new();
         arguments.visit_owned_slots(&mut |slot| slots.push(slot as usize));

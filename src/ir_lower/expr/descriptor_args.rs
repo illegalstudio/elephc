@@ -47,7 +47,7 @@ pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
     native_references: bool,
     span: Span,
 ) -> LoweredValue {
-    if crate::types::call_args::has_named_args(args)
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || descriptor_args_need_runtime_unpack_keys(args)
     {
         return lower_named_descriptor_invoker_arg_container(ctx, args, sig, native_references, span);
@@ -83,7 +83,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
     for arg in args {
         let value = lower_signature_invoker_ref_arg_marker(ctx, sig, positional_index, arg, native_references)
             .unwrap_or_else(|| {
-                let value = lower_expr(ctx, arg);
+                let value = lower_value_invoker_argument(ctx, arg, native_references);
                 coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
             });
         let array = load_published_container(ctx, owner, array_ty.clone(), arg.span);
@@ -130,7 +130,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     let owner = publish_constructed_container(ctx, hash, span);
     let state = begin_descriptor_unpack(ctx, owner, hash_ty.clone(), span);
     let mb_variables = sig.is_some_and(|signature| {
-        crate::types::first_class_callable_builtin_sig("mb_convert_variables").as_ref()
+        crate::types::first_class_callable_builtin_sig_with_semantics("mb_convert_variables", ctx.semantic_profile).as_ref()
             == Some(signature)
     });
     // The runtime key counter owns the argument numbering. This compile-time index only
@@ -170,7 +170,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                 } else {
                     None
                 }
-                .unwrap_or_else(|| lower_expr(ctx, value));
+                .unwrap_or_else(|| lower_value_invoker_argument(ctx, value, native_references));
                 bind_descriptor_unpack_named(ctx, &state, key, value, None, arg.span);
             }
             _ => {
@@ -181,7 +181,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     arg,
                     native_references,
                 )
-                .unwrap_or_else(|| lower_expr(ctx, arg));
+                .unwrap_or_else(|| lower_value_invoker_argument(ctx, arg, native_references));
                 positional_index += 1;
                 bind_descriptor_unpack_positional(ctx, &state, value, None, arg.span);
             }
@@ -191,6 +191,15 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
     retire_owned_call_operand(ctx, owner, span);
     boxed
+}
+
+/// Detaches value-call cells from caller reference payloads before a checked mutator can retag them.
+pub(super) fn lower_value_invoker_argument(ctx: &mut LoweringContext<'_, '_>, argument: &Expr,
+    native_references: bool) -> LoweredValue {
+    let value = lower_expr(ctx, argument);
+    if !native_references && crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode) {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(argument.span))
+    } else { value }
 }
 
 /// Returns the variable name when this literal argument should be passed by reference.
@@ -221,6 +230,12 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
     item: &Expr,
     native_references: bool,
 ) -> Option<LoweredValue> {
+    if !native_references
+        && crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode) {
+        // Explicit call_user_func* arguments carry values. A checked mutator must write
+        // to its temporary argument cell instead of synthesizing a reference to the caller.
+        return None;
+    }
     if native_references && sig.is_some_and(|sig| {
         let regular = crate::types::call_args::regular_param_count(sig);
         (index >= regular && variadic_param_is_by_ref(sig))
@@ -243,7 +258,7 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
             || sig
                 .params
                 .get(index)
-                .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed));
+                .is_some_and(|(_, ty)| crate::types::uses_boxed_reference_payload(ty));
         if expects_mixed
             && ctx.boxed_reference_promotion_is_authorized(var_name, item.span)
             && !ctx.is_ref_bound_local(var_name)

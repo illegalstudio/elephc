@@ -11,13 +11,11 @@
 //!   when no declared slot matches.
 
 use super::*;
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+use super::super::magic_property_guards::{
+    MAGIC_SET_GUARD_FRAME_BYTES, MAGIC_SET_GUARD_NODE_OFFSET,
+    emit_magic_set_guard_push, emit_magic_set_guard_pop,
+    emit_magic_set_exception_handler, emit_magic_set_exception_handler_pop,
 };
-
-const MAGIC_SET_GUARD_FRAME_BYTES: usize = TRY_HANDLER_SLOT_SIZE + 64;
-const MAGIC_SET_GUARD_NODE_OFFSET: usize = 0;
-const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = 48;
 
 /// Raises PHP's call-site `TypeError` for a property argument whose storage cannot satisfy a
 /// typed by-reference parameter. The runtime unwinder transfers control, so the callee call
@@ -35,7 +33,7 @@ pub(in crate::codegen::lower_inst) fn lower_reference_argument_type_error(
 pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
-    if let Some(Immediate::ReflectionPropertyRef { class, property }) = inst.immediate {
+    if let Some(Immediate::ReflectionPropertyRef { class, property, .. }) = inst.immediate {
         let slot = resolve_physical_property_slot(ctx, object, class, property, inst)?;
         let value_ty = ctx.value_php_type(value)?;
         ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
@@ -1321,87 +1319,6 @@ fn emit_branch_if_stacked_runtime_hash_contains(
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     emit_branch_if_hash_entry_found(ctx, found_label);
-}
-
-/// Adds the caller-owned stack node unless the active chain already contains this pair.
-fn emit_magic_set_guard_push(
-    ctx: &mut FunctionContext<'_>,
-    receiver_offset: usize,
-    name_offset: usize,
-    node_offset: usize,
-) {
-    let target = ctx.emitter.target;
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
-        receiver_offset,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 1),
-        name_offset,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
-        name_offset + 8,
-    );
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 3),
-        node_offset,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_magic_set_guard_push");
-}
-
-/// Removes the exact stack node this invocation published.
-fn emit_magic_set_guard_pop(ctx: &mut FunctionContext<'_>, node_offset: usize) {
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        node_offset,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_magic_set_guard_pop");
-}
-
-/// Installs a local handler so an escaping `__set` cannot strand a stack guard node.
-fn emit_magic_set_exception_handler(ctx: &mut FunctionContext<'_>, caught_label: &str) {
-    let scratch = abi::temp_int_reg(ctx.emitter.target);
-    for (symbol, offset) in [
-        ("_exc_handler_top", MAGIC_SET_GUARD_HANDLER_OFFSET),
-        ("_exc_call_frame_top", MAGIC_SET_GUARD_HANDLER_OFFSET + 8),
-        (
-            "_rt_diag_suppression",
-            MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, symbol, 0);
-        abi::emit_store_to_sp(ctx.emitter, scratch, offset);
-    }
-    abi::emit_temporary_stack_address(ctx.emitter, scratch, MAGIC_SET_GUARD_HANDLER_OFFSET);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_JMP_BUF_OFFSET,
-    );
-    ctx.emitter.save_exception_handler();
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, caught_label);
-}
-
-/// Restores the handler and diagnostic state saved by the local `__set` boundary.
-fn emit_magic_set_exception_handler_pop(ctx: &mut FunctionContext<'_>) {
-    let scratch = abi::temp_int_reg(ctx.emitter.target);
-    for (symbol, offset) in [
-        ("_exc_handler_top", MAGIC_SET_GUARD_HANDLER_OFFSET),
-        (
-            "_rt_diag_suppression",
-            MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, scratch, offset);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, symbol, 0);
-    }
 }
 
 /// Lowers a runtime-name write when the receiver is a boxed Mixed object.

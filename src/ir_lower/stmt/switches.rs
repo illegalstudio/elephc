@@ -34,9 +34,10 @@ pub(super) fn lower_switch(
     } else {
         let mut subject = lower_expr(ctx, subject_expr);
         let preserve_subject = live_subject.is_none()
-            && matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
-            && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name)
-                .is_some_and(|class| class.operators.is_some()));
+            && (crate::semantics::comparisons::active(ctx.semantic_profile, ctx.source_mode)
+                || (matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
+                    && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name)
+                        .is_some_and(|class| class.operators.is_some()))));
         if preserve_subject {
             if matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed)) {
                 subject = crate::ir_lower::ownership::copy_assignment_value(ctx, subject, Some(span));
@@ -100,6 +101,7 @@ fn switch_dispatch_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) -> IfArmEx
         tail,
         types: ctx.local_types_snapshot(),
         initialized: ctx.initialized_slots_snapshot(),
+        ref_bound: ctx.ref_bound_locals_snapshot(),
         static_callables: HashMap::new(),
         reflection: ctx.reflection_bindings_snapshot(),
     }
@@ -169,6 +171,7 @@ pub(super) fn lower_dynamic_switch_dispatch(
     live_subject: Option<&str>,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
 ) -> SwitchDispatch {
+    let strict = crate::semantics::comparisons::active(ctx.semantic_profile, ctx.source_mode);
     let mut case_edges = Vec::with_capacity(cases.len());
     for (case_exprs, _) in cases {
         let mut edges = Vec::with_capacity(case_exprs.len());
@@ -197,7 +200,7 @@ pub(super) fn lower_dynamic_switch_dispatch(
             let case_value = if case_is_null {
                 // `int == null` is `int == 0`; materialize that cast only for
                 // the integer shortcut, preserving null for all other PHP types.
-                if int_subject.is_some() {
+                if int_subject.is_some() && !strict {
                     lower_expr(ctx, &Expr::new(ExprKind::IntLiteral(0), case_expr.span))
                 } else {
                     case_value
@@ -248,7 +251,10 @@ pub(super) fn lower_dynamic_switch_dispatch(
             } else {
                 ctx.guard_owned_local_views(&[case_value], case_expr.span)
             };
-            let matched = if use_loose_eq {
+            let matched = if strict {
+                ctx.emit_value(Op::StrictEq, vec![subject.value, case_value.value], None,
+                    PhpType::Bool, Op::StrictEq.default_effects(), Some(case_expr.span))
+            } else if use_loose_eq {
                 // Loose equality handles string/string, string/scalar, float/numeric,
                 // and mixed cases exactly as PHP's `==` would inside an if/elseif chain.
                 let expression = Expr::new(ExprKind::Null, case_expr.span);

@@ -39,7 +39,7 @@ pub(super) fn resolve_known_reflection_function_name(
 /// Resolves a supported callable builtin name for `ReflectionFunction`.
 pub(super) fn resolve_known_reflection_builtin_name(function_name: &str) -> Option<String> {
     let canonical = canonical_builtin_function_name(function_name.trim_start_matches('\\'))?;
-    first_class_builtin_signature(&canonical).map(|_| canonical)
+    crate::builtins::registry::first_class_callable_sig(&canonical).map(|_| canonical)
 }
 
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.
@@ -107,7 +107,7 @@ pub(super) fn reflection_method_class_get_constructor_target(
     if php_symbol_key(method) != "getconstructor" {
         return None;
     }
-    if !reflection_class_new_instance_args(args).is_empty() {
+    if !reflection_class_new_instance_args(args, ctx.semantic_profile).is_empty() {
         return None;
     }
     let reflected_class = reflection_class_reflected_class(ctx, object)?;
@@ -144,7 +144,7 @@ pub(super) fn reflection_property_class_get_property_target(
         return None;
     }
     let class_name = reflection_class_reflected_class(ctx, object)?;
-    let property = reflection_class_member_name_arg(args)?;
+    let property = reflection_class_member_name_arg(args, ctx.semantic_profile)?;
     Some((class_name, property))
 }
 
@@ -165,18 +165,18 @@ pub(super) fn reflection_method_class_get_method_target(
         return None;
     }
     let class_name = reflection_class_reflected_class(ctx, object)?;
-    let method = reflection_class_member_name_arg(args)?;
+    let method = reflection_class_member_name_arg(args, ctx.semantic_profile)?;
     let method = resolve_known_class_method_name(ctx, &class_name, &method)?;
     Some((class_name, method))
 }
 
 /// Returns the literal name argument passed to a ReflectionClass member lookup.
-pub(super) fn reflection_class_member_name_arg(args: &[Expr]) -> Option<String> {
-    let args = reflection_class_new_instance_args(args);
+pub(super) fn reflection_class_member_name_arg(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<String> {
+    let args = reflection_class_new_instance_args(args, profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    let (name, _) = reflection_class_static_property_regular_args(&args, "name", None)?;
+    let (name, _) = reflection_class_static_property_regular_args(&args, "name", None, profile)?;
     reflection_class_static_property_name_arg(name.as_ref()?)
 }
 
@@ -185,11 +185,11 @@ pub(super) fn reflection_function_constructor_regular_arg(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<Expr> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return match args.as_slice() {
             [function_arg] => Some(function_arg.clone()),
             _ => None,
@@ -211,6 +211,7 @@ pub(super) fn reflection_function_constructor_regular_arg(
         false,
         true,
         &assoc_spread_sources(ctx, &args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() {
@@ -224,11 +225,11 @@ pub(super) fn reflection_property_constructor_regular_args(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<(Expr, Expr)> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return match args.as_slice() {
             [class_arg, property_arg] => Some((class_arg.clone(), property_arg.clone())),
             _ => None,
@@ -250,6 +251,7 @@ pub(super) fn reflection_property_constructor_regular_args(
         false,
         true,
         &assoc_spread_sources(ctx, &args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() {
@@ -265,14 +267,14 @@ pub(super) fn reflection_method_constructor_regular_args(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<(Expr, Expr)> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
     if args.len() == 1 {
         return reflection_method_constructor_single_target(ctx, &args[0]);
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return match args.as_slice() {
             [class_arg, method_arg] => Some((class_arg.clone(), method_arg.clone())),
             _ => None,
@@ -294,6 +296,7 @@ pub(super) fn reflection_method_constructor_regular_args(
         false,
         true,
         &assoc_spread_sources(ctx, &args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() {

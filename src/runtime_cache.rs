@@ -1,10 +1,9 @@
 //! Purpose:
 //! Builds and caches the reusable runtime object that is linked beside generated user code.
-//! A request is keyed by compiler version, target, heap size, runtime feature shape and the
-//! source-derived build identity — the inputs that produce the assembly — so a warm hit never
-//! builds it. Objects themselves are named by the hash of their assembly, and an alias file maps
-//! each request key to one: a new build identity whose runtime assembly did not change finds the
-//! object already assembled and repays only the generation, not the assembler run.
+//! A request is keyed by compiler version, target, heap size, runtime feature shape,
+//! semantic profile and the source-derived build identity. A warm hit uses that request key to
+//! find an alias without generating assembly. Objects are keyed by their assembly hash, so a new
+//! request with identical assembly can reuse the assembled object.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before user assembly is linked into the final binary.
@@ -20,7 +19,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::codegen;
+use elephc_semantics::SemanticProfile;
+
 use crate::codegen::platform::Target;
 use crate::codegen::{Emit, RuntimeFeatures};
 
@@ -90,22 +90,46 @@ pub fn prepare_runtime_object(
 ///
 /// A static library uses direct relocations (`pic = false`) but still needs the
 /// recoverable host boundary enabled in runtime fatal paths.
+#[allow(dead_code)]
 pub fn prepare_runtime_object_for_emit(
     heap_size: usize,
     target: Target,
     features: RuntimeFeatures,
     emit: Emit,
 ) -> Result<PreparedRuntimeObject, String> {
-    match emit {
-        Emit::Executable => {
-            prepare_runtime_object_with_mode(heap_size, target, features, false, false)
+    prepare_runtime_object_for_emit_with_semantics(
+        heap_size,
+        target,
+        features,
+        emit,
+        SemanticProfile::PERMISSIVE,
+    )
+}
+
+/// Prepares a runtime object partitioned by its effective semantic guarantees.
+pub fn prepare_runtime_object_for_emit_with_semantics(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+    emit: Emit,
+    semantic_profile: SemanticProfile,
+) -> Result<PreparedRuntimeObject, String> {
+    let (pic, library_boundary) = match emit {
+        Emit::Executable => (false, false),
+        Emit::Cdylib => (true, true),
+        Emit::Staticlib => (false, true),
+        Emit::Phpext => {
+            return Err("PHP extensions build an isolated combined runtime object".to_string());
         }
-        Emit::Phpext => Err("PHP extensions build an isolated combined runtime object".to_string()),
-        Emit::Cdylib => prepare_runtime_object_with_mode(heap_size, target, features, true, true),
-        Emit::Staticlib => {
-            prepare_runtime_object_with_mode(heap_size, target, features, false, true)
-        }
-    }
+    };
+    prepare_runtime_object_with_semantics(
+        heap_size,
+        target,
+        features,
+        pic,
+        library_boundary,
+        semantic_profile,
+    )
 }
 
 /// Implements runtime preparation for independent relocation and library-boundary modes.
@@ -115,6 +139,25 @@ fn prepare_runtime_object_with_mode(
     features: RuntimeFeatures,
     pic: bool,
     library_boundary: bool,
+) -> Result<PreparedRuntimeObject, String> {
+    prepare_runtime_object_with_semantics(
+        heap_size,
+        target,
+        features,
+        pic,
+        library_boundary,
+        SemanticProfile::PERMISSIVE,
+    )
+}
+
+/// Implements runtime preparation for explicit semantic, relocation, and library policies.
+fn prepare_runtime_object_with_semantics(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+    pic: bool,
+    library_boundary: bool,
+    semantic_profile: SemanticProfile,
 ) -> Result<PreparedRuntimeObject, String> {
     // Worktrees commonly share a package version and cache directory while their
     // runtime emitters differ. Cargo supplies a source-derived emitter identity
@@ -127,6 +170,7 @@ fn prepare_runtime_object_with_mode(
         pic,
         library_boundary,
         env!("ELEPHC_RUNTIME_BUILD_ID").as_bytes(),
+        semantic_profile,
     )
 }
 
@@ -142,6 +186,7 @@ fn prepare_runtime_object_with_identity(
     pic: bool,
     library_boundary: bool,
     build_identity: &[u8],
+    semantic_profile: SemanticProfile,
 ) -> Result<PreparedRuntimeObject, String> {
     let cache_dir = usable_runtime_object_cache_dir()?;
 
@@ -154,6 +199,7 @@ fn prepare_runtime_object_with_identity(
         library_boundary,
         build_identity,
     );
+    let request_key = identity::partition_semantic_profile(request_key, semantic_profile);
     let alias_path = cache_dir.join(runtime_cache_alias_name(heap_size, target, request_key));
     if let Some(cache_path) = read_runtime_cache_alias(&alias_path) {
         let integrity_path = runtime_integrity_path(&cache_path);
@@ -169,12 +215,13 @@ fn prepare_runtime_object_with_identity(
         }
     }
 
-    let runtime_asm = codegen::generate_runtime_with_features_mode(
+    let runtime_asm = crate::codegen_support::generate_runtime_with_semantics(
         heap_size,
         target,
         features,
         pic,
         library_boundary,
+        semantic_profile,
     );
     let content_key = runtime_content_key(target, &runtime_asm);
     let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, content_key));
@@ -196,6 +243,7 @@ fn prepare_runtime_object_with_identity(
             pic,
             library_boundary,
             build_identity,
+            semantic_profile,
         );
     };
     prune_runtime_cache_objects(&cache_dir, &cache_path);

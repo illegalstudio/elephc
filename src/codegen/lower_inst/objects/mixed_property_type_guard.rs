@@ -129,12 +129,14 @@ struct ObjectPlan {
     /// Runtime class ids publishing `__toString`, which a `string` destination accepts by
     /// calling it. Empty for every destination that is not string-shaped.
     stringable: Vec<u64>,
+    /// Runtime eval metadata can supply a Stringable class outside the static class inventory.
+    eval_stringable: bool,
 }
 
 impl ObjectPlan {
     /// Returns true when no object of any class can satisfy the declared type.
     fn rejects_every_class(&self) -> bool {
-        !self.any_class && self.accepted.is_empty() && self.stringable.is_empty()
+        !self.any_class && self.accepted.is_empty() && self.stringable.is_empty() && !self.eval_stringable
     }
 }
 
@@ -395,7 +397,7 @@ fn emit_object_plan(
         abi::emit_jump(ctx.emitter, accept_label);
         return Ok(false);
     }
-    if plan.accepted.is_empty() && plan.stringable.is_empty() {
+    if plan.accepted.is_empty() && plan.stringable.is_empty() && !plan.eval_stringable {
         return Ok(false);
     }
     let stringify_label = ctx.next_label(&format!(
@@ -403,10 +405,14 @@ fn emit_object_plan(
         label_fragment(&slot.property)
     ));
     emit_accept_object_classes(ctx.emitter, &plan.accepted, accept_label);
-    if plan.stringable.is_empty() {
+    if plan.stringable.is_empty() && !plan.eval_stringable {
         return Ok(false);
     }
     emit_accept_object_classes(ctx.emitter, &plan.stringable, &stringify_label);
+    if plan.eval_stringable {
+        super::super::builtins::emit_borrowed_eval_object_is_a(ctx, value, "Stringable")?;
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &stringify_label);
+    }
     let rejected_label = ctx.next_label(&format!(
         "typed_prop_{}_tostring_rejected",
         label_fragment(&slot.property)
@@ -948,6 +954,7 @@ fn string_actions(ctx: &FunctionContext<'_>) -> Result<Vec<TagAction>> {
         0 | 1 | 2 | 3 => TagAction::Accept,
         6 => TagAction::ObjectClasses(ObjectPlan {
             stringable: stringable.clone(),
+            eval_stringable: ctx.module.required_runtime_features.eval_bridge,
             ..ObjectPlan::default()
         }),
         _ => TagAction::Reject,
@@ -1103,6 +1110,7 @@ fn union_actions(
         any_class: has(&MemberKind::AnyObject),
         accepted: class_ids,
         stringable,
+        eval_stringable: has(&MemberKind::Str) && ctx.module.required_runtime_features.eval_bridge,
     };
     // PHP's weak-mode union resolution prefers an exact member, then coerces in int, float,
     // string, bool order among the members the union actually declares.
@@ -1622,3 +1630,29 @@ mod tests {
 
 mod reference_coercion;
 pub(in crate::codegen::lower_inst) use reference_coercion::lower as lower_reference_property_coercion;
+
+#[cfg(test)]
+mod eval_stringable_tests {
+
+    /// Weak string declarations query live eval metadata only when that bridge is linked.
+    #[test]
+    fn strict_weak_string_properties_query_eval_stringable_on_all_targets() {
+        let source = "<?php class WeakEvalString { public static string $text = 'kept'; } \
+            function weakEvalStringWrite(mixed $value): void { WeakEvalString::$text = $value; }";
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+            .with(elephc_semantics::StrictFeature::Casts, true);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+            for eval_bridge in [false, true] {
+                let mut module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+                module.required_runtime_features.eval_bridge = eval_bridge;
+                crate::ir::validate_module(&module).unwrap();
+                let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+                assert_eq!(assembly.contains(&target.extern_symbol("__elephc_eval_object_is_a")), eval_bridge,
+                    "{name}: recover the object's actual class context before string conversion");
+            }
+        }
+    }
+}

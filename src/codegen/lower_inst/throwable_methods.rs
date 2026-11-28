@@ -358,7 +358,7 @@ mod tests {
                 let mut emitter = Emitter::new(target);
                 emit_box_throwable_method_result(&mut emitter, method, &PhpType::Str);
                 let asm = emitter.output();
-                assert!(asm.contains("__rt_heap_alloc"), "{name}: {method}");
+                assert!(asm.contains("__rt_mixed_from_owned_string"), "{name}: {method}");
                 assert!(!asm.contains("__rt_mixed_from_value"), "{name}: {method}");
                 assert!(!asm.contains("__rt_str_persist"), "{name}: {method}");
             }

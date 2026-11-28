@@ -73,7 +73,7 @@ fn global_constant_read_deprecation(
 /// read still yields it whichever way a user error handler answers. The branches are literals
 /// rather than the constant itself, which EIR lowering would report a second time.
 fn deprecated_constant_read(span: Span, message: &str, value: ExprKind) -> ExprKind {
-    let at = |kind| Expr { kind, span };
+    let at = |kind| Expr::new(kind, span);
     ExprKind::Ternary {
         condition: Box::new(at(ExprKind::FunctionCall {
             name: resolved_name("__elephc_builtin_deprecated".to_string()),
@@ -126,6 +126,9 @@ pub(super) fn resolve_expr(
         }
         ExprKind::Not(inner) => {
             ExprKind::Not(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
+        }
+        ExprKind::UnaryPlus(inner) => {
+            ExprKind::UnaryPlus(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }
         ExprKind::Negate(inner) => {
             ExprKind::Negate(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
@@ -591,7 +594,7 @@ pub(super) fn resolve_expr(
         },
         _ => expr.kind.clone(),
     };
-    Expr::new(kind, expr.span)
+    expr.with_kind(kind)
 }
 
 /// Resolves the target of an instanceof expression.

@@ -51,7 +51,7 @@ impl LocalSlotAnalysis {
             // dropped the prologue retain on a by-value parameter the abandon then released
             // (`function f($a, int $n) { unset($a); … }` over-released the CALLER's box, and the
             // returned string came back as heap-debug poison bytes).
-            if matches!(inst.op, Op::StoreLocal | Op::StoreRefCell | Op::ZeroLocalSlot) {
+            if matches!(inst.op, Op::StoreLocal | Op::StoreLocalRetiringBox | Op::StoreRefCell | Op::ZeroLocalSlot) {
                 if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
                     stored_slots.insert(slot);
                 }

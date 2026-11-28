@@ -46,6 +46,7 @@ pub(super) fn eval_property_read_result(
     object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps, owned: Option<&mut Vec<RuntimeCellHandle>>, quiet: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !quiet { super::super::checked_nullability::require_non_null(object, context, values)?; }
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
@@ -79,10 +80,14 @@ pub(super) fn eval_property_read_result(
                 );
             }
         }
-        if quiet && !values.object_dynamic_property_exists(object, property_name)?
+        if (quiet || context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization))
+            && !values.object_dynamic_property_exists(object, property_name)?
             && values.reflection_method_flags(&class_name, "__get")?.is_none()
         {
-            return eval_missing_unset_property(object, &class_name, property_name, context, values);
+            if quiet {
+                return eval_missing_unset_property(object, &class_name, property_name, context, values);
+            }
+            return initialization::missing_property(property_name, context, values);
         }
         return values.property_get(object, property_name);
     };
@@ -131,6 +136,16 @@ pub(super) fn eval_property_read_result(
                 context,
                 values,
             );
+        }
+        if property.property_type().is_none()
+            && context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+            && !context.dynamic_property_is_initialized(identity, &storage_property_name)
+        {
+            if let Some(result) = eval_magic_property_get(object, &object_class_name, property_name, context, values)? {
+                return Ok(result);
+            }
+            if quiet { return values.null(); }
+            return initialization::missing_property(property_name, context, values);
         }
         if property.property_type().is_some()
             && !context.dynamic_property_is_initialized(identity, &storage_property_name)
@@ -189,6 +204,9 @@ pub(super) fn eval_property_read_result(
         {
             return Ok(result);
         }
+        if !quiet && context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization) {
+            return initialization::missing_property(property_name, context, values);
+        }
     }
     if quiet && !declared_property_found {
         return eval_missing_unset_property(object, &object_class_name, property_name, context, values);
@@ -227,7 +245,30 @@ pub(crate) fn eval_property_set_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    set_property_with_source(object, property_name, value, MemberWriteSource::Internal, context, values)
+}
+
+/// Writes an evaluated user producer without inferring a logical proof from its runtime occupant.
+pub(in crate::interpreter) fn eval_sourced_property_set_result(object: RuntimeCellHandle, property: &str,
+    value: RuntimeCellHandle, source: Option<&ArgumentSource>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_property_with_source(object, property, value, MemberWriteSource::Evaluated(source), context, values)
+}
+
+/// Publishes an array mutation's data schema without manufacturing an argument proof.
+pub(in crate::interpreter) fn eval_array_property_set_result(object: RuntimeCellHandle, property: &str, value: RuntimeCellHandle,
+    schema: Option<&elephc_generics::Type>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_property_with_source(object, property, value, MemberWriteSource::ArrayContents(schema), context, values)
+}
+
+/// Shares authorization, hook dispatch and physical publication for internal and source-aware writes.
+fn set_property_with_source(object: RuntimeCellHandle, property_name: &str, value: RuntimeCellHandle,
+    source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     validate_property_write_receiver(object, property_name, "assign", context, values)?;
+    context.invalidate_member_source_views();
     let Ok(identity) = values.object_identity(object) else {
         return values.property_set(object, property_name, value);
     };
@@ -350,6 +391,7 @@ pub(crate) fn eval_property_set_result(
     let class_is_readonly = class.is_readonly_class();
     let mut storage_property_name = property_name.to_string();
     let mut declared_property_found = false;
+    let mut declared_type = None;
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
@@ -385,6 +427,7 @@ pub(crate) fn eval_property_set_result(
             );
         }
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
+        declared_type = property.property_type().cloned();
         // An initialized readonly value rejects an overwrite before implicit protected(set)
         // access is checked. An authorized clone can still consume its one rewrite later.
         if property.is_readonly()
@@ -427,6 +470,10 @@ pub(crate) fn eval_property_set_result(
                 &declaring_class, property.name(), value, context, values,
             );
         }
+        if !property.has_set_hook() || current_eval_property_hook_is(&declaring_class, property.name(),
+            &property_hook_set_method(property.name()), context) {
+            source.validate(property.property_type(), &declaring_class, &object_class_name, value, context, values)?;
+        }
         if property.has_set_hook() {
             if !current_eval_property_hook_is(
                 &declaring_class,
@@ -445,7 +492,7 @@ pub(crate) fn eval_property_set_result(
                     &object_class_name,
                     &hook_method,
                     object,
-                    vec![EvaluatedCallArg {
+                    vec![EvaluatedCallArg { source_type: source.argument(),
                         evaluation_owner: None,
                         name: None,
                         value,
@@ -465,7 +512,13 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
-        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
+        eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+        if context.dynamic_property_alias(identity,&storage_property_name).is_none() {
+            if let Some(candidate)=coerce_property_value_candidate(&declaring_class,&property,value,context,values)? {
+                return with_eval_value_lease(candidate,context,values,|candidate,context,values|
+                    eval_property_set_result(object,property_name,candidate,context,values));
+            }
+        }
     }
     if !declared_property_found {
         if let Some((declaring_class, visibility, write_visibility, is_static)) =
@@ -565,6 +618,9 @@ pub(crate) fn eval_property_set_result(
             values,
         )?;
     }
+    eval_validate_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
+    let existing = context.dynamic_property_array_type(identity, &storage_property_name).cloned();
+    let origin = source.array_origin(existing.as_ref(), declared_type.as_ref(), property_name, value, context, values)?;
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
@@ -573,20 +629,24 @@ pub(crate) fn eval_property_set_result(
             EvalReferenceTarget::Cell { cell } if values.is_reference(*cell)? => *cell,
             _ => value,
         };
-        eval_reference_target_write(
-            identity,
-            &storage_property_name,
-            target,
-            value,
-            context,
-            values,
-        )?;
+        let handled = write_member_reference_origin(&target, value, origin.as_ref(), context, values,
+            |context, values, origin, cell| {
+                context.set_dynamic_property_array_type(identity, &storage_property_name, origin.clone());
+                eval_note_instance_property_array_value(identity, &storage_property_name, cell, context, values)
+            })?;
+        if !handled {
+            eval_reference_target_write(identity, &storage_property_name, target, value, context, values)?;
+            if let Some(origin) = origin { context.set_dynamic_property_array_type(identity, &storage_property_name, origin); }
+        }
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
+        eval_note_instance_property_array_value(identity, &storage_property_name, storage, context, values)?;
         return eval_with_native_property_storage_scope(
             &object_class_name, &storage_property_name, context, values,
             |values| values.property_set(object, &storage_property_name, storage),
         );
     }
+    if let Some(origin) = origin { context.set_dynamic_property_array_type(identity, &storage_property_name, origin); }
+    eval_note_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
     eval_with_native_property_storage_scope(
         &object_class_name, &storage_property_name, context, values,
         |values| values.property_set(object, &storage_property_name, value),
@@ -646,30 +706,32 @@ pub(super) fn eval_write_public_dynamic_property(
     Ok(())
 }
 
-/// Binds one eval object property to a by-reference source parameter.
-/// Checks an AOT array property before forwarding a write to its native setter.
+/// Checks native array kind and structural contents before forwarding a candidate to its setter.
 pub(super) fn validate_eval_native_array_property_assignment(
-    declaring_class: &str,
-    property_name: &str,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
+    declaring_class: &str, property_name: &str, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(property_type) = context.native_property_type(declaring_class, property_name) else {
-        return Ok(());
-    };
-    let requires_array = !property_type.allows_null()
-        && !property_type.is_intersection()
-        && !property_type.variants().is_empty()
-        && property_type.variants().iter().all(|variant| matches!(variant, EvalParameterTypeVariant::Array));
-    if !requires_array || matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Ok(());
+    let Some(property_type) = context.native_property_type(declaring_class, property_name) else { return Ok(()); };
+    let requires_array = !property_type.allows_null() && !property_type.is_intersection()
+        && !property_type.variants().is_empty() && property_type.variants().iter().all(|variant| match variant {
+            EvalParameterTypeVariant::Array => true,
+            EvalParameterTypeVariant::Generic(elephc_generics::Type::Apply(name, _)) => name == "array",
+            _ => false,
+        });
+    let array = matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    if requires_array && !array {
+        return eval_throw_type_error(&format!("Cannot assign value to property {}::{} of type array",
+            declaring_class, property_name), context, values);
     }
-    eval_throw_type_error(
-        &format!("Cannot assign value to property {}::{} of type array", declaring_class, property_name),
-        context,
-        values,
-    )
+    if array && context.semantic_profile().checked_property_references() {
+        let declared = local_binding_origins::resolve_declared_source_type(&crate::eval_ir::generic_type(&property_type),
+            Some(declaring_class), Some(declaring_class), context)?;
+        if let Some(schema) = local_binding_origins::array_source_schema(&declared)
+            .and_then(crate::eval_ir::array_contents_type) {
+            validate_generic_local(&crate::eval_ir::parameter_type(&schema), property_name, value, context, values)?;
+        }
+    }
+    Ok(())
 }
 
 /// Binds a writable instance property to a source reference and publishes its initialized storage.
@@ -681,6 +743,7 @@ pub(super) fn eval_property_reference_bind_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    context.invalidate_member_source_views();
     let identity = values.object_identity(object)?;
     let class = context
         .dynamic_object_class(identity)
@@ -706,15 +769,20 @@ pub(super) fn eval_property_reference_bind_result(
         scope,
         values,
     )?;
+    prepare_property_reference_admission(&declaring_class,&property,&target,context,values)?;
     let value = eval_reference_target_value(&target, context, values)?;
-    eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
-    context.bind_dynamic_property_alias(identity, &storage_property_name, target);
-    eval_with_native_property_storage_scope(
-        &object_class_name, &storage_property_name, context, values,
-        |values| values.property_set(object, &storage_property_name, value),
-    )?;
-    context.mark_dynamic_property_initialized(identity, &storage_property_name);
-    Ok(())
+    with_eval_value_lease(value, context, values, |value, context, values| {
+        eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+        eval_validate_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
+        context.bind_dynamic_property_alias(identity, &storage_property_name, target);
+        eval_note_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
+        eval_with_native_property_storage_scope(
+            &object_class_name, &storage_property_name, context, values,
+            |values| values.property_set(object, &storage_property_name, value),
+        )?;
+        context.mark_dynamic_property_initialized(identity, &storage_property_name);
+        Ok(())
+    })
 }
 
 /// Resolves a local by-reference source into a persistent property alias target.
@@ -726,6 +794,9 @@ pub(super) fn eval_property_reference_target(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
+    if let Some(target) = owned_property_reference_source(source_name, context, scope, values)? {
+        return Ok(target);
+    }
     if let Some(target) = scope.reference_target(source_name).cloned() {
         let resolved = persistent_reference_target(target.clone())?;
         if reference_target_has_object_root(&resolved) {
@@ -783,14 +854,14 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             };
             let array =
                 visible_scope_cell(context, scope, array_name).map_or_else(|| values.null(), Ok)?;
-            values.array_get(array, *index)
+            super::super::reference_keys::read(array, index, context, values)
         }
         EvalReferenceTarget::NestedArrayElement {
             array_target,
             index,
         } => {
             let array = eval_reference_target_value(array_target, context, values)?;
-            values.array_get(array, *index)
+            super::super::reference_keys::read(array, index, context, values)
         }
         EvalReferenceTarget::ObjectProperty {
             object,
@@ -851,6 +922,8 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        && values.is_null(object)? { return Ok(false); }
     if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
         values, object, property_name, elephc_builtin_contract::ObjectProperty::Isset, None,
     )? {
@@ -859,6 +932,8 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         return truthy.and_then(|value| released.map(|()| value));
     }
     let Ok(identity) = values.object_identity(object) else {
+        if context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+            && values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(false); }
         let value = values.property_get(object, property_name)?;
         return eval_property_probe_value_is_set(value, context, values);
     };
@@ -879,6 +954,13 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
             let storage_property_name =
                 eval_instance_property_storage_name(&declaring_class, &property);
+            if property.property_type().is_none()
+                && context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+                && !context.dynamic_property_is_initialized(identity, &storage_property_name)
+            {
+                return eval_magic_property_isset(object, &object_class_name, property_name, context, values)
+                    .map(|result| result.unwrap_or(false));
+            }
             if property.property_type().is_some()
                 && !context.dynamic_property_is_initialized(identity, &storage_property_name)
             {
@@ -1054,17 +1136,39 @@ pub(super) fn eval_magic_property_get(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let property = values.string(property_name)?;
-    let result = eval_dynamic_method_with_values(
-        &declaring_class,
-        object_class_name,
-        &method,
-        object,
-        positional_args(vec![property.borrowed()]),
-        context,
-        values,
-    );
-    finish_magic_property_name(result, property, context, values).map(Some)
+    let identity = values.object_identity(object)?;
+    let guarded = context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+        && eval_dynamic_property_for_access(object_class_name, property_name, context).is_some_and(|(owner, member)| {
+            member.property_type().is_none()
+                && validate_eval_member_access(&owner, member.visibility(), context).is_ok()
+                && !context.dynamic_property_is_initialized(identity, &eval_instance_property_storage_name(&owner, &member))
+        });
+    let mut node = std::pin::pin!([0_u64; 4]);
+    if guarded && !values.native_magic_get_guard_push(identity, property_name, node.as_mut().get_mut())? {
+        return initialization::missing_property(property_name, context, values);
+    }
+    let result = (|| {
+        let property = values.string(property_name)?;
+        let result = eval_dynamic_method_with_values(
+            &declaring_class,
+            object_class_name,
+            &method,
+            object,
+            positional_args(vec![property.borrowed()]),
+            context,
+            values,
+        );
+        finish_magic_property_name(result, property, context, values).map(Some)
+    })();
+    if guarded {
+        let popped = values.native_magic_get_guard_pop(node.as_mut().get_mut());
+        match (result, popped) {
+            (Err(status), _) => Err(status),
+            (Ok(Some(value)), Err(status)) => finish_eval_argument_values(Err(status), [value], context, values).map(Some),
+            (Ok(None), Err(status)) => Err(status),
+            (Ok(value), Ok(())) => Ok(value),
+        }
+    } else { result }
 }
 
 /// Dispatches an undefined or inaccessible eval property write through `__set()`.

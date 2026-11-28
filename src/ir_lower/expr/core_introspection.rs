@@ -47,7 +47,12 @@ pub(super) fn lower_globals_read(
         })
         .cloned()
         .collect::<Vec<_>>();
-    names.sort();
+    names.extend(ctx.builder.function().instructions.iter().filter_map(|inst| {
+        if inst.op != Op::LoadGlobalRefCell { return None; }
+        let Some(Immediate::GlobalName(data)) = inst.immediate else { return None; };
+        ctx.data.global_names.get(data.as_raw() as usize).cloned()
+    }));
+    names.sort(); names.dedup();
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
@@ -62,17 +67,32 @@ pub(super) fn lower_globals_read(
     );
     for name in names {
         let key = lower_string_literal(ctx, &name, expr);
-        let value = ctx.load_local(&name, Some(expr.span));
+        let data = ctx.intern_global_name(&name);
+        let ty = ctx.global_alias_type(&name);
+        let value = ctx.emit_value(Op::LoadGlobal, Vec::new(), Some(Immediate::GlobalName(data)),
+            ty, Op::LoadGlobal.default_effects(), Some(expr.span));
+        ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
         let value = box_value_as_mixed(ctx, value, expr.span);
-        ctx.emit_void(
-            Op::HashSet,
-            vec![hash.value, key.value, value.value],
-            None,
-            Op::HashSet.default_effects(),
-            Some(expr.span),
-        );
+        ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None,
+            Op::HashSet.default_effects(), Some(expr.span));
     }
     hash
+}
+
+/// Loads a live scope binding only inside the predecessor that proves its presence.
+fn insert_scope_binding(ctx: &mut LoweringContext<'_, '_>, name: &str,
+    hash: LoweredValue, expr: &Expr,
+) {
+    let key = lower_string_literal(ctx, name, expr);
+    let value = ctx.load_local(name, Some(expr.span));
+    let value = box_value_as_mixed(ctx, value, expr.span);
+    let mut roots = Vec::new();
+    let value = root_array_literal_item(ctx, value, expr.span, &mut roots);
+    ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None,
+        Op::HashSet.default_effects(), Some(expr.span));
+    for slot in roots.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
 }
 
 /// Builds the associative array of locals visible at the current lexical call site.
@@ -97,16 +117,13 @@ pub(super) fn lower_visible_defined_vars(
         Some(expr.span),
     );
     for name in names {
-        let key = lower_string_literal(ctx, &name, expr);
-        let value = ctx.load_local(&name, Some(expr.span));
-        let value = box_value_as_mixed(ctx, value, expr.span);
-        ctx.emit_void(
-            Op::HashSet,
-            vec![hash.value, key.value, value.value],
-            None,
-            Op::HashSet.default_effects(),
-            Some(expr.span),
-        );
+        let slot = ctx.local_slots[&name];
+        if ctx.builder.function().flags.tracks_local_binding_state {
+            crate::ir_lower::local_binding_state::when_bound(ctx, slot, expr.span,
+                |ctx| insert_scope_binding(ctx, &name, hash, expr));
+        } else {
+            insert_scope_binding(ctx, &name, hash, expr);
+        }
     }
     hash
 }

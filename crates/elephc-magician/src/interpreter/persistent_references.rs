@@ -26,7 +26,9 @@ pub(in crate::interpreter) fn eval_persistent_variable_reference(
             promote_array_reference_variable(target_scope, &name, context, values)?
         },
         EvalReferenceTarget::Cell { cell } if values.is_reference(cell)? => cell,
-        target if reference_target_has_object_root(&target) => {
+        target if reference_target_has_object_root(&target)
+            || matches!(target, EvalReferenceTarget::StaticProperty { .. }
+                | EvalReferenceTarget::ArrayElement { .. } | EvalReferenceTarget::NestedArrayElement { .. }) => {
             let Some(cell) = scope.visible_cell(local) else { return Ok(None); };
             if !values.is_reference(cell)? { return Ok(None); }
             cell
@@ -59,6 +61,9 @@ fn promote_array_reference_variable(
         // A superglobal lives in the global scope whatever scope names it.
         return promote_array_reference_variable(global_scope, name, context, values);
     }
+    let source_view = source.local_source_view(name, context).cloned();
+    let argument_source = source.local_argument_source(name, context).cloned();
+    let guarded = source.local_guard_source_view(name, context).is_some();
     let (value, ownership) = source.entry(name).filter(|entry| entry.flags().is_visible())
         .map(|entry| (entry.cell(), entry.flags().ownership))
         .map_or_else(|| values.null().map(|value| (value, ScopeCellOwnership::Owned)), Ok)?;
@@ -72,6 +77,11 @@ fn promote_array_reference_variable(
     }
     for old in source.set_respecting_references(name.to_string(), reference, ScopeCellOwnership::Owned) {
         values.release(old)?;
+    }
+    if let Some(packet) = argument_source { source.record_local_argument_source(name.to_string(), packet); }
+    if let Some(view) = source_view {
+        if guarded { source.record_local_guard_source_view(name.to_string(), view, context.source_view_epoch()); }
+        else { source.record_local_source_view(name.to_string(), view, context.source_view_epoch()); }
     }
     Ok(reference)
 }

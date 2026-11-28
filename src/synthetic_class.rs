@@ -477,6 +477,8 @@ pub fn e_error_suppress(value: Expr) -> Expr {
     Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
 }
 
+/// Constructs the explicit numeric unary-plus form used by generated preludes.
+pub fn e_pos(value: Expr) -> Expr { Expr::unary_plus(value) }
 /// `clone value`.
 pub fn e_clone(value: Expr) -> Expr {
     Expr::new(ExprKind::Clone(Box::new(value)), Span::dummy())
@@ -1408,7 +1410,7 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner)
+        | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::ErrorSuppress(inner) => walk_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             walk_expr(subject, out);
@@ -1942,7 +1944,7 @@ impl FunctionBuilder {
 /// a gate the PHP-text preludes get from a textual scan of their source.
 ///
 /// UNLIKE `reads_of`, THIS MUST NOT BE CONSERVATIVE. A node it silently skipped would hide
-/// a forbidden call and turn the gate green while the prelude breaks `--strict-php`
+/// a forbidden call and turn the gate green while the prelude breaks `--php-only`
 /// compiles. So it panics on any node these builders are not known to produce: adding a
 /// helper above without teaching this function about it fails loudly instead of quietly
 /// narrowing the audit.
@@ -2239,7 +2241,7 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner)
+        | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::ErrorSuppress(inner) => audit_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             audit_expr(subject, out);
@@ -2963,7 +2965,11 @@ function demo_render(mixed $value, int $indent): string {
                                 e_call(
                                     "sprintf",
                                     vec![
-                                        e_concat_all(vec![e_str("%."), e_var("p"), e_str("e")]),
+                                        e_concat_all(vec![
+                                            e_str("%."),
+                                            e_cast(CastType::StringFormat, e_var("p")),
+                                            e_str("e"),
+                                        ]),
                                         e_var("value"),
                                     ],
                                 ),

@@ -598,7 +598,7 @@ impl AppendLowerer {
             alias
         } else {
             let associative = dimensions.first().and_then(Option::as_ref)
-                .is_some_and(crate::syntax::types::empty_array_key_requires_hash_storage);
+                .is_some_and(dimension_requires_hash_storage);
             self.bind_slot_alias(target, false, associative)
         };
         for (position, dimension) in dimensions.iter().enumerate() {
@@ -634,7 +634,7 @@ impl AppendLowerer {
                 let current = self.bind(target.clone());
                 self.live_guard(&cell, false, false);
                 let associative = dimensions.get(position + 1).and_then(Option::as_ref)
-                    .is_some_and(crate::syntax::types::empty_array_key_requires_hash_storage);
+                    .is_some_and(dimension_requires_hash_storage);
                 let alias = self.bind_slot_alias(target, false, associative);
                 self.unset_temps(vec![current]);
                 alias
@@ -672,7 +672,7 @@ impl AppendLowerer {
     ) -> Result<(), CompileError> {
         let target = self.reserve_append_slot(base)?;
         let associative = dimensions.first().and_then(Option::as_ref)
-            .is_some_and(crate::syntax::types::empty_array_key_requires_hash_storage);
+            .is_some_and(dimension_requires_hash_storage);
         let mut cell = self.bind_slot_alias(target, false, associative);
         for (position, dimension) in dimensions.iter().enumerate() {
             let target = if let Some(index) = dimension {
@@ -691,7 +691,7 @@ impl AppendLowerer {
             };
             let leaf = position + 1 == dimensions.len();
             let associative = dimensions.get(position + 1).and_then(Option::as_ref)
-                .is_some_and(crate::syntax::types::empty_array_key_requires_hash_storage);
+                .is_some_and(dimension_requires_hash_storage);
             cell = self.bind_slot_alias(target, leaf, associative);
         }
         let value = self.leaf(cell.clone(), rhs, &AppendUpdate::Assign);
@@ -791,4 +791,10 @@ impl AppendLowerer {
         self.prelude.push(statement);
         Ok(())
     }
+}
+
+/// Chooses storage that supports the dimension under either PHP or exact-key semantics.
+fn dimension_requires_hash_storage(index: &Expr) -> bool {
+    matches!(index.kind, ExprKind::StringLiteral(_))
+        || crate::syntax::types::empty_array_key_requires_hash_storage(index)
 }

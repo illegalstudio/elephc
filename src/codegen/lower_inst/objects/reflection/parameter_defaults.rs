@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Applies declaration-time int-to-float binding only to defaults PHP can fold without constants.
+pub(super) fn reflection_folded_integer_default(
+    source: &Expr,
+    ty: &PhpType,
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+) -> Option<ReflectionParameterDefaultValue> {
+    if !ty.coerces_integer_to_float() { return None; }
+    crate::optimize::with_expression_semantics(ctx.module.semantic_profile, source.source_profile, || {
+        let mut source = source.clone();
+        source.producer_binding = None;
+        let mut folded = crate::optimize::fold_constant_expression(source);
+        crate::types::deferred_defaults::prune_literal_branches(&mut folded);
+        let folded = crate::optimize::fold_constant_expression(folded);
+        let value = crate::codegen::const_default_values::resolve_literal_expression(
+            &folded, ctx.module, (!current_class.is_empty()).then_some(current_class),
+        )?;
+        let ExprKind::IntLiteral(value) = value else { return None; };
+        Some(ReflectionParameterDefaultValue::Float(value as f64))
+    })
+}
+
 /// Converts a supported parameter default expression into Reflection metadata.
 pub(super) fn reflection_parameter_default_value(
     ctx: &FunctionContext<'_>,
@@ -25,7 +47,7 @@ pub(super) fn reflection_parameter_default_value(
                 info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
                     .any(|owner| owner == scope))))
             && function.callable_default.as_ref()
-                .is_some_and(|value| value == default && value.span == default.span);
+                .is_some_and(|value| value.same_value_producer(default));
     // A default that reads a deprecated constant has a reflection twin, which reports on every
     // call at the caller's line instead of consuming the parameter's own once flags.
     let helpers = || ctx.module.functions.iter().chain(ctx.module.closures.iter()).filter(helper_for_default);
@@ -40,17 +62,14 @@ pub(super) fn reflection_parameter_default_value(
     {
         return Ok(Some(value));
     }
-    if let Some(value) = reflection_literal_parameter_default_value(default) {
+    if let Some(value) = reflection_literal_parameter_default_value(default, ctx.module.semantic_profile) {
         return Ok(Some(value));
     }
-    let context = crate::codegen::const_default_values::ConstDefaultContext {
-        module: ctx.module,
-        current_class: (!current_class.is_empty()).then_some(current_class),
-    };
+    let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, (!current_class.is_empty()).then_some(current_class));
     if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
         .and_then(crate::codegen::const_default_values::resolved_literal_default)
     {
-        return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span)));
+        return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span), ctx.module.semantic_profile));
     }
     match &default.kind {
         // Unsupported constant forms retain their source export without failing compilation.
@@ -84,17 +103,14 @@ pub(super) fn reflection_parameter_default_non_object_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
-    if let Some(value) = reflection_literal_parameter_default_non_object_value(default) {
+    if let Some(value) = reflection_literal_parameter_default_non_object_value(default, ctx.module.semantic_profile) {
         return Ok(Some(value));
     }
-    let context = crate::codegen::const_default_values::ConstDefaultContext {
-        module: ctx.module,
-        current_class: (!current_class.is_empty()).then_some(current_class),
-    };
+    let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, (!current_class.is_empty()).then_some(current_class));
     if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
         .and_then(crate::codegen::const_default_values::resolved_literal_default)
     {
-        return Ok(reflection_literal_parameter_default_non_object_value(&Expr::new(kind, default.span)));
+        return Ok(reflection_literal_parameter_default_non_object_value(&Expr::new(kind, default.span), ctx.module.semantic_profile));
     }
     match &default.kind {
         // Object arguments share the supported constant-value fallback.
@@ -112,8 +128,9 @@ pub(super) fn reflection_parameter_default_non_object_value(
 /// Converts constructor arguments for object defaults, rejecting nested objects.
 pub(super) fn reflection_literal_parameter_default_non_object_value(
     default: &Expr,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ReflectionParameterDefaultValue> {
-    let value = reflection_literal_parameter_default_value(default)?;
+    let value = reflection_literal_parameter_default_value(default, profile)?;
     if reflection_default_value_contains_object(&value) {
         return None;
     }
@@ -146,14 +163,15 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
 /// Converts a literal parameter/property default expression into Reflection metadata.
 pub(super) fn reflection_literal_parameter_default_value(
     default: &Expr,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ReflectionParameterDefaultValue> {
     if let Some(ExprKind::StringLiteral(value)) =
         crate::codegen::literal_defaults::fold_named_class_constant(&default.kind)
     {
         return Some(ReflectionParameterDefaultValue::Str(value));
     }
-    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(&default.kind, crate::codegen_support::compile_php_version()) {
-        return reflection_literal_parameter_default_value(&Expr::new(folded, default.span));
+    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(&default.kind, crate::codegen_support::compile_php_version(), profile) {
+        return reflection_literal_parameter_default_value(&Expr::new(folded, default.span), profile);
     }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
@@ -163,10 +181,12 @@ pub(super) fn reflection_literal_parameter_default_value(
         ExprKind::Null => Some(ReflectionParameterDefaultValue::Null),
         ExprKind::ArrayLiteral(items) => items
             .iter()
-            .map(reflection_literal_parameter_default_value)
+            .map(|value| reflection_literal_parameter_default_value(value, profile))
             .collect::<Option<Vec<_>>>()
             .map(ReflectionParameterDefaultValue::Array),
-        ExprKind::ArrayLiteralAssoc(entries) => reflection_assoc_array_default_value(entries),
+        ExprKind::ArrayLiteralAssoc(entries) => reflection_assoc_array_default_value(entries, profile),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| reflection_literal_parameter_default_value(&number, profile)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value
                 .checked_neg()
@@ -181,12 +201,13 @@ pub(super) fn reflection_literal_parameter_default_value(
 /// Converts an associative array literal into normalized Reflection default metadata.
 pub(super) fn reflection_assoc_array_default_value(
     entries: &[(Expr, Expr)],
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ReflectionParameterDefaultValue> {
     entries
         .iter()
         .map(|(key, value)| {
-            let key = reflection_default_array_key(key)?;
-            let value = reflection_literal_parameter_default_value(value)?;
+            let key = reflection_default_array_key(key, profile)?;
+            let value = reflection_literal_parameter_default_value(value, profile)?;
             Some(ReflectionDefaultAssocEntry { key, value })
         })
         .collect::<Option<Vec<_>>>()
@@ -194,43 +215,28 @@ pub(super) fn reflection_assoc_array_default_value(
 }
 
 /// Converts one supported associative-array key expression into PHP-normalized metadata.
-pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefaultArrayKey> {
+pub(super) fn reflection_default_array_key(key: &Expr, profile: elephc_semantics::SemanticProfile) -> Option<ReflectionDefaultArrayKey> {
     if let Some(ExprKind::StringLiteral(value)) =
         crate::codegen::literal_defaults::fold_named_class_constant(&key.kind)
     {
-        return reflection_default_string_array_key(&value);
+        return reflection_default_string_array_key(&value, profile);
     }
-    match &key.kind {
-        ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
-        ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => {
-            let key = crate::types::php_float_array_key(*value);
-            Some(ReflectionDefaultArrayKey::Int(key))
-        }
-        ExprKind::StringLiteral(value) => reflection_default_string_array_key(value),
-        ExprKind::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => value.checked_neg().map(ReflectionDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => {
-                let negated = -*value;
-                let key = crate::types::php_float_array_key(negated);
-                Some(ReflectionDefaultArrayKey::Int(key))
-            }
-            _ => None,
-        },
-        _ => None,
-    }
+    let key = crate::codegen::const_default_values::resolve_literal_array_const_default_key(key, profile)?;
+    Some(reflection_default_key_from_shared(key))
 }
 
-/// Normalizes a string array key according to PHP integer-string key rules.
-pub(super) fn reflection_default_string_array_key(value: &str) -> Option<ReflectionDefaultArrayKey> {
-    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
-    if let Ok(decoded) = std::str::from_utf8(&bytes) {
-        if is_php_integer_array_key(decoded) {
-            return decoded.parse::<i64>().ok().map(ReflectionDefaultArrayKey::Int);
-        }
+/// Shares byte-based identity with callable and eval default metadata.
+pub(super) fn reflection_default_string_array_key(value: &str, profile: elephc_semantics::SemanticProfile) -> Option<ReflectionDefaultArrayKey> {
+    crate::codegen::const_default_values::const_default_string_array_key(value, profile)
+        .map(reflection_default_key_from_shared)
+}
+
+/// Adapts the shared key representation without reclassifying source strings.
+fn reflection_default_key_from_shared(key: crate::codegen::const_default_values::ConstDefaultArrayKey) -> ReflectionDefaultArrayKey {
+    match key {
+        crate::codegen::const_default_values::ConstDefaultArrayKey::Int(value) => ReflectionDefaultArrayKey::Int(value),
+        crate::codegen::const_default_values::ConstDefaultArrayKey::String(value) => ReflectionDefaultArrayKey::Str(value),
     }
-    Some(ReflectionDefaultArrayKey::Str(value.to_string()))
 }
 
 /// Converts scalar/null constant metadata into a parameter default value.

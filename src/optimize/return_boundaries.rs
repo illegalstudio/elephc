@@ -1,6 +1,5 @@
 //! Purpose:
-//! Models the runtime verification at declared `int`, `float`, `string`, `bool`, `callable`
-//! and class-like return boundaries.
+//! Models runtime verification at declared scalar, callable and class-like return boundaries.
 //!
 //! Called from:
 //! - Callable effect and exception summaries, DCE body scopes, and checker body scopes.
@@ -78,6 +77,7 @@ impl ReturnBoundaryFacts {
     /// under the declaring file's `strict` mode.
     fn checks_source(&self, source: &PhpType, strict: bool) -> bool {
         self.declared_callable
+            || self.implicit_may_throw(source)
             || (self.declared_object && crate::types::object_boundary::runtime_checked_object_source(source))
             || match &self.declared_scalar {
                 Some(PhpType::Int) => declared_int_return_requires_validation(true, &PhpType::Int, source),
@@ -96,15 +96,31 @@ impl ReturnBoundaryFacts {
     /// returned expression (`Checker::record_scalar_guard_arg_site`), which lowering consults too.
     /// A declared `callable` return can throw on every return.
     fn may_throw(&self, expr: &Expr) -> bool {
+        let source = self.source_type(expr);
         self.declared_callable
+            || self.implicit_may_throw(&source)
             || (self.declared_object && !self.object_source(expr))
             || match &self.declared_scalar {
                 Some(PhpType::Int) => declared_int_return_requires_validation(
-                    true, &PhpType::Int, &self.source_type(expr),
+                    true, &PhpType::Int, &source,
                 ),
                 Some(_) => super::binding_decisions::is_scalar_guard_site(expr.span),
                 None => false,
             }
+    }
+
+    /// Retains an exact-kind failure independently of ordinary PHP return verification.
+    fn implicit_may_throw(&self, source: &PhpType) -> bool {
+        if super::semantic_context::enabled(elephc_semantics::StrictFeature::Nullability)
+            && crate::semantics::nullability::non_null_contract(&self.declared_result) {
+            // A useful static heap type can still carry a logical null from its producer.
+            return true;
+        }
+        matches!(crate::semantics::conversions::implicit(
+            super::semantic_context::active_profile(), super::semantic_context::active_source_mode(),
+            &self.declared_result, source),
+            elephc_semantics::conversions::ConversionPlan::Guard { .. }
+                | elephc_semantics::conversions::ConversionPlan::Reject(_))
     }
 
     /// Recognizes returned values that are objects before the class-like boundary checks them.
@@ -130,7 +146,7 @@ impl ReturnBoundaryFacts {
                 CastType::Int => PhpType::Int,
                 CastType::Float => PhpType::Float,
                 CastType::Bool => PhpType::Bool,
-                CastType::String => PhpType::Str,
+                CastType::String | CastType::StringFormat => PhpType::Str,
                 _ => PhpType::Mixed,
             },
             ExprKind::FunctionCall { name, .. } => with_active_function_effects(|functions|
@@ -168,25 +184,8 @@ fn declared_scalar_return(hint: Option<&TypeExpr>) -> Option<PhpType> {
 }
 
 /// Resolves only representations whose syntax is authoritative before checker specialization.
-fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
-    match hint {
-        Some(TypeExpr::Int) => PhpType::Int,
-        Some(TypeExpr::Float) => PhpType::Float,
-        Some(TypeExpr::Bool) => PhpType::Bool,
-        Some(TypeExpr::False) => PhpType::False,
-        Some(TypeExpr::Str) => PhpType::Str,
-        // A scalar keyword spelled as a name (`Named("string")`) is the same declaration.
-        Some(TypeExpr::Named(name)) => match name.as_str().to_ascii_lowercase().as_str() {
-            "int" => PhpType::Int,
-            "float" => PhpType::Float,
-            "string" => PhpType::Str,
-            "bool" => PhpType::Bool,
-            _ => PhpType::Mixed,
-        },
-        Some(TypeExpr::Nullable(inner)) => PhpType::Union(vec![parameter_type(Some(inner)), PhpType::Void]),
-        Some(TypeExpr::Union(members)) => PhpType::Union(members.iter().map(|hint| parameter_type(Some(hint))).collect()),
-        _ => PhpType::Mixed,
-    }
+pub(super) fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
+    hint.and_then(crate::semantics::conversions::implicit_hint).unwrap_or(PhpType::Mixed)
 }
 
 /// Installs one lexical return contract and restores the caller's context afterwards.
@@ -208,7 +207,8 @@ pub(super) fn active_return_boundary_may_throw(expr: &Expr) -> bool {
 /// `TypeError` unwinds (declared `string`, `float` and `bool`; the `int` check does not).
 pub(crate) fn active_return_boundary_releases_refused_value() -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
-        matches!(facts.declared_scalar, Some(PhpType::Str | PhpType::Float | PhpType::Bool))))
+        matches!(facts.declared_scalar, Some(PhpType::Str | PhpType::Float | PhpType::Bool))
+            || facts.implicit_may_throw(&PhpType::Mixed)))
 }
 
 /// Uses the checker's source-point type once inference has established the current read view,

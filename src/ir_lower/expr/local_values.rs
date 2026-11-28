@@ -17,6 +17,7 @@ use super::*;
 pub(super) fn lower_local_value(
     ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span,
 ) -> LoweredValue {
+    crate::ir_lower::initialization::guard_read(ctx, name, span);
     // A branch-local view must not reinterpret a two-word frame slot as a raw scalar.
     let checked = ctx.local_value_read_types.get(&(ctx.loop_storage_scope.clone(), span, name.to_string()));
     let boxed_read = checked == Some(&PhpType::Mixed);

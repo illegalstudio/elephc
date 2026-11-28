@@ -20,7 +20,7 @@ fn executable_path_defaults_resolve_and_release_fresh_string_elements_on_all_tar
         let target = Target::parse(name).unwrap();
         let mut module = Module::new(target);
         module.global_constants.insert("PROGRAM_BINARY".to_string(), (
-            ExprKind::ConstRef("PHP_BINARY".into()), PhpType::Str,
+            Expr::new(ExprKind::ConstRef("PHP_BINARY".into()), Span::dummy()), PhpType::Str,
         ));
         let default = Expr::new(ExprKind::ConstRef("PROGRAM_BINARY".into()), Span::dummy());
         let sig = signature(vec![("path".into(), PhpType::Str)], vec![Some(default)], vec![true], None);
@@ -126,10 +126,17 @@ fn nested_deferred_default_resolves_to_native_helper() {
     let default = Expr::new(ExprKind::ArrayLiteral(vec![
         Expr::new(ExprKind::Throw(Box::new(exception)), Span::dummy()),
     ]), Span::dummy());
-    let mut helper = crate::ir::Function::new("native_default".into(), crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed);
-    helper.callable_default = Some(default.clone());
-    module.add_closure(helper);
     let sig = signature(vec![("items".into(), PhpType::php_array())], vec![Some(default)], vec![true], None);
+    let mut reflection = crate::ir::Function::new(
+        "__elephc_reflection_default\\native_default".into(),
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed),
+        PhpType::Mixed,
+    );
+    reflection.callable_default = sig.default_value(0);
+    module.add_closure(reflection);
+    let mut helper = crate::ir::Function::new("native_default".into(), crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed);
+    helper.callable_default = Some(sig.default_value(0).expect("present helper default"));
+    module.add_closure(helper);
     assert!(matches!(&resolve_invoker_defaults(&module, None, &sig)[0],
         Some(InvokerDefaultValue::EirHelper(name)) if name == "native_default"));
     assert!(!module.required_runtime_features.eval_bridge);

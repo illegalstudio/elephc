@@ -21,6 +21,107 @@ pub(super) use incdec::native as lower_native_incdec;
 pub(crate) use incdec::step as with_dimension_incdec_value;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
+/// Dispatches a nested named-property root through its exact runtime storage protocol.
+///
+/// The caller has already captured receiver and dimension side effects. This helper keeps the
+/// receiver lease alive while every class arm hands the same attached container to `apply`.
+pub(super) fn lower_runtime_named_property_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    mode: PropertyDimensionFetchMode,
+    apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
+) -> bool {
+    let Some((object, property)) = super::nested_property_updates::named_property_root(target)
+    else { return false; };
+    if !crate::ir_lower::expr::nested_property_requires_runtime_dispatch(ctx, object) {
+        return false;
+    }
+    let mut property_expr = target;
+    while let ExprKind::ArrayAccess { array, .. } = &property_expr.kind {
+        property_expr = array;
+    }
+    let object_value = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
+    let mut receiver = property_write_receiver::PropertyWriteReceiver::new(
+        ctx,
+        object_value,
+        property_expr.span,
+    );
+    receiver.narrow_for_array(ctx, property, &[], property_expr.span);
+    let ty = ctx.builder.value_php_type(receiver.value.value);
+    let borrowed = ctx.emit_value(
+        Op::Borrow,
+        vec![receiver.value.value],
+        None,
+        ty,
+        Op::Borrow.default_effects(),
+        Some(property_expr.span),
+    );
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let handled = magic_index::lower_container(
+        ctx,
+        borrowed,
+        property,
+        property_expr.span,
+        apply,
+        |ctx, object_value, apply| {
+            lower_runtime_named_property_container_without_magic(
+                ctx,
+                object,
+                object_value,
+                property,
+                property_expr,
+                mode,
+                apply,
+            );
+        },
+    );
+    if !handled {
+        lower_runtime_named_property_container_without_magic(
+            ctx,
+            object,
+            borrowed,
+            property,
+            property_expr,
+            mode,
+            apply,
+        );
+    }
+    receiver.finish(ctx, property_expr.span);
+    true
+}
+
+/// Selects declared storage after dynamic and overloaded runtime names are excluded.
+fn lower_runtime_named_property_container_without_magic(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    object_value: LoweredValue,
+    property: &str,
+    property_expr: &Expr,
+    mode: PropertyDimensionFetchMode,
+    apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
+) {
+    if runtime_receivers::lower_nested_container(
+        ctx,
+        object_value,
+        object,
+        property,
+        property_expr,
+        mode,
+        apply,
+    ) {
+        return;
+    }
+    let container = crate::ir_lower::expr::lower_nested_assignment_property_source_from_value(
+        ctx,
+        object,
+        object_value,
+        property,
+        property_expr,
+        mode,
+    );
+    apply(ctx, container);
+}
+
 /// Selects declaration initialization rules for a property used as a dimension container.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum PropertyDimensionFetchMode { Write, ReadWrite }
@@ -185,6 +286,17 @@ pub(super) fn lower_property_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_property_array_element(read, object, property, index)
     });
+    if matches!(&update, Some(ElementUpdate::Compound)) {
+        let target = Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::PropertyAccess {
+                object: Box::new(object.clone()), property: property.into(),
+            }, span)), index: Box::new(index.clone()),
+        }, span);
+        if super::nested_property_updates::static_attached_property_root(ctx, &target) {
+            super::nested_array_writes::lower_nested_array_assign(ctx, &target, value, span);
+            return;
+        }
+    }
     if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
         && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
@@ -718,6 +830,9 @@ fn lower_property_array_assign_value_direct(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
+        crate::ir_lower::array_key_guards::for_declared_array_write(
+            ctx, object, index, value, &[], span,
+        );
         let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
@@ -742,6 +857,9 @@ fn lower_property_array_assign_value_direct(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
+        crate::ir_lower::array_key_guards::for_declared_array_write(
+            ctx, object, index, value, &[], span,
+        );
         let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
@@ -957,15 +1075,20 @@ pub(crate) fn lower_property_array_unset(
         Some(span),
     );
     ctx.builder.set_value_ownership(container.value, Ownership::Borrowed);
+    let prepared = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, index, span);
+    let index = prepared.value;
+    crate::ir_lower::array_key_guards::for_removal(ctx, container, index, span);
     // The runtime flag reports a removed value that may own a cycle-capable graph.
-    ctx.emit_value(
+    let removed = ctx.emit_value(
         remove,
         vec![container.value, index.value],
         None,
         PhpType::Bool,
         remove.default_effects(),
         Some(span),
-    )
+    );
+    prepared.finish(ctx, span);
+    removed
 }
 
 /// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.
@@ -981,32 +1104,24 @@ fn lower_php_array_property_write(
     key_already_diagnosed: bool,
 ) {
     let data = ctx.intern_string(property);
+    let property_ty = object_property_type(ctx, object.value, property)
+        .unwrap_or_else(PhpType::php_array);
     let array = ctx.emit_value(
         Op::PropGetForWrite,
         vec![object.value],
         Some(Immediate::Data(data)),
-        PhpType::php_array(),
+        property_ty,
         Op::PropGetForWrite.default_effects(),
         Some(span),
     );
     ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
     if let Some(index) = index {
-        ctx.emit_void(
-            Op::RuntimeCall,
-            vec![array.value, index.value, value.value],
-            key_already_diagnosed.then_some(Immediate::Bool(true)),
-            effects_lookup::runtime_effects(),
-            Some(span),
+        super::boxed_write_owners::lower_set(
+            ctx, array, index, value, &[], span, key_already_diagnosed,
         );
         release_persisted_string_operand(ctx, index, span);
     } else {
-        ctx.emit_void(
-            Op::MixedArrayAppend,
-            vec![array.value, value.value],
-            None,
-            Op::MixedArrayAppend.default_effects(),
-            Some(span),
-        );
+        super::boxed_write_owners::lower_append(ctx, array, value, span);
     }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));

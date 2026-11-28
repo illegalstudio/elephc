@@ -105,7 +105,7 @@ pub(super) fn register_eval_native_constructor(
     let default_context = super::default_source::declaring_default_context(
         ctx.module, &registration.class_name, "__construct", false,
     );
-    for (index, default) in registration.signature.defaults.iter().enumerate() {
+    for index in 0..registration.signature.defaults.len() {
         // The hidden count slot's synthesized `0` is not a PHP default and must not be reported.
         if !visible_indexes.contains(&index) {
             continue;
@@ -125,10 +125,11 @@ pub(super) fn register_eval_native_constructor(
         ) {
             continue;
         }
+        let reflection_default = registration.signature.reflection_default_expr(index);
         if register_eval_native_param_default_error(ctx, context_source,
-            (&class_name_label, class_name_len), index, default.as_ref(), &default_context,
+            (&class_name_label, class_name_len), index, reflection_default.as_ref(), &default_context,
             "__elephc_eval_register_native_constructor_param_default_error") { continue; }
-        if let Some(default) = default
+        if let Some(default) = registration.signature.default_value(index)
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))
         {
@@ -152,7 +153,7 @@ pub(super) fn register_eval_native_constructor(
             index,
         );
         if ctx.module.functions.iter().any(|function| function.name == helper)
-            && !default.as_ref().is_some_and(crate::types::deferred_defaults::contains_deferred_error)
+            && !reflection_default.as_ref().is_some_and(crate::types::deferred_defaults::contains_deferred_error)
         {
             register_eval_native_constructor_compiled_default(
                 ctx,

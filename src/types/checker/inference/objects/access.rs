@@ -54,12 +54,20 @@ impl Checker {
         if let Some(key) = Self::narrowed_property_env_key(object, property) {
             if let Some(narrowed) = env.get(&key) {
                 if let Ok(obj_ty) = self.infer_type(object, env) {
+                    crate::semantics::nullability::validate_receiver(self.semantic_profile,
+                        self.semantic_source_mode, &obj_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
+                    crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+                        &self.mixed_selection_receiver_view(object, &obj_ty), self.null_probe_operations.contains(&expr.span), false, expr.span)?;
                     self.record_member_receiver_type(expr.span, &obj_ty);
                 }
                 return Ok(narrowed.clone());
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), self.null_probe_operations.contains(&expr.span), false, expr.span)?;
+        crate::semantics::nullability::validate_receiver(self.semantic_profile,
+            self.semantic_source_mode, &obj_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
         // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
@@ -184,6 +192,8 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), self.null_probe_operations.contains(&expr.span), true, expr.span)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
@@ -216,12 +226,20 @@ impl Checker {
         nullsafe: bool,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), self.null_probe_operations.contains(&expr.span), nullsafe, expr.span)?;
+        if !nullsafe {
+            crate::semantics::nullability::validate_receiver(self.semantic_profile,
+                self.semantic_source_mode, &obj_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
+        }
         self.record_member_receiver_type(expr.span, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
         }
 
         let property_ty = self.infer_type(property, env)?;
+        crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+            &property_ty, property.span, "dynamic property names", |member| self.valid_dynamic_property_name_type(member))?;
         if !self.valid_dynamic_property_name_type(&property_ty) {
             return Err(CompileError::new(
                 property.span,

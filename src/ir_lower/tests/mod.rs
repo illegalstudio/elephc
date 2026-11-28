@@ -37,7 +37,30 @@ macro_rules! supported_target_cases {
     };
 }
 
+/// Schedules opaque eval with each profile and optimizer setting in its own native test.
+macro_rules! opaque_eval_profile_cases {
+    ($name:ident, $verify:ident) => {
+        #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+        mod $name {
+            /// Verifies permissive execution without optimization.
+            #[test]
+            fn permissive_unoptimized() { super::$verify(false, false); }
+            /// Verifies permissive execution with optimization.
+            #[test]
+            fn permissive_optimized() { super::$verify(false, true); }
+            /// Verifies strict execution without optimization.
+            #[test]
+            fn strict_unoptimized() { super::$verify(true, false); }
+            /// Verifies strict execution with optimization.
+            #[test]
+            fn strict_optimized() { super::$verify(true, true); }
+        }
+    };
+}
+
 mod aggregate_operand_owners;
+mod strict_comparator_callbacks;
 mod boxed_operators;
 mod loose_comparison_batch;
 mod argument_evaluation_owners;
@@ -67,11 +90,18 @@ mod web_superglobal_assignments;
 mod conditional_assignment_owners;
 mod borrowed_string_reads;
 mod mbstring_fast_semantics;
+mod builtin_semantic_profile;
 mod buffer_element_updates;
 mod ref_local_append;
 mod foreach_hash_scalars;
 mod element_value_views;
 mod settype_foreach;
+mod strict_static_bindings;
+mod strict_array_key_shapes;
+mod strict_array_key_folding;
+mod strict_array_key_read_guards;
+mod spl_intrinsic_owners;
+mod raw_offset_keys;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
@@ -139,6 +169,7 @@ mod scalar_load_owners;
 mod buffer_lengths;
 mod branch_conditions;
 mod boxed_array_write_owners;
+mod array_write_pending_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
 mod keyed_array_kernels;
@@ -758,3 +789,171 @@ echo checks($argc);
         );
     }
 }
+
+mod strict_abs;
+
+mod strict_pow;
+mod strict_numeric_aggregates;
+mod strict_numeric_builtins;
+mod strict_division_modulo;
+mod strict_numeric_domains;
+mod strict_unary_domains;
+
+mod strict_conversion_parameters;
+mod strict_comparisons;
+mod strict_strings;
+mod strict_string_native_updates;
+
+mod strict_conversion_returns;
+
+mod strict_inferred_returns;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod native_module;
+
+mod strict_conditional_results;
+
+mod strict_typed_initializers;
+
+mod strict_typed_stores;
+mod strict_numeric_locals;
+mod strict_binding_alternatives;
+mod strict_copy_origins;
+mod strict_structural_locals;
+mod strict_resource_locals;
+
+mod strict_defaults;
+
+mod strict_default_evidence;
+
+mod strict_trusted_constants;
+
+mod strict_trusted_defaults;
+
+mod strict_descriptor_parameters;
+
+mod strict_nominal_unions;
+
+mod strict_container_unions;
+
+mod strict_default_producers;
+
+mod strict_property_producers;
+
+mod strict_global_producers;
+mod strict_checked_casts;
+mod strict_checked_radix;
+mod strict_builtin_casts;
+mod strict_settype;
+mod strict_settype_domains;
+mod strict_object_casts;
+mod strict_object_cast_domains;
+mod strict_gmp_intval;
+
+mod strict_settype_collections;
+mod strict_string_conversions;
+
+mod mixed_literal_key_guards;
+
+mod array_default_keys;
+
+mod static_unpack_keys;
+
+mod semantic_sources;
+mod duplicate_unpack_values;
+
+mod reflection_array_evaluation;
+
+mod reflection_guarded_properties;
+
+mod constructor_string_owners;
+mod reflection_constructor_arrays;
+mod declared_callable_profiles;
+mod array_key_foreach_guards;
+mod array_key_write_guards;
+mod array_access_write_kinds;
+
+mod boolean_offset_writes;
+
+mod property_key_writes;
+
+mod array_key_removals;
+
+mod array_key_missing_reads;
+
+mod eval_array_key_guards;
+
+mod builtin_key_inputs;
+
+mod builtin_key_reflection;
+
+mod array_parent_key_order;
+
+mod array_parent_places;
+mod false_parent_completion;
+mod owned_reference_keys;
+mod escaped_reference_sources;
+mod array_key_admission;
+
+mod fresh_reference_sources;
+
+mod unused_reference_capture;
+
+mod fresh_reference_arguments;
+
+mod fresh_member_reference_arguments;
+
+mod reference_binding_alternatives;
+
+mod conditional_parameter_origins;
+mod eval_binding_ends;
+mod eval_parameter_origins;
+mod conditional_reference_origins;
+mod open_parameter_contracts;
+
+mod captured_binding_origins;
+
+mod captured_reference_producers;
+
+mod captured_value_producers;
+
+mod foreach_binding_ends;
+
+mod global_value_snapshots;
+
+mod conditional_static_origins;
+
+mod global_binding_leases;
+
+mod global_publication_owners;
+
+mod reached_global_producers;
+
+mod conditional_global_origins;
+
+mod global_producer_boundaries;
+
+mod initialized_frame_reads;
+mod initialized_scope_reads;
+mod initialized_extended_reads;
+
+mod initialized_eval_reads;
+
+mod initialized_global_imports;
+
+mod initialized_object_reads;
+
+mod initialized_boxed_reads;
+
+mod initialized_magic_reads;
+mod initialized_admission;
+
+mod indexed_reads;
+mod nullable_receivers;
+mod nullable_descriptors;
+mod nullable_declarations;
+
+mod strict_mixed_operands;
+mod strict_mixed_builtins;
+mod strict_array_contracts;
+
+mod strict_member_promises;

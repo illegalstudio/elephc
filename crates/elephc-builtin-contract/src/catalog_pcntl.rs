@@ -53,7 +53,7 @@ const fn pcntl_contract_with_min_args(
     }
 }
 
-/// Builds one Elephc-only PCNTL extension contract hidden by `--strict-php`.
+/// Builds one Elephc-only PCNTL extension contract hidden by `--php-only`.
 const fn pcntl_extension_contract(
     name: &'static str,
     params: &'static [ParamSpec],

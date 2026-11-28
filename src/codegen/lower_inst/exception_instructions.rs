@@ -18,7 +18,7 @@ pub(super) fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instru
     super::super::lower_term::lower_throw_value(ctx, value)
 }
 
-/// Lowers a static-message catchable PHP `Error` without evaluating later operands.
+/// Lowers a typed static-message PHP failure without evaluating later operands.
 pub(super) fn lower_throw_error(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if !inst.operands.is_empty() {
         return Err(CodegenIrError::invalid_module(format!(
@@ -34,7 +34,13 @@ pub(super) fn lower_throw_error(ctx: &mut FunctionContext<'_>, inst: &Instructio
         .get(data.as_raw() as usize)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?
         .clone();
-    exceptions::emit_error(ctx, &message);
+    match inst.op {
+        Op::ThrowTypeError => exceptions::emit_type_error(ctx, &message),
+        Op::ThrowValueError => exceptions::emit_value_error(ctx, &message),
+        Op::ThrowArithmeticError => exceptions::emit_arithmetic_error(ctx, &message),
+        Op::ThrowOutOfBounds => exceptions::emit_out_of_bounds(ctx, &message),
+        _ => exceptions::emit_error(ctx, &message),
+    }
     Ok(())
 }
 

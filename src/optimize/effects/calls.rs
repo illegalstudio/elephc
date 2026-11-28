@@ -22,6 +22,8 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let arg_types = semantic_optimizer_arg_types(def, args);
             let input = crate::builtins::semantics::BuiltinSemanticInput {
+                semantic_profile: crate::optimize::semantic_context::active_profile(),
+                source_mode: crate::optimize::semantic_context::active_source_mode(),
                 name: def.name,
                 args,
                 arg_types: &arg_types,
@@ -38,7 +40,8 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
                             .combine(super::callable_value_binding_effect(callback, args))
                     })
                     .unwrap_or_else(conservative_call_effect);
-                return Effect::from_eir(intrinsic_effects).combine(callback_effect);
+                let boundary = crate::builtins::semantics::comparison_boundary_effects(def, &input);
+                return Effect::from_eir(intrinsic_effects | boundary).combine(callback_effect);
             }
             Effect::from_eir(effects)
         } else {
@@ -128,7 +131,8 @@ fn semantic_optimizer_arg_types(
             // A runtime conversion descriptor consumes the original PHP value, so a
             // checked parameter type cannot describe a non-literal source expression.
             _ if matches!(def.spec.semantics.argument_lowering,
-                crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced) => PhpType::Mixed,
+                crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced
+                    | crate::builtins::semantics::BuiltinArgumentLowering::NumericParameters(_)) => PhpType::Mixed,
             _ => def
                 .params
                 .get(index)
@@ -148,13 +152,15 @@ fn closure_body_call_effect(callee: &Expr) -> Option<Effect> {
     let ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
         captures, capture_refs, by_ref_return, .. } = &callee.kind else { return None; };
     let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
+    let forms_references = !references.is_empty();
     references.extend(capture_refs.iter().cloned());
     let values = closure_value_binding_names(params, captures, capture_refs,
         variadic.as_deref(), *variadic_by_ref);
     let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
         params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
-    Some(with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
-        with_reference_parameter_scope(*by_ref_return, references, || block_effect(body)))))
+    let effect = with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
+        with_reference_parameter_scope(*by_ref_return, references, || block_effect(body))));
+    Some(crate::optimize::effect_analysis::parameter_binding_effect(false, forms_references, effect))
 }
 
 /// Computes the effect for an expression that may be called at runtime.

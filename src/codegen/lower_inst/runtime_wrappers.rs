@@ -40,7 +40,8 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         // A transform that persists its result (`strtoupper`) must not be copied again here.
         let owns_string_return = sig.return_type.codegen_repr() == PhpType::Str
             && super::builtin_returns_owned_string(name);
-        return emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return, false);
+        return emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return,
+            builtin_uses_prepared_callable_body(name, ctx.module.semantic_profile));
     };
     if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
         let label = ctx.next_global_label("callable_invoker");
@@ -48,6 +49,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             ctx.module, None, sig,
         );
         let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+            semantic_profile: ctx.module.semantic_profile,
             label: &label,
             sig,
             captures: &[],
@@ -72,6 +74,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         ctx.module, None, sig,
     );
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        semantic_profile: ctx.module.semantic_profile,
         label: &label,
         sig,
         captures: &[],
@@ -155,6 +158,7 @@ fn emit_runtime_callable_invoker_named(
     }
     let label = ctx.next_global_label("callable_invoker");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        semantic_profile: ctx.module.semantic_profile,
         label: &label,
         sig,
         captures,
@@ -215,13 +219,13 @@ pub(in crate::codegen) fn emit_runtime_builtin_wrapper_inline(
     ctx: &mut FunctionContext<'_>,
     name: &str,
     sig: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<String> {
     emit_runtime_call_wrapper_inline(
         ctx,
         name,
         sig,
-        RuntimeCallWrapperKind::Builtin { strict_php },
+        RuntimeCallWrapperKind::Builtin { php_only },
     )
 }
 
@@ -261,7 +265,7 @@ pub(in crate::codegen) fn emit_runtime_extern_wrapper_inline(
 /// Kind of call instruction used by a descriptor entry wrapper.
 #[derive(Clone, Copy)]
 enum RuntimeCallWrapperKind {
-    Builtin { strict_php: bool },
+    Builtin { php_only: bool },
     Extern,
 }
 
@@ -273,8 +277,8 @@ fn emit_runtime_call_wrapper_inline(
     kind: RuntimeCallWrapperKind,
 ) -> Result<String> {
     let cached = match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
-            ctx.shared.runtime_builtin_wrapper(name, sig, strict_php)
+        RuntimeCallWrapperKind::Builtin { php_only } => {
+            ctx.shared.runtime_builtin_wrapper(name, sig, php_only)
         }
         RuntimeCallWrapperKind::Extern => ctx.shared.runtime_extern_wrapper(name, sig),
     };
@@ -291,9 +295,9 @@ fn emit_runtime_call_wrapper_inline(
     // emitted. Publishing the reservation here makes that recursion reuse this entry
     // instead of recursively cloning and lowering the same wrapper forever.
     match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
+        RuntimeCallWrapperKind::Builtin { php_only } => {
             ctx.shared
-                .cache_runtime_builtin_wrapper(name, sig, strict_php, &label)
+                .cache_runtime_builtin_wrapper(name, sig, php_only, &label)
         }
         RuntimeCallWrapperKind::Extern => {
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
@@ -322,6 +326,21 @@ fn emit_runtime_call_wrapper_inline(
     Ok(label)
 }
 
+/// Keeps wrapper construction and descriptor return ownership on the same full PHP-body contract.
+fn builtin_uses_prepared_callable_body(name: &str, profile: elephc_semantics::SemanticProfile) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        use crate::builtins::semantics::*;
+        matches!(def.spec.semantics.callable, BuiltinCallablePolicy::Prepared(_))
+            || profile.contains(elephc_semantics::StrictFeature::Comparisons)
+                && def.spec.comparison_policy().is_some()
+            || matches!(def.spec.semantics.argument_lowering, BuiltinArgumentLowering::WeakStringUnion { .. })
+            || def.spec.semantics.runtime_functions == BuiltinRuntimeFunctions::None
+                && matches!(def.spec.semantics.lowering, BuiltinLowering::Eir(_))
+                && elephc_builtin_contract::lookup(name)
+                    .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
+    })
+}
+
 /// Builds the EIR body for a PHP-ABI wrapper around a builtin or extern call.
 fn build_runtime_call_wrapper_function(
     module: &mut Module,
@@ -330,27 +349,10 @@ fn build_runtime_call_wrapper_function(
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
-    if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
-        // GMP's homes lower through the prelude helper graph, which first-class callable
-        // wrappers must reproduce. Other EIR-graph homes already build their own callable
-        // body through the generic wrapper path, so widening this predicate would duplicate
-        // their allocation graph (for example `gc_status`).
-        let prepared_eir_lowering = crate::builtins::registry::lookup(name).is_some_and(|def| {
-            def.spec.semantics.runtime_functions
-                == crate::builtins::semantics::BuiltinRuntimeFunctions::None
-                && matches!(
-                    def.spec.semantics.lowering,
-                    crate::builtins::semantics::BuiltinLowering::Eir(_)
-                )
-                && elephc_builtin_contract::lookup(name)
-                    .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
-        });
-        if prepared_eir_lowering || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
-            def.spec.semantics.argument_lowering,
-            crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
-        )) {
+    if let RuntimeCallWrapperKind::Builtin { php_only } = kind {
+        if builtin_uses_prepared_callable_body(name, module.semantic_profile) {
             let function = crate::ir_lower::lower_prepared_builtin_callable(
-                module, label, name, sig, strict_php,
+                module, label, name, sig, php_only,
             );
             crate::ir::validate_function(&function).map_err(|error|
                 CodegenIrError::invalid_module(format!("prepared builtin callable: {error:?}")))?;
@@ -363,7 +365,7 @@ fn build_runtime_call_wrapper_function(
         if packed_merge {
             // Keep the public variadic signature, but validate and unpack it before
             // crossing the two-operand backend boundary. Full body lowering owns the pack.
-            let function = crate::ir_lower::lower_array_merge_callable(module, label, sig, strict_php);
+            let function = crate::ir_lower::lower_array_merge_callable(module, label, sig, php_only);
             crate::ir::validate_function(&function).map_err(|error| {
                 CodegenIrError::invalid_module(format!("array merge callable wrapper: {error:?}"))
             })?;
@@ -376,7 +378,7 @@ fn build_runtime_call_wrapper_function(
         if boxed_user_sort {
             // The graph owns reference capture and normal/exceptional publication. A raw
             // RuntimeCall would bypass that graph and treat a Mixed cell as an array header.
-            let function = crate::ir_lower::lower_boxed_usort_callable(module, label, sig, strict_php);
+            let function = crate::ir_lower::lower_boxed_usort_callable(module, label, sig, php_only);
             crate::ir::validate_function(&function).map_err(|error| {
                 CodegenIrError::invalid_module(format!("boxed sort callable wrapper: {error:?}"))
             })?;
@@ -434,7 +436,7 @@ fn build_runtime_call_wrapper_function(
         operands.push(decode_invocation_scope(&mut builder, profile));
     }
     let result = match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
+        RuntimeCallWrapperKind::Builtin { php_only } => {
             let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
                 CodegenIrError::invalid_module(format!(
                     "callable wrapper {} is not registry-backed",
@@ -445,7 +447,8 @@ fn build_runtime_call_wrapper_function(
                 builder: &mut builder,
                 data: &mut module.data,
                 functions: &module.functions,
-                strict_php,
+                php_only,
+                semantic_profile: module.semantic_profile,
             };
             let result = crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
@@ -556,12 +559,27 @@ struct WrapperBuiltinLoweringContext<'a, 'f> {
     data: &'a mut crate::ir::DataPool,
     /// Lowered functions, for the callee signature a generated wrapper call must match.
     functions: &'a [crate::ir::Function],
-    strict_php: bool,
+    php_only: bool,
+    semantic_profile: elephc_semantics::SemanticProfile,
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext
     for WrapperBuiltinLoweringContext<'_, '_>
 {
+    /// Uses the containing module's profile rather than a permissive synthetic default.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile { self.semantic_profile }
+
+    /// Synthetic callable bodies implement public builtin contracts despite being generated code.
+    fn source_mode(&self) -> crate::source::SourceMode { crate::source::SourceMode::Php }
+
+    /// Refuses graph lowering in the flat adapter, which Prepared descriptors bypass explicitly.
+    fn emit_numeric_binary(
+        &mut self, _left: ValueId, _operation: crate::parser::ast::BinOp, _right: ValueId,
+        _source_mode: crate::source::SourceMode, _span: crate::span::Span,
+    ) -> std::result::Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new("numeric operator graphs require a prepared builtin wrapper"))
+    }
+
     /// Returns PHP metadata attached to one synthetic-wrapper operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)
@@ -645,8 +663,9 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
                     arguments: crate::ir::RuntimeArgumentLayout::Values,
-                    strict_php: self.strict_php,
+                    php_only: self.php_only,
                     strict_types: None,
+                    strict_comparisons: self.semantic_profile.contains(elephc_semantics::StrictFeature::Comparisons),
                 }
             }
             target => target,
@@ -872,7 +891,7 @@ mod tests {
                 "clone_scope_probe",
                 "clone",
                 &sig,
-                RuntimeCallWrapperKind::Builtin { strict_php: false },
+                RuntimeCallWrapperKind::Builtin { php_only: false },
             )
             .unwrap();
             assert_eq!(sig.params.len(), 2, "{target}");
@@ -913,7 +932,7 @@ mod tests {
                 "debug_backtrace_array_probe",
                 "debug_backtrace",
                 &sig,
-                RuntimeCallWrapperKind::Builtin { strict_php: false },
+                RuntimeCallWrapperKind::Builtin { php_only: false },
             ).unwrap();
             assert_eq!(wrapper.return_php_type, expected, "{target}");
             assert_eq!(
@@ -944,7 +963,7 @@ mod tests {
             let sig = crate::builtins::registry::first_class_callable_sig("gc_status").unwrap();
             let wrapper = build_runtime_call_wrapper_function(
                 &mut module, "gc_status_owner_probe", "gc_status", &sig,
-                RuntimeCallWrapperKind::Builtin { strict_php: false },
+                RuntimeCallWrapperKind::Builtin { php_only: false },
             ).unwrap();
             let allocations: Vec<_> = wrapper.instructions.iter()
                 .filter(|inst| matches!(inst.op, Op::HashNew | Op::MixedBox))
@@ -955,6 +974,29 @@ mod tests {
                 assert_eq!(wrapper.value(allocation.result.unwrap()).unwrap().ownership, Ownership::Owned);
             }
             assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::Release), "{target}");
+        }
+    }
+    /// Strict comparison descriptors share the full body and hidden caller scope on every target.
+    #[test]
+    fn strict_comparison_callable_wrappers_keep_guards_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for selected in [false, true] {
+                for name in ["in_array", "sort"] {
+                    let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+                    module.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE
+                        .with(elephc_semantics::StrictFeature::Comparisons, selected);
+                    let sig = crate::builtins::registry::first_class_callable_sig_with_semantics(name,
+                        module.semantic_profile).unwrap();
+                    let sig = runtime_builtin_wrapper_sig(name, &sig);
+                    let wrapper = build_runtime_call_wrapper_function(&mut module, "comparison_wrapper", name,
+                        &sig, RuntimeCallWrapperKind::Builtin { php_only: false }).unwrap();
+                    crate::ir::validate_function(&wrapper).unwrap();
+                    assert_eq!(wrapper.flags.is_builtin_contract_wrapper, selected, "{target} {name}");
+                    assert_eq!(wrapper.params.len(), sig.params.len() + usize::from(selected), "{target} {name}");
+                    assert_eq!(module.data.strings.iter().any(|message|
+                        message.contains("--strict-comparisons:")), selected, "{target} {name}");
+                }
+            }
         }
     }
 }

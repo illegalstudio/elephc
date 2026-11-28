@@ -272,3 +272,11 @@ fn test_question_vs_question_question() {
 }
 
 // --- Heredoc / Nowdoc ---
+
+
+/// Numeric signs stay distinct tokens so the parser can retain unary-plus provenance and zero signs.
+#[test]
+fn test_unary_ieee_sign_tokens_retain_float_magnitude() {
+    assert_eq!(tokens("<?php +0.0; -0.0;"), vec![Token::OpenTag, Token::Plus, Token::FloatLiteral(0.0),
+        Token::Semicolon, Token::Minus, Token::FloatLiteral(0.0), Token::Semicolon, Token::Eof]);
+}

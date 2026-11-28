@@ -32,6 +32,7 @@ pub(super) fn normalize(checker: &mut Checker, program: &Program) {
             .any(|default| unresolved_constant(default, checker, &globals, &HashSet::new()).is_some())
     });
     let mut defines = DefineFacts::default();
+    defines.semantic_profile = checker.semantic_profile;
     if needs_defines {
         collect_defines(program, &mut defines);
     }
@@ -147,10 +148,13 @@ pub(crate) fn collect_globals(program: &Program, globals: &mut HashMap<String, E
 /// Named arguments can appear in any order, so `constant_name` is looked up wherever it is.
 /// A literal unpack reaches the call as a positional argument after PHP's compile-time
 /// expansion, so `define(...["X", 7])` defines `X` exactly like `define("X", 7)`.
-fn literal_define_name(args: &[Expr]) -> Option<String> {
+fn literal_define_name(
+    args: &[Expr],
+    profile: elephc_semantics::SemanticProfile,
+) -> Option<String> {
     // Let the shared planner expand literal associative unpacks; its integer-key order is
     // PHP array order, not a hard-coded key `0`.
-    let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let expanded = crate::types::call_args::expand_static_assoc_spread_args(args, profile);
     expanded
         .iter()
         .find_map(named_define_name)
@@ -192,6 +196,8 @@ struct DefineFacts {
     names: HashSet<String>,
     /// Whether any body calls `eval()`, which can define a constant after schema creation.
     contains_eval: bool,
+    /// Semantic key policy used to classify literal unpack arguments.
+    semantic_profile: elephc_semantics::SemanticProfile,
 }
 
 /// Collects literal `define("NAME", …)` names and whether the program calls `eval()`.
@@ -336,7 +342,7 @@ fn collect_defines_expr(expr: &Expr, defines: &mut DefineFacts) {
         ExprKind::FunctionCall { name, args } => {
             let key = crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'));
             if key == "define" {
-                if let Some(name) = literal_define_name(args) {
+                if let Some(name) = literal_define_name(args, defines.semantic_profile) {
                     defines.names.insert(name.trim_start_matches('\\').to_string());
                 }
             }
@@ -596,6 +602,14 @@ fn replace_unresolved_constants(
 pub(super) fn bind_constants(
     expr: &mut Expr, owner: &str, checker: &Checker, globals: &HashMap<String, Expr>, depth: usize,
 ) {
+    bind_constant_reads(expr, owner, checker, globals, depth, true);
+}
+
+/// Resolves constant reads, optionally preserving their enclosing operations for strict checks.
+pub(super) fn bind_constant_reads(
+    expr: &mut Expr, owner: &str, checker: &Checker, globals: &HashMap<String, Expr>,
+    depth: usize, fold: bool,
+) {
     if depth > 64 { return; }
     let replacement = match &expr.kind {
         ExprKind::ConstRef(name) => globals.get(name.as_str().trim_start_matches('\\'))
@@ -605,7 +619,7 @@ pub(super) fn bind_constants(
                     || matches!(constant.value, elephc_builtin_contract::ConstValue::StreamResource(_))
                 { return None; }
                 crate::types::predefined_constants::literal_of(constant.value)
-                    .map(|kind| Expr::new(kind, expr.span))
+                    .map(|kind| expr.with_kind(kind))
             }).map(|value| (owner.to_string(), value)),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             let class = match receiver.written_class_receiver() {
@@ -619,12 +633,12 @@ pub(super) fn bind_constants(
         _ => None,
     };
     if let Some((scope, mut value)) = replacement {
-        bind_constants(&mut value, &scope, checker, globals, depth + 1);
+        bind_constant_reads(&mut value, &scope, checker, globals, depth + 1, fold);
         value.span = expr.span;
         *expr = value;
         return;
     }
-    let mut visit = |value: &mut Expr| bind_constants(value, owner, checker, globals, depth + 1);
+    let mut visit = |value: &mut Expr| bind_constant_reads(value, owner, checker, globals, depth + 1, fold);
     match &mut expr.kind {
         ExprKind::ArrayLiteral(items) | ExprKind::NewObject { args: items, .. }
         | ExprKind::NewScopedObject { args: items, .. } => items.iter_mut().for_each(&mut visit),
@@ -647,10 +661,12 @@ pub(super) fn bind_constants(
             if let Some(default) = default { visit(default); }
         }
         ExprKind::ArrayAccess { array, index } => { visit(array); visit(index); }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => visit(value),
         _ => {}
     }
-    *expr = crate::optimize::fold_constant_expression(expr.clone());
-    prune_literal_branches(expr);
+    if fold {
+        *expr = crate::optimize::fold_constant_expression(expr.clone());
+        prune_literal_branches(expr);
+    }
 }

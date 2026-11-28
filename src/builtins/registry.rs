@@ -162,15 +162,29 @@ pub fn dynamic_wrapper_prelude_callees(name: &str) -> &'static [&'static str] {
 }
 
 /// Returns every compiler prelude function a builtin's callable wrapper may call directly: the
-/// runtime-selected wrapper callees, and the XML and GMP helpers their lowerings forward to.
+/// semantic requirements, runtime-selected wrapper callees, and XML and GMP forwarding helpers.
 ///
 /// A wrapper can only be built when all of them are declared, which happens when the program
 /// calls the builtin or names it as a literal where a declared `callable` keeps the string.
 pub fn callable_wrapper_prelude_helpers(name: &str) -> Vec<&'static str> {
     let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
     let mut helpers = dynamic_wrapper_prelude_callees(&key).to_vec();
+    if let Some(definition) = lookup(&key) {
+        if let crate::builtins::semantics::BuiltinRequirements::Static(requirements) =
+            definition.spec.semantics.requirements
+        {
+            helpers.extend(requirements.iter().filter_map(|requirement| match requirement {
+                crate::builtins::semantics::BuiltinRequirement::PreludeHelper(helper) => {
+                    Some(*helper)
+                }
+                _ => None,
+            }));
+        }
+    }
     helpers.extend_from_slice(crate::builtins::xml::prelude_helpers_for(&key));
     helpers.extend(crate::builtins::gmp::prelude_helpers_for(&key));
+    helpers.sort_unstable();
+    helpers.dedup();
     helpers
 }
 
@@ -285,6 +299,12 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 ///
 /// Returns `None` if the builtin is not registered.
 pub fn function_sig(name: &str) -> Option<FunctionSig> {
+    function_sig_with_semantics(name, elephc_semantics::SemanticProfile::PERMISSIVE, crate::source::SourceMode::Php)
+}
+
+/// Resolves a builtin signature without discarding the caller's semantic and source policies.
+pub fn function_sig_with_semantics(name: &str, semantic_profile: elephc_semantics::SemanticProfile,
+    source_mode: crate::source::SourceMode) -> Option<FunctionSig> {
     let def = lookup(name)?;
     // A neutral PHP array declaration does not distinguish indexed arrays from
     // hashes. When checker and EIR share result typing, callable signatures must
@@ -297,6 +317,8 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
         ) => {
             let arg_types = def.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>();
             resolve(&crate::builtins::semantics::BuiltinSemanticInput {
+                semantic_profile,
+                source_mode,
                 name: def.name,
                 args: &[],
                 arg_types: &arg_types,
@@ -305,8 +327,12 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
         }
         _ => def.return_type.clone(),
     };
+    let preserve_numeric = matches!(def.spec.semantics.argument_lowering,
+        crate::builtins::semantics::BuiltinArgumentLowering::NumericParameters(_))
+        && def.spec.semantics.argument_lowering.with_semantics(semantic_profile, source_mode)
+            == crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced;
     Some(FunctionSig {
-        params: def.params.clone(),
+        params: def.params.iter().map(|(name, ty)| (name.clone(), if preserve_numeric { PhpType::Mixed } else { ty.clone() })).collect(),
         param_type_exprs: vec![None; def.params.len()],
         param_attributes: vec![Vec::new(); def.params.len()],
         defaults: def.defaults.clone(),
@@ -357,6 +383,12 @@ fn php_type_may_be_callable(ty: &PhpType) -> bool {
 ///
 /// Returns `None` if the builtin is not registered.
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
+    first_class_callable_sig_with_semantics(name, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Derives a public builtin callable signature using its module's immutable guarantees.
+pub fn first_class_callable_sig_with_semantics(name: &str,
+    semantic_profile: elephc_semantics::SemanticProfile) -> Option<FunctionSig> {
     let def = lookup(name)?;
     if matches!(
         def.spec.semantics.callable,
@@ -364,7 +396,7 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     ) {
         return None;
     }
-    let sig = function_sig(def.name)?;
+    let sig = function_sig_with_semantics(def.name, semantic_profile, crate::source::SourceMode::Php)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
     truncate_callable_sig_to_enforced_arity(def, &mut fcc_sig);
     refine_first_class_callable_sig(def, &mut fcc_sig);
@@ -419,6 +451,10 @@ pub fn first_class_callable_rejection(name: &str) -> Option<&'static str> {
 
 /// Applies first-class-callable refinements that are broader in the direct builtin spec.
 fn refine_first_class_callable_sig(def: &BuiltinDef, sig: &mut FunctionSig) {
+    if let crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) = def.spec.semantics.callable {
+        target.refine_first_class_callable_sig(sig);
+        return;
+    }
     if let crate::builtins::semantics::BuiltinLowering::Runtime(
         crate::ir::RuntimeCallTarget::Function(target),
     ) = def.spec.semantics.lowering
@@ -766,6 +802,14 @@ mod tests {
             names_vec, sorted_vec,
             "names() must return sorted order for deterministic assembly layout"
         );
+    }
+
+    /// Semantic prelude requirements also gate runtime-selected callable wrappers.
+    #[test]
+    fn callable_wrapper_helpers_include_semantic_requirements() {
+        let helpers = callable_wrapper_prelude_helpers("settype");
+        assert!(helpers.contains(&crate::object_cast_prelude::CAST_HELPER));
+        assert!(helpers.contains(&crate::object_cast_prelude::DYNAMIC_CAST_HELPER));
     }
 
     /// Verifies the derived arity error mirrors the legacy "<name>() takes …" messages.

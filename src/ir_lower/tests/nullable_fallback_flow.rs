@@ -372,12 +372,15 @@ fn test_nullable_fallback_flow_r37_synthetic_hash_return() {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), target);
         for (function_name, expected) in [
-            ("__elephc_opcache_ini_all_details", IrType::Heap(IrHeapKind::Hash)),
+            ("__elephc_opcache_ini_all_details", IrType::Heap(IrHeapKind::Mixed)),
             ("__elephc_opcache_ini_all_plain", IrType::Heap(IrHeapKind::Mixed)),
             ("typedHash", IrType::Heap(IrHeapKind::Hash)),
         ] {
             let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
             assert_eq!(function.return_type, expected, "{name}: {function_name}");
+            if function_name.starts_with("__elephc_opcache_ini_") {
+                assert!(function.return_php_type.is_php_array(), "{name}: {function_name} must expose PHP array semantics");
+            }
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }

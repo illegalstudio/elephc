@@ -135,6 +135,9 @@ fn print_instruction(out: &mut String, function: &Function, data: &DataPool, ins
     if let Some(immediate) = &inst.immediate {
         print_immediate(out, data, immediate);
     }
+    if inst.op == crate::ir::Op::BindLocalRefContract {
+        let _ = write!(out, " contract={}", inst.result_php_type);
+    }
     if !inst.effects.is_empty() {
         let _ = write!(out, " ; effects: {}", inst.effects.names().join(", "));
     }
@@ -186,8 +189,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PromotableArray => {
             let _ = write!(out, " promotable_array");
         }
-        Immediate::ReflectionConstruction => {
-            let _ = write!(out, " reflection_construction");
+        Immediate::CheckedElementRead => { let _ = write!(out, " checked_element_read"); }
+        Immediate::InitializedGetter { method, property } => {
+            let _ = write!(out, " initialized_getter[{},{}]", method.as_raw(), property.as_raw());
+        }
+        Immediate::ReflectionConstruction { uses_runtime_arg_container } => {
+            let _ = write!(out, " reflection_construction[arguments={uses_runtime_arg_container}]");
         }
         Immediate::DeclaredCallableNames => {
             let _ = write!(out, " declared_callable_names");
@@ -203,6 +210,16 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::LocalSlotPair { first, second } => {
             let _ = write!(out, " slots[{},{}]", first.as_raw(), second.as_raw());
+        }
+        Immediate::EvalScopeStore(metadata) => {
+            let crate::ir::EvalScopeStoreImmediate { name, contract, role } = &**metadata;
+            let value = data.global_names.get(name.as_raw() as usize)
+                .map(String::as_str).unwrap_or("<unknown>");
+            let _ = write!(out, " scope[{}:{:?}] origin={contract:?} role={role:?}", name.as_raw(), value);
+        }
+        Immediate::EvalBindingCopy { source, destination, owner } => {
+            let _ = write!(out, " source[{}] destination[{}] owner[{}]",
+                source.as_raw(), destination.as_raw(), owner.as_raw());
         }
         Immediate::PropertyRefCell {
             first,
@@ -235,20 +252,30 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::RuntimeRef(id) => {
             let _ = write!(out, " runtime#{}", id.0);
         }
-        Immediate::ProfiledData { data: id, strict_php } => {
+        Immediate::StrictExit(id) => {
+            let _ = write!(out, " data#{} strict_types", id.as_raw());
+        }
+        Immediate::ProfiledData { data: id, profile } => {
             let _ = write!(
                 out,
-                " data#{} profile={}",
+                " data#{} profile={} semantics=v{}:{:016x}",
                 id.as_raw(),
-                if *strict_php { "strict-php" } else { "elephc" }
+                if profile.php_only() { "php-only" } else { "elephc" },
+                elephc_semantics::SEMANTICS_ABI_VERSION,
+                profile.semantics().bits()
             );
         }
         Immediate::RuntimeCall(target) => {
             let _ = write!(out, " runtime.{}", target.as_eir());
+            if let crate::ir::RuntimeCallTarget::NumericFunction { policy, .. }
+                | crate::ir::RuntimeCallTarget::NumericUnary { policy, .. } = target {
+                let _ = write!(out, " numeric-policy={:016x}", policy.requirements().bits());
+            }
             if let crate::ir::RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } = target {
                 let _ = write!(out, " class={class_id} slot={slot} static={is_static}");
             }
-            if let crate::ir::RuntimeCallTarget::ProfiledFunction { target, strict_types, arguments, .. } = target {
+            if let crate::ir::RuntimeCallTarget::ProfiledFunction { target, strict_types, strict_comparisons, arguments, .. } = target {
+                if *strict_comparisons { let _ = write!(out, " strict_comparisons=1"); }
                 if *arguments == crate::ir::RuntimeArgumentLayout::IndexedArray {
                     let _ = write!(out, " arguments=indexed-array");
                 }
@@ -281,8 +308,11 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PropertyRef { class, property } => {
             let _ = write!(out, " property#{}::{}", class, property);
         }
-        Immediate::ReflectionPropertyRef { class, property } => {
+        Immediate::ReflectionPropertyRef { class, property, profile } => {
             let _ = write!(out, " reflection-property#{}::{}", class, property);
+            if profile.semantics() != elephc_semantics::SemanticProfile::PERMISSIVE {
+                let _ = write!(out, " semantics={:#x}", profile.semantics().bits());
+            }
         }
         Immediate::FieldRef { layout, field } => {
             let _ = write!(out, " field#{}::{}", layout, field);
@@ -298,6 +328,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::TypePredicate(predicate) => {
             let _ = write!(out, " {}", predicate.as_eir());
+        }
+        Immediate::NumericOperation { op, policy } => {
+            let _ = write!(out, " {} numeric-policy={:016x}", op.as_eir(), policy.requirements().bits());
+        }
+        Immediate::NumericUpdate { increment, policy } => {
+            let _ = write!(out, " {} numeric-policy={:016x}", if *increment { 1 } else { -1 }, policy.requirements().bits());
         }
         Immediate::MixedNumericOp(op) => {
             let _ = write!(out, " {}", op.as_eir());
@@ -328,6 +364,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::PropertyFetchMode(mode) => {
             let _ = write!(out, " fetch={}", mode.as_eir());
+        }
+        Immediate::ProfiledPropertyFetch { mode, profile } => {
+            let _ = write!(out, " fetch={} semantics={:#x}", mode.as_eir(), profile.semantics().bits());
         }
         Immediate::IterStart(metadata) => {
             let _ = write!(

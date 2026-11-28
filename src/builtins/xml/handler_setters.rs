@@ -148,6 +148,7 @@ pub(super) const fn setter_semantics(lower: crate::builtins::semantics::BuiltinL
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::XmlHandlerSetter,
         callable: BuiltinCallablePolicy::StaticOnly(
             "handler setters type their closure arguments at the call site",

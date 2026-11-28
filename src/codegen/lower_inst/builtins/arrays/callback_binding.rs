@@ -16,6 +16,33 @@ pub(super) struct StaticSortCallbackBinding {
     pub(super) return_ty: PhpType,
 }
 
+/// Routes raw arguments requiring owned boxes through the descriptor invocation boundary.
+pub(super) fn direct_callback_requires_argument_boxing(
+    ctx: &FunctionContext<'_>, value: ValueId, visible_arg_types: &[PhpType],
+) -> Result<bool> {
+    let callback = match static_callable_array_callback_name(ctx, value, "callback argument probe")? {
+        Some(callback) => callback,
+        None => static_callback_name_operand(ctx, value, "callback argument probe")?,
+    };
+    let param_types = if let Some(callee) = ctx.callable_function_by_name(&callback.name) {
+        callee.params.iter().map(|parameter| parameter.php_type.clone()).collect()
+    } else if callback.kind != StaticCallbackOperandKind::FirstClassCallable {
+        return Ok(false);
+    } else if let Some(target) = instance_method_sort_callback_target(
+        ctx, &callback, "callback argument probe", Some(visible_arg_types),
+    )? {
+        target.param_types
+    } else if let Some(target) = static_method_sort_callback_target(
+        ctx, &callback.name, "callback argument probe", Some(visible_arg_types),
+    )? {
+        target.param_types
+    } else {
+        return Ok(false);
+    };
+    Ok(param_types.iter().zip(visible_arg_types).any(|(parameter, incoming)|
+        callback_arg_needs_mixed_box(parameter, incoming)))
+}
+
 /// Returns a static callback binding for callback runtimes, including late-static env when needed.
 pub(super) fn static_sort_callback_binding(
     ctx: &mut FunctionContext<'_>,

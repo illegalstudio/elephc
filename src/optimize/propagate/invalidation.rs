@@ -130,7 +130,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         },
         ExprKind::Cast { target: CastType::String, expr: inner } => expr_invalidation(inner)
             .union(top_level_globals_guard(expr_effect(expr))),
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -149,6 +149,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         )),
         ExprKind::BinaryOp { left, right, .. } => {
             expr_invalidation(left).union(expr_invalidation(right))
+                .union(top_level_globals_guard(expr_effect(expr)))
         }
         ExprKind::InstanceOf { value, target } => {
             let target_inv = match target {

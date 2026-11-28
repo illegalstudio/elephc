@@ -29,6 +29,8 @@ pub use elephc_builtin_contract::ParamSpec;
 pub struct BuiltinCheckCtx<'a> {
     /// The active type checker (mutable so the hook can emit warnings and errors).
     pub checker: &'a mut crate::types::checker::Checker,
+    /// Invocation contract policy, independent of the physical mode of argument expressions.
+    pub source_mode: crate::source::SourceMode,
     /// The canonical lower-cased builtin name at the call site.
     pub name: &'a str,
     /// The unevaluated argument expressions passed to the builtin.

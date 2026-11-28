@@ -33,7 +33,7 @@ fn rust_called_export_stack_words(target: Target, name: &str) -> Option<usize> {
     }
     Some(match name {
         "__elephc_eval_value_method_call" | "__elephc_eval_value_static_property_set" => 1,
-        "__elephc_eval_value_static_method_call" => 2,
+        "__elephc_eval_value_static_method_call" | "__elephc_eval_value_static_property_set_v2" => 2,
         "__elephc_eval_reflection_owner_new" => 11,
         _ => 0,
     })
@@ -41,6 +41,8 @@ fn rust_called_export_stack_words(target: Target, name: &str) -> Option<usize> {
 
 /// Assembly emitter.
 pub struct Emitter {
+    /// Immutable semantic policy used while selecting runtime helper implementations.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
     buf: String,
     pub target: Target,
     pub platform: Platform,
@@ -98,6 +100,7 @@ impl Emitter {
     /// Creates an emitter for the specified target platform.
     pub fn new(target: Target) -> Self {
         Self {
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
             buf: String::with_capacity(4096),
             target,
             platform: target.platform,

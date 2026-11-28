@@ -129,6 +129,25 @@ $a->x[0][] = 7; echo "append:", count($a->x[0]), " ", json_encode($a->x), "\n";
     assert_eq!(out, "A:9|B:9|C:9|append:3 [[1,9,7],[3]]\n");
 }
 
+/// A runtime-typed receiver keeps deep property stores and updates attached to its object slot.
+#[test]
+fn test_nested_mixed_receiver_property_writes_stay_attached() {
+    let out = compile_and_run(
+        r#"<?php
+class MixedNestedHolder { public array $items = [[0, 0], [0, 0]]; }
+function mutateMixedNestedHolder(mixed $object): int {
+    $object->items[0][1] = 2;
+    $object->items[1][0] += 3;
+    $object->items[1][1]++;
+    return ($object->items[0][0] += 4);
+}
+$holder = new MixedNestedHolder();
+echo mutateMixedNestedHolder($holder), "|", json_encode($holder->items);
+"#,
+    );
+    assert_eq!(out, "4|[[4,2],[3,1]]");
+}
+
 /// `array_push()` into a static property inside a loop lost the array once it reallocated.
 /// Pins the counts through several growths and the element pushed after them, with a clean
 /// heap. Regression for #1207.

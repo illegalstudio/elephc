@@ -39,7 +39,8 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     if let Some(value) = constants::lower_silenced_constant_deprecation_call(ctx, name, expr) {
         return value;
     }
-    constants::register_static_define_call(ctx, name, args);
+    let prepared_define_args = constants::register_static_define_call(ctx, name, args);
+    let args = prepared_define_args.as_deref().unwrap_or(args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
     }
@@ -107,7 +108,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         && !ctx.extern_functions.contains_key(canonical)
     {
         let callback = Expr::new(ExprKind::StringLiteral("mb_convert_variables".to_string()), expr.span);
-        let sig = crate::types::first_class_callable_builtin_sig("mb_convert_variables");
+        let sig = crate::types::first_class_callable_builtin_sig_with_semantics("mb_convert_variables", ctx.semantic_profile);
         return lower_call_user_func_descriptor_invoke(ctx, &callback, args, sig.as_ref(), expr)
             .expect("mb_convert_variables descriptor invocation");
     }
@@ -181,7 +182,10 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         }
     }
     if !is_extern && !is_user_function {
-        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
+        if let Some(call) = super::prepared_builtin_refs::lower_dynamic_place_call(
+            ctx, canonical, sig.as_ref(), args, expr, ctx.builtin_source_mode(),
+        ) { return call; }
+        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr, ctx.builtin_source_mode()) {
             return call;
         }
     }
@@ -500,17 +504,31 @@ pub(super) fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
-    emit_builtin_call_value_with_target(ctx, name, operands, php_type, span, eval_literal, None)
+    let source_mode = ctx.builtin_source_mode();
+    emit_builtin_call_value_with_source_mode(ctx, name, operands, php_type, span, eval_literal, source_mode)
 }
 
-/// Retains source-form overload selection while sharing builtin argument ownership handling.
+/// Emits a builtin with a separate invocation contract while retaining physical argument semantics.
+pub(super) fn emit_builtin_call_value_with_source_mode(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType, span: Span, eval_literal: Option<&str>, source_mode: crate::source::SourceMode,
+) -> LoweredValue {
+    emit_builtin_call_value_with_source_mode_and_target(ctx, name, operands, php_type, span, eval_literal, source_mode, None)
+}
+
+/// Retains a positional overload target without dropping the caller's semantic source mode.
 fn emit_builtin_call_value_with_target(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    operands: Vec<crate::ir::ValueId>,
-    php_type: PhpType,
-    span: Span,
-    eval_literal: Option<&str>,
+    ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType, span: Span, eval_literal: Option<&str>, target: Option<crate::ir::RuntimeCallTarget>,
+) -> LoweredValue {
+    let source_mode = ctx.builtin_source_mode();
+    emit_builtin_call_value_with_source_mode_and_target(ctx, name, operands, php_type, span, eval_literal, source_mode, target)
+}
+
+/// Shares builtin operand ownership across semantic modes and source-selected overloads.
+fn emit_builtin_call_value_with_source_mode_and_target(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType, span: Span, eval_literal: Option<&str>, source_mode: crate::source::SourceMode,
     target: Option<crate::ir::RuntimeCallTarget>,
 ) -> LoweredValue {
     if eval_literal.is_none() {
@@ -522,7 +540,7 @@ fn emit_builtin_call_value_with_target(
             // straight to __rt_throw_current while these operands are still pure SSA. Pin them
             // in the unwind chain for the duration of the call so a caught guard releases them
             // exactly once instead of stranding them.
-            let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span);
+            let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span, source_mode);
             let lowered = if let Some(target) = target {
                 let value = ctx.emit_value(
                     Op::RuntimeCall, operands.clone(), Some(Immediate::RuntimeCall(target)),
@@ -530,12 +548,13 @@ fn emit_builtin_call_value_with_target(
                 );
                 crate::builtins::semantics::LoweredBuiltinValue { value: value.value }
             } else {
-                crate::builtins::semantics::lower_registry_call(
+                crate::builtins::semantics::lower_registry_call_with_source_mode(
                     ctx,
                     def,
                     &operands,
                     &php_type,
                     span,
+                    source_mode,
                 )
                 .unwrap_or_else(|error| {
                     panic!(
@@ -657,7 +676,7 @@ fn emit_builtin_call_value_with_target(
             Op::EvalLiteralCall,
             Some(Immediate::ProfiledData {
                 data: ctx.intern_string(fragment),
-                strict_php: crate::strict_php::is_enabled(),
+                profile: crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile),
             }),
             Op::EvalLiteralCall.default_effects(),
         )
@@ -667,16 +686,15 @@ fn emit_builtin_call_value_with_target(
         let immediate = if construct_key == "eval" {
             Immediate::ProfiledData {
                 data,
-                strict_php: crate::strict_php::is_enabled(),
+                profile: crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile),
             }
-        } else if matches!(construct_key.as_str(), "exit" | "die") {
+        } else if matches!(construct_key.as_str(), "exit" | "die")
+            && crate::source::current_strict_types()
+        {
             // A statically known float/null/bool status is rejected before codegen in strict
             // mode, but a boxed `mixed` status still needs the per-tag strict check at run
             // time, so the call site's profile travels with the call.
-            Immediate::ProfiledData {
-                data,
-                strict_php: crate::source::current_strict_types(),
-            }
+            Immediate::StrictExit(data)
         } else {
             Immediate::Data(data)
         };
@@ -715,6 +733,11 @@ fn emit_builtin_call_value_with_target(
             }
         }
         ctx.end_argument_guard_scope();
+    }
+    if is_eval && (eval_needs_barrier || eval_literal.is_some_and(|fragment|
+        eval_literal_scope_barrier_writes(ctx, fragment).is_some()))
+    {
+        crate::ir_lower::reference_local_validators::prepare_eval_bindings(ctx, span);
     }
     let call = ctx.emit_value(
         op,
@@ -964,6 +987,14 @@ pub(super) fn resolve_registry_builtin_result_type(
     span: Span,
     checked: Option<PhpType>,
 ) -> Option<PhpType> {
+    resolve_registry_builtin_result_type_with_source_mode(ctx, name, args, operands, span, checked, ctx.builtin_source_mode())
+}
+
+/// Resolves the invocation contract without adopting the argument expressions' source policy.
+pub(super) fn resolve_registry_builtin_result_type_with_source_mode(
+    ctx: &LoweringContext<'_, '_>, name: &str, args: &[Expr], operands: &[crate::ir::ValueId],
+    span: Span, checked: Option<PhpType>, source_mode: crate::source::SourceMode,
+) -> Option<PhpType> {
     let def = crate::builtins::registry::lookup(name)?;
     debug_assert!(
         declared_type_is_a_safe_fallback(&def.return_type, checked.as_ref())
@@ -980,6 +1011,8 @@ pub(super) fn resolve_registry_builtin_result_type(
         .map(|operand| ctx.builder.value_php_type(*operand))
         .collect::<Vec<_>>();
     let input = crate::builtins::semantics::BuiltinSemanticInput {
+        semantic_profile: ctx.semantic_profile,
+        source_mode,
         name: def.name,
         args,
         arg_types: &arg_types,

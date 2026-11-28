@@ -33,22 +33,22 @@ pub(super) fn guard_heap_replacement(
     if repr == PhpType::Iterable {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp {result}, #4"));         // indexed arrays satisfy the physical iterable payload ABI
-                ctx.emitter.instruction(&format!("b.eq {accepted}"));          // accept the unboxed array pointer
-                ctx.emitter.instruction(&format!("cmp {result}, #5"));         // associative arrays share the raw iterable pointer ABI
-                ctx.emitter.instruction(&format!("b.eq {accepted}"));          // accept the unboxed hash pointer
-                ctx.emitter.instruction(&format!("cmp {result}, #6"));         // objects need a Traversable contract check
-                ctx.emitter.instruction(&format!("b.eq {iterable_object}"));   // validate the concrete object before replacing the cell
-                ctx.emitter.instruction(&format!("b {invalid}"));              // reject every scalar and callable tag
+                ctx.emitter.instruction(&format!("cmp {result}, #4"));          // indexed arrays satisfy the physical iterable payload ABI
+                ctx.emitter.instruction(&format!("b.eq {accepted}"));           // accept the unboxed array pointer
+                ctx.emitter.instruction(&format!("cmp {result}, #5"));          // associative arrays share the raw iterable pointer ABI
+                ctx.emitter.instruction(&format!("b.eq {accepted}"));           // accept the unboxed hash pointer
+                ctx.emitter.instruction(&format!("cmp {result}, #6"));          // objects need a Traversable contract check
+                ctx.emitter.instruction(&format!("b.eq {iterable_object}"));    // validate the concrete object before replacing the cell
+                ctx.emitter.instruction(&format!("b {invalid}"));               // reject every scalar and callable tag
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp {result}, 4"));          // indexed arrays satisfy the physical iterable payload ABI
-                ctx.emitter.instruction(&format!("je {accepted}"));            // accept the unboxed array pointer
-                ctx.emitter.instruction(&format!("cmp {result}, 5"));          // associative arrays share the raw iterable pointer ABI
-                ctx.emitter.instruction(&format!("je {accepted}"));            // accept the unboxed hash pointer
-                ctx.emitter.instruction(&format!("cmp {result}, 6"));          // objects need a Traversable contract check
-                ctx.emitter.instruction(&format!("je {iterable_object}"));     // validate the concrete object before replacing the cell
-                ctx.emitter.instruction(&format!("jmp {invalid}"));            // reject every scalar and callable tag
+                ctx.emitter.instruction(&format!("cmp {result}, 4"));           // indexed arrays satisfy the physical iterable payload ABI
+                ctx.emitter.instruction(&format!("je {accepted}"));             // accept the unboxed array pointer
+                ctx.emitter.instruction(&format!("cmp {result}, 5"));           // associative arrays share the raw iterable pointer ABI
+                ctx.emitter.instruction(&format!("je {accepted}"));             // accept the unboxed hash pointer
+                ctx.emitter.instruction(&format!("cmp {result}, 6"));           // objects need a Traversable contract check
+                ctx.emitter.instruction(&format!("je {iterable_object}"));      // validate the concrete object before replacing the cell
+                ctx.emitter.instruction(&format!("jmp {invalid}"));             // reject every scalar and callable tag
             }
         }
         ctx.emitter.label(&iterable_object);
@@ -115,6 +115,10 @@ pub(super) fn detach_missing_local(
 ) -> Result<()> {
     let Some(state) = ctx.ref_cell_state_offset(local.slot) else { return Ok(()); };
     let offset = ctx.local_offset(local.slot)?;
+    if let Some(owner) = ctx.function.locals[local.slot.as_raw() as usize].ref_cell_owner {
+        let owner_offset = ctx.local_offset(owner)?;
+        crate::codegen::lower_inst::local_stores::unbind_local_contract(ctx, owner_offset);
+    }
     let result = abi::int_result_reg(ctx.emitter);
     let raw = ctx.next_label("eval_unset_raw_local");
     let owner = ctx.next_label("eval_unset_hidden_owner");
@@ -169,6 +173,7 @@ pub(super) fn detach_rebound_local(
             ctx.emitter.instruction(&format!("je {attached}"));                 // preserve the original alias unless unset detached this name
         }
     }
+    crate::codegen::local_binding_state::mark(ctx, local.slot, false);
     detach_missing_local(ctx, local, pending_throw)?;
     ctx.emitter.label(&attached);
     Ok(())

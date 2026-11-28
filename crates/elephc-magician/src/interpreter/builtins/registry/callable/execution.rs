@@ -564,7 +564,7 @@ pub(super) fn eval_clear_evaluated_arg_ref_targets(
 ) -> Vec<EvaluatedCallArg> {
     evaluated_args
         .into_iter()
-        .map(|arg| EvaluatedCallArg {
+        .map(|arg| EvaluatedCallArg { source_type: arg.source_type,
             evaluation_owner: None,
             name: arg.name,
             value: arg.value,

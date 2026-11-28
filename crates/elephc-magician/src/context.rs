@@ -22,6 +22,11 @@ mod functions;
 mod generics;
 mod global_registry;
 mod local_types;
+mod array_reference_types;
+mod property_reference_types;
+mod property_array_types;
+use property_array_types::EvalPropertyArrayOrigin;
+use property_reference_types::PropertyReferenceAdmission;
 mod native_catalog;
 mod native_defaults;
 mod native_function;
@@ -33,6 +38,9 @@ pub(crate) mod pcntl_runtime;
 mod reference_metadata;
 mod reflection_registry;
 mod runtime_state;
+mod semantic_profile;
+mod source_views;
+mod return_sources;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -53,11 +61,13 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub use alias_metadata::*;
 pub use closure_metadata::*;
 pub use core::*;
+pub(crate) use return_sources::ReturnSourceContract;
+use core::EvalStaticLocal;
 pub use functions::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 pub(crate) use global_registry::*;
-pub(crate) use reflection_registry::{
-    forget_released_reflection_identity, untrack_reflection_identities_for_context,
-};
+#[cfg(not(test))]
+pub(crate) use reflection_registry::forget_released_reflection_identity;
+pub(crate) use reflection_registry::untrack_reflection_identities_for_context;
 use native_catalog::SharedNative;
 pub use native_defaults::*;
 pub use native_function::*;

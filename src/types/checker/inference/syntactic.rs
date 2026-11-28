@@ -8,6 +8,8 @@
 //! Key details:
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
+use elephc_semantics::SemanticProfile;
+
 use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::termination::expr_guarantees_function_exit;
 use crate::types::{
@@ -17,14 +19,14 @@ use crate::types::{
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
 /// Used for functions that are never called directly (only used as callbacks).
-pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+pub fn infer_return_type_syntactic(body: &[Stmt], profile: SemanticProfile) -> PhpType {
     if crate::types::checker::yield_validation::body_contains_yield(body) {
         return PhpType::Object("Generator".to_string());
     }
 
     let mut types = Vec::new();
     for stmt in body {
-        collect_return_types_syntactic(stmt, &mut types);
+        collect_return_types_syntactic(stmt, &mut types, profile);
     }
     if types.is_empty() {
         return PhpType::Int;
@@ -42,16 +44,16 @@ pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
 /// Used by `infer_return_type_syntactic` to gather return types from a function body.
 /// Handles control-flow structures (if/else, while, try/catch, switch, match) by recursing
 /// into their nested bodies. Skips declarations and other non-executable statements.
-fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
+fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>, profile: SemanticProfile) {
     match &stmt.kind {
         StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
         StmtKind::NamespaceBlock { body, .. } => {
             for inner in body {
-                collect_return_types_syntactic(inner, types);
+                collect_return_types_syntactic(inner, types, profile);
             }
         }
         StmtKind::Return(Some(expr)) => {
-            types.push(infer_expr_type_syntactic(expr));
+            types.push(infer_expr_type_syntactic(expr, profile));
         }
         StmtKind::Return(None) => {
             types.push(PhpType::Void);
@@ -63,16 +65,16 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
             ..
         } => {
             for s in then_body {
-                collect_return_types_syntactic(s, types);
+                collect_return_types_syntactic(s, types, profile);
             }
             for (_, body) in elseif_clauses {
                 for s in body {
-                    collect_return_types_syntactic(s, types);
+                    collect_return_types_syntactic(s, types, profile);
                 }
             }
             if let Some(body) = else_body {
                 for s in body {
-                    collect_return_types_syntactic(s, types);
+                    collect_return_types_syntactic(s, types, profile);
                 }
             }
         }
@@ -81,7 +83,7 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. } => {
             for s in body {
-                collect_return_types_syntactic(s, types);
+                collect_return_types_syntactic(s, types, profile);
             }
         }
         StmtKind::Try {
@@ -90,28 +92,28 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
             finally_body,
         } => {
             for s in try_body {
-                collect_return_types_syntactic(s, types);
+                collect_return_types_syntactic(s, types, profile);
             }
             for catch_clause in catches {
                 for s in &catch_clause.body {
-                    collect_return_types_syntactic(s, types);
+                    collect_return_types_syntactic(s, types, profile);
                 }
             }
             if let Some(body) = finally_body {
                 for s in body {
-                    collect_return_types_syntactic(s, types);
+                    collect_return_types_syntactic(s, types, profile);
                 }
             }
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
                 for s in body {
-                    collect_return_types_syntactic(s, types);
+                    collect_return_types_syntactic(s, types, profile);
                 }
             }
             if let Some(body) = default {
                 for s in body {
-                    collect_return_types_syntactic(s, types);
+                    collect_return_types_syntactic(s, types, profile);
                 }
             }
         }
@@ -311,18 +313,28 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
 /// A best-effort syntactic heuristic — not full type inference. Handles literals,
 /// casts, null-coalesce, ternary, match, array literals, binary operators, function calls,
 /// and `new` expressions. Returns a conservative type for unrecognized constructs.
-pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
+pub fn infer_expr_type_syntactic(expr: &Expr, profile: SemanticProfile) -> PhpType {
+    crate::types::constant_binding::bound_result_type(infer_unbound_expr_type_syntactic(expr, profile), expr.producer_binding)
+}
+
+/// Estimates the original expression before declaration producer binding changes integer kinds.
+fn infer_unbound_expr_type_syntactic(expr: &Expr, profile: SemanticProfile) -> PhpType {
     match &expr.kind {
         // A reference element carries the storage type of the place it aliases.
-        ExprKind::Reference(inner) => infer_expr_type_syntactic(inner),
+        ExprKind::Reference(inner) => infer_expr_type_syntactic(inner, profile),
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
         ExprKind::BoolLiteral(false) => PhpType::False,
         ExprKind::BoolLiteral(true) => PhpType::Bool,
         ExprKind::Null => PhpType::Void,
+        ExprKind::UnaryPlus(inner) => {
+            if let Some(number) = crate::semantics::numeric::literal_unary_plus(inner) { return infer_expr_type_syntactic(&number, profile); }
+            match infer_expr_type_syntactic(inner, profile) { PhpType::Float => PhpType::Float, _ => PhpType::Mixed }
+        }
+
         ExprKind::Cast {
-            target: CastType::String,
+            target: CastType::String | CastType::StringFormat,
             ..
         } => PhpType::Str,
         ExprKind::Cast {
@@ -343,7 +355,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::Cast {
             target: CastType::Array,
             expr,
-        } => crate::types::array_cast_result_type(&infer_expr_type_syntactic(expr)),
+        } => crate::types::array_cast_result_type(&infer_expr_type_syntactic(expr, profile)),
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
@@ -385,7 +397,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             "ptr" | "ptr_null" | "buffer_ptr" => PhpType::Pointer(None),
             "ptr_offset" => {
                 if let Some(first_arg) = args.first() {
-                    match infer_expr_type_syntactic(first_arg) {
+                    match infer_expr_type_syntactic(first_arg, profile) {
                         PhpType::Pointer(tag) => PhpType::Pointer(tag),
                         _ => PhpType::Pointer(None),
                     }
@@ -399,16 +411,16 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             _ => PhpType::Int,
         },
         ExprKind::NullCoalesce { value, default } => {
-            let left_ty = infer_expr_type_syntactic(value);
+            let left_ty = infer_expr_type_syntactic(value, profile);
             // A default that never yields (`throw`, `exit`) is not a null arm.
             let right_ty = if expr_guarantees_function_exit(default) {
                 PhpType::Never
             } else {
-                infer_expr_type_syntactic(default)
+                infer_expr_type_syntactic(default, profile)
             };
             null_coalesce_merge_type(&left_ty, &right_ty)
         }
-        ExprKind::ErrorSuppress(inner) => infer_expr_type_syntactic(inner),
+        ExprKind::ErrorSuppress(inner) => infer_expr_type_syntactic(inner, profile),
         ExprKind::Print(_) => PhpType::Int,
         ExprKind::Throw(_) => PhpType::Void,
         ExprKind::Ternary {
@@ -416,8 +428,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             else_expr,
             ..
         } => {
-            let then_ty = infer_expr_type_syntactic(then_expr);
-            let else_ty = infer_expr_type_syntactic(else_expr);
+            let then_ty = infer_expr_type_syntactic(then_expr, profile);
+            let else_ty = infer_expr_type_syntactic(else_expr, profile);
             if then_ty == else_ty {
                 then_ty
             } else if then_ty == PhpType::Str || else_ty == PhpType::Str {
@@ -429,30 +441,30 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
         }
         ExprKind::ShortTernary { value, default } => {
-            let value_ty = infer_expr_type_syntactic(value);
-            let default_ty = infer_expr_type_syntactic(default);
+            let value_ty = infer_expr_type_syntactic(value, profile);
+            let default_ty = infer_expr_type_syntactic(default, profile);
             wider_type_syntactic(&value_ty, &default_ty)
         }
         ExprKind::Match { arms, default, .. } => {
             let mut result_ty = default
                 .as_ref()
-                .map(|expr| infer_expr_type_syntactic(expr))
+                .map(|expr| infer_expr_type_syntactic(expr, profile))
                 .unwrap_or(PhpType::Void);
             for (_, arm_expr) in arms {
-                let arm_ty = infer_expr_type_syntactic(arm_expr);
+                let arm_ty = infer_expr_type_syntactic(arm_expr, profile);
                 result_ty = wider_type_syntactic(&result_ty, &arm_ty);
             }
             result_ty
         }
         ExprKind::ArrayLiteral(elems) => {
-            PhpType::Array(Box::new(array_literal_element_type_syntactic(elems)))
+            PhpType::Array(Box::new(array_literal_element_type_syntactic(elems, profile)))
         }
         ExprKind::ArrayLiteralAssoc(entries) => {
             let mut key_ty: Option<PhpType> = None;
             let mut value_ty: Option<PhpType> = None;
             for (key, value) in entries {
-                let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
-                let next_value = infer_expr_type_syntactic(value);
+                let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key, profile), profile);
+                let next_value = infer_expr_type_syntactic(value, profile);
                 key_ty = Some(match key_ty {
                     Some(current) => merge_array_key_types(current, next_key),
                     None => next_key,
@@ -483,11 +495,13 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                             ExprKind::Spread(inner) => inner.as_ref(),
                             _ => source,
                         };
-                        assoc_spread_entry_types_syntactic(inner).1
+                        assoc_spread_entry_types_syntactic(inner, profile).1
                     }
-                    ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value)
-                    | ArrayEntry::Reference(value) | ArrayEntry::KeyReference(_, value) => {
-                        infer_expr_type_syntactic(value)
+                    ArrayEntry::Keyed(_, value)
+                    | ArrayEntry::Value(value)
+                    | ArrayEntry::Reference(value)
+                    | ArrayEntry::KeyReference(_, value) => {
+                        infer_expr_type_syntactic(value, profile)
                     }
                 };
                 value_ty = Some(match value_ty {
@@ -515,8 +529,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         ExprKind::BinaryOp { left, op, right } => match op {
             BinOp::Add => {
-                let lt = infer_expr_type_syntactic(left);
-                let rt = infer_expr_type_syntactic(right);
+                let lt = infer_expr_type_syntactic(left, profile);
+                let rt = infer_expr_type_syntactic(right, profile);
                 if matches!((&lt, &rt), (PhpType::Array(_), PhpType::Array(_)))
                     && is_empty_indexed_array_literal(left)
                 {
@@ -538,8 +552,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Mod => {
-                let lt = infer_expr_type_syntactic(left);
-                let rt = infer_expr_type_syntactic(right);
+                let lt = infer_expr_type_syntactic(left, profile);
+                let rt = infer_expr_type_syntactic(right, profile);
                 if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
@@ -558,8 +572,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             BinOp::Pow => {
                 // PHP's `**` keeps an integer result when both operands are ints, the
                 // exponent is non-negative and the value fits; otherwise it is a float.
-                let lt = infer_expr_type_syntactic(left);
-                let rt = infer_expr_type_syntactic(right);
+                let lt = infer_expr_type_syntactic(left, profile);
+                let rt = infer_expr_type_syntactic(right, profile);
                 if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
                 } else if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
@@ -692,15 +706,15 @@ fn is_one_int_literal(expr: &Expr) -> bool {
 }
 
 /// Infers the element type for an indexed array literal without scalar coercion widening.
-fn array_literal_element_type_syntactic(elems: &[Expr]) -> PhpType {
+fn array_literal_element_type_syntactic(elems: &[Expr], profile: SemanticProfile) -> PhpType {
     let mut elem_ty = elems
         .first()
-        .map(infer_expr_type_syntactic)
+        .map(|expr| infer_expr_type_syntactic(expr, profile))
         .unwrap_or(PhpType::Never);
     for elem in elems.iter().skip(1) {
         elem_ty = merge_array_literal_element_type_syntactic(
             elem_ty,
-            infer_expr_type_syntactic(elem),
+            infer_expr_type_syntactic(elem, profile),
         );
     }
     elem_ty
@@ -712,8 +726,8 @@ fn array_literal_element_type_syntactic(elems: &[Expr]) -> PhpType {
 /// contributes integer keys and a hash source contributes the source's key type. Anything this
 /// syntactic pass cannot name stays `Mixed` on both slots rather than inheriting the generic
 /// `PhpType::Int` fallback that `infer_expr_type_syntactic` ends with.
-fn assoc_spread_entry_types_syntactic(inner: &Expr) -> (PhpType, PhpType) {
-    match infer_expr_type_syntactic(inner) {
+fn assoc_spread_entry_types_syntactic(inner: &Expr, profile: SemanticProfile) -> (PhpType, PhpType) {
+    match infer_expr_type_syntactic(inner, profile) {
         PhpType::Array(elem) => (PhpType::Int, *elem),
         PhpType::AssocArray { key, value } => (*key, *value),
         _ => (PhpType::Mixed, PhpType::Mixed),
@@ -749,12 +763,16 @@ mod tests {
                 args: vec![Expr {
                     kind: ExprKind::StringLiteral("return 1;".to_string()),
                     span: Span::dummy(),
+                    source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+                    producer_binding: None,
                 }],
             },
             span: Span::dummy(),
+            source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+            producer_binding: None,
         };
 
-        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+        assert_eq!(infer_expr_type_syntactic(&expr, elephc_semantics::SemanticProfile::PERMISSIVE), PhpType::Mixed);
     }
 
     /// Verifies syntactic indexed plus assoc array union type.
@@ -812,7 +830,7 @@ mod tests {
         let ty = infer_expr_type_syntactic(&assoc_literal(vec![
             (Expr::string_lit("n"), Expr::int_lit(1)),
             (Expr::string_lit("s"), Expr::string_lit("hi")),
-        ]));
+        ]), elephc_semantics::SemanticProfile::PERMISSIVE);
 
         assert_eq!(
             ty,
@@ -830,7 +848,7 @@ mod tests {
         let ty = infer_expr_type_syntactic(&assoc_literal(vec![
             (Expr::string_lit("a"), Expr::string_lit("x")),
             (Expr::string_lit("b"), Expr::string_lit("y")),
-        ]));
+        ]), elephc_semantics::SemanticProfile::PERMISSIVE);
 
         assert_eq!(
             ty,
@@ -852,7 +870,7 @@ mod tests {
                 ArrayEntry::Spread(Expr::new(ExprKind::Spread(Box::new(source)), Span::dummy())),
             ]),
             Span::dummy(),
-        ));
+        ), elephc_semantics::SemanticProfile::PERMISSIVE);
 
         assert_eq!(
             ty,
@@ -875,7 +893,7 @@ mod tests {
                 )),
             ]),
             Span::dummy(),
-        ));
+        ), elephc_semantics::SemanticProfile::PERMISSIVE);
 
         assert_eq!(
             ty,
@@ -902,36 +920,36 @@ mod tests {
     #[test]
     fn test_syntactic_array_cast_matches_array_cast_classification() {
         assert_eq!(
-            infer_expr_type_syntactic(&array_cast(Expr::string_lit("x"))),
+            infer_expr_type_syntactic(&array_cast(Expr::string_lit("x")), elephc_semantics::SemanticProfile::PERMISSIVE),
             PhpType::Array(Box::new(PhpType::Str))
         );
         assert_eq!(
-            infer_expr_type_syntactic(&array_cast(Expr::new(ExprKind::Null, Span::dummy()))),
+            infer_expr_type_syntactic(&array_cast(Expr::new(ExprKind::Null, Span::dummy())), elephc_semantics::SemanticProfile::PERMISSIVE),
             PhpType::Array(Box::new(PhpType::Never))
         );
         assert_eq!(
-            infer_expr_type_syntactic(&array_cast(Expr::int_lit(1))),
+            infer_expr_type_syntactic(&array_cast(Expr::int_lit(1)), elephc_semantics::SemanticProfile::PERMISSIVE),
             PhpType::Array(Box::new(PhpType::Int))
         );
         assert_eq!(
             infer_expr_type_syntactic(&array_cast(Expr::new(
                 ExprKind::ArrayLiteral(vec![Expr::string_lit("x")]),
                 Span::dummy(),
-            ))),
+            )), elephc_semantics::SemanticProfile::PERMISSIVE),
             PhpType::Array(Box::new(PhpType::Str))
         );
         assert_eq!(
             infer_expr_type_syntactic(&Expr::new(
                 ExprKind::ArrayLiteral(vec![array_cast(Expr::string_lit("x"))]),
                 Span::dummy(),
-            )),
+            ), elephc_semantics::SemanticProfile::PERMISSIVE),
             PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
         );
         assert_eq!(
             infer_expr_type_syntactic(&assoc_literal(vec![(
                 Expr::string_lit("k"),
                 array_cast(Expr::int_lit(1)),
-            )])),
+            )]), elephc_semantics::SemanticProfile::PERMISSIVE),
             PhpType::AssocArray {
                 key: Box::new(PhpType::Str),
                 value: Box::new(PhpType::Array(Box::new(PhpType::Int))),
@@ -947,7 +965,7 @@ mod tests {
             (Expr::string_lit("a"), Expr::int_lit(1)),
             (Expr::string_lit("b"), Expr::string_lit("x")),
             (Expr::string_lit("c"), Expr::float_lit(1.5)),
-        ]));
+        ]), elephc_semantics::SemanticProfile::PERMISSIVE);
 
         assert_eq!(
             ty,
@@ -996,20 +1014,26 @@ mod tests {
                 default: Box::new(Expr {
                     kind: ExprKind::Throw(Box::new(Expr::string_lit("none"))),
                     span: Span::dummy(),
+                    source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+                    producer_binding: None,
                 }),
             },
             span: Span::dummy(),
+            source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+            producer_binding: None,
         };
-        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Int);
+        assert_eq!(infer_expr_type_syntactic(&expr, elephc_semantics::SemanticProfile::PERMISSIVE), PhpType::Int);
         let nulled = Expr {
             kind: ExprKind::NullCoalesce {
                 value: Box::new(Expr::int_lit(1)),
-                default: Box::new(Expr { kind: ExprKind::Null, span: Span::dummy() }),
+                default: Box::new(Expr::new(ExprKind::Null, Span::dummy())),
             },
             span: Span::dummy(),
+            source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+            producer_binding: None,
         };
         assert_eq!(
-            infer_expr_type_syntactic(&nulled),
+            infer_expr_type_syntactic(&nulled, elephc_semantics::SemanticProfile::PERMISSIVE),
             PhpType::Union(vec![PhpType::Int, PhpType::Void])
         );
     }

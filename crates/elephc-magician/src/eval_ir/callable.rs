@@ -264,6 +264,8 @@ pub enum EvalParameterTypeVariant {
     Object,
     String,
     Void,
+    /// Internal resource value contract, distinct from a PHP class named resource.
+    Resource,
 }
 
 /// How multiple eval parameter type atoms combine.

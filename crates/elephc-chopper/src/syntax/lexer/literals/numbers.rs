@@ -14,6 +14,10 @@ use super::super::token::Token;
 use crate::syntax::errors::CompileError;
 use crate::scanner::NumberKind;
 use crate::syntax::span::Span;
+use elephc_semantics::{
+    integer_literals::{classify_integer_digits, IntegerMagnitude},
+    StrictFeature,
+};
 use std::num::IntErrorKind;
 
 /// After scanning a numeric literal, ensure no alphanumeric character or `_`
@@ -54,6 +58,28 @@ fn radix_digits_to_float(digits: &str, radix: u32) -> f64 {
     value
 }
 
+/// Preserves the minimum signed magnitude and rejects larger integer spellings before rounding.
+fn strict_integer_token(
+    cursor: &Cursor,
+    digits: &str,
+    radix: u32,
+    span: Span,
+) -> Result<Option<Token>, CompileError> {
+    if !cursor.semantic_profile.contains(StrictFeature::Overflow) {
+        return Ok(None);
+    }
+    match classify_integer_digits(digits, radix) {
+        IntegerMagnitude::Signed(value) => Ok(Some(Token::IntLiteral(value))),
+        IntegerMagnitude::MinimumMagnitude => Ok(Some(Token::MinimumIntegerMagnitude)),
+        IntegerMagnitude::Overflow => Err(CompileError::semantic_violation(
+            span,
+            StrictFeature::Overflow,
+            "--strict-overflow: integer literal is outside signed 64-bit range",
+        )),
+        IntegerMagnitude::Invalid => Err(CompileError::new(span, "Invalid integer literal")),
+    }
+}
+
 /// Parses a radix-prefixed digit string as either an `i64` integer or an `f64`
 /// float (on positive overflow). Returns `Token::IntLiteral` or `Token::FloatLiteral`.
 /// On a parse error unrelated to overflow, returns the provided error message.
@@ -62,7 +88,11 @@ fn parse_radix_int_or_float(
     digits: &str,
     radix: u32,
     invalid_message: &str,
+    span: Span,
 ) -> Result<Token, CompileError> {
+    if let Some(token) = strict_integer_token(cursor, digits, radix, span)? {
+        return Ok(token);
+    }
     match i64::from_str_radix(digits, radix) {
         Ok(value) => Ok(Token::IntLiteral(value)),
         Err(err) if matches!(err.kind(), IntErrorKind::PosOverflow) => {
@@ -75,7 +105,14 @@ fn parse_radix_int_or_float(
 /// Parses a decimal digit string as either an `i64` integer or an `f64` float
 /// (on positive overflow). Returns `Token::IntLiteral` or `Token::FloatLiteral`.
 /// On any other parse error returns "Invalid integer literal".
-fn parse_decimal_int_or_float(cursor: &Cursor, digits: &str) -> Result<Token, CompileError> {
+fn parse_decimal_int_or_float(
+    cursor: &Cursor,
+    digits: &str,
+    span: Span,
+) -> Result<Token, CompileError> {
+    if let Some(token) = strict_integer_token(cursor, digits, 10, span)? {
+        return Ok(token);
+    }
     match digits.parse::<i64>() {
         Ok(value) => Ok(Token::IntLiteral(value)),
         Err(err) if matches!(err.kind(), IntErrorKind::PosOverflow) => {
@@ -106,7 +143,7 @@ pub(in crate::syntax::lexer) fn number_token(
                 return Err(CompileError::new(start, missing));
             }
             validate_no_trailing_alnum(end, label)?;
-            parse_radix_int_or_float(end, &text[2..].replace('_', ""), radix, invalid)
+            parse_radix_int_or_float(end, &text[2..].replace('_', ""), radix, invalid, start)
         }
         NumberKind::Float => {
             validate_no_trailing_alnum(end, "float")?;
@@ -118,11 +155,11 @@ pub(in crate::syntax::lexer) fn number_token(
         NumberKind::LegacyOctal => {
             validate_no_trailing_alnum(end, "octal")?;
             let message = if validation_only() { "Invalid numeric literal" } else { "Invalid octal literal" };
-            parse_radix_int_or_float(end, &text.replace('_', ""), 8, message)
+            parse_radix_int_or_float(end, &text.replace('_', ""), 8, message, start)
         }
         NumberKind::Decimal => {
             validate_no_trailing_alnum(end, "decimal")?;
-            parse_decimal_int_or_float(end, &text.replace('_', ""))
+            parse_decimal_int_or_float(end, &text.replace('_', ""), start)
         }
     }
 }

@@ -59,23 +59,9 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         return store_if_result(ctx, inst);
     }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
-        match source_ty {
-            PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                ctx.load_value_to_result(value)?;
-                crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
-                return store_if_result(ctx, inst);
-            }
-            PhpType::Void | PhpType::Never => {
-                crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
-                return store_if_result(ctx, inst);
-            }
-            other => {
-                return Err(CodegenIrError::unsupported(format!(
-                    "runtime_call from PHP type {:?} to PHP type TaggedScalar",
-                    other
-                )))
-            }
-        }
+        ctx.load_value_to_result(value)?;
+        super::direct_calls::coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
+        return store_if_result(ctx, inst);
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         let result_ty = inst.result_php_type.codegen_repr();

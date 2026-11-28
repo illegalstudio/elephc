@@ -7,18 +7,29 @@
 //!
 //! Key details:
 //! - The writable cell is updated before the deprecation callback observes it.
-//! - Update-only null conversion is silent and precedes missing-key diagnostics.
+//! - PHP null conversion precedes ordinary key diagnostics; strict kind guards run earlier.
 //! - Static updates stop on callback throws; plain writes preserve opcode completion separately.
 //! - Existing receiver owners stay published across notification on every target.
 //! - A sole pending owner after notification means the original parent was detached.
 
 use super::*;
 
-/// Converts a retained null update receiver before its write-context dimension is read.
-pub(super) fn normalize_null_for_update(
+/// Returns whether a boxed parent can still be a promotable PHP scalar at run time.
+pub(super) fn parent_requires_scalar_normalization(
+    ctx: &LoweringContext<'_, '_>,
+    parent: LoweredValue,
+) -> bool {
+    let ty = ctx.builder.value_php_type(parent.value);
+    ty.codegen_repr() == PhpType::Mixed
+        && !type_satisfies_array_access_for_ir(ctx, &ty)
+        && crate::types::checker::single_object_class_name(&ty).is_none()
+}
+
+/// Materializes a retained null receiver before a write-context key is validated or read.
+pub(super) fn normalize_null_for_write(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
 ) {
-    if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
+    if !parent_requires_scalar_normalization(ctx, parent) {
         return;
     }
     let null = ctx.emit_value(Op::IsNull, vec![parent.value], None, PhpType::Bool,
@@ -46,7 +57,7 @@ pub(super) fn normalize_for_update(
     let attached = ctx.declare_synthetic_php_local(PhpType::Bool);
     let present = lower_expr(ctx, &Expr::new(ExprKind::BoolLiteral(true), span));
     ctx.store_local(&attached, present, PhpType::Bool, Some(span));
-    if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
+    if !parent_requires_scalar_normalization(ctx, parent) {
         return present;
     }
     let boolean = ctx.emit_value(Op::TypePredicate, vec![parent.value],

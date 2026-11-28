@@ -29,7 +29,7 @@ use crate::names::{
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
-    is_php_integer_array_key, AttrArgEntry, EnumCaseInfo, EnumCaseValue, FunctionSig,
+    AttrArgEntry, EnumCaseInfo, EnumCaseValue, FunctionSig,
     InterfaceInfo, PhpType,
 };
 

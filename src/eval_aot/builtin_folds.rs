@@ -13,9 +13,9 @@ use super::*;
 pub(crate) fn fold_static_builtin_int_call(
     short_name: &str,
     args: &[Expr],
-    strict_php: bool,
+    source_profile: EvalSourceProfile,
 ) -> Option<i64> {
-    let ExprKind::IntLiteral(value) = fold_static_builtin_call(short_name, args, strict_php)? else {
+    let ExprKind::IntLiteral(value) = fold_static_builtin_call(short_name, args, source_profile)? else {
         return None;
     };
     Some(value)
@@ -25,15 +25,15 @@ pub(crate) fn fold_static_builtin_int_call(
 pub(super) fn fold_static_builtin_call(
     short_name: &str,
     args: &[Expr],
-    strict_php: bool,
+    source_profile: EvalSourceProfile,
 ) -> Option<ExprKind> {
     let name = php_symbol_key(short_name);
-    if crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
-        &name, strict_php,
+    if crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
+        &name, source_profile.php_only(),
     ) {
         return None;
     }
-    let normalized_args = normalize_static_builtin_args(&name, args)?;
+    let normalized_args = normalize_static_builtin_args(&name, args, source_profile.semantics())?;
     let args = normalized_args.as_slice();
     match name.as_str() {
         name if name == "strlen" => fold_strlen(args).map(ExprKind::IntLiteral),
@@ -110,10 +110,10 @@ pub(super) fn fold_static_builtin_call(
 }
 
 /// Normalizes named/static-spread builtin arguments before attempting a static fold.
-pub(super) fn normalize_static_builtin_args(short_name: &str, args: &[Expr]) -> Option<Vec<Expr>> {
+pub(super) fn normalize_static_builtin_args(short_name: &str, args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
     let sig = builtin_call_sig(short_name)?;
     let call_span = args.first().map(|arg| arg.span).unwrap_or_else(Span::dummy);
-    let plan = plan_call_args(&sig, args, call_span, true, false).ok()?;
+    let plan = plan_call_args(&sig, args, call_span, true, false, profile).ok()?;
     Some(plan.normalized_args())
 }
 
@@ -298,7 +298,7 @@ pub(super) fn static_array_value_is_fold_safe(expr: &Expr) -> bool {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => true,
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
             static_array_value_is_fold_safe(inner)
         }
         ExprKind::ArrayLiteral(items) => items.iter().all(static_array_value_is_fold_safe),
@@ -396,4 +396,27 @@ pub(super) fn fold_int_values(args: &[Expr]) -> Option<Vec<i64>> {
         return None;
     }
     args.iter().map(const_int_expr).collect()
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    /// Literal eval folding cannot reinterpret exact numeric string keys as positional arguments.
+    #[test]
+    fn static_builtin_unpack_folds_follow_source_key_profile() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        let span = Span::dummy();
+        let args = [Expr::new(ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("0"), Expr::string_lit("abc"))]), span,
+        ))), span)];
+        for exact in [false, true] {
+            for php_only in [false, true] {
+                let profile = EvalSourceProfile::new(php_only,
+                    SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact));
+                assert_eq!(fold_static_builtin_int_call("strlen", &args, profile),
+                    if exact { None } else { Some(3) });
+            }
+        }
+    }
 }

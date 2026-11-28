@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
-//! - Null or sentinel payloads presented with a container-shaped tag (4–6) are
+//! - Missing-string pointers and null/sentinel container payloads (tags 4-6) are
 //!   normalized to the canonical Mixed null tag before ownership or allocation.
 //! - Tag 13 (`POINTER_ARRAY_VALUE_TYPE`, a raw `?ptr<T>` word from a pointer array or hash)
 //!   boxes as PHP null for address 0 and as an integer otherwise, so no cell carries tag 13.
@@ -141,11 +141,13 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_from_value_null_container");
     emitter.instruction("mov x9, #8");                                          // runtime tag 8 is the canonical boxed PHP null
-    emitter.instruction("str x9, [sp, #0]");                                    // replace the container-shaped tag before allocation
+    emitter.instruction("str x9, [sp, #0]");                                    // replace the logical source tag before allocation
     emitter.instruction("stp xzr, xzr, [sp, #8]");                              // canonical null has no payload words or ownership
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // allocate the normalized Mixed null without retaining the sentinel
 
     emitter.label("__rt_mixed_from_value_string");
+    crate::codegen_support::sentinels::emit_branch_if_null_string(
+        emitter, "x1", "x9", "__rt_mixed_from_value_null_container");
     emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for the boxed owner
     emitter.instruction("stp x1, x2, [sp, #8]");                                // replace the saved payload with the owned string pointer and length
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // continue with allocation after persisting the string
@@ -175,7 +177,7 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
 /// Emits `__rt_mixed_from_owned_string`, which boxes an already-owned string pair.
 ///
 /// AArch64 input: `x1`/`x2` = owned string pointer/length; x86_64 input: `rax`/`rdx`.
-/// Output: `x0`/`rax` = a fresh Mixed cell whose string tag owns the transferred bytes.
+/// Output: `x0`/`rax` = a fresh Mixed cell owning the bytes, or canonical PHP null for a miss.
 /// The transfer is direct: no persistence, identity lookup, or byte copy is performed.
 pub fn emit_mixed_from_owned_string(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -197,6 +199,15 @@ pub fn emit_mixed_from_owned_string(emitter: &mut Emitter) {
         emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // transfer the string pointer into the cell
         emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                   // reload the owned string length
         emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // transfer the string length into the cell
+        emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                    // inspect the transferred pointer before publishing its logical kind
+        crate::codegen_support::sentinels::emit_branch_if_null_string(
+            emitter, "r10", "r11", "__rt_mixed_from_owned_string_null");
+        emitter.instruction("jmp __rt_mixed_from_owned_string_done");           // genuine empty and nonempty strings keep their string payload
+        emitter.label("__rt_mixed_from_owned_string_null");
+        emitter.instruction("mov QWORD PTR [rax], 8");                          // the missing-string marker denotes PHP null
+        emitter.instruction("mov QWORD PTR [rax + 8], 0");                      // canonical null owns no string pointer
+        emitter.instruction("mov QWORD PTR [rax + 16], 0");                     // canonical null has no high payload word
+        emitter.label("__rt_mixed_from_owned_string_done");
         emitter.instruction("leave");                                           // restore the caller frame pointer
         emitter.instruction("ret");                                             // return the boxed string cell
         return;
@@ -216,6 +227,14 @@ pub fn emit_mixed_from_owned_string(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0]");                                        // publish the string tag
     emitter.instruction("ldp x10, x11, [sp, #0]");                              // reload the transferred string pointer and length
     emitter.instruction("stp x10, x11, [x0, #8]");                              // transfer the string pair into the cell
+    crate::codegen_support::sentinels::emit_branch_if_null_string(
+        emitter, "x10", "x9", "__rt_mixed_from_owned_string_null");
+    emitter.instruction("b __rt_mixed_from_owned_string_done");                 // genuine empty and nonempty strings keep their string payload
+    emitter.label("__rt_mixed_from_owned_string_null");
+    emitter.instruction("mov x9, #8");                                          // the missing-string marker denotes PHP null
+    emitter.instruction("str x9, [x0]");                                        // publish canonical null instead of a string-shaped missing value
+    emitter.instruction("stp xzr, xzr, [x0, #8]");                              // canonical null owns no payload
+    emitter.label("__rt_mixed_from_owned_string_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
     emitter.instruction("add sp, sp, #48");                                     // release the boxer frame
     emitter.instruction("ret");                                                 // return the boxed string cell
@@ -301,7 +320,7 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value_done");                      // never allocate an independently destructible alias
 
     emitter.label("__rt_mixed_from_value_null_container");
-    emitter.instruction("mov QWORD PTR [rbp - 8], 8");                          // replace the container-shaped tag with canonical Mixed null
+    emitter.instruction("mov QWORD PTR [rbp - 8], 8");                          // replace the logical source tag with canonical Mixed null
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // canonical null has no low payload or ownership
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // canonical null has no high payload
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // allocate the normalized Mixed null without retaining the sentinel
@@ -309,6 +328,8 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_from_value_string");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the source string pointer into the x86_64 string helper input register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // move the source string length into the paired x86_64 string helper register
+    crate::codegen_support::sentinels::emit_branch_if_null_string(
+        emitter, "rax", "r10", "__rt_mixed_from_value_null_container");
     emitter.instruction("call __rt_str_persist");                               // duplicate the string payload so the new mixed owner receives heap-backed storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // replace the saved low payload word with the owned string pointer returned by str_persist
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // replace the saved high payload word with the owned string length returned by str_persist
@@ -338,6 +359,9 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the boxed mixed pointer in rax
 }
+
+#[cfg(test)]
+mod string_null_tests;
 
 #[cfg(test)]
 mod tests {

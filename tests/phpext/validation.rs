@@ -11,6 +11,26 @@
 
 use super::*;
 
+/// Requires SDK-independent PHP extension validation to accept both frontend terminal modes.
+fn assert_phpext_frontend_accepts(project: &Project, file: &str, source_text: &str) {
+    let source = project.0.join(file);
+    fs::write(&source, source_text).unwrap();
+    for mode in ["--check", "--emit-ir"] {
+        let output = Command::new(compiler_binary())
+            .arg("build")
+            .args(["--emit", "phpext", mode])
+            .arg(&source)
+            .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 /// Native handles must retain their identity instead of boxing into PHP integer addresses.
 #[test]
 fn phpext_validation_rejects_native_handle_boxing() {
@@ -267,6 +287,40 @@ fn phpext_validation_accepts_nullable_parameter_shapes() {
             .output().unwrap();
         assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
     }
+}
+
+/// Declared arrays avoid impossible scalar and ArrayAccess dispatch during hosted validation.
+#[test]
+fn phpext_validation_accepts_declared_array_writes() {
+    let project = Project::new();
+    assert_phpext_frontend_accepts(
+        &project,
+        "array_writes.php",
+        r#"<?php
+#[Export] function php_named(array $value): array { $value['compiled'] = true; return $value; }
+#[Export] function php_float(array $value, float $key): array { $value[$key] = 1; return $value; }
+#[Export] function php_append(array $value): array { $value[] = 'added'; return $value; }
+"#,
+    );
+}
+
+/// Canonical function statics retain their value contracts and hosted activation lease.
+#[test]
+fn phpext_validation_accepts_canonical_function_statics() {
+    let project = Project::new();
+    assert_phpext_frontend_accepts(
+        &project,
+        "function_statics.php",
+        r#"<?php
+#[Export] final class StaticNode {}
+#[Export] function php_keep(?StaticNode $node, bool $set): ?StaticNode {
+    static $saved = null;
+    if ($set) { $saved = $node; }
+    return $saved;
+}
+#[Export] function php_tick(): int { static $state = 0; return ++$state; }
+"#,
+    );
 }
 
 /// Reports unsupported defaults as source errors before native SDK discovery in every mode.

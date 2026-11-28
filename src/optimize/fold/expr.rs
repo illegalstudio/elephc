@@ -12,7 +12,7 @@ use super::super::*;
 use super::super::{fold_block, try_prune_match_expr};
 use super::casts::try_fold_cast;
 use super::ops::{
-    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not,
+    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not, try_fold_unary_plus,
     try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
 };
 
@@ -127,7 +127,16 @@ pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
 /// runtime decisions — this function only folds when the result is an
 /// unambiguous PHP equivalent.
 pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
+    if let Some(binding) = expr.producer_binding {
+        let mut original = expr;
+        original.producer_binding = None;
+        let folded = crate::optimize::with_expression_semantics(
+            crate::optimize::semantic_context::active_profile(), original.source_profile, || fold_expr(original));
+        return crate::types::constant_binding::apply_binding(folded, binding);
+    }
     let span = expr.span;
+    let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         kind @ ExprKind::Runtime(_) => kind,
         ExprKind::Reference(inner) => ExprKind::Reference(Box::new(fold_expr(*inner))),
@@ -155,6 +164,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::UnaryPlus(inner) => {
+            let inner = fold_expr(*inner);
+            try_fold_unary_plus(&inner).unwrap_or_else(|| ExprKind::UnaryPlus(Box::new(inner)))
+        }
         ExprKind::Negate(inner) => {
             let inner = fold_expr(*inner);
             try_fold_negate(&inner).unwrap_or_else(|| ExprKind::Negate(Box::new(inner)))
@@ -262,8 +275,8 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
-            if let Some(folded) = try_fold_scalar_builtin(&name, &args) {
-                return fold_expr(Expr::new(folded, span));
+            if let Some(folded) = try_fold_scalar_builtin(&name, &args, span) {
+                return fold_expr(Expr { kind: folded, span, source_profile, producer_binding });
             }
             if name
                 .as_canonical()
@@ -279,12 +292,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                         let user_function = active_fold_user_function_exists(candidate);
                         let profile_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
                             candidate,
-                            crate::strict_php::is_enabled(),
+                            crate::php_only::is_enabled(),
                         );
                         if user_function || profile_builtin || date_alias {
                             let target_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
                                 candidate,
-                                crate::strict_php::is_enabled(),
+                                crate::php_only::is_enabled(),
                                 target,
                             );
                             if user_function || target_builtin || date_alias || active_target_guard_condition() {
@@ -319,7 +332,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .map(|entry| entry.map_exprs(fold_expr)).collect());
             crate::types::fold_spreadless_mixed_array_literal(
                 &literal, crate::codegen_support::compile_php_version(),
-            ).unwrap_or(literal)
+             crate::optimize::semantic_context::active_profile()).unwrap_or(literal)
         }
         ExprKind::Match {
             subject,
@@ -561,7 +574,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }
     };
-    Expr { kind, span }
+    Expr { kind, span, source_profile, producer_binding }
 }
 
 /// Folds the target of an instanceof expression, recursing into the expression form.
@@ -594,9 +607,9 @@ fn fold_callable_target(target: CallableTarget) -> CallableTarget {
 /// rules, so a literal argument takes exactly the result the runtime cast would produce. A user
 /// function shadowing the global name, a namespaced call, or an explicit base argument keeps the
 /// call for runtime evaluation.
-fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
+fn try_fold_scalar_builtin(name: &Name, args: &[Expr], span: Span) -> Option<ExprKind> {
     let canonical = crate::names::php_symbol_key(name.as_canonical().trim_start_matches('\\'));
-    if active_fold_user_function_exists(&canonical) {
+    if active_fold_user_function_exists(&canonical) || active_source_fold_user_call(span) {
         return None;
     }
     if let Some(folded) = try_fold_explicit_encoding_literal(&canonical, args) {

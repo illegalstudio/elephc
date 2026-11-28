@@ -219,7 +219,7 @@ require "part.lfc";
             ),
         ],
         "main.php",
-        &["--strict-php", "--define", "FEATURE"],
+        &["--php-only", "--define", "FEATURE"],
     );
     assert_eq!(output, "7:p:i:7:7:7:L:I:1:1:1");
 }
@@ -257,7 +257,7 @@ class Greeter {
             ),
         ],
         "main.php",
-        &["--strict-php", "--define", "FEATURE"],
+        &["--php-only", "--define", "FEATURE"],
     );
     assert_eq!(output, "BCL");
 }
@@ -289,7 +289,7 @@ require "leaf.php";"#,
 
 /// Verifies runtime eval dispatch restores the caller's PHP/LFC builtin profile each time.
 #[test]
-fn lfc_and_strict_php_eval_calls_do_not_leak_profiles() {
+fn lfc_and_php_only_eval_calls_do_not_leak_profiles() {
     let output = compile_lfc_eval_project_and_run(
         &[
             (
@@ -314,7 +314,7 @@ function lfc_literal_eval_profile(): string {
             ),
         ],
         "main.php",
-        &["--strict-php"],
+        &["--php-only"],
     );
     assert_eq!(output, "sLs:sLs");
 }
@@ -331,28 +331,28 @@ fn lfc_strict_define_does_not_hide_ifdef_in_php_source() {
             ),
         ],
         "main.lfc",
-        &["--strict-php", "--define", "FEATURE"],
+        &["--php-only", "--define", "FEATURE"],
     );
     assert!(
-        stderr.contains("ifdef") && stderr.contains("strict-php"),
+        stderr.contains("ifdef") && stderr.contains("php-only"),
         "unexpected diagnostic: {stderr}"
     );
 }
 
 /// Verifies strict mode still audits a PHP file included from an LFC entry.
 #[test]
-fn lfc_entry_does_not_disable_strict_php_for_included_php() {
+fn lfc_entry_does_not_disable_php_only_for_included_php() {
     let stderr = compile_lfc_project_error(
         &[
             ("main.lfc", "require \"part.php\";"),
             ("part.php", "<?php ptr_null();"),
         ],
         "main.lfc",
-        &["--strict-php"],
+        &["--php-only"],
     );
     assert!(
         stderr.contains("Undefined function: ptr_null")
-            || stderr.contains("disabled by --strict-php"),
+            || stderr.contains("disabled by --php-only"),
         "unexpected diagnostic: {stderr}"
     );
 }

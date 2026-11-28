@@ -761,6 +761,7 @@ dependencies = [
  "elephc-probe",
  "elephc-random",
  "elephc-reference",
+ "elephc-semantics",
  "elephc-tidy",
  "elephc-tls",
  "elephc-tz",
@@ -804,6 +805,7 @@ name = "elephc-chopper"
 version = "0.1.0"
 dependencies = [
  "elephc-builtin-contract",
+ "elephc-semantics",
  "serde_json",
  "stacker",
 ]
@@ -903,6 +905,7 @@ dependencies = [
  "elephc-pcntl",
  "elephc-phar",
  "elephc-process-context",
+ "elephc-semantics",
  "flate2",
  "inventory",
  "libc",
@@ -999,6 +1002,10 @@ version = "0.1.0"
 
 [[package]]
 name = "elephc-reference"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-semantics"
 version = "0.1.0"
 
 [[package]]

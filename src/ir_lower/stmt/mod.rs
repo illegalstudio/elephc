@@ -27,7 +27,7 @@ use crate::ir_lower::expr::{
     lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type,
     lower_closure_for_assignment, lower_condition, lower_expr,
-    reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
+    reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
     persist_pending_string, string_value_needs_persistence, type_satisfies_array_access_for_ir,
@@ -45,6 +45,8 @@ mod string_append;
 mod conditionals;
 mod loops;
 mod array_write_core;
+mod boxed_write_parents;
+mod boxed_write_owners;
 mod dimension_incdec_results;
 pub(crate) use dimension_incdec_results::{ValueIncDecLocals, value_incdec_locals, publish_value_incdec};
 mod buffer_element_updates;
@@ -63,6 +65,8 @@ mod includes;
 mod exceptions;
 mod control_exit;
 mod declarations;
+mod static_bindings;
+mod global_bindings;
 mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;
@@ -78,6 +82,8 @@ mod nested_write_sources;
 mod nested_plain_writes;
 mod nested_spl_writes;
 mod nested_false_errors;
+pub(in crate::ir_lower) use nested_false_errors::raise_invalid_key_type_error as raise_invalid_array_key_type_error;
+pub(in crate::ir_lower) use nested_false_errors::raise_invalid_unset_key_type_error as raise_invalid_array_unset_key_type_error;
 mod return_coercions;
 mod repr_fixpoint;
 mod static_property_helpers;
@@ -109,6 +115,7 @@ pub(crate) use property_array_writes::{
 };
 use metadata_control::*;
 use return_coercions::*;
+pub(super) use return_coercions::coerce_to_tagged_scalar;
 use static_property_helpers::*;
 
 pub(crate) use control_exit::{
@@ -155,11 +162,14 @@ pub(super) use array_write_storage::{
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     let _profile = crate::source::scoped_parse_mode(stmt.profile());
-    crate::strict_php::with_source_mode(stmt.source_mode, || {
+    let previous_source_mode = ctx.source_mode;
+    ctx.source_mode = stmt.source_mode;
+    crate::php_only::with_source_mode(stmt.source_mode, || {
         if !ctx.builder.insertion_block_is_terminated() {
             repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
         }
     });
+    ctx.source_mode = previous_source_mode;
 }
 
 /// Declares the hidden internal-array-pointer cursor slots used inside a loop body before
@@ -355,7 +365,7 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Return(value) => lower_return(ctx, value.as_ref(), stmt.span),
         StmtKind::ConstDecl { name, value } => lower_const_decl(ctx, name, value, stmt.span),
         StmtKind::ListUnpack { vars, value } => lower_list_unpack(ctx, vars, value, stmt.span),
-        StmtKind::Global { vars } => lower_global(ctx, vars),
+        StmtKind::Global { vars } => lower_global(ctx, vars, stmt.span),
         StmtKind::StaticVar { name, init } => lower_static_var(ctx, name, init, stmt.span),
         StmtKind::PropertyAssign {
             object,

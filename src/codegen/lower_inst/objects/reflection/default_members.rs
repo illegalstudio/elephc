@@ -241,15 +241,25 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
         )
         .filter(|_| has_type);
         let default_expr = sig.defaults.get(index).and_then(Option::as_ref);
-        let default_value = default_expr
-            .map(|default| {
-                reflection_parameter_default_value(ctx, current_class, current_info, default)
-            })
-            .transpose()?
-            .flatten();
         let source_default_expr = source_defaults
             .and_then(|defaults| defaults.get(index))
             .and_then(Option::as_ref);
+        let default_value = default_expr
+            .map(|default| {
+                let source = source_default_expr.unwrap_or(default);
+                if declared {
+                    if let Some(value) = reflection_folded_integer_default(
+                        source, ty, ctx, current_class,
+                    ) {
+                        return Ok(Some(value));
+                    }
+                }
+                let reflection_default = sig.reflection_default_expr(index);
+                let reflection_default = reflection_default.as_ref().unwrap_or(default);
+                reflection_parameter_default_value(ctx, current_class, current_info, reflection_default)
+            })
+            .transpose()?
+            .flatten();
         let default_value_constant_name = source_default_expr
             .or(default_expr)
             .and_then(reflection_parameter_default_constant_name);
@@ -257,6 +267,7 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             reflection_parameter_default_export(
                 display_class, display_info, default,
                 matches!(default_value, None | Some(ReflectionParameterDefaultValue::EirHelper(_))),
+                ctx.module.semantic_profile,
             )
         });
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");

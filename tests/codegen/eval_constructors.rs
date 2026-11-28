@@ -387,7 +387,9 @@ return gettype($box->value) . ":" . $box->value;');
 /// Verifies AOT constructor argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_dynamic_new_constructor_by_ref_arg_prep_fatal_cleans_up_stack() {
-    let out = compile_and_run_capture(
+    assert_constructor_arg_prep_type_error(
+        "EvalCtorPrepFatalBridge",
+        "EvalCtorPrepFatalNeed",
         r#"<?php
 class EvalCtorPrepFatalNeed {}
 class EvalCtorPrepFatalBridge {
@@ -401,23 +403,6 @@ new EvalCtorPrepFatalBridge($value, 123);
 echo "bad";');
 "#,
     );
-
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
-    );
 }
 
 /// Verifies named and unpacked AOT constructor arg-prep fatals restore the eval bridge frame.
@@ -425,7 +410,8 @@ echo "bad";');
 fn test_eval_dynamic_new_constructor_by_ref_named_spread_arg_prep_fatal_cleans_up_stack() {
     let cases = [
         (
-            "named",
+            "EvalCtorNamedPrepFatalBridge",
+            "EvalCtorNamedPrepFatalNeed",
             r#"<?php
 class EvalCtorNamedPrepFatalNeed {}
 class EvalCtorNamedPrepFatalBridge {
@@ -441,7 +427,8 @@ echo "bad";');
 "#,
         ),
         (
-            "spread",
+            "EvalCtorSpreadPrepFatalBridge",
+            "EvalCtorSpreadPrepFatalNeed",
             r#"<?php
 class EvalCtorSpreadPrepFatalNeed {}
 class EvalCtorSpreadPrepFatalBridge {
@@ -458,25 +445,25 @@ echo "bad";');
         ),
     ];
 
-    for (label, source) in cases {
-        let out = compile_and_run_capture(source);
-        assert!(
-            !out.success,
-            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
-            out.stdout, out.stderr
-        );
-        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
-        assert!(
-            out.stderr.contains("Fatal error: eval() runtime failed"),
-            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
-            out.stderr
-        );
-        assert!(
-            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-            "{label}: stderr leaked a Rust panic: {}",
-            out.stderr
-        );
+    for (class, expected_type, source) in cases {
+        assert_constructor_arg_prep_type_error(class, expected_type, source);
     }
+}
+
+/// Checks the uncaught constructor error and confirms eval never resumed after the failed bind.
+fn assert_constructor_arg_prep_type_error(class: &str, expected_type: &str, source: &str) {
+    let out = compile_and_run_capture(source);
+    let report = format!("{}{}", out.stdout, out.stderr);
+    assert!(!out.success, "{class}: expected an uncaught TypeError: {report}");
+    let expected = format!(
+        "Uncaught TypeError: {class}::__construct(): Argument #2 ($need) must be of type {expected_type}, int given"
+    );
+    assert!(report.contains(&expected), "{class}: expected {expected:?}, got {report}");
+    assert!(!out.stdout.contains("bad"), "{class}: eval resumed after the bind failed");
+    assert!(
+        !report.contains("panicked at") && !report.contains("thread '"),
+        "{class}: output leaked a Rust panic: {report}"
+    );
 }
 
 /// Verifies eval-declared constructor by-reference args write back to lvalue targets.

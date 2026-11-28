@@ -9,63 +9,72 @@
 
 use super::*;
 
-/// Lowers a numeric unary operation.
+/// Preserves scalar unary results and PHP's overflow promotion through boxed storage.
 pub(super) fn lower_numeric_unary(
-    ctx: &mut LoweringContext<'_, '_>,
-    inner: &Expr,
-    int_op: Op,
-    float_op: Op,
-    expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, inner: &Expr,
+    operator: elephc_semantics::numeric_unary::NumericUnaryOp, expr: &Expr,
 ) -> LoweredValue {
+    use elephc_semantics::numeric_unary::NumericUnaryOp;
     let value = lower_expr(ctx, inner);
-    let operand_type = ctx.builder.value_php_type(value.value);
-    let number_class = crate::types::object_operators::binary_plan_with_classes(
-        &BinOp::Mul, &PhpType::Int, &operand_type, ctx.classes,
+    let ty = ctx.builder.value_php_type(value.value);
+    let negate = operator == NumericUnaryOp::Negate;
+    let number_class = negate && crate::types::object_operators::binary_plan_with_classes(
+        &BinOp::Mul, &PhpType::Int, &ty, ctx.classes,
     ).is_some_and(|plan| plan.class.operators.is_some_and(|operators|
         operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number));
-    if int_op == Op::INeg && (number_class || crate::types::object_operators::operator_class(&operand_type).is_some()) {
+    if number_class || crate::types::object_operators::operator_class(&ty).is_some() {
         let factor = lower_int_literal(ctx, if number_class { -1 } else { 0 }, expr);
-        let operation = if number_class { BinOp::Mul } else { BinOp::Sub };
-        if let Some(result) = object_operators::lower_object_binary_values(ctx, factor, &operation, value, expr) {
-            return result;
-        }
+        let operation = if number_class { BinOp::Mul } else if negate { BinOp::Sub } else { BinOp::Add };
+        if let Some(result) = object_operators::lower_object_binary_values(ctx, factor, &operation, value, expr) { return result; }
     }
-    match value.ir_type {
-        IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
-        IrType::I64 => {
-            // Check if the type checker promoted this to Mixed (non-constant int negate
-            // can overflow PHP_INT_MIN to float).
-            let result_php_type = fallback_expr_type(expr);
-            if result_php_type == PhpType::Mixed && int_op == Op::INeg {
-                // Emit a checked negate via the mixed numeric sub helper: 0 - value
-                let zero = lower_int_literal(ctx, 0, expr);
-                return lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
+    let scalar_representation = matches!((value.ir_type, &ty), (IrType::I64, PhpType::Int) | (IrType::F64, PhpType::Float));
+    if scalar_representation {
+        crate::ir_lower::numeric_domains::unary(ctx, value, elephc_semantics::numeric_domains::NumericOperator::Unary, expr.span);
+        if !negate { return value; }
+        if value.ir_type == IrType::F64 {
+            return ctx.emit_value(Op::FNeg, vec![value.value], None, PhpType::Float, Op::FNeg.default_effects(), Some(expr.span));
+        }
+        if value.ir_type == IrType::I64 {
+            if crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow() {
+                return crate::ir_lower::checked_arithmetic::negate(ctx, value, expr.span);
             }
-            ctx.emit_value(int_op, vec![value.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
-        }
-        IrType::TaggedScalar => {
-            let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
-            ctx.emit_value(int_op, vec![narrowed.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
-        }
-        _ if int_op == Op::INeg => {
+            let safe_literal =
+                matches!(&inner.kind, ExprKind::IntLiteral(value) if *value != i64::MIN);
+            if safe_literal {
+                return ctx.emit_value(Op::INeg, vec![value.value], None, PhpType::Int, Op::INeg.default_effects(), Some(expr.span));
+            }
+            // The result can promote to float. Use checked subtraction so later range proofs
+            // can eliminate boxing without assuming the source integer excludes PHP_INT_MIN.
             let zero = lower_int_literal(ctx, 0, expr);
-            if let Some(result) = object_operators::lower_dynamic_object_negate(
-                ctx, zero, value, expr, |ctx| {
-                    let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
-                    release_binary_operand_temporary(ctx, value, expr.span);
-                    result
-                },
-            ) {
-                return result;
-            }
-            let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
-            // Mirror the binary mixed-op path: an owning boxed operand (e.g.
-            // `-($i * 7 + 1)`, issue #500) must be released once consumed.
-            release_binary_operand_temporary(ctx, value, expr.span);
-            result
+            return ctx.emit_value(Op::ICheckedSub, vec![zero.value, value.value], None,
+                PhpType::Mixed, Op::ICheckedSub.default_effects(), Some(expr.span));
         }
-        _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span)),
     }
+    let zero = lower_int_literal(ctx, 0, expr);
+    let scalar = |ctx: &mut LoweringContext<'_, '_>| lower_boxed_numeric_unary(ctx, value, operator, expr.span);
+    let native = if negate { object_operators::lower_dynamic_object_negate(ctx, zero, value, expr, scalar) }
+        else { object_operators::lower_dynamic_object_plus(ctx, zero, value, expr, scalar) };
+    native.unwrap_or_else(|| lower_boxed_numeric_unary(ctx, value, operator, expr.span))
+}
+
+/// Guards the original kind, roots both storage forms and transfers one exact numeric result owner.
+fn lower_boxed_numeric_unary(
+    ctx: &mut LoweringContext<'_, '_>, input: LoweredValue,
+    operator: elephc_semantics::numeric_unary::NumericUnaryOp, span: Span,
+) -> LoweredValue {
+    crate::ir_lower::numeric_domains::unary(ctx, input, elephc_semantics::numeric_domains::NumericOperator::Unary, span);
+    let original = pin_in_flight_owners(ctx, &[input.value], span);
+    let operand = crate::ir_lower::numeric_operands::box_value(ctx, input, span);
+    let boxed = if operand.value != input.value { pin_in_flight_owners(ctx, &[operand.value], span) } else { Vec::new() };
+    let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    let result = ctx.emit_owned_value(Op::RuntimeCall, vec![operand.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::NumericUnary { operator, policy })),
+        PhpType::Mixed, Effects::all(), Some(span));
+    unpin_in_flight_owners(ctx, boxed, span);
+    if operand.value != input.value { release_binary_operand_temporary(ctx, operand, span); }
+    unpin_in_flight_owners(ctx, original, span);
+    release_binary_operand_temporary(ctx, input, span);
+    result
 }
 
 /// Returns the PHP type `lower_int_unary` stamps for `~` and the other integer unaries.
@@ -88,6 +97,9 @@ pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, o
             return result;
         }
     }
+    if matches!(value.ir_type, IrType::I64 | IrType::TaggedScalar) {
+        crate::ir_lower::numeric_domains::unary(ctx, value, elephc_semantics::numeric_domains::NumericOperator::BitNot, expr.span);
+    }
     let result_ty = int_unary_result_type(value.ir_type);
     if value.ir_type == IrType::I64 {
         ctx.emit_value(op, vec![value.value], None, result_ty, op.default_effects(), Some(expr.span))
@@ -95,8 +107,25 @@ pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, o
         let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
         ctx.emit_value(op, vec![narrowed.value], None, result_ty, op.default_effects(), Some(expr.span))
     } else {
-        ctx.emit_value(Op::RuntimeCall, vec![value.value], None, result_ty, Effects::all(), Some(expr.span))
+        lower_boxed_bitnot(ctx, value, Some(expr.span))
     }
+}
+
+/// Computes scalar boxed bit-not after native handlers, retaining all exceptional operand owners.
+pub(super) fn lower_boxed_bitnot(ctx: &mut LoweringContext<'_, '_>, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+    let at = span.unwrap_or_else(Span::dummy);
+    crate::ir_lower::numeric_domains::unary(ctx, input, elephc_semantics::numeric_domains::NumericOperator::BitNot, at);
+    let originals = pin_in_flight_owners(ctx, &[input.value], at);
+    let operand = crate::ir_lower::numeric_operands::box_value(ctx, input, at);
+    let pins = if operand.value != input.value { pin_in_flight_owners(ctx, &[operand.value], at) } else { Vec::new() };
+    let result = ctx.emit_owned_value(Op::RuntimeCall, vec![operand.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::MixedBitNot)), PhpType::Mixed,
+        Effects::all(), span);
+    unpin_in_flight_owners(ctx, pins, at);
+    if operand.value != input.value { release_binary_operand_temporary(ctx, operand, at); }
+    unpin_in_flight_owners(ctx, originals, at);
+    release_binary_operand_temporary(ctx, input, at);
+    result
 }
 
 /// Lowers a tagged scalar into PHP int semantics, coercing null to zero.
@@ -118,7 +147,7 @@ pub(super) fn lower_tagged_scalar_to_int(
 /// Lowers logical negation.
 pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    let value = ctx.truthy_consuming(value, Some(expr.span));
+    let value = ctx.condition_truthy_consuming(value, Some(expr.span));
     let zero = lower_int_literal(ctx, 0, expr);
     ctx.emit_value(
         Op::ICmp,
@@ -163,7 +192,11 @@ pub(super) fn lower_error_suppress(ctx: &mut LoweringContext<'_, '_>, inner: &Ex
 /// Lowers `print`.
 pub(super) fn lower_print(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    let value = super::string_contracts::formatting(ctx, value, inner.span);
     ctx.emit_void(Op::PrintValue, vec![value.value], None, Op::PrintValue.default_effects(), Some(expr.span));
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(inner.span));
+    }
     lower_int_literal(ctx, 1, expr)
 }
 
@@ -176,7 +209,7 @@ pub(super) fn lower_logical_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let lhs = ctx.truthy_consuming(lhs, Some(left.span));
+    let lhs = ctx.condition_truthy_consuming(lhs, Some(left.span));
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let rhs_block = ctx.builder.create_named_block("logical.rhs", Vec::new());
     let const_block = ctx.builder.create_named_block("logical.const", Vec::new());
@@ -201,7 +234,7 @@ pub(super) fn lower_logical_binary(
     ctx.builder.position_at_end(rhs_block);
     join.enter_arm(ctx);
     let rhs = lower_expr(ctx, right);
-    let rhs = ctx.truthy_consuming(rhs, Some(right.span));
+    let rhs = ctx.condition_truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
     join.leave_arm(ctx);
 
@@ -225,7 +258,7 @@ pub(super) fn lower_logical_xor(
     let native_boolean = ctx.classes.keys().any(|name|
         elephc_builtin_contract::lookup_class(name)
             .and_then(|class| class.operators).and_then(|operators| operators.boolean).is_some());
-    let (lhs, rhs) = if native_boolean {
+    let (lhs, rhs) = if native_boolean || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Bools) {
         // XOR evaluates both operands before either native conversion can throw.
         let lhs = lower_expr(ctx, left);
         let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
@@ -239,9 +272,9 @@ pub(super) fn lower_logical_xor(
             value: pinned_transfer_owner(ctx, &right_pins, right.span).unwrap_or(rhs.value),
             ..rhs
         };
-        let lhs = ctx.truthy(left_input, Some(left.span));
+        let lhs = ctx.condition_truthy(left_input, Some(left.span));
         let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
-        let rhs = ctx.truthy(right_input, Some(right.span));
+        let rhs = ctx.condition_truthy(right_input, Some(right.span));
         let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
         release_pinned_in_flight_owners(ctx, right_pins, right.span);
         release_pinned_in_flight_owners(ctx, left_pins, left.span);

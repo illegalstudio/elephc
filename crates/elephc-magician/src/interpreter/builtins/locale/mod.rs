@@ -78,6 +78,7 @@ pub(in crate::interpreter) fn eval_locale_values_result(
     let args = args
         .iter()
         .map(|value| EvaluatedCallArg {
+            source_type: None,
             evaluation_owner: None,
             name: None,
             value: *value,

@@ -70,20 +70,30 @@ try {
     );
 }
 
-/// Checks one AOT callable argument-preparation fatal without bundling multiple links.
-fn assert_aot_function_arg_prep_fatal(label: &str, source: &str) {
+/// Checks the PHP argument diagnostic for the selected AOT callable signature.
+fn assert_aot_arg_prep_type_error(
+    label: &str,
+    callee: &str,
+    expected_type: &str,
+    source: &str,
+) {
+    let message = format!(
+        "{callee}(): Argument #2 ($need) must be of type {expected_type}, int given"
+    );
+    assert_uncaught_arg_prep_type_error(label, &message, source);
+}
+
+/// Checks that argument preparation reports the expected error without entering the callee.
+fn assert_uncaught_arg_prep_type_error(label: &str, message: &str, source: &str) {
     let out = compile_and_run_capture(source);
     assert!(
         !out.success,
-        "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
+        "{label}: expected an uncaught TypeError, stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "", "{label}: unexpected stdout");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
+    let expected = format!("Fatal error: Uncaught TypeError: {message}");
+    assert!(out.stdout.contains(&expected), "{label}: expected {expected:?}, stdout={:?}", out.stdout);
+    assert!(!out.stdout.contains("bad"), "{label}: method body ran");
     assert!(
         !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
         "{label}: stderr leaked a Rust panic: {}",
@@ -94,8 +104,10 @@ fn assert_aot_function_arg_prep_fatal(label: &str, source: &str) {
 /// Verifies string callable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_string_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "string callable",
+        "eval_aot_function_string_prep_fatal_bridge",
+        "EvalAotFunctionStringPrepFatalNeed",
         r#"<?php
 class EvalAotFunctionStringPrepFatalNeed {}
 function eval_aot_function_string_prep_fatal_bridge(int &$value, EvalAotFunctionStringPrepFatalNeed $need): int {
@@ -114,8 +126,10 @@ echo "bad";');
 /// Verifies first-class callable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_first_class_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "first-class callable",
+        "eval_aot_function_first_prep_fatal_bridge",
+        "EvalAotFunctionFirstPrepFatalNeed",
         r#"<?php
 class EvalAotFunctionFirstPrepFatalNeed {}
 function eval_aot_function_first_prep_fatal_bridge(int &$value, EvalAotFunctionFirstPrepFatalNeed $need): int {
@@ -134,8 +148,10 @@ echo "bad";');
 /// Verifies Closure::fromCallable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_closure_from_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "Closure::fromCallable",
+        "eval_aot_function_closure_prep_fatal_bridge",
+        "EvalAotFunctionClosurePrepFatalNeed",
         r#"<?php
 class EvalAotFunctionClosurePrepFatalNeed {}
 function eval_aot_function_closure_prep_fatal_bridge(int &$value, EvalAotFunctionClosurePrepFatalNeed $need): int {
@@ -154,8 +170,10 @@ echo "bad";');
 /// Verifies call_user_func_array argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_call_user_func_array() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "call_user_func_array",
+        "eval_aot_function_array_prep_fatal_bridge",
+        "EvalAotFunctionArrayPrepFatalNeed",
         r#"<?php
 class EvalAotFunctionArrayPrepFatalNeed {}
 function eval_aot_function_array_prep_fatal_bridge(int &$value, EvalAotFunctionArrayPrepFatalNeed $need): int {
@@ -309,7 +327,10 @@ try {
 /// Verifies AOT instance method argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_instance_method_by_ref_arg_prep_fatal_cleans_up_stack() {
-    let out = compile_and_run_capture(
+    assert_aot_arg_prep_type_error(
+        "instance method",
+        "EvalAotInstancePrepFatalBridge::bump",
+        "EvalAotInstancePrepFatalNeed",
         r#"<?php
 class EvalAotInstancePrepFatalNeed {}
 class EvalAotInstancePrepFatalBridge {
@@ -326,29 +347,15 @@ $callback($value, 123);
 echo "bad";');
 "#,
     );
-
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
-    );
 }
 
 /// Verifies AOT static method argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_static_method_by_ref_arg_prep_fatal_cleans_up_stack() {
-    let out = compile_and_run_capture(
+    assert_aot_arg_prep_type_error(
+        "static method",
+        "EvalAotStaticPrepFatalBridge::bump",
+        "EvalAotStaticPrepFatalNeed",
         r#"<?php
 class EvalAotStaticPrepFatalNeed {}
 class EvalAotStaticPrepFatalBridge {
@@ -364,23 +371,6 @@ $callback($value, 123);
 echo "bad";');
 "#,
     );
-
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
-    );
 }
 
 /// Verifies AOT static method callable variants restore the eval bridge frame on prep fatal.
@@ -389,6 +379,8 @@ fn test_eval_aot_static_method_callable_variants_by_ref_arg_prep_fatal_clean_up_
     let cases = [
         (
             "array callable",
+            "EvalAotStaticVariantArrayPrepFatalBridge::bump",
+            "EvalAotStaticVariantArrayPrepFatalNeed",
             r#"<?php
 class EvalAotStaticVariantArrayPrepFatalNeed {}
 class EvalAotStaticVariantArrayPrepFatalBridge {
@@ -406,6 +398,8 @@ echo "bad";');
         ),
         (
             "first-class callable",
+            "EvalAotStaticVariantFirstClassPrepFatalBridge::bump",
+            "EvalAotStaticVariantFirstClassPrepFatalNeed",
             r#"<?php
 class EvalAotStaticVariantFirstClassPrepFatalNeed {}
 class EvalAotStaticVariantFirstClassPrepFatalBridge {
@@ -423,6 +417,8 @@ echo "bad";');
         ),
         (
             "Closure::fromCallable array",
+            "EvalAotStaticVariantFromCallablePrepFatalBridge::bump",
+            "EvalAotStaticVariantFromCallablePrepFatalNeed",
             r#"<?php
 class EvalAotStaticVariantFromCallablePrepFatalNeed {}
 class EvalAotStaticVariantFromCallablePrepFatalBridge {
@@ -440,32 +436,18 @@ echo "bad";');
         ),
     ];
 
-    for (label, source) in cases {
-        let out = compile_and_run_capture(source);
-        assert!(
-            !out.success,
-            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
-            out.stdout, out.stderr
-        );
-        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
-        assert!(
-            out.stderr.contains("Fatal error: eval() runtime failed"),
-            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
-            out.stderr
-        );
-        assert!(
-            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-            "{label}: stderr leaked a Rust panic: {}",
-            out.stderr
-        );
+    for (label, callee, expected_type, source) in cases {
+        assert_aot_arg_prep_type_error(label, callee, expected_type, source);
     }
 }
 
 /// Verifies instance array callable named argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_instance_array_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "instance array callable",
+        "EvalAotNamedRefArrayFatalBridge::bump",
+        "EvalAotNamedRefArrayFatalNeed",
         r#"<?php
 class EvalAotNamedRefArrayFatalNeed {}
 class EvalAotNamedRefArrayFatalBridge {
@@ -487,8 +469,10 @@ echo "bad";');
 /// Verifies first-class instance callable named argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_first_class_instance_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "first-class instance callable",
+        "EvalAotNamedRefFirstFatalBridge::bump",
+        "EvalAotNamedRefFirstFatalNeed",
         r#"<?php
 class EvalAotNamedRefFirstFatalNeed {}
 class EvalAotNamedRefFirstFatalBridge {
@@ -510,8 +494,10 @@ echo "bad";');
 /// Verifies Closure::fromCallable instance named argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_closure_from_callable_instance() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "Closure::fromCallable instance",
+        "EvalAotNamedRefClosureFatalBridge::bump",
+        "EvalAotNamedRefClosureFatalNeed",
         r#"<?php
 class EvalAotNamedRefClosureFatalNeed {}
 class EvalAotNamedRefClosureFatalBridge {
@@ -533,8 +519,10 @@ echo "bad";');
 /// Verifies static string callable named argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_static_string_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "static string callable",
+        "EvalAotNamedRefStringFatalBridge::bump",
+        "EvalAotNamedRefStringFatalNeed",
         r#"<?php
 class EvalAotNamedRefStringFatalNeed {}
 class EvalAotNamedRefStringFatalBridge {
@@ -555,8 +543,10 @@ echo "bad";');
 /// Verifies first-class static callable named argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_first_class_static_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "first-class static callable",
+        "EvalAotNamedRefStaticFatalBridge::bump",
+        "EvalAotNamedRefStaticFatalNeed",
         r#"<?php
 class EvalAotNamedRefStaticFatalNeed {}
 class EvalAotNamedRefStaticFatalBridge {
@@ -577,8 +567,10 @@ echo "bad";');
 /// Verifies invokable object callable named argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_invokable_object_callable() {
-    assert_aot_function_arg_prep_fatal(
+    assert_aot_arg_prep_type_error(
         "invokable object callable",
+        "EvalAotNamedRefInvokeFatalBridge::__invoke",
+        "EvalAotNamedRefInvokeFatalNeed",
         r#"<?php
 class EvalAotNamedRefInvokeFatalNeed {}
 class EvalAotNamedRefInvokeFatalBridge {
@@ -599,7 +591,10 @@ echo "bad";');
 /// Verifies AOT first-class method argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_first_class_method_by_ref_arg_prep_fatal_cleans_up_stack() {
-    let out = compile_and_run_capture(
+    assert_aot_arg_prep_type_error(
+        "first-class instance method",
+        "EvalAotFirstClassPrepFatalBridge::bump",
+        "EvalAotFirstClassPrepFatalNeed",
         r#"<?php
 class EvalAotFirstClassPrepFatalNeed {}
 class EvalAotFirstClassPrepFatalBridge {
@@ -616,29 +611,15 @@ $callback($value, 123);
 echo "bad";');
 "#,
     );
-
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
-    );
 }
 
 /// Verifies AOT `Closure::fromCallable()` method argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_closure_from_callable_method_by_ref_arg_prep_fatal_cleans_up_stack() {
-    let out = compile_and_run_capture(
+    assert_aot_arg_prep_type_error(
+        "Closure::fromCallable instance method",
+        "EvalAotFromCallablePrepFatalBridge::bump",
+        "EvalAotFromCallablePrepFatalNeed",
         r#"<?php
 class EvalAotFromCallablePrepFatalNeed {}
 class EvalAotFromCallablePrepFatalBridge {
@@ -654,23 +635,6 @@ $value = "2";
 $callback($value, 123);
 echo "bad";');
 "#,
-    );
-
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
     );
 }
 

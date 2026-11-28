@@ -926,10 +926,11 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
     else {
         return Ok(None);
     };
-    let args = bind_evaluated_function_args(
+    let arguments = bind_evaluated_function_arg_records(
         &[String::from("name"), String::from("value")],
         evaluated_args,
     )?;
+    let args = arguments.iter().map(|argument| argument.value).collect::<Vec<_>>();
     let property_name = eval_reflection_string_arg(args[0], values)?;
     // php-src initializes the reflected class once the arguments are evaluated, whether the
     // property exists or not.
@@ -963,8 +964,12 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
             .declaring_class_name
             .as_deref()
             .unwrap_or(reflected_name.as_str());
+        let argument = match arguments[1].evaluation_owner.as_ref() {
+            Some(owner) => owner.take(values)?, None => None,
+        };
+        let argument = match argument { Some(value) => value, None => values.retain(args[1])? };
         let updated = eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
-            values.static_property_set(&reflected_name, &property_name, args[1])
+            values.static_property_class_set(&reflected_name, &property_name, argument)
         })?;
         if updated {
             return values.null().map(Some);

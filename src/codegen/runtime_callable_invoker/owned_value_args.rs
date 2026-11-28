@@ -22,6 +22,7 @@ pub(super) fn coerce(
     source_ty: &PhpType,
     target_ty: Option<&PhpType>,
 ) -> (PhpType, bool) {
+    super::parameter_guards::check(emitter, ctx, data, source_ty);
     if let (Some((index, name)), Some(target)) = (ctx.literal_parameter.clone(), target_ty) {
         if matches!(target, PhpType::False | PhpType::Void) {
             let boxed_source = !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));

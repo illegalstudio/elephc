@@ -141,6 +141,14 @@ pub(super) fn lower_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_local_array_element(read, array, index)
     });
+    if matches!(&update, Some(ElementUpdate::Compound)) && ctx.local_type(array).codegen_repr() == PhpType::Mixed {
+        let target = Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::Variable(array.into()), span)),
+            index: Box::new(index.clone()),
+        }, span);
+        super::nested_array_writes::lower_nested_array_assign(ctx, &target, value, span);
+        return;
+    }
     if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
         && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
@@ -370,7 +378,15 @@ fn lower_concrete_array_reference_bind(
         Op::LoadLocalRefCellPtr.default_effects(),
         Some(span),
     );
-    let (index_value, (), index_pins) = lower_write_key_then(ctx, index, |_| ());
+    let mut pending = [array_value];
+    let ((index_value, (), mut key_pins), mut index_pins) =
+        crate::ir_lower::expr::lower_with_pending_owners(ctx, &mut pending, span,
+            |ctx| lower_write_key_then(ctx, index, |_| ()));
+    let array_value = pending[0];
+    index_pins.append(&mut key_pins);
+    crate::ir_lower::array_key_guards::for_write(
+        ctx, array_value, index_value, cell, &index_pins, index.span,
+    );
     // The key expression may have bound the destination. Publish the fresh container only
     // after the key ran, and re-read the slot when the key could have replaced it.
     let array_value = match auto_viv {
@@ -483,8 +499,18 @@ fn lower_array_assign_from_value(
         lower_boxed_array_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
-    let (mut index_value, mut value_value, mut index_pins) =
-        lower_write_key_and_value(ctx, index, value);
+    // Final frame storage may make this earlier local view own a retained array.
+    // Keep that lease visible while an index or checked RHS can throw before publication.
+    let mut pending = [array_value];
+    let ((mut index_value, mut value_value, mut index_pins), mut receiver_pins) =
+        crate::ir_lower::expr::lower_with_pending_owners(ctx, &mut pending, span,
+            |ctx| lower_write_key_and_value(ctx, index, value));
+    let array_value = pending[0];
+    receiver_pins.append(&mut index_pins);
+    index_pins = receiver_pins;
+    crate::ir_lower::array_key_guards::for_write(
+        ctx, array_value, index_value, value_value, &index_pins, index.span,
+    );
     // `??=` borrows its result temp: the slot keeps the reference and hands it to the
     // expression consumer, so the container write must retain its own owner instead of
     // adopting the temp (which would leave a dangling hash entry after the merge releases it).
@@ -562,11 +588,11 @@ fn lower_array_assign_from_value(
     // needlessly dispatching.
     let empty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if is_empty_indexed_array_element(&element))
-        && crate::types::empty_array_key_requires_hash_storage(index)
+        && crate::types::empty_array_key_requires_hash_storage(index, ctx.semantic_profile)
         && !index_is_boxed_mixed_key(index_value.ir_type);
     let nonempty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if !is_empty_indexed_array_element(&element))
-        && crate::types::nonempty_array_key_forces_hash_storage(index)
+        && crate::types::nonempty_array_key_forces_hash_storage(index, ctx.semantic_profile)
         && !index_is_boxed_mixed_key(index_value.ir_type);
     let mixed_elements = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
@@ -616,7 +642,7 @@ fn lower_array_assign_from_value(
         && !index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
         && (index_value.ir_type == IrType::Str
-            || crate::types::empty_array_key_requires_hash_storage(index)
+            || crate::types::empty_array_key_requires_hash_storage(index, ctx.semantic_profile)
             || matches!(value_value.ir_type,
                 IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)))
     {
@@ -700,7 +726,7 @@ fn lower_array_assign_from_value(
     }
     if op == Op::ArraySet {
         let (array_value, updated_ty, needs_storeback) =
-            prepare_indexed_array_local_set(ctx, array_value, value_value, span);
+            prepare_indexed_array_local_set(ctx, array, array_value, value_value, span);
         ctx.emit_void(
             op,
             vec![array_value.value, index_value.value, value_value.value],
@@ -741,6 +767,7 @@ pub(super) fn lower_concrete_array_set_values(
     index_pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
     span: Span, key_already_diagnosed: bool,
 ) {
+    crate::ir_lower::array_key_guards::for_write(ctx, array, index, value, &index_pins, span);
     let op = array_set_op(array.ir_type);
     ctx.emit_void(
         op,
@@ -771,23 +798,28 @@ pub(super) fn lower_boxed_array_set(
     let array = boxed_invalid_scalar_receiver(ctx, array, span);
     let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
-    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
-        let value = lower_expr(ctx, expr);
-        let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
-        if let Some(root) = root { roots.push(root); }
-        value
+    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr, key: bool| {
+        let mut lower = |ctx: &mut LoweringContext<'_, '_>| {
+            let value = lower_expr(ctx, expr);
+            let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
+            if let Some(root) = root { roots.push(root); }
+            value
+        };
+        if key { ctx.with_independent_write_receiver(lower) } else { lower(ctx) }
     };
     // Preserve the existing PHP ordering for bare variable keys versus computed keys.
     let (index, value) = if matches!(index.kind, ExprKind::Variable(_)) {
-        let value = lower_operand(ctx, value);
-        (lower_operand(ctx, index), value)
+        let value = lower_operand(ctx, value, false);
+        (lower_operand(ctx, index, true), value)
     } else {
-        let index = lower_operand(ctx, index);
-        (index, lower_operand(ctx, value))
+        let index = lower_operand(ctx, index, true);
+        (index, lower_operand(ctx, value, false))
     };
-    string_offset_writes::lower_boxed_set(
+    let index = prepare_boxed_write_key(ctx, index, span, &mut roots);
+    super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
+    if ctx.builder.insertion_block_is_terminated() { return; }
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }
@@ -813,14 +845,105 @@ pub(super) fn lower_boxed_array_set_values(
         }
         operand
     };
-    let index = root(ctx, index);
+    let index = ctx.with_independent_write_receiver(|ctx| root(ctx, index));
     let value = root(ctx, value);
-    string_offset_writes::lower_boxed_set(
+    let index = prepare_boxed_write_key(ctx, index, span, &mut roots);
+    super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
+    if ctx.builder.insertion_block_is_terminated() { return; }
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }
+}
+
+/// Preserves exact object keys until runtime receiver dispatch selects array or ArrayAccess.
+///
+/// An ArrayAccess receiver dispatches to its `offsetSet` signature, whose ordinary call coercion
+/// boxes a mixed parameter. A runtime array receiver rejects the same raw object through the
+/// prepared key guard. Pre-boxing the key here would create a second owner outside the call
+/// ledger, which can retire a WeakMap key before the compound update finishes.
+fn prepare_boxed_write_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    key: LoweredValue,
+    span: Span,
+    roots: &mut Vec<crate::ir::LocalSlotId>,
+) -> LoweredValue {
+    if matches!(ctx.builder.value_php_type(key.value).codegen_repr(), PhpType::Object(_)) {
+        return key;
+    }
+    crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, key, span)
+        .into_value_with_owners(roots)
+}
+
+/// Recognizes boxed packed-or-hash storage whose PHP contract is still exactly `array`.
+pub(super) fn boxed_receiver_has_array_contract(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+) -> bool {
+    ctx.builder.value_php_type(receiver.value).is_php_array()
+}
+
+/// Peels identity-only wrappers while preserving the published boxed array cell.
+pub(super) fn direct_boxed_array_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+) -> LoweredValue {
+    let value = wrapped_source(
+        ctx,
+        receiver.value,
+        |op| matches!(op, Op::Borrow | Op::Move),
+        |source| ctx.builder.value_php_type(source).is_php_array(),
+    );
+    LoweredValue {
+        value,
+        ir_type: ctx.builder.value_type(value),
+    }
+}
+
+/// Restores a published property or reference cell after lifetime-only wrappers.
+pub(super) fn direct_published_boxed_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+) -> LoweredValue {
+    let source = wrapped_source(
+        ctx,
+        receiver.value,
+        |op| matches!(op, Op::Acquire | Op::Borrow | Op::Move),
+        |_| true,
+    );
+    if matches!(
+        ctx.builder.value_defining_op(source),
+        Some(Op::PropGetForWrite | Op::LoadRefCell)
+    ) {
+        return LoweredValue {
+            value: source,
+            ir_type: ctx.builder.value_type(source),
+        };
+    }
+    receiver
+}
+
+/// Follows caller-approved wrappers while each source preserves the required contract.
+fn wrapped_source(
+    ctx: &LoweringContext<'_, '_>,
+    mut value: crate::ir::ValueId,
+    peels: impl Fn(Op) -> bool,
+    accepts: impl Fn(crate::ir::ValueId) -> bool,
+) -> crate::ir::ValueId {
+    while let Some(instruction) = ctx.builder.value_defining_instruction(value) {
+        if !peels(instruction.op) {
+            break;
+        }
+        let Some(source) = instruction.operands.first().copied() else {
+            break;
+        };
+        if !accepts(source) {
+            break;
+        }
+        value = source;
+    }
+    value
 }
 
 /// Routes impossible integer/float stores through the existing boxed PHP error path.
@@ -902,7 +1025,10 @@ fn lower_promotable_array_local_set(
             let array_ty = ctx.builder.value_php_type(array_value.value);
             let value_value =
                 coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value_span));
-            (value_value, prepare_indexed_array_local_set(ctx, array_value, value_value, span))
+            (
+                value_value,
+                prepare_indexed_array_local_set(ctx, array, array_value, value_value, span),
+            )
         };
     ctx.emit_void(
         Op::ArraySet,

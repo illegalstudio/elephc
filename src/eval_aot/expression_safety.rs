@@ -28,7 +28,7 @@ where
         ExprKind::Variable(name) => {
             facts.is_assigned(name) || scope_reads.is_some_and(|reads| reads.contains(name))
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
@@ -87,7 +87,7 @@ where
         ExprKind::Cast { target, expr } => {
             matches!(
                 target,
-                CastType::Int | CastType::Float | CastType::String | CastType::Bool
+                CastType::Int | CastType::Float | CastType::String | CastType::StringFormat | CastType::Bool
             ) && expr_is_eir_function_safe(expr, support, facts, scope_reads)
         }
         ExprKind::Match {
@@ -124,7 +124,7 @@ where
                     facts,
                     scope_reads,
                 )
-                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, support.strict_php())
+                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, EvalSourceProfile::new(support.php_only(), support.semantic_profile()))
                     .is_some()
                 || support.function_supported(name.as_str(), args)
         }
@@ -185,7 +185,7 @@ where
     static_callback_function_name(callback).is_some_and(|callback_name| {
         let short_callback = callback_name.trim_start_matches('\\');
         eir_runtime_builtin_call_is_safe(short_callback, callback_args, support, facts, scope_reads)
-            || fold_static_builtin_call(short_callback, callback_args, support.strict_php()).is_some()
+            || fold_static_builtin_call(short_callback, callback_args, EvalSourceProfile::new(support.php_only(), support.semantic_profile())).is_some()
             || support.function_supported(short_callback, callback_args)
     })
 }

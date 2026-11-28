@@ -669,6 +669,7 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
         retired_type: Option<&PhpType>, reference_write: Option<bool>,
     ) -> ThrownTypes {
+        let _semantics = super::semantic_context::scoped_source_mode(stmt.source_mode);
         // The checker publishes switch comparison throws at each evaluated label prefix.
         if !include_operands && !matches!(stmt.kind,
             StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
@@ -729,6 +730,9 @@ impl ExceptionFlowAnalysis {
             // in THIS frame, so a same-frame catch can still see it.
             StmtKind::Assign { name, value }
             | StmtKind::TypedAssign { name, value, .. } => operand(value)
+                .combined(if super::semantic_context::implicit_store_may_throw(stmt) {
+                    ThrownTypes::exact("TypeError")
+                } else { ThrownTypes::default() })
                 .combined(overwrite())
                 .combined(if reference_write.unwrap_or_else(|| is_reference_volatile(name)) { ThrownTypes::unknown() }
                     else { ThrownTypes::default() }),
@@ -908,6 +912,8 @@ impl ExceptionFlowAnalysis {
     fn internal_conversion_throws(&self, expr: &Expr) -> ThrownTypes {
         if self.has_internal_object_operators && !effects::literal_scalar_operand(expr) {
             ThrownTypes::unknown()
+        } else if super::semantic_context::boolean_guard_may_throw(expr) {
+            ThrownTypes::exact("TypeError")
         } else { ThrownTypes::default() }
     }
 
@@ -934,6 +940,12 @@ impl ExceptionFlowAnalysis {
         let thrown = self.operation_throws_at_boundary(expr, bindings, class_context, include_operands);
         if super::binding_decisions::call_has_scalar_guard_arg(call_args(expr)) {
             thrown.combined(ThrownTypes::unknown())
+        } else if super::semantic_context::implicit_value_boundary_may_throw(expr)
+            || super::semantic_context::comparison_boundary_may_throw(expr)
+            || super::semantic_context::string_boundary_may_throw(expr)
+            || super::semantic_context::array_key_boundary_may_throw(expr)
+        {
+            thrown.combined(ThrownTypes::exact("TypeError"))
         } else {
             thrown
         }
@@ -955,12 +967,20 @@ impl ExceptionFlowAnalysis {
         let operands = |values: &[Expr]| if include_operands {
             self.expr_list_throws(values, bindings, class_context)
         } else { ThrownTypes::default() };
-        match &expr.kind {
+        let overflow = if super::semantic_context::integer_overflow_may_throw(expr) {
+            ThrownTypes::exact("ArithmeticError")
+        } else { ThrownTypes::default() };
+        let update = if super::semantic_context::checked_update_may_dispatch(expr) {
+            ThrownTypes::unknown()
+        } else { ThrownTypes::default() };
+        overflow.combined(update).combined(match &expr.kind {
             ExprKind::Throw(inner) => operand(inner)
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
-            ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
                 let thrown = operand(inner);
-                if self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
+                if super::semantic_context::numeric_domain_may_throw(expr)
+                    || super::semantic_context::unary_numeric_conversion_may_dispatch(expr)
+                    || self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
                     thrown.combined(ThrownTypes::unknown())
                 } else { thrown }
             }
@@ -980,7 +1000,10 @@ impl ExceptionFlowAnalysis {
                 .combined(host_output_throws()),
             ExprKind::Cast { target, expr: inner } => {
                 let mut thrown = operand(inner);
-                if matches!(target, CastType::String) {
+                if super::semantic_context::checked_cast_may_throw(expr) {
+                    thrown = thrown.combined(ThrownTypes::unknown());
+                }
+                if matches!(target, CastType::String | CastType::StringFormat) {
                     thrown = thrown.combined(self.string_conversion_throws(inner, class_context));
                 } else if matches!(target, CastType::Bool | CastType::Array) {
                     thrown = thrown.combined(self.internal_conversion_throws(inner));
@@ -992,7 +1015,9 @@ impl ExceptionFlowAnalysis {
             ExprKind::BinaryOp { left, op, right } => {
                 let mut thrown = operand(left)
                     .combined(operand(right));
-                if self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
+                if super::semantic_context::numeric_domain_may_throw(expr)
+                || super::semantic_context::checked_numeric_conversion_may_dispatch(expr)
+                    || self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 } else if matches!(op, BinOp::And | BinOp::Or | BinOp::Xor) {
                     thrown = thrown.combined(self.internal_conversion_throws(left))
@@ -1206,7 +1231,7 @@ impl ExceptionFlowAnalysis {
                 ExprKind::NamedArg { .. }) => ThrownTypes::default(),
             _ if expr_effect(expr).may_throw => ThrownTypes::unknown(),
             _ => ThrownTypes::default(),
-        }
+        })
     }
 
     /// Reuses a declaration's canonical spelling for PHP's case-insensitive function lookup.

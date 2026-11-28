@@ -22,7 +22,7 @@ use crate::ir::{
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, Visibility,
+    ClassMethod, Expr, Program, StaticReceiver, Stmt, StmtKind, Visibility,
 };
 use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
@@ -103,7 +103,7 @@ fn lower_on_compiler_stack(
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
     let _closure_param_hints =
-        crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
+        crate::ir_lower::closure_hints::install(&check_result.closure_param_hints, &check_result.closure_result_types);
     let _closure_defaults = crate::ir_lower::initializer_reads::install(check_result);
     // A program that runs dynamic `eval()` code can define constants after schema creation.
     // Declared initializers must ask the eval runtime for those names instead of reading native
@@ -113,6 +113,7 @@ fn lower_on_compiler_stack(
         &check_result.native_defined_constants,
     );
     let mut module = Module::new(target);
+    module.semantic_profile = check_result.semantic_profile;
     module.source_path = source_path.map(crate::source::canonical_source_path);
     // Codegen may run on another thread than parsing, so freeze the span-to-file table here.
     // Paths are canonicalized exactly like `_script_source_file` and `__FILE__`: the CLI may
@@ -166,6 +167,7 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
+    validate_dynamic_source_policy(&module)?;
     function::lower_eval_native_default_helpers(
         &mut module,
         check_result,
@@ -206,11 +208,16 @@ fn lower_on_compiler_stack(
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
+    super::reference_local_validators::lower_requested(&mut module)?;
+    if super::reference_property_validators::required_by_profile(&module) {
+        super::reference_property_validators::enable_native_reference_validation(&mut module)?;
+    }
     // A refused shape is reported before validation: the placeholder EIR those sites emit
     // keeps the module well formed, but the program must not reach codegen regardless.
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
+    validate_dynamic_source_policy(&module)?;
     module.erase_declared_callable_types();
     validate_module(&module).map_err(|error| super::validation_context::describe(&module, error))?;
     Ok(module)

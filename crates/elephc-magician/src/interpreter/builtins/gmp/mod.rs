@@ -91,3 +91,4 @@ pub(in crate::interpreter) fn eval_gmp_bridge_extension(
 }
 
 pub(in crate::interpreter) use dispatch::*;
+pub(in crate::interpreter) use gmp_intval::eval_gmp_intval_values_result;

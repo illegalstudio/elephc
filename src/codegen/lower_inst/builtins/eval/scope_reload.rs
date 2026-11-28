@@ -58,6 +58,8 @@ fn store_mixed_scope_cell_to_logical_local(
     let rejected = ctx.next_label("eval_local_reload_rejected");
     scope_reload_checks::guard_heap_replacement(ctx, &local.ty, &local.name, pending_throw, &rejected);
     match local.ty.codegen_repr() {
+        // Raw null storage has no payload; canonical shared snapshots are handled separately.
+        PhpType::Void => {},
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             replace_owned_eval_local(ctx, local, pending_throw)?;
@@ -105,6 +107,7 @@ fn store_mixed_scope_cell_to_logical_local(
             )))
         }
     }
+    crate::codegen::local_binding_state::mark(ctx, local.slot, true);
     ctx.emitter.label(&rejected);
     Ok(())
 }
@@ -146,6 +149,8 @@ fn store_mixed_scope_cell_to_ref_cell(
         &rejected,
     );
     match payload_ty.codegen_repr() {
+        // Shared canonical null references took the wrapper-identity branch above.
+        PhpType::Void => {},
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             replace_owned_eval_ref_cell(ctx, local, payload_ty, pending_throw)?;
@@ -193,9 +198,11 @@ fn store_mixed_scope_cell_to_ref_cell(
             )))
         }
     }
+    crate::codegen::local_binding_state::mark(ctx, local.slot, true);
     abi::emit_jump(ctx.emitter, &rejected);
     ctx.emitter.label(&converted);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    crate::codegen::local_binding_state::mark(ctx, local.slot, true);
     ctx.emitter.label(&rejected);
     Ok(())
 }
@@ -242,7 +249,8 @@ pub(super) fn store_mixed_scope_cell_to_global(
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
+            let prefix = ctx.next_label("eval_global_publication");
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw, &prefix);
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
@@ -260,7 +268,8 @@ pub(super) fn store_mixed_scope_cell_to_global(
             let string = ctx.next_label("eval_reload_global_string_payload");
             let persist = ctx.next_label("eval_reload_global_persist_string");
             abi::emit_owned_mixed_string(ctx.emitter, &string, &persist);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
+            let prefix = ctx.next_label("eval_global_publication");
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw, &prefix);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -272,7 +281,8 @@ pub(super) fn store_mixed_scope_cell_to_global(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg));  // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
+            let prefix = ctx.next_label("eval_global_publication");
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw, &prefix);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -291,8 +301,14 @@ fn replace_owned_eval_global(
     symbol: &str,
     ty: &PhpType,
     pending_throw: Option<usize>,
+    prefix: &str,
 ) {
     emitter.comment("publish eval global replacement before retiring the previous owner");
+    if ty.codegen_repr() == PhpType::Mixed {
+        crate::codegen_support::runtime::reference_cells::swap_mixed_symbol(emitter, symbol, prefix);
+        retire_eval_replacement_owner(emitter, ty, pending_throw);
+        return;
+    }
     abi::emit_push_result_value(emitter, ty);
     abi::emit_load_symbol_to_result(emitter, symbol, ty);
     abi::emit_push_result_value(emitter, ty);
@@ -408,13 +424,16 @@ pub(super) fn store_missing_scope_entry_to_local(
     local: &EvalSyncLocal,
     pending_throw: Option<usize>,
 ) -> Result<()> {
+    crate::codegen::local_binding_state::mark(ctx, local.slot, false);
     scope_reload_checks::detach_missing_local(ctx, local, pending_throw)?;
     match local.ty.codegen_repr() {
+        PhpType::Void => {},
         PhpType::Mixed | PhpType::Union(_) => {
             ensure_eval_local_writeback_owns_value(ctx, local)?;
             ctx.release_local_before_refcounted_writeback(local.slot)?;
-            let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
-            abi::emit_call_label(ctx.emitter, &symbol);
+            // An absent PHP binding uses the same zeroed slot as native unset. No new lease
+            // should survive on a path where the local was never successfully bound.
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         PhpType::Int | PhpType::Bool => {
@@ -481,7 +500,8 @@ pub(super) fn store_missing_scope_entry_to_global(
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol_name = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol_name);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
+            let prefix = ctx.next_label("eval_global_publication");
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw, &prefix);
         }
         PhpType::Int => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -500,11 +520,13 @@ pub(super) fn store_missing_scope_entry_to_global(
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
+            let prefix = ctx.next_label("eval_global_publication");
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw, &prefix);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
+            let prefix = ctx.next_label("eval_global_publication");
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw, &prefix);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -533,7 +555,7 @@ mod tests {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             for ty in &cases {
                 let mut emitter = Emitter::new(Target::parse(target).unwrap());
-                replace_owned_eval_global(&mut emitter, "_eval_guarded_reload_global", ty, Some(88));
+                replace_owned_eval_global(&mut emitter, "_eval_guarded_reload_global", ty, Some(88), "guarded_reload");
                 let asm = emitter.output();
                 let publication = asm.rfind("_eval_guarded_reload_global").unwrap();
                 let cleanup = asm.find("__rt_cleanup_invoke").unwrap();
@@ -564,14 +586,16 @@ mod tests {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             for (ty, release) in &cases {
                 let mut emitter = Emitter::new(Target::parse(target).unwrap());
-                replace_owned_eval_global(&mut emitter, "_eval_reload_test_global", ty, None);
+                replace_owned_eval_global(&mut emitter, "_eval_reload_test_global", ty, None, "typed_reload");
                 let asm = emitter.output();
                 let publication = asm.rfind("_eval_reload_test_global").unwrap();
                 let cleanup = asm.find(release).unwrap();
                 assert!(publication < cleanup, "{target}: {ty}: {asm}");
                 assert_eq!(asm.matches(release).count(), 1, "{target}: {ty}: {asm}");
-                let restored = if target == "linux-x86_64" { "add rsp, 32" } else { "add sp, sp, #32" };
-                assert!(asm.find(restored).unwrap() < cleanup, "{target}: cleanup must not strand temporary stack owners");
+                if *ty != PhpType::Mixed {
+                    let restored = if target == "linux-x86_64" { "add rsp, 32" } else { "add sp, sp, #32" };
+                    assert!(asm.find(restored).unwrap() < cleanup, "{target}: cleanup must not strand temporary stack owners");
+                }
                 assert!(!asm.contains("__rt_incref"), "{target}: the replacement already owns its payload");
             }
         }

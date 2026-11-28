@@ -11,6 +11,17 @@ use super::*;
 
 /// Lowers string concatenation.
 pub(super) fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, expr: &Expr) -> LoweredValue {
+    if crate::semantics::strings::active(ctx.semantic_profile, ctx.source_mode) {
+        let lhs = lower_expr(ctx, left);
+        let lhs = persist_concat_lhs_if_rhs_can_reset(ctx, lhs, right, expr.span);
+        let (lhs, capture_pins) = object_operators::capture_left_operand_with_policy(ctx, lhs, right, left.span, true);
+        let mut pending = [lhs];
+        let (rhs, pins) = lower_with_pending_owners(ctx, &mut pending, right.span, |ctx| lower_expr(ctx, right));
+        let result = lower_concat_from_values(ctx, pending[0], rhs, expr);
+        unpin_in_flight_owners(ctx, pins, right.span);
+        unpin_in_flight_owners(ctx, capture_pins, left.span);
+        return result;
+    }
     let lhs = lower_expr(ctx, left);
     let lhs = coerce_to_string(ctx, lhs, expr);
     let lhs = crate::ir_lower::ownership::persist_string_byte_view(ctx, lhs, Some(left.span));
@@ -29,6 +40,13 @@ pub(super) fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right
 pub(super) fn lower_concat_from_values(
     ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, rhs: LoweredValue, expr: &Expr,
 ) -> LoweredValue {
+    let (lhs, rhs) = if crate::semantics::strings::active(ctx.semantic_profile, ctx.source_mode) {
+        let pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);
+        let lhs = super::string_contracts::concatenation(ctx, lhs, expr.span);
+        let rhs = super::string_contracts::concatenation(ctx, rhs, expr.span);
+        unpin_in_flight_owners(ctx, pins, expr.span);
+        (lhs, rhs)
+    } else { (lhs, rhs) };
     let lhs = coerce_to_string(ctx, lhs, expr);
     let lhs = crate::ir_lower::ownership::persist_string_byte_view(ctx, lhs, Some(expr.span));
     let mut pending = [lhs];
@@ -151,7 +169,7 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
             expr_can_reset_concat_storage(value)
                 || matches!(target, InstanceOfTarget::Expr(inner) if expr_can_reset_concat_storage(inner))
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

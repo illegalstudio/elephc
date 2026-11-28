@@ -14,23 +14,25 @@ use crate::ir::RuntimeFnId;
 /// Selects a string offset write or the existing array/object setter using the runtime parent.
 pub(super) fn lower_nested_set(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
-    key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
+    key: LoweredValue, value: LoweredValue, index: &Expr, span: Span, key_already_diagnosed: bool,
 ) {
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
         emit_set(ctx, parent, key, value, span, key_already_diagnosed);
         return;
     }
-    let string = predicate(ctx, parent, crate::ir::PhpTypePredicate::String, span);
-    let string_write = ctx.builder.create_named_block("nested.write.string", Vec::new());
-    let array_write = ctx.builder.create_named_block("nested.write.container", Vec::new());
     let done = ctx.builder.create_named_block("nested.write.done", Vec::new());
     let initialized = ctx.initialized_slots_snapshot();
-    branch(ctx, string, string_write, array_write);
-    ctx.builder.position_at_end(string_write);
-    lower_string_write(ctx, parent, key, value, span);
-    ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
-    ctx.builder.position_at_end(array_write);
-    ctx.restore_initialized_slots(initialized.clone());
+    if !super::nested_write_guards::literal_rejects_string_offset(index) {
+        let string = predicate(ctx, parent, crate::ir::PhpTypePredicate::String, span);
+        let string_write = ctx.builder.create_named_block("nested.write.string", Vec::new());
+        let array_write = ctx.builder.create_named_block("nested.write.container", Vec::new());
+        branch(ctx, string, string_write, array_write);
+        ctx.builder.position_at_end(string_write);
+        lower_string_write(ctx, parent, key, value, span);
+        branch_to(ctx, done);
+        ctx.builder.position_at_end(array_write);
+        ctx.restore_initialized_slots(initialized.clone());
+    }
     let boolean = predicate(ctx, parent, crate::ir::PhpTypePredicate::Bool, span);
     let truth = ctx.emit_value(Op::IsTruthy, vec![parent.value], None, PhpType::Bool,
         Op::IsTruthy.default_effects(), Some(span));
@@ -79,28 +81,33 @@ fn lower_false_write(
     let pending_slot = ctx.local_slots[&pending_name];
     ctx.emit_void(Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(pending_slot)),
         Op::PushCallOperandOwner.default_effects(), Some(span));
-    let mut direct = predicate(ctx, key, crate::ir::PhpTypePredicate::Int, span);
-    for kind in [crate::ir::PhpTypePredicate::String, crate::ir::PhpTypePredicate::Bool] {
-        let other = predicate(ctx, key, kind, span);
-        direct = ctx.emit_value(Op::IBitOr, vec![direct.value, other.value], None,
-            PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
-    }
-    let insert = ctx.builder.create_named_block("nested.write.false.pending.insert", Vec::new());
-    let check = ctx.builder.create_named_block("nested.write.false.pending.key", Vec::new());
     let rethrow = ctx.builder.create_named_block("nested.write.false.pending.rethrow", Vec::new());
-    branch(ctx, direct, insert, check);
-    ctx.builder.position_at_end(insert);
-    emit_set(ctx, parent, key, value, span, key_already_diagnosed);
-    ctx.builder.terminate(Terminator::Br { target: rethrow, args: Vec::new() });
-    ctx.builder.position_at_end(check);
-    let array = predicate(ctx, key, crate::ir::PhpTypePredicate::Array, span);
-    let object = predicate(ctx, key, crate::ir::PhpTypePredicate::Object, span);
-    let invalid = ctx.emit_value(Op::IBitOr, vec![array.value, object.value], None,
-        PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
-    let key_error = ctx.builder.create_named_block("nested.write.false.pending.type.error", Vec::new());
-    branch(ctx, invalid, key_error, rethrow);
-    ctx.builder.position_at_end(key_error);
-    lower_pending_key_error(ctx, key, object, &pending_name, pending_slot, span);
+    if super::nested_false_errors::key_always_completes(ctx, key) {
+        emit_set(ctx, parent, key, value, span, key_already_diagnosed);
+        branch_to(ctx, rethrow);
+    } else {
+        let mut direct = predicate(ctx, key, crate::ir::PhpTypePredicate::Int, span);
+        for kind in [crate::ir::PhpTypePredicate::String, crate::ir::PhpTypePredicate::Bool] {
+            let other = predicate(ctx, key, kind, span);
+            direct = ctx.emit_value(Op::IBitOr, vec![direct.value, other.value], None,
+                PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+        }
+        let insert = ctx.builder.create_named_block("nested.write.false.pending.insert", Vec::new());
+        let check = ctx.builder.create_named_block("nested.write.false.pending.key", Vec::new());
+        branch(ctx, direct, insert, check);
+        ctx.builder.position_at_end(insert);
+        emit_set(ctx, parent, key, value, span, key_already_diagnosed);
+        branch_to(ctx, rethrow);
+        ctx.builder.position_at_end(check);
+        let array = predicate(ctx, key, crate::ir::PhpTypePredicate::Array, span);
+        let object = predicate(ctx, key, crate::ir::PhpTypePredicate::Object, span);
+        let invalid = ctx.emit_value(Op::IBitOr, vec![array.value, object.value], None,
+            PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+        let key_error = ctx.builder.create_named_block("nested.write.false.pending.type.error", Vec::new());
+        branch(ctx, invalid, key_error, rethrow);
+        ctx.builder.position_at_end(key_error);
+        lower_pending_key_error(ctx, key, object, &pending_name, pending_slot, span);
+    }
     ctx.builder.position_at_end(rethrow);
     let pending = ctx.load_local(&pending_name, Some(span));
     ctx.clear_owned_hidden_temp(&pending_name, Some(span));
@@ -284,9 +291,9 @@ fn replace_cell(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, value: 
 /// Uses the unchanged native array/object setter for a non-string parent.
 fn emit_set(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool) {
-    ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        effects_lookup::runtime_effects(), Some(span));
+    super::boxed_write_owners::lower_set(
+        ctx, parent, key, value, &[], span, key_already_diagnosed,
+    );
 }
 
 /// Borrows a constant complete diagnostic and forwards it to PHP's shared warning channel.

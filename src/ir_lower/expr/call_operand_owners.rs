@@ -25,6 +25,7 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
             owners: Vec::new(),
             rooted_reference_value_views: std::collections::HashSet::new(),
             live_property_reference_arguments: false,
+            prepared_builtin_reference_arguments: false,
             pending_property_type_guards: Vec::new(),
         },
     );
@@ -515,9 +516,14 @@ pub(super) fn root_non_aliasing_callback_operands(
 ) -> Vec<(usize, crate::ir::LocalSlotId)> {
     use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinLowering, BuiltinResultOwnership};
     use crate::ir::RuntimeCallTarget;
-    let needs_unwind_roots = match def.spec.semantics.lowering {
+    let aggregate = matches!(def.spec.semantics.runtime_functions,
+        crate::builtins::semantics::BuiltinRuntimeFunctions::One(
+            crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct));
+    // Aggregate graph homes still borrow the activation's original temporary across warnings.
+    let needs_unwind_roots = aggregate || match def.spec.semantics.lowering {
         BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
-            | RuntimeCallTarget::ProfiledFunction { target, .. }) => {
+            | RuntimeCallTarget::ProfiledFunction { target, .. }
+            | RuntimeCallTarget::NumericFunction { target, .. }) => {
             target.string_callback_operand_index().is_some()
                 // Aggregates enter user code through warning handlers rather than
                 // an explicit callback operand. Their internal snapshot does not
@@ -897,6 +903,25 @@ pub(super) fn load_published_container(
     value
 }
 
+/// Publishes an operand while exposing only a borrowed view to a retaining consumer.
+///
+/// A consumer such as `MixedBox` or a retaining container write acquires its own lease. Passing
+/// the `Acquire` returned by `root_owned_call_operand` directly would also let that consumer
+/// release the lease already held by the published slot, then slot retirement would release it a
+/// second time. Reloading through the slot gives the consumer a stable, explicitly borrowed view.
+pub(super) fn root_borrowed_call_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let (value, owner) = root_owned_call_operand(ctx, value, span);
+    let php_type = ctx.builder.value_php_type(value.value);
+    let borrowed = owner
+        .map(|slot| load_published_container(ctx, slot, php_type, span))
+        .unwrap_or(value);
+    (borrowed, owner)
+}
+
 /// Transfers a completed container out of its published construction slot.
 pub(super) fn take_published_container(
     ctx: &mut LoweringContext<'_, '_>,
@@ -1035,6 +1060,26 @@ pub(crate) fn unregister_owned_call_operand(
     );
 }
 
+/// Transfers a published operand to a consuming runtime call without releasing it.
+///
+/// The unwind record is detached before the call because the callee can consume the value and
+/// then throw. Clearing the slot also prevents frame cleanup from releasing the transferred
+/// owner a second time.
+pub(crate) fn transfer_owned_call_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    slot: crate::ir::LocalSlotId,
+    span: Span,
+) {
+    unregister_owned_call_operand(ctx, slot, span);
+    ctx.emit_void(
+        Op::UnsetLocal,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::UnsetLocal.default_effects(),
+        Some(span),
+    );
+}
+
 /// Clears a rooted operand before releasing it, including when its destructor throws.
 pub(crate) fn retire_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
@@ -1051,6 +1096,19 @@ pub(crate) fn retire_owned_call_operand(
     );
 }
 
+/// Retires an outer receiver after a nested call, keeping its completed result unwind-visible.
+/// Detach the operand record before publishing the result pin so cleanup remains strictly LIFO.
+pub(super) fn retire_owned_call_operand_preserving_result(
+    ctx: &mut LoweringContext<'_, '_>, slot: crate::ir::LocalSlotId,
+    result: LoweredValue, span: Span,
+) {
+    unregister_owned_call_operand(ctx, slot, span);
+    let pins = pin_in_flight_owners(ctx, &[result.value], span);
+    ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(span));
+    unpin_in_flight_owners(ctx, pins, span);
+}
+
 /// One temporary owner or provisional local view protected across a throwing window.
 ///
 /// Temporary pins use a non-retaining `OwnedTemp` store. Local views use guards whose
@@ -1060,6 +1118,8 @@ pub(crate) fn retire_owned_call_operand(
 pub(crate) enum PinnedInFlightOwner {
     /// An independent SSA owner parked in a non-retaining hidden slot.
     Temporary {
+        /// Original SSA owner, used to avoid publishing the same lease twice.
+        value: crate::ir::ValueId,
         /// Hidden `OwnedTemp` parking the pointer during the throwing window.
         temp_name: String,
         /// Owner slot published in the unwind chain for that window.
@@ -1070,6 +1130,13 @@ pub(crate) enum PinnedInFlightOwner {
 }
 
 impl PinnedInFlightOwner {
+    /// Identifies the lease already protected by this temporary or provisional view.
+    pub(crate) fn value(&self) -> crate::ir::ValueId {
+        match self {
+            Self::Temporary { value, .. } | Self::LocalView { value } => *value,
+        }
+    }
+
     /// Extracts the owner slot from a record returned by temporary-only pinning.
     fn into_temporary_slot(self) -> crate::ir::LocalSlotId {
         match self {
@@ -1158,7 +1225,7 @@ pub(crate) fn pin_in_flight_owners(
         let slot = ctx.local_slots[&temp_name];
         register_owned_call_operand(ctx, slot, span);
         pinned.push(*operand);
-        records.push(PinnedInFlightOwner::Temporary { temp_name, slot });
+        records.push(PinnedInFlightOwner::Temporary { value: *operand, temp_name, slot });
     }
     records
 }
@@ -1201,7 +1268,7 @@ pub(crate) fn unpin_in_flight_owners(
 ) {
     for record in records.into_iter().rev() {
         match record {
-            PinnedInFlightOwner::Temporary { temp_name, slot } => {
+            PinnedInFlightOwner::Temporary { temp_name, slot, .. } => {
                 unregister_owned_call_operand(ctx, slot, span);
                 ctx.clear_owned_hidden_temp(&temp_name, Some(span));
             }
@@ -1227,12 +1294,15 @@ pub(super) fn pin_throwing_builtin_operands(
     rooted: &[(usize, crate::ir::LocalSlotId)],
     result_type: &PhpType,
     span: Span,
+    source_mode: crate::source::SourceMode,
 ) -> Vec<PinnedInFlightOwner> {
     let arg_types = operands
         .iter()
         .map(|operand| ctx.builder.value_php_type(*operand))
         .collect::<Vec<_>>();
     let input = crate::builtins::semantics::BuiltinSemanticInput {
+        semantic_profile: ctx.semantic_profile,
+        source_mode,
         name: def.name,
         args: &[],
         arg_types: &arg_types,

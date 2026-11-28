@@ -96,6 +96,9 @@ pub(crate) fn prune_switch_stmt(
 
     let Some(subject_value) = scalar_value(&subject) else {
         if cases.len() == 1
+            // Exact switches read variable subjects after each label and retire captured
+            // subjects before the body. A binary expression has different timing.
+            && !crate::optimize::semantic_context::enabled(elephc_semantics::StrictFeature::Comparisons)
             && !single_case_rewrite_would_clone_a_decision(&subject, &cases, &default)
         {
             let (patterns, _) = &cases[0];
@@ -341,19 +344,15 @@ pub(crate) fn classify_case_patterns(
     patterns: &[Expr],
     comparison: CaseComparison,
 ) -> CaseMatch {
-    let mut has_unknown = false;
     for pattern in patterns {
         match pattern_matches_scalar(subject, pattern, comparison) {
             Some(true) => return CaseMatch::Matches,
             Some(false) => {}
-            None => has_unknown = true,
+            // Earlier patterns can evaluate code before a later pattern matches.
+            None => return CaseMatch::Unknown,
         }
     }
-    if has_unknown {
-        CaseMatch::Unknown
-    } else {
-        CaseMatch::NoMatch
-    }
+    CaseMatch::NoMatch
 }
 
 /// Determines if a case pattern matches a scalar subject value under the given comparison mode.
@@ -368,6 +367,7 @@ pub(crate) fn pattern_matches_scalar(
     let pattern = scalar_value(pattern)?;
     match comparison {
         CaseComparison::Strict => compare_scalar_strict(subject, &pattern),
+        CaseComparison::LooseSwitch if crate::optimize::semantic_context::enabled(elephc_semantics::StrictFeature::Comparisons) => compare_scalar_strict(subject, &pattern),
         CaseComparison::LooseSwitch => compare_scalar_switch(subject, &pattern),
     }
 }

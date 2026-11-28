@@ -2,7 +2,7 @@
 //! Preserves PHP scalar receiver behavior for local offset writes and array creation.
 //!
 //! Called from:
-//! - `local_offset_writes` append and indexed assignment paths.
+//! - Local and property append and indexed assignment paths.
 //!
 //! Key details:
 //! - Only null, false, or missing locals become arrays; other scalars remain intact on error.
@@ -18,14 +18,24 @@ pub(super) fn eval_array_autovivification(
     if let Some(current) = current {
         match values.type_tag(current)? {
             EVAL_TAG_NULL => {}
-            EVAL_TAG_BOOL if !values.truthy(current)? => {
-                values.warning("Deprecated: Automatic conversion of false to array is deprecated")?;
-            }
+            EVAL_TAG_BOOL if !values.truthy(current)? => {}
             EVAL_TAG_STRING if append => return eval_throw_error("[] operator not supported for strings", context, values),
             _ => return eval_throw_error("Cannot use a scalar value as an array", context, values),
         }
     }
     values.array_new(1)
+}
+
+/// Dispatches false conversion after the caller has published its empty array parent.
+pub(super) fn eval_false_array_parent_diagnostic(
+    was_false: bool, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if was_false {
+        eval_dispatch_php_error("Automatic conversion of false to array is deprecated",
+            E_DEPRECATED, context, values)?;
+    }
+    Ok(())
 }
 
 /// Writes a PHP string byte, preserving the original value on errors or invalid negative offsets.

@@ -118,10 +118,21 @@ pub fn resolve_collecting_includes_with_defines(
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    resolve_collecting_includes_with_semantics(program, base_dir, defines,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Resolves a root program and its physical includes under one immutable semantic profile.
+pub fn resolve_collecting_includes_with_semantics(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
         Span::reset_source_ids();
         crate::parser::stmt::params::forget_included_param_lines();
-        resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
+        resolve_collecting_includes_with_defines_inner(program, base_dir, defines, semantic_profile)
     })
 }
 
@@ -131,13 +142,25 @@ pub fn resolve_collecting_includes_with_defines(
 /// compile already handed out, so a file this pulls in never reuses the identity of another
 /// file of the same program. Rewinding here gave an autoloaded file's includes the identities of
 /// the entry's includes, so span-keyed checker results leaked between them (issue #1445).
+#[allow(dead_code)] // Default-profile compatibility entry point for library harnesses.
 pub(crate) fn resolve_collecting_includes_continuing(
     program: Program,
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    resolve_collecting_includes_continuing_with_semantics(program, base_dir, defines,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Keeps source identities and the active semantic profile when resolving autoloaded includes.
+pub(crate) fn resolve_collecting_includes_continuing_with_semantics(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
+        resolve_collecting_includes_with_defines_inner(program, base_dir, defines, semantic_profile)
     })
 }
 
@@ -149,15 +172,18 @@ fn resolve_collecting_includes_with_defines_inner(
     program: Program,
     base_dir: &Path,
     defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::semantics::validate_source(&program, semantic_profile)?;
     if !has_includes(&program) {
         return Ok((program, Vec::new()));
     }
 
-    let discovery = discover_include_declarations(&program, base_dir, defines)?;
+    let discovery = discover_include_declarations(&program, base_dir, defines, semantic_profile)?;
     let mut declared_once: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
     let mut state = ResolveState::with_conditional_defines(defines);
+    state.semantic_profile = semantic_profile;
     let resolved = resolve_stmts(
         program,
         base_dir,

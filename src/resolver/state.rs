@@ -16,6 +16,8 @@ use crate::parser::ast::{Stmt, StmtKind, UseKind};
 /// Tracks active namespace, constants defined via `define()`, and `use const` imports for the current resolution scope.
 #[derive(Clone, Default)]
 pub(super) struct ResolveState {
+    /// Immutable guarantees used before pruning any subsequently loaded source.
+    pub(super) semantic_profile: elephc_semantics::SemanticProfile,
     /// Constants registered via `define()`. Maps canonical name to canonical value.
     pub(super) constants: HashMap<String, String>,
     /// The current namespace prefix, if any.

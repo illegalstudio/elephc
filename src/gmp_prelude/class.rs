@@ -25,6 +25,7 @@ pub(super) fn gmp_class() -> Stmt {
         .prop("__elephc_num", TypeExpr::Str, None)
         .method(constructor())
         .method(to_string())
+        .method(numeric_source())
         .method(debug_info())
         .method(serialize_magic())
         .method(unserialize_magic())
@@ -96,6 +97,11 @@ fn constructor() -> MethodBuilder {
 /// `__toString(): string`.
 fn to_string() -> MethodBuilder {
     method("__toString").returns(TypeExpr::Str).returning(prop("__elephc_num"))
+}
+
+/// Returns original decimal digits independently of PHP's narrowing scalar adapters.
+fn numeric_source() -> MethodBuilder {
+    method("__elephc_numeric_source").final_().returns(TypeExpr::Str).returning(prop("__elephc_num"))
 }
 
 /// Foldable `__debugInfo(): array` projection: only the virtual `num` property.

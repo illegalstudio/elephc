@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Borrows the immutable descriptor selected by an enclosing native producer.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_binding_type(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_binding_type(ctx, inst)
+}
+
+/// Copies an eval producer contract onto fresh independent native reference storage.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_copy_binding_type(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_copy_binding_type(ctx, inst)
+}
+
 /// Appends live eval declarations to the current owned native inventory container.
 pub(in crate::codegen::lower_inst) fn append_eval_inventory(
     ctx: &mut FunctionContext<'_>,
@@ -46,12 +60,26 @@ pub(in crate::codegen::lower_inst) fn lower_eval_scope_get(
     eval::lower_eval_scope_get(ctx, inst)
 }
 
+/// Lowers a scope presence observation independently of its boxed value.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_contains(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_contains(ctx, inst)
+}
+
 /// Lowers a direct EIR eval-scope write by static variable name.
 pub(in crate::codegen::lower_inst) fn lower_eval_scope_set(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     eval::lower_eval_scope_set(ctx, inst)
+}
+
+/// Publishes the checked source contract before native scope snapshots enter the interpreter.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_bind_local_type(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_bind_local_type(ctx, inst)
 }
 
 /// Lowers a native call to a zero-argument function declared through `eval()`.
@@ -345,4 +373,21 @@ pub(in crate::codegen::lower_inst) fn lower_eval_static_property_set(
     property_name: &str,
 ) -> Result<()> {
     eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
+}
+
+/// Probes a known boxed object through its live owning context without retaining or converting it.
+pub(in crate::codegen::lower_inst) fn emit_borrowed_eval_object_is_a(
+    ctx: &mut FunctionContext<'_>, object: ValueId, target: &str,
+) -> Result<()> {
+    ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 1))?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    eval::emit_object_relation_target(ctx, target, false);
+    Ok(())
+}
+
+/// Retires the old scope origin through the shared protected scope-unset ABI.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_end_binding(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_end_binding(ctx, inst)
 }

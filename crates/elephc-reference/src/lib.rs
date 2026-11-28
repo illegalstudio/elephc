@@ -11,3 +11,4 @@
 
 pub mod native_reference_sources;
 pub mod native_reference_validation;
+pub mod scope_bindings;

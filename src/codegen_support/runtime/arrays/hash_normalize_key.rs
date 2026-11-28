@@ -1,12 +1,12 @@
 //! Purpose:
-//! Emits the `__rt_hash_normalize_key`, `__rt_hash_normalize_key_string` runtime helper assembly for hash normalize key.
+//! Emits PHP integer-string normalization or exact string-key identity helpers.
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - The immutable profile selects key identity without changing storage or ownership.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -15,10 +15,18 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Dispatches to the target-specific implementation after a blank line and global label.
 /// For ARM64: input x1=string_ptr, x2=string_len; output x1=key_lo, x2=key_hi where
-/// key_hi=-1 indicates an integer key and key_hi=0 signals a string key (x1/x2 unchanged).
+/// key_hi=-1 indicates an integer key; a string keeps its original pointer and byte length.
 /// For x86_64 Linux: input rax=string_ptr, rdx=string_len; output rax=key_lo, rdx=key_hi
 /// with the same conventions. String keys return with rax/rdx (x1/x2) untouched.
 pub fn emit_hash_normalize_key(emitter: &mut Emitter) {
+    if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys) {
+        emitter.blank();
+        emitter.comment("--- runtime: exact string keys ---");
+        emitter.label_global("__rt_hash_normalize_key");
+        emitter.label("__rt_hash_normalize_key_string");
+        emitter.instruction("ret");                                             // preserve the original string pointer and byte length
+        return;
+    }
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_normalize_key_linux_x86_64(emitter);
         return;
@@ -101,6 +109,9 @@ pub fn emit_hash_normalize_key(emitter: &mut Emitter) {
     emitter.label("__rt_hash_normalize_key_string");
     emitter.instruction("ret");                                                 // leave x1/x2 unchanged for string keys
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Emits the x86_64 Linux variant of `__rt_hash_normalize_key`.
 ///

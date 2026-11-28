@@ -35,6 +35,8 @@ pub(super) fn check_property_assign(
     compound_property_update: bool,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    crate::semantics::mixed::member_receiver(checker.semantic_profile, checker.semantic_source_mode,
+        &checker.mixed_selection_receiver_view(object, &obj_ty), false, false, span)?;
     // Capture the checked receiver view before RHS inference can invalidate property guards.
     checker.record_member_receiver_type(span, &obj_ty);
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
@@ -107,6 +109,8 @@ pub(super) fn check_property_array_push(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    crate::semantics::mixed::member_receiver(checker.semantic_profile, checker.semantic_source_mode,
+        &checker.mixed_selection_receiver_view(object, &obj_ty), false, false, span)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
@@ -221,8 +225,10 @@ pub(super) fn check_property_array_assign(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    crate::semantics::mixed::member_receiver(checker.semantic_profile, checker.semantic_source_mode,
+        &checker.mixed_selection_receiver_view(object, &obj_ty), false, false, span)?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
-    let normalized_idx_ty = property_write_key_type(normalized_array_key_type(index, idx_ty.clone()));
+    let normalized_idx_ty = property_write_key_type(normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile));
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
@@ -233,9 +239,7 @@ pub(super) fn check_property_array_assign(
             || checker.interfaces.contains_key(name)
             || crate::types::checker::builtin_stdclass::is_stdclass(name))
     {
-        if !is_php_array_key_type(&normalized_idx_ty) {
-            return Err(CompileError::new(span, "Array index must be integer"));
-        }
+        // An erased property may contain ArrayAccess, whose key contract belongs to its method.
         return Ok(());
     }
     match &obj_ty {
@@ -243,13 +247,14 @@ pub(super) fn check_property_array_assign(
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &prop_ty, &idx_ty, index.span)?;
             if prop_ty == PhpType::Str {
                 return Err(CompileError::new(
                     span,
                     super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
                 ));
             }
-            if property_supports_object_dimensions(checker, &prop_ty) {
+            if prop_ty == PhpType::Mixed || property_supports_object_dimensions(checker, &prop_ty) {
                 return Ok(());
             }
             if let PhpType::Buffer(elem_ty) = &prop_ty {
@@ -288,6 +293,7 @@ pub(super) fn check_property_array_assign(
                 span,
                 "Array index assignment",
             )?;
+            crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &field_ty, &idx_ty, index.span)?;
 
             if !matches!(normalized_idx_ty, PhpType::Int) {
                 return Err(CompileError::new(span, "Array index must be integer"));
@@ -1071,6 +1077,7 @@ fn updated_array_property_push_type(
             return Ok(prop_ty.clone());
         }
     }
+    checker.require_array_write_contract(prop_ty, &PhpType::Int, val_ty, span)?;
     if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
@@ -1190,6 +1197,7 @@ pub(super) fn updated_array_property_assign_type(
             return Ok(prop_ty.clone());
         }
     }
+    checker.require_array_write_contract(prop_ty, normalized_idx_ty, val_ty, span)?;
     if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
@@ -1197,10 +1205,10 @@ pub(super) fn updated_array_property_assign_type(
         PhpType::Array(elem_ty) => {
             if !matches!(normalized_idx_ty, PhpType::Int)
                 || (matches!(elem_ty.as_ref(), PhpType::Never)
-                    && static_array_key_forces_hash_storage(index))
+                    && static_array_key_forces_hash_storage(index, checker.semantic_profile))
                 || (instance_slot
                     && !property_has_declared_type
-                    && untyped_property_key_may_skip(index))
+                    && untyped_property_key_may_skip(index, checker.semantic_profile))
             {
                 // A declared `array<T>` is a packed vector that keeps its storage, so a key
                 // that is not provably an integer would be coerced into an index and a string
@@ -1329,8 +1337,8 @@ pub(super) fn property_write_key_type(key: PhpType) -> PhpType {
 /// that is provably `0` is always in range. Every other integer key takes hash storage, where a
 /// gap costs nothing, exactly as `array_key_contiguity_is_unproven` decides for an empty local.
 /// No loop-counter exception applies, because any call in the loop may reset the property.
-fn untyped_property_key_may_skip(index: &Expr) -> bool {
-    static_array_key_forces_hash_storage(index) || array_key_contiguity_is_unproven(index)
+fn untyped_property_key_may_skip(index: &Expr, profile: elephc_semantics::SemanticProfile) -> bool {
+    static_array_key_forces_hash_storage(index, profile) || array_key_contiguity_is_unproven(index)
 }
 
 /// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).

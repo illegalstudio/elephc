@@ -27,8 +27,9 @@ pub(in crate::interpreter) fn eval_builtin_strval(
     let [value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_strval_result(value, context, values)
+    with_eval_operands(&[value], context, scope, values, |args, context, _, values| {
+        eval_strval_result(args[0], context, values)
+    })
 }
 
 /// Applies PHP `strval()` to one already evaluated value.
@@ -37,6 +38,5 @@ pub(in crate::interpreter) fn eval_strval_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_string_context_value(value, context, values)?;
-    values.cast_string(value)
+    eval_cast_value(&EvalCastType::String, value, context, values)
 }

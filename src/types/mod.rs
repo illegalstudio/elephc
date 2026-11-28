@@ -8,6 +8,8 @@
 //! Key details:
 //! - `check()` runs after name resolution and before optimization/codegen so later passes receive canonical type metadata.
 
+/// Native callable and value-contract metadata spelling.
+pub(crate) mod native_type_spec;
 /// Type checking module.
 pub mod checker;
 /// Trait flattening and resolution.
@@ -27,6 +29,9 @@ mod array_cast;
 pub(crate) mod call_args;
 /// Shared detection of lazy lexical errors in normalized default expression trees.
 pub(crate) mod deferred_defaults;
+/// Declaration producer binding and complete global constant metadata shared by native and hosted consumers.
+pub(crate) mod constant_binding;
+pub(crate) use constant_binding::GlobalConstants;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.
@@ -41,6 +46,9 @@ pub(crate) mod diagnostic_names;
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+mod reference_layout;
+pub(crate) use reference_layout::{managed_static_property_binding, CanonicalReferencePayload, canonical_property_reference_payload, checked_property_references,
+    static_property_storage_type, uses_boxed_reference_payload};
 pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
@@ -71,11 +79,14 @@ mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
-pub(crate) use array_literals::{fold_spreadless_mixed_array_literal, php_float_array_key};
+pub(crate) use array_literals::{
+    fold_spreadless_mixed_array_literal, next_literal_array_index, php_float_array_key,
+    plan_literal_array_entries,
+};
 pub(crate) use array_keys::{
     array_key_contiguity_is_unproven, array_key_type_from_value_type,
     empty_array_key_requires_hash_storage, is_php_integer_array_key,
-    merge_array_key_types, nonempty_array_key_forces_hash_storage,
+    literal_array_key, merge_array_key_types, nonempty_array_key_forces_hash_storage,
     nonempty_array_key_stays_in_range, normalized_array_key_type,
     parse_php_string_offset_literal, static_array_key_forces_hash_storage,
 };
@@ -102,8 +113,9 @@ pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,
 };
+pub use result::{LocalStoreContract, LocalStoreContracts};
 pub(crate) use result::{
-    ElementValueViews, LocalValueReadTypes, LoopStorageTypes, PromotableArrays,
+    ElementValueViews, LocalCopyContract, LocalValueReadTypes, LoopStorageTypes, PromotableArrays,
 };
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
@@ -129,7 +141,8 @@ pub(crate) use defined::{
     defined_late_static_member,
 };
 pub(crate) use signatures::{
-    builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
+    builtin_call_sig, builtin_call_sig_with_semantics, callable_wrapper_sig, first_class_callable_builtin_sig,
+    first_class_callable_builtin_sig_with_semantics,
 };
 pub use signatures::FunctionSig;
 
@@ -151,6 +164,20 @@ pub fn check_with_options(
     options: CheckOptions,
 ) -> Result<CheckResult, crate::errors::CompileError> {
     result::check_with_options(program, options)
+}
+
+/// Runs the complete checker with a staged semantic profile for integration-test drivers.
+///
+/// This deliberately bypasses only the publication gate for pending guarantees. Production
+/// compilation continues through `check_with_target_and_options`, which rejects unpublished
+/// profiles before entering the checker.
+#[doc(hidden)]
+pub fn check_staged_semantics(
+    program: &crate::parser::ast::Program,
+    target: crate::codegen::platform::Target,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<CheckResult, crate::errors::CompileError> {
+    checker::check_staged_semantics(program, target, profile)
 }
 
 /// The checker/EIR scope key of the top-level program body.

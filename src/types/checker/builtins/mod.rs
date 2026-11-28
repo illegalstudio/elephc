@@ -27,7 +27,7 @@ use super::Checker;
 pub(crate) use catalog::{
     all_supported_builtin_function_names, canonical_builtin_function_name,
     is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
-    is_supported_builtin_function, strict_php_hidden_builtin,
+    is_supported_builtin_function, php_only_hidden_builtin,
     supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,
 };
 #[cfg(test)]
@@ -107,7 +107,8 @@ impl Checker {
                     self.require_macos_builtin_library(library);
                     self.record_callable_builtin_library(library);
                 }
-                crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+                crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_)
+                | crate::builtins::semantics::BuiltinRequirement::PreludeHelper(_) => {}
             }
         }
     }
@@ -128,6 +129,21 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
+        self.check_builtin_with_source_mode(name, args, span, env, self.semantic_source_mode, false)
+    }
+
+    /// Applies the public callable contract while evaluating arguments in their physical source mode.
+    pub(crate) fn check_builtin_callable(
+        &mut self, name: &str, args: &[Expr], span: crate::span::Span, env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        self.check_builtin_with_source_mode(name, args, span, env, crate::source::SourceMode::Php, true)
+    }
+
+    /// Checks one builtin invocation without changing the source policy of argument expressions.
+    fn check_builtin_with_source_mode(
+        &mut self, name: &str, args: &[Expr], span: crate::span::Span, env: &TypeEnv,
+        source_mode: crate::source::SourceMode, callable_boundary: bool,
+    ) -> Result<Option<PhpType>, CompileError> {
         // `isset`/`unset` are lazy language constructs: their operands may be an
         // undeclared property routed to `__isset`/`__unset`, which must not be
         // eagerly inferred by argument normalization. Their handlers inspect the
@@ -141,12 +157,12 @@ impl Checker {
         {
             return Ok(None);
         }
-        // `--strict-php` hides extension builtins entirely: the call must fall
+        // `--php-only` hides extension builtins entirely: the call must fall
         // through to user-function resolution and the standard undefined-function
         // diagnostics, mirroring PHP where these names do not exist. This must
         // run before argument normalization so the hidden builtin's signature is
         // never applied to the call.
-        if catalog::strict_php_hidden_builtin(&builtin_key) {
+        if catalog::php_only_hidden_builtin(&builtin_key) {
             return Ok(None);
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
@@ -156,7 +172,7 @@ impl Checker {
         let normalized_args;
         let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
-            (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
+            (!is_lazy_construct).then(|| crate::types::builtin_call_sig_with_semantics(name, self.semantic_profile, source_mode)).flatten()
         {
             normalized_args = if forwards_callback_names {
                 self.normalize_named_call_args(&sig, args, span, &format!("Builtin '{}'", name), env)?
@@ -180,19 +196,20 @@ impl Checker {
         // Builtin signatures count literal unpacked values instead of containers,
         // but only after the planner has validated ordering and named arguments.
         let static_positional_args = (!is_lazy_construct)
-            .then(|| crate::types::call_args::expand_planned_positional_spreads(args))
+            .then(|| crate::types::call_args::expand_planned_positional_spreads(args, self.semantic_profile))
             .flatten();
         let args = static_positional_args.as_deref().unwrap_or(args);
         let mut spread_type_error = None;
+        let profile = self.semantic_profile;
         let indexed_spread_args = (!is_lazy_construct && !forwards_callback_names
-            && crate::types::builtin_call_sig(name)
+            && crate::types::builtin_call_sig_with_semantics(name, self.semantic_profile, source_mode)
                 .is_some_and(|sig| !sig.ref_params.iter().any(|by_ref| *by_ref)))
             .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(args, |source| {
                 match self.infer_type(source, env) {
                     Ok(ty) => matches!(ty.codegen_repr(), PhpType::Array(_)),
                     Err(error) => { spread_type_error = Some(error); false }
                 }
-            }))
+            }, profile))
             .flatten();
         if let Some(error) = spread_type_error {
             return Err(error);
@@ -215,6 +232,7 @@ impl Checker {
             // type expression remains authoritative for per-element coercion and Reflection.
             self.promote_eval_native_variadic_containers()?;
             self.infer_type(&args[0], env)?;
+            self.record_eval_binding_contracts(env, span);
             return Ok(Some(PhpType::Mixed));
         }
 
@@ -246,6 +264,11 @@ impl Checker {
                     ),
                 ));
             }
+            // A later flow join can require descriptor dispatch even for a known builtin.
+            // Prepare that wrapper's reference ABI before contextual specialization returns.
+            let callable_ref_sig = callable_boundary.then(||
+                crate::types::first_class_callable_builtin_sig_with_semantics(name, self.semantic_profile))
+                .flatten();
             // One authority for every builtin that declares a by-reference parameter. Several
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
@@ -277,11 +300,21 @@ impl Checker {
                     continue;
                 }
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    let boxed_callable_expected = callable_ref_sig.as_ref()
+                        .and_then(|sig| sig.params.get(index)).map(|(_, ty)| ty)
+                        .filter(|ty| crate::types::uses_boxed_reference_payload(ty));
+                    if crate::semantics::conversions::checked_casts(self.semantic_profile, source_mode)
+                        && matches!(def.spec.semantics.callable,
+                            crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_))
+                        && def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+                    {
+                        self.promote_live_property_reference_argument(arg, env)?;
+                    }
                     // A mixed reference can replace a guarded value and require a wider cell.
                     // Publish the same storage transition as an ordinary mixed-reference call.
-                    if def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+                    if boxed_callable_expected.is_some() || (def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
                         && self.guarded_local_storage_type(arg, env)
-                            .is_some_and(|storage| !Self::is_raw_non_null_contract(storage))
+                            .is_some_and(|storage| !Self::is_raw_non_null_contract(storage)))
                     {
                         let actual = self.infer_type(arg, env)?;
                         let output = if def.spec.semantics.preserves_array_reference(index)
@@ -289,6 +322,8 @@ impl Checker {
                                 || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. }))
                         {
                             PhpType::php_array()
+                        } else if let Some(expected) = boxed_callable_expected {
+                            expected.clone()
                         } else {
                             PhpType::Mixed
                         };
@@ -341,7 +376,8 @@ impl Checker {
                     crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                         self.require_macos_builtin_library(library);
                     }
-                    crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+                    crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_)
+                    | crate::builtins::semantics::BuiltinRequirement::PreludeHelper(_) => {}
                 }
             }
             if !matches!(
@@ -349,11 +385,17 @@ impl Checker {
                 crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
             ) {
                 let mut arg_types = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_types.push(self.infer_type(arg, env)?);
+                for (index, arg) in args.iter().enumerate() {
+                    let ty = self.infer_type(arg, env)?;
+                    if let Some(expected) = crate::builtins::input_contracts::parameter_type(def, index) {
+                        self.require_noncoercive_value_type(&expected, &ty, source_mode, arg.span, name)?;
+                    }
+                    arg_types.push(ty);
                 }
                 reject_array_at_string_param(name, &def.params, def.variadic.is_some(), args, &arg_types)?;
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
+                    semantic_profile: self.semantic_profile,
+                    source_mode,
                     name: &builtin_key,
                     args,
                     arg_types: &arg_types,
@@ -363,6 +405,30 @@ impl Checker {
                     def.spec.semantics.validation
                 {
                     validate(&semantic_input)?;
+                }
+                if let crate::builtins::semantics::BuiltinValidation::MixedInputs(resolve) =
+                    def.spec.semantics.validation
+                {
+                    for (index, expected) in resolve(&semantic_input) {
+                        let (Some(actual), Some(argument)) = (arg_types.get(index), args.get(index)) else { continue; };
+                        let actual = if matches!(argument.kind, ExprKind::Spread(_)) { &PhpType::Mixed } else { actual };
+                        self.require_mixed_value_type(&expected, actual, source_mode, argument.span, name)?;
+                    }
+                }
+                if let crate::builtins::semantics::BuiltinValidation::ExplicitNumericCast(target) = def.spec.semantics.validation {
+                    let cast = match target {
+                        elephc_semantics::numeric_cast::NumericCastTarget::Int => crate::parser::ast::CastType::Int,
+                        elephc_semantics::numeric_cast::NumericCastTarget::Float => crate::parser::ast::CastType::Float,
+                    };
+                    if let Some(ty) = arg_types.first() { self.validate_explicit_numeric_cast(source_mode, &cast, ty, span)?; }
+                    if crate::semantics::conversions::checked_casts(self.semantic_profile, source_mode)
+                        && target == elephc_semantics::numeric_cast::NumericCastTarget::Int
+                        && arg_types.first() == Some(&PhpType::Str) {
+                        if let Some(Expr { kind: ExprKind::IntLiteral(base), .. }) = args.get(1) {
+                            elephc_semantics::integer_cast_base::validate_integer_cast_base(*base)
+                                .map_err(|failure| CompileError::new(span, failure.message()))?;
+                        }
+                    }
                 }
                 let ret = match def.spec.semantics.result_type {
                     crate::builtins::semantics::BuiltinResultType::Declared => {
@@ -407,11 +473,18 @@ impl Checker {
                     if contextual.contains(&idx) {
                         continue;
                     }
-                    self.infer_type(arg, env)?;
+                    let ty = self.infer_type(arg, env)?;
+                    if let Some(input) = def.spec.semantics.array_key_input.filter(|input| input.argument() == idx) {
+                        input.validate_type(self.semantic_profile, &ty, arg.span)?;
+                    }
+                    if let Some(expected) = crate::builtins::input_contracts::parameter_type(def, idx) {
+                        self.require_noncoercive_value_type(&expected, &ty, source_mode, arg.span, name)?;
+                    }
                 }
             }
             let mut cx = crate::builtins::spec::BuiltinCheckCtx {
                 checker: self,
+                source_mode,
                 name,
                 args,
                 argument_plan: builtin_arg_plan.as_ref(),

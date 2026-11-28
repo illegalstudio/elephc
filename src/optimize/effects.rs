@@ -76,7 +76,7 @@ pub(super) fn internal_conversion_may_throw(expr: &Expr) -> bool {
 /// Includes the implicit native conversion performed when evaluating a condition.
 fn condition_effect(expr: &Expr) -> Effect {
     let effect = expr_effect(expr);
-    if internal_conversion_may_throw(expr) { effect.with_may_throw() } else { effect }
+    if internal_conversion_may_throw(expr) || super::semantic_context::boolean_guard_may_throw(expr) { effect.with_may_throw() } else { effect }
 }
 
 /// Unknown string-cast operands may be NaN or dispatch a PHP conversion callback.
@@ -109,6 +109,7 @@ pub(super) fn stmt_may_throw(stmt: &Stmt) -> bool {
 /// Computes the combined `Effect` for a single statement, including all nested expressions.
 /// Covers all `StmtKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
+    let _semantics = super::semantic_context::scoped_source_mode(stmt.source_mode);
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
         StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(),
@@ -116,7 +117,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Echo(expr) => output_effect(expr_effect(expr)),
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
             => expr_effect(expr),
         StmtKind::Return(Some(expr)) => {
@@ -125,10 +125,17 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 effect.with_may_throw()
             } else { effect }
         }
+        // Rebinding a reached static can retire a local object; recursive initializers can
+        // also discard their outer result after an inner call has initialized the storage.
+        StmtKind::StaticVar { init, .. } => expr_effect(init)
+            .with_side_effects().with_may_throw().with_writes_globals(),
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { name, value }
         | StmtKind::TypedAssign { name, value, .. } => {
             let effect = expr_effect(value).with_side_effects();
+            let effect = if super::semantic_context::implicit_store_may_throw(stmt) {
+                effect.with_may_throw()
+            } else { effect };
             if is_reference_volatile(name) {
                 // A property-backed alias can validate or invoke Stringable callbacks.
                 effect.with_may_throw().with_writes_globals()
@@ -257,10 +264,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                     .unwrap_or(Effect::PURE),
             ),
         StmtKind::NamespaceBlock { body, .. } => block_effect(body),
-        // Declaring `global` conservatively counts as writing global storage
-        // (a declaration almost always precedes a write). The bit stays out of
-        // `is_observable`, so the declaration itself remains removable.
-        StmtKind::Global { .. } => Effect::PURE.with_writes_globals(),
+        // A reached declaration creates missing storage and retires the displaced local.
+        // Its destructor can execute PHP before the new alias is published.
+        StmtKind::Global { .. } => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
         StmtKind::FunctionDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -337,6 +343,18 @@ pub(super) fn callable_value_binding_effect(callable: &Expr, args: &[Expr]) -> E
 /// Covers all `ExprKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
 pub(super) fn expr_effect(expr: &Expr) -> Effect {
+    let effect = expression_effect_without_binding(expr);
+    if super::semantic_context::initialization_read_may_throw(expr)
+        || super::semantic_context::implicit_value_boundary_may_throw(expr)
+        || super::semantic_context::comparison_boundary_may_throw(expr)
+        || super::semantic_context::string_boundary_may_throw(expr)
+        || super::semantic_context::array_key_boundary_may_throw(expr)
+        || super::semantic_context::checked_cast_may_throw(expr) { effect.with_may_throw() }
+    else { effect }
+}
+
+/// Computes ordinary expression effects before the caller's independent parameter contract.
+fn expression_effect_without_binding(expr: &Expr) -> Effect {
     match &expr.kind {
         ExprKind::Runtime(_) => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
         ExprKind::Reference(inner) => expr_effect(inner),
@@ -362,9 +380,13 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 Effect::PURE
             }
         }
-        ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             let effect = expr_effect(inner);
-            if internal_object_operators_available() && !literal_scalar_operand(inner) {
+            if super::semantic_context::numeric_domain_may_throw(expr)
+                || super::semantic_context::unary_numeric_conversion_may_dispatch(expr) {
+                effect.with_side_effects().with_may_throw().with_writes_globals()
+            } else if super::semantic_context::integer_overflow_may_throw(expr)
+                || (internal_object_operators_available() && !literal_scalar_operand(inner)) {
                 effect.with_may_throw()
             } else { effect }
         }
@@ -389,15 +411,19 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if matches!(op, BinOp::Eq | BinOp::NotEq)
+            if super::semantic_context::numeric_domain_may_throw(expr)
+                || super::semantic_context::checked_numeric_conversion_may_dispatch(expr)
+                || matches!(op, BinOp::Eq | BinOp::NotEq)
                 && (!literal_scalar_operand(left) || !literal_scalar_operand(right))
             {
                 // Object-to-number warnings can call a handler that mutates globals or throws.
                 operands.with_side_effects().with_may_throw().with_writes_globals()
-            } else if binary_op_may_throw(op, right)
+            } else if super::semantic_context::integer_overflow_may_throw(expr) || binary_op_may_throw(op, right)
                 || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right))
                 || (matches!(op, BinOp::And | BinOp::Or | BinOp::Xor)
-                    && (internal_conversion_may_throw(left) || internal_conversion_may_throw(right))) {
+                    && (internal_conversion_may_throw(left) || internal_conversion_may_throw(right)
+                        || super::semantic_context::boolean_guard_may_throw(left)
+                        || super::semantic_context::boolean_guard_may_throw(right))) {
                 operands.with_may_throw()
             } else {
                 operands
@@ -436,8 +462,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => {
             let effect = Effect::PURE.with_side_effects();
-            if is_reference_volatile(name) {
+            if is_reference_volatile(name) || super::semantic_context::checked_update_may_dispatch(expr) {
                 effect.with_may_throw().with_writes_globals()
+            } else if super::semantic_context::integer_overflow_may_throw(expr) {
+                effect.with_may_throw()
             } else { effect }
         }
         ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))
@@ -550,7 +578,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::ShortTernary { value, default } => {
             condition_effect(value).combine(expr_effect(default))
         }
-        ExprKind::Closure { .. } => Effect::PURE,
+        ExprKind::Closure { capture_refs, .. } => {
+            // Reference formation creates missing bindings even when the descriptor is discarded.
+            if capture_refs.is_empty() { Effect::PURE } else { Effect::PURE.with_side_effects() }
+        },
         ExprKind::NamedArg { value, .. } => expr_effect(value),
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => expr_effect(object)

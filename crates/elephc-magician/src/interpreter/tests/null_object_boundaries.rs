@@ -17,7 +17,7 @@ fn typed_named_variadic_binding_avoids_positional_hash_scans() {
     let mut context = ElephcEvalContext::new();
     let mut values = FakeOps::default();
     let object = values.new_object("stdClass").expect("caller object");
-    let args = (0..64).map(|index| EvaluatedCallArg {
+    let args = (0..64).map(|index| EvaluatedCallArg { source_type: None,
         evaluation_owner: None,
         name: Some(format!("arg{index}")), value: object, ref_target: None,
     }).collect();

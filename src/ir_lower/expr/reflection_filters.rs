@@ -229,18 +229,18 @@ pub(super) fn reflection_class_member_filter_arg(
     args: &[Expr],
     constant_class: &str,
 ) -> Option<Option<i64>> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return match args.as_slice() {
             [] => Some(None),
             [filter] => reflection_member_filter_value(ctx, filter, constant_class),
             _ => None,
         };
     }
-    let (filter, _) = reflection_class_static_property_regular_args(&args, "filter", None)?;
+    let (filter, _) = reflection_class_static_property_regular_args(&args, "filter", None, ctx.semantic_profile)?;
     filter
         .as_ref()
         .map(|filter| reflection_member_filter_value(ctx, filter, constant_class))

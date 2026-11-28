@@ -119,6 +119,12 @@ macro_rules! impl_lifecycle_scalar_ops {
         crate::runtime_hooks::object_owners::retain_object_children(self, object, children)
     }
 
+    /// Chains borrowed Throwable objects below Rust through the shared protected native boundary.
+    fn chain_throwables(&mut self, current: RuntimeCellHandle, previous: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let status = unsafe { __elephc_eval_throwable_chain_v1(current.as_ptr(), previous.as_ptr()) };
+        self.handle_native_cleanup_status(status)
+    }
+
     /// Uses the runtime's GC-traced persistent reference cells.
     fn supports_persistent_references(&self) -> bool { true }
 
@@ -132,23 +138,48 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(unsafe { __elephc_eval_value_reference_is_shared(value.as_ptr()) } != 0)
     }
 
+    /// Retains the current native child independently from its replaceable reference wrapper.
+    fn retain_value_cell(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_retain_value_cell_v1(value.as_ptr()) })
+    }
+
     /// Allocates an independently owned reference wrapper around a copied PHP value.
     fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_reference_new(value.as_ptr()) })
     }
 
-    /// Publishes a copied replacement and transfers the previous owner for cleanup.
+    /// Validates before publishing and transfers the previous owner for ordinary eval cleanup.
     fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
-        let previous = unsafe { __elephc_eval_value_reference_replace(reference.as_ptr(), value.as_ptr()) };
-        if previous.is_null() { self.null() } else { Self::handle(previous) }
+        // The coordinator must see this activation, including non-registered Rust hosts and
+        // nested property writes while their owning context is already draining its values.
+        let _context = unsafe { self.context.as_ref() }
+            .filter(|context| context.semantic_profile().checked_property_references())
+            .map(|_| crate::context::push_native_frame_context(self.context.cast_mut()));
+        let mut previous = std::ptr::null_mut();
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe { __elephc_eval_value_reference_replace_v2(
+            reference.as_ptr(), value.as_ptr(), 0, &mut previous, &mut thrown) };
+        if status == 0 {
+            return if previous.is_null() { self.null() } else { Self::handle(previous) };
+        }
+        let previous = (!previous.is_null()).then(|| RuntimeCellHandle::from_raw(previous));
+        let thrown = (!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown));
+        let thrown = crate::runtime_hooks::release::release_native_cells(previous, thrown);
+        if let Some(thrown) = thrown {
+            self.schedule_pending_throw(thrown)?;
+            Err(EvalStatus::UncaughtThrowable)
+        } else { Err(EvalStatus::RuntimeFatal) }
     }
+
+    /// The native publication boundary owns joint native/eval source normalization.
+    fn coordinates_property_reference_candidates(&self) -> bool { true }
 
     /// Detaches a reference before returning an ordinary PHP value copy.
     fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) })
     }
 
-    /// Emits one PHP warning through the generated runtime diagnostic helper.
+    /// Contains PHP warning-handler exceptions below Rust before returning their status.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
         // Magician submits complete diagnostics, unlike native fragment producers.
         let terminated;
@@ -156,10 +187,8 @@ macro_rules! impl_lifecycle_scalar_ops {
             terminated = format!("{message}\n");
             &terminated
         };
-        unsafe {
-            __elephc_eval_warning(message.as_ptr(), message.len() as u64);
-        }
-        Ok(())
+        let status = unsafe { __elephc_eval_warning_v2(message.as_ptr(), message.len() as u64) };
+        self.handle_native_cleanup_status(status)
     }
 
     /// Emits one PHP warning reported at an explicit line inside the scanned source.

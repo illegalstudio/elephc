@@ -10,6 +10,29 @@
 
 use crate::support::*;
 
+/// Applies strict operator domains to resolved enum backing constants before folding.
+#[test]
+fn test_strict_enum_backing_expressions_preserve_operator_domains() {
+    let numeric = r#"<?php
+const ENUM_COUNT = 7;
+enum StrictNumericEnum: int { case Count = +ENUM_COUNT; }
+echo (string) StrictNumericEnum::Count->value;
+"#;
+    assert_eq!(StrictFixture::new(numeric).run(&["--strict"]), "7");
+
+    let strings = r#"<?php
+const ENUM_SUFFIX = 3 + 4;
+enum StrictStringEnum: string { case Value = 'n' . ENUM_SUFFIX; }
+"#;
+    StrictFixture::new(strings).assert_error(&["--strict-strings"], "--strict-strings");
+
+    let bools = r#"<?php
+const ENUM_CONDITION = 1;
+enum StrictBoolEnum: int { case Count = ENUM_CONDITION ? 7 : 8; }
+"#;
+    StrictFixture::new(bools).assert_error(&["--strict-bools"], "--strict-bools");
+}
+
 /// Class and interface constants, concatenation both ways and negation fold to literals,
 /// inside a namespace, so `cases()`, `from()` and `tryFrom()` see the values php does.
 #[test]

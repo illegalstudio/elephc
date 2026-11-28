@@ -187,6 +187,7 @@ impl Checker {
                     ));
                 }
                 if supplied_reference {
+                    self.record_reference_argument_contract(arg, &actual_ty);
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -250,7 +251,7 @@ impl Checker {
                             .get(param_idx)
                             .copied()
                             .unwrap_or(false)
-                            || matches!(expected_ty, PhpType::Mixed));
+                            || crate::types::uses_boxed_reference_payload(expected_ty));
                     if tracks_boxed_reference_output {
                         let layout_contract = crate::types::is_written_reference_array_param(
                             &effective_sig.ref_params,

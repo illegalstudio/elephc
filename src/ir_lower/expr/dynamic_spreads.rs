@@ -40,12 +40,12 @@ pub(super) fn lower_boxed_spread_args(
 ) -> Option<Vec<ValueId>> {
     let hidden = crate::func_args::sig_collects_surplus_args(sig);
     if sig.variadic.is_some() && !hidden || sig.ref_params.iter().any(|by_ref| *by_ref)
-        || !hidden && !preserve_values && sig.defaults.iter().any(Option::is_some)
         || crate::func_args::sig_has_hidden_argc_param(sig)
         || !args.iter().any(|arg| match &arg.kind {
             ExprKind::Spread(source) => {
                 hidden || preserve_values
-                    || spread_source_storage_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
+                    || matches!(spread_source_storage_type_for_ir(ctx, source).codegen_repr(),
+                        PhpType::Mixed | PhpType::AssocArray { .. })
                     || nested_spread_assoc_literal(source)
             }
             _ => false,
@@ -54,7 +54,8 @@ pub(super) fn lower_boxed_spread_args(
         return None;
     }
     let span = args.first()?.span;
-    let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false, ctx.semantic_profile).ok()?;
+    if !hidden && !preserve_values && !plan.has_spread_args() { return None; }
     let mut staged = Vec::with_capacity(plan.source_args.len());
     for arg in &plan.source_args {
         staged.push(match &arg.kind {
@@ -101,8 +102,8 @@ pub(super) fn lower_boxed_spread_args(
         let valid = compare_ints(ctx, count.value, max.value, CmpPredicate::Sle, span);
         require(ctx, valid, "ArgumentCountError", &format!("{builtin}(): Too many arguments for unpacked call"), span);
     }
-    // A fixed user signature binds its parameters in PHP's order: a parameter skipped before a
-    // bound one fails first ("not passed"), then each parameter is either missing (too few
+    // A fixed user signature binds its parameters in PHP's order: a required parameter skipped
+    // before a bound one fails first ("not passed"), then each parameter is either missing (too few
     // arguments) or checked against its declared scalar type, so a `TypeError` for an earlier
     // parameter precedes the `ArgumentCountError` for a later missing one.
     let check_in_order = !hidden && !preserve_values;
@@ -112,14 +113,14 @@ pub(super) fn lower_boxed_spread_args(
     let mut string_slots: Vec<Option<String>> = vec![None; state.slots.len()];
     let bound = check_in_order.then(|| emit_unpassed_parameter_checks(ctx, sig, &state, span));
     for (index, filled) in state.filled.iter().enumerate() {
-        if hidden {
-            if let Some(Some(default)) = sig.defaults.get(index) {
+        if hidden || !preserve_values {
+            if let Some(default) = sig.default_value(index) {
                 let ready = ctx.load_local(filled, Some(span));
                 let done = ctx.builder.create_named_block("spread.default.done", Vec::new());
                 let missing = ctx.builder.create_named_block("spread.default.missing", Vec::new());
                 conditional(ctx, ready.value, done, missing);
                 ctx.builder.position_at_end(missing);
-                store_expr_into_temp(ctx, &state.slots[index], PhpType::Mixed, default, span);
+                store_expr_into_temp(ctx, &state.slots[index], PhpType::Mixed, &default, span);
                 branch(ctx, done);
                 ctx.builder.position_at_end(done);
                 continue;
@@ -260,7 +261,7 @@ pub(super) fn lower_boxed_spread_args(
     } })
 }
 
-/// Throws PHP's "not passed" `ArgumentCountError` for a parameter the unpacked arguments
+/// Throws PHP's "not passed" `ArgumentCountError` for a required parameter the unpacked arguments
 /// skipped while binding a later one (`f(...['t' => $x])` leaves `$s` unpassed), before any
 /// parameter is checked. A missing TRAILING parameter is reported later, in parameter order.
 ///
@@ -285,7 +286,8 @@ fn emit_unpassed_parameter_checks(
         branch(ctx, next);
         ctx.builder.position_at_end(next);
     }
-    for index in 0..count.saturating_sub(1) {
+    let required = crate::types::call_args::required_param_count(sig);
+    for index in 0..required.min(count.saturating_sub(1)) {
         let filled = ctx.load_local(&state.filled[index], Some(span));
         let check = ctx.builder.create_named_block("spread.unpassed.check", Vec::new());
         let ok = ctx.builder.create_named_block("spread.unpassed.ok", Vec::new());
@@ -316,9 +318,15 @@ fn nested_spread_assoc_literal(source: &Expr) -> bool {
     matches!(source.kind, ExprKind::ArrayLiteralMixed(_))
 }
 
-/// Stores an expression in a rooted slot whose boxed layout does not depend on its current value.
+/// Captures an argument's value before later arguments can mutate a shared box.
 fn root_value(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> String {
-    initialize_owned_slot(ctx, PhpType::Mixed, expr)
+    let ty = PhpType::Mixed;
+    let slot = ctx.declare_hidden_temp(ty.clone());
+    let value = lower_expr(ctx, expr);
+    let value = crate::ir_lower::ownership::copy_assignment_value(ctx, value, Some(expr.span));
+    store_value_into_temp(ctx, &slot, ty, value, expr.span);
+    register_owned_call_operand(ctx, ctx.local_slots[&slot], expr.span);
+    slot
 }
 
 /// Creates and publishes a refcounted temporary for same-frame exception cleanup.

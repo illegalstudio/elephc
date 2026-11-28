@@ -199,10 +199,10 @@ pub(super) fn eval_native_interface_property_registration(
 pub(super) fn eval_native_interface_property_type_spec(contract: &PropertyHookContract) -> Option<String> {
     match (contract.get_type.as_ref(), contract.set_type.as_ref()) {
         (Some(get_type), Some(set_type)) if get_type == set_type => {
-            eval_native_php_type_spec(get_type, false)
+            crate::types::native_type_spec::logical_type_spec(get_type, false)
         }
-        (Some(get_type), None) => eval_native_php_type_spec(get_type, false),
-        (None, Some(set_type)) => eval_native_php_type_spec(set_type, false),
+        (Some(get_type), None) => crate::types::native_type_spec::logical_type_spec(get_type, false),
+        (None, Some(set_type)) => crate::types::native_type_spec::logical_type_spec(set_type, false),
         _ => None,
     }
 }

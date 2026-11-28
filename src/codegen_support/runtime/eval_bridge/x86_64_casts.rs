@@ -332,20 +332,26 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_unserialize");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve slots for the string pair and boxed result
+    emitter.instruction("sub rsp, 96");                                         // reserve source, result and two owned-value guard records
     emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // coerce the eval value to PHP's string context
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the string pointer across context calls
     emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save the string length across context calls
+    abi::emit_guard_owned_at_stack(emitter, "rax", "__rt_exception_release_owned", 32);
     emitter.instruction("call __rt_unserialize_begin");                         // start an isolated unserialize context
     emitter.instruction("call __rt_unserialize_inherit_policy");                // use the default allowed-classes policy
     abi::emit_store_zero_to_symbol(emitter, "_unser_call_line", 0);             // eval warnings report the fragment root line
     emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the string pointer
     emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // restore the string length
     emitter.instruction("call __rt_unserialize_mixed");                         // parse the payload into a boxed Mixed value
-    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the boxed result across context teardown
+    emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the boxed result without overwriting its source owner
+    abi::emit_guard_owned_at_stack(emitter, "rax", "__rt_exception_release_owned", 64);
     emitter.instruction("call __rt_unserialize_end");                           // close the unserialize context
-    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // reload the parse result
+    abi::emit_unguard_owned_at_stack(emitter, 64);
+    abi::emit_unguard_owned_at_stack(emitter, 32);
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // recover the owned string conversion or borrowed scratch pointer
+    emitter.instruction("call __rt_decref_any");                                // retire heap strings while leaving shared scratch untouched
+    emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                       // reload the parse result after retiring its input
     emitter.instruction("test rax, rax");                                       // did the parser produce a value?
     emitter.instruction("jne __elephc_eval_value_unserialize_done");            // preserve a successful boxed value
     emitter.instruction("mov eax, 3");                                          // runtime tag 3 = boolean
@@ -353,7 +359,7 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // false has no high payload word
     emitter.instruction("call __rt_mixed_from_value");                          // box PHP's false parse failure
     emitter.label("__elephc_eval_value_unserialize_done");
-    emitter.instruction("add rsp, 16");                                         // release the wrapper stack slots
+    emitter.instruction("add rsp, 96");                                         // release the wrapper stack slots and owned-value records
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed unserialized value to Rust
 

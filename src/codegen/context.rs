@@ -13,6 +13,7 @@
 //!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
 //!   id — not the fragment — is what keeps two similarly named functions from colliding.
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
@@ -75,8 +76,9 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) binding_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
-    callable_reachability: CallableReachabilityAnalysis,
+    callable_reachability: OnceCell<CallableReachabilityAnalysis>,
     /// Runtime names a declared-`callable` conversion may resolve when provenance is open
     /// (see `lower_elephc_normalize_callable`); `None` outside such a conversion.
     pub(super) declared_callable_candidates: Option<Vec<String>>,
@@ -123,6 +125,21 @@ pub(crate) struct FunctionContext<'a> {
 }
 
 impl<'a> FunctionContext<'a> {
+    /// Reads the original named-property policy, including across inlining and getter dispatch.
+    pub(super) fn property_read_requires_initialization(&self) -> bool {
+        self.current_inst.and_then(|id| self.function.instruction(id)).is_some_and(|inst| {
+            let profile = match inst.immediate {
+                Some(Immediate::ProfiledData { profile, .. }
+                    | Immediate::ReflectionPropertyRef { profile, .. })
+                    if matches!(inst.op, Op::PropGet | Op::NullsafePropGet) => Some(profile),
+                Some(Immediate::ProfiledPropertyFetch { mode: crate::ir::PropertyFetchMode::Read, profile })
+                    if inst.op == Op::DynamicPropGet => Some(profile),
+                _ => None,
+            };
+            profile.is_some_and(|profile| profile.semantics().contains(elephc_semantics::StrictFeature::Initialization))
+        })
+    }
+
     /// Returns the PHP lexical class scope the current instruction executes in.
     ///
     /// An instruction the inliner spliced in from a method body keeps that method's class
@@ -207,7 +224,6 @@ impl<'a> FunctionContext<'a> {
         heap_debug: bool,
         epilogue_label: Option<String>,
     ) -> Self {
-        let callable_reachability = CallableReachabilityAnalysis::new(module, function);
         let module_runtime = shared.module_runtime_facts(module);
         let function_fragment = label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
@@ -246,8 +262,9 @@ impl<'a> FunctionContext<'a> {
             numeric_frame_only_slots: layout.numeric_frame_only_slots,
             numeric_values: layout.numeric_values,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
+            binding_state_offsets: layout.binding_state_offsets,
             local_analysis: layout.local_analysis,
-            callable_reachability,
+            callable_reachability: OnceCell::new(),
             declared_callable_candidates: None,
             shared_selector_candidates: None,
             inline_callable_selectors: false,
@@ -432,7 +449,11 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn runtime_callable_candidates(&self, value: ValueId) -> Option<Vec<String>> {
         self.shared_selector_candidates
             .clone()
-            .or_else(|| self.callable_reachability.candidates(value))
+            .or_else(|| {
+                self.callable_reachability
+                    .get_or_init(|| CallableReachabilityAnalysis::new(self.module, self.function))
+                    .candidates(value)
+            })
             .or_else(|| self.declared_callable_candidates.clone())
     }
 
@@ -459,12 +480,11 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the type a value is boxed into `mixed` as.
     ///
-    /// That is its codegen type, except for a `?ptr<T>`: its codegen form is the bare pointer,
-    /// and only the declared union tells the boxer that address 0 is PHP null (a plain `ptr`
-    /// boxes 0 as the integer it is).
+    /// Nullable pointers retain null at address zero. Resources retain their PHP tag even
+    /// though their native payload uses the same integer-word representation as an int.
     pub(super) fn mixed_box_type(&self, value: ValueId) -> Result<PhpType> {
         let raw = self.raw_value_php_type(value)?;
-        if crate::types::is_nullable_pointer_type(&raw) {
+        if crate::types::is_nullable_pointer_type(&raw) || matches!(raw, PhpType::Resource(_)) {
             Ok(raw)
         } else {
             self.value_php_type(value)
@@ -1042,14 +1062,7 @@ impl<'a> FunctionContext<'a> {
     /// Loads the value pointed to by a local ref-cell pointer slot.
     fn load_ref_cell_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let storage_ty = self.local_php_type(slot)?;
-        let payload_ty = self.ref_cell_payload_type(slot)?;
-        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
-        super::lower_inst::coerce_loaded_local_to_result_type(
-            self,
-            &payload_ty,
-            &storage_ty,
-        )?;
-        Ok(storage_ty)
+        super::lower_inst::load_ref_cell_local_to_result_as(self, slot, &storage_ty)
     }
 
     /// Loads a reference cell's physical payload without coercing it to the logical slot type.
@@ -1127,7 +1140,12 @@ impl<'a> FunctionContext<'a> {
 
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
-        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire)
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire, false)
+    }
+
+    /// Publishes the new local before retiring a box retained across a consuming conversion.
+    pub(super) fn store_local_retiring_box(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire, true)
     }
 
     /// Republishes a container a mutating runtime helper may have relocated.
@@ -1140,18 +1158,21 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
     ) -> Result<()> {
-        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep, false)
     }
 
     /// Identifies a borrowed concrete container read from an unpromoted boxed reference local.
     pub(super) fn needs_borrowed_container_lease(
         &self, slot: LocalSlotId, value: ValueId,
     ) -> Result<bool> {
-        let ref_load = self.function.value(value).and_then(|value| match value.def {
+        let borrowed_load = self.function.value(value).and_then(|value| match value.def {
             ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
             _ => None,
-        }).is_some_and(|inst| inst.op == Op::LoadRefCell);
-        Ok(ref_load
+        }).is_some_and(|inst| {
+            inst.op == Op::LoadRefCell
+                || (inst.op == Op::LoadLocal && inst.result_ownership == Ownership::Borrowed)
+        });
+        Ok(borrowed_load
             && self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
             && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
             && matches!(self.value_php_type(value)?.codegen_repr(),
@@ -1200,9 +1221,10 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
         previous: RefCellStorePrevious,
+        retire_raw_box: bool,
     ) -> Result<()> {
         match self.local_slot_representation(slot) {
-            LocalSlotRepresentation::Raw => self.store_value_to_raw_local(slot, value),
+            LocalSlotRepresentation::Raw => self.store_value_to_raw_local_retiring_box(slot, value, retire_raw_box),
             LocalSlotRepresentation::RefCell => {
                 self.store_value_to_ref_cell_local(slot, value, previous)
             }
@@ -1226,7 +1248,7 @@ impl<'a> FunctionContext<'a> {
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
                 }
-                self.store_value_to_raw_local(slot, value)?;
+                self.store_value_to_raw_local_retiring_box(slot, value, retire_raw_box)?;
                 self.emit_branch(&done);
                 self.emitter.label(&ref_cell);
                 self.store_value_to_ref_cell_local(slot, value, previous)?;
@@ -1234,6 +1256,26 @@ impl<'a> FunctionContext<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Retires the previous box only for a slot whose final raw representation requires one.
+    fn store_value_to_raw_local_retiring_box(
+        &mut self, slot: LocalSlotId, value: ValueId, retire_box: bool,
+    ) -> Result<()> {
+        if !retire_box || self.local_php_type(slot)?.codegen_repr() != PhpType::Mixed {
+            return self.store_value_to_raw_local(slot, value);
+        }
+        // The original box survives the array mutation. Its replacement must be visible
+        // before the discarded payload can run a destructor.
+        let offset = self.local_offset(slot)?;
+        let previous = abi::secondary_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, previous, offset);
+        abi::emit_push_reg(self.emitter, previous);
+        self.store_value_to_raw_local(slot, value)?;
+        let result = abi::int_result_reg(self.emitter);
+        abi::emit_pop_reg(self.emitter, result);
+        abi::emit_call_label(self.emitter, "__rt_decref_mixed");
+        Ok(())
     }
 
     /// Releases a boxed source-local owner before a consuming container mutation.
@@ -1250,14 +1292,17 @@ impl<'a> FunctionContext<'a> {
     ) -> Result<()> {
         let source_ty = self.value_php_type(value)?;
         let target_ty = self.local_php_type(slot)?;
-        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
-            && matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
-            && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
-        {
-            let offset = self.local_offset(slot)?;
-            super::frame::emit_owned_local_cleanup(self, slot, offset, &target_ty);
+        if target_ty.codegen_repr() != PhpType::Mixed || source_ty.codegen_repr() == PhpType::Mixed {
+            return Ok(());
         }
-        Ok(())
+        // A synthetic alias can have a Mixed frame slot and point into a native array binding.
+        // In that case the consuming mutation owns the array itself and must retire it once.
+        if self.local_stores_ref_cell_pointer(slot)
+            && self.ref_cell_payload_type(slot)?.codegen_repr() != PhpType::Mixed
+        {
+            return Ok(());
+        }
+        self.release_local_before_refcounted_writeback(slot)
     }
 
     /// Stores an SSA value into a slot known to contain its raw frame representation.
@@ -1426,6 +1471,16 @@ impl<'a> FunctionContext<'a> {
             .any(|inst| inst.op == Op::Release && inst.operands == [value])
     }
 
+    /// Returns whether cleanup after the current instruction already owns this SSA lease.
+    ///
+    /// Consumers with a conditional ownership path, such as static initialization, use this
+    /// independently of `Ownership::Owned`: a transient string can be `MaybeOwned` and still
+    /// require immediate retirement when neither EIR nor a published operand slot will do it.
+    pub(super) fn value_cleanup_is_deferred(&self, value: ValueId) -> bool {
+        self.value_is_released_later(value)
+            || operand_owners::has_scoped_cleanup(self.function, value, self.current_inst)
+    }
+
     /// Stores the current result register(s) directly into an addressable local slot.
     pub(super) fn store_current_result_to_local(&mut self, slot: LocalSlotId) -> Result<()> {
         let target_ty = self.local_php_type(slot)?;
@@ -1524,6 +1579,33 @@ impl<'a> FunctionContext<'a> {
         let cell_reg = abi::symbol_scratch_reg(self.emitter);
         let result_reg = abi::int_result_reg(self.emitter);
         abi::load_at_offset(self.emitter, cell_reg, offset);
+        if *ty == PhpType::Mixed {
+            let raw = self.next_label("refcounted_writeback_release_raw_mixed");
+            let followed = self.next_label("refcounted_writeback_release_followed_mixed");
+            let payload = self.next_label("refcounted_writeback_release_mixed_payload");
+            abi::emit_push_reg(self.emitter, cell_reg);
+            abi::emit_reg_move(self.emitter, result_reg, cell_reg);
+            abi::emit_call_label(self.emitter, "__rt_reference_cell_mixed_payload_address");
+            abi::emit_branch_if_int_result_zero(self.emitter, &raw);
+            abi::emit_reg_move(self.emitter, cell_reg, result_reg);
+            let marker_reg = abi::secondary_scratch_reg(self.emitter);
+            crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+                self.emitter,
+                cell_reg,
+                result_reg,
+                marker_reg,
+                &followed,
+            );
+            self.emit_branch(&payload);
+            self.emitter.label(&raw);
+            abi::emit_load_temporary_stack_slot(self.emitter, cell_reg, 0);
+            self.emitter.label(&payload);
+            abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
+            abi::emit_store_zero_to_address(self.emitter, cell_reg, 0);
+            abi::emit_release_temporary_stack(self.emitter, 16);
+            abi::emit_decref_if_refcounted(self.emitter, ty);
+            return Ok(());
+        }
         abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
         abi::emit_store_zero_to_address(self.emitter, cell_reg, 0);
         if *ty == PhpType::Str {
@@ -1641,14 +1723,21 @@ impl<'a> FunctionContext<'a> {
     /// the function signature. Other promoted locals use their final frame storage shape for
     /// both representations.
     pub(super) fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
-        if let Some(ty) = self.current_inst.and_then(|inst|
-            self.local_analysis.ref_cell_payload_type_before_inst(inst, slot)) {
-            return Ok(ty.clone());
-        }
-        if let Some(ty) = self.local_analysis.stable_ref_cell_payload_type(slot) {
-            return Ok(ty.clone());
+        if let Some(ty) = self.proven_ref_cell_payload_type(slot) { return Ok(ty); }
+        if let Some(parameter) = self.function.params.get(slot.as_raw() as usize)
+            .filter(|parameter| parameter.by_ref && !parameter.variadic) {
+            return Ok(parameter.php_type.clone());
         }
         self.local_php_type(slot)
+    }
+
+    /// Keeps proven current payload facts separate from a raw incoming ABI fallback.
+    pub(super) fn proven_ref_cell_payload_type(&self, slot: LocalSlotId) -> Option<PhpType> {
+        if let Some(ty) = self.current_inst.and_then(|inst|
+            self.local_analysis.ref_cell_payload_type_before_inst(inst, slot)) {
+            return Some(ty.clone());
+        }
+        self.local_analysis.stable_ref_cell_payload_type(slot).cloned()
     }
 
     /// Stores the current result register(s) through a local ref-cell pointer slot.
@@ -1829,7 +1918,8 @@ impl<'a> FunctionContext<'a> {
         }
         use crate::builtins::semantics::BuiltinResultOwnership;
         let fresh = match inst.immediate {
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) =>
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+            | Some(Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { target, .. })) =>
                 target.result_ownership() == BuiltinResultOwnership::Fresh,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) =>
                 target.result_ownership() == BuiltinResultOwnership::Fresh,

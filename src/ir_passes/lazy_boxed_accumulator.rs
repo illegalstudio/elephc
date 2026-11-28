@@ -115,7 +115,7 @@ fn reads_locals_by_name(function: &Function) -> bool {
     function
         .instructions
         .iter()
-        .any(|inst| matches!(inst.op, Op::EvalLiteralCall | Op::EvalScopeGet | Op::EvalScopeSet))
+        .any(|inst| matches!(inst.op, Op::EvalLiteralCall | Op::EvalScopeGet | Op::EvalScopeContains | Op::EvalScopeSet))
 }
 
 /// Name prefix of the raw integer companion of a rewritten local.

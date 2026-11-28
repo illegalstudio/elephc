@@ -8,11 +8,13 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use super::array_element_references::bind_array_element_reference;
 
 pub(super) mod native_xml_reads;
 mod runtime_hooks;
 mod reference_arguments;
-pub(crate) use reference_arguments::lower_runtime_reference_argument;
+mod reference_place_dispatch;
+pub(crate) use reference_arguments::{lower_runtime_reference_argument, lower_dynamic_reference_argument};
 mod write_dimensions;
 pub(crate) use write_dimensions::{lower_native_dimension_write_select, may_have_native_xml_dimensions};
 pub(crate) use write_dimensions::lower_native_dimension_incdec_select_from_values;
@@ -99,6 +101,9 @@ pub(super) fn lower_property_get(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    if op == Op::PropGet {
+        crate::ir_lower::nullability::require_non_null(ctx, object, &[], &[], expr.span);
+    }
     lower_property_get_from_value(ctx, object, property, op, expr)
 }
 
@@ -250,11 +255,10 @@ fn bind_property_reference_cell(
     }
 }
 
-/// Binds a local alias directly to a native static property's process-lifetime storage slot.
+/// Binds a local alias to the selected raw or managed native static storage.
 ///
-/// The static symbol owns its payload, so the alias itself is borrowed. Container replacements
-/// written through the alias are immediately visible through `C::$property`, and the same alias
-/// gives `IterStart` a local origin that can reload the replacement after hash growth.
+/// Checked boxed declarations retain their managed cell, so rebinding the property leaves the
+/// original alias alive. Raw static symbols retain their borrowed process-lifetime ABI.
 pub(crate) fn lower_ref_assign_static_property(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
@@ -275,7 +279,14 @@ pub(crate) fn lower_ref_assign_static_property(
         Op::LoadStaticPropertyRefCell.default_effects(),
         Some(span),
     );
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    let managed = static_receiver_class_name(ctx, receiver).and_then(|name| ctx.classes.get(&name))
+        .is_some_and(|class| {
+            let owner = class.static_property_declaring_classes.get(property)
+                .and_then(|name| ctx.classes.get(name)).unwrap_or(class);
+            crate::types::managed_static_property_binding(owner, property, ctx.semantic_profile)
+        });
+    if managed { ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span)); }
+    else { ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span)); }
 }
 
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
@@ -379,74 +390,6 @@ fn aliased_property_argument(
     None
 }
 
-/// Lowers `$target =& $arr[idx]` using the ownership represented by the container.
-///
-/// The addressable receiver is first represented by a local alias and normalized to hash storage.
-/// Its entry then owns a managed tag-11 cell, so the new local can outlive replacement or
-/// destruction of the parent. This also gives copy-on-write and growth a writable place where
-/// they can publish a replacement reached through a static property or nested element.
-pub(crate) fn lower_ref_assign_array_elem(
-    ctx: &mut LoweringContext<'_, '_>,
-    target: &str,
-    source: &Expr,
-    span: Span,
-) {
-    let ExprKind::ArrayAccess { array, index } = &source.kind else {
-        return;
-    };
-    if instance_object_class_for_ir(ctx, array)
-        .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap"))
-    {
-        let call = Expr::new(ExprKind::MethodCall {
-            object: array.clone(), method: "__elephc_reference".into(), args: vec![(**index).clone()],
-        }, source.span);
-        lower_ref_assign_call(ctx, target, &call, span);
-        return;
-    }
-    let prepared_array = prepare_addressable_ref_array_receiver(ctx, array);
-    let array = prepared_array.as_ref().unwrap_or(array);
-    crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);
-    let array_value = lower_expr(ctx, array);
-    let container_type = ctx.builder.value_php_type(array_value.value).codegen_repr();
-    let mut index_value = lower_expr(ctx, index);
-    let value_type = match container_type {
-        PhpType::Array(elem_ty) => {
-            if elem_ty.codegen_repr() == PhpType::Mixed {
-                PhpType::Mixed
-            } else {
-                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
-                normalize_value_php_type(*elem_ty)
-            }
-        }
-        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
-        _ => array_access_result_type(ctx, array_value.value, Op::ArrayGet, source),
-    };
-    let cell_ptr = ctx.emit_value(
-        Op::LoadArrayElemRefCell,
-        vec![array_value.value, index_value.value],
-        None,
-        value_type.clone(),
-        Op::LoadArrayElemRefCell.default_effects(),
-        Some(span),
-    );
-    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
-    // A property read that is not addressable storage (a `mixed` property, so no synthetic
-    // alias was reified above) arrives as an OWNING temporary -- `PropGet` acquires -- and
-    // nothing else releases it: the binding above retains the entry's managed cell, not the
-    // container, so the container's owner was simply leaked, one boxed array per
-    // `$r = &$obj->m[k]`. Only the property reads are released here. A concrete container
-    // loaded from a Mixed-widened local also counts as an owning temporary, but that detached
-    // owner is what the backend's consuming store-back transfers, and releasing it too freed
-    // the table under the local.
-    if matches!(
-        ctx.builder.value_defining_op(array_value.value),
-        Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
-    ) && ctx.value_is_owning_temporary(array_value)
-    {
-        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
-    }
-}
-
 /// Reifies a static property, stable declared property, or nested element as a local receiver.
 ///
 /// Element reference lowering can only republish COW or growth through `ReceiverPlace` when its
@@ -542,39 +485,6 @@ fn prepare_addressable_ref_array_receiver_impl(
     }
 }
 
-/// Binds a synthetic foreach source alias to an element after its receiver was promoted to hash.
-///
-/// Unlike an ordinary indexed `=&` binding, a promoted hash entry owns a managed reference cell.
-/// Retaining that cell gives the synthetic origin a stable writeback address across table growth,
-/// source replacement, and destruction of the enclosing container.
-pub(crate) fn lower_owned_ref_assign_array_elem(
-    ctx: &mut LoweringContext<'_, '_>,
-    target: &str,
-    source: &Expr,
-    span: Span,
-) {
-    let ExprKind::ArrayAccess { array, index } = &source.kind else {
-        return;
-    };
-    let array_value = lower_expr(ctx, array);
-    let index_value = lower_expr(ctx, index);
-    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
-        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
-        PhpType::AssocArray { value, .. } => normalize_value_php_type(*value),
-        _ => PhpType::Mixed,
-    };
-    let cell_ptr = ctx.emit_value(
-        Op::LoadArrayElemRefCellExisting,
-        vec![array_value.value, index_value.value],
-        None,
-        value_type.clone(),
-        Op::LoadArrayElemRefCellExisting.default_effects(),
-        Some(span),
-    );
-    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
-}
-
-
 /// Materializes a missing XML property for an indirect write while preserving existing selections.
 pub(crate) fn lower_native_xml_property_write_fetch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
@@ -665,19 +575,36 @@ fn lower_property_get_without_runtime_hooks(
         let result = lower_property_get_without_native_dispatch(ctx, receiver, property, op, expr);
         return stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span);
     }
+    if let Some(value) = super::initialization_properties::magic_read(ctx, object, property, op, expr) {
+        return value;
+    }
+    lower_direct_property_read(ctx, object, property, op, expr)
+}
+
+/// Emits the selected physical read after getter and source-policy dispatch have completed.
+pub(super) fn lower_direct_property_read(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
+    property: &str, op: Op, expr: &Expr,
+) -> LoweredValue {
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     let reads_extern_cstr = op == Op::PropGet
         && result_type == PhpType::Str
         && extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some();
+    let immediate = if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && crate::ir_lower::initialization::enabled(ctx) {
+        Immediate::ProfiledData { data, profile: crate::source::EvalSourceProfile::new(
+            crate::php_only::is_enabled(), ctx.semantic_profile) }
+    } else { Immediate::Data(data) };
+    let pins = crate::ir_lower::initialization::pin_read_operands(ctx, &[object.value], expr.span);
     let result = ctx.emit_value(
         op,
         vec![object.value],
-        Some(Immediate::Data(data)),
+        Some(immediate),
         result_type,
         op.default_effects(),
         Some(expr.span),
     );
+    super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
     if reads_extern_cstr {
         // A C `char*` field reads as a borrowed view of C memory the program may free or
         // rewrite at any time, so the value PHP keeps is an owned copy taken right here.
@@ -763,21 +690,21 @@ fn property_result_type(
                 .get(&class_name)
                 .and_then(|info| info.fields.iter().find(|field| field.name == property))
             else {
-                return fallback_expr_type(expr);
+                return fallback_expr_type(expr, ctx.semantic_profile);
             };
             return normalize_value_php_type(field.php_type.clone());
         }
         if let Some(class_name) = packed_receiver_class(ctx, &object_ty) {
             let normalized = class_name.trim_start_matches('\\');
             let Some(class_info) = ctx.packed_classes.get(normalized) else {
-                return fallback_expr_type(expr);
+                return fallback_expr_type(expr, ctx.semantic_profile);
             };
             let Some(field) = class_info.fields.iter().find(|field| field.name == property) else {
-                return fallback_expr_type(expr);
+                return fallback_expr_type(expr, ctx.semantic_profile);
             };
             return normalize_value_php_type(field.php_type.codegen_repr());
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let nullable =
         nullable || (receiver_miss_is_null && value_may_carry_container_miss(ctx, object));
@@ -796,7 +723,7 @@ fn property_result_type(
         if ctx.interfaces.contains_key(normalized) {
             return PhpType::Mixed;
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
         let property_ty = normalize_value_php_type(property_ty);
@@ -847,7 +774,7 @@ fn property_result_type(
                 PhpType::Mixed
             };
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let property_ty = normalize_value_php_type(property_ty.clone());
     if nullable {
@@ -1186,7 +1113,9 @@ pub(super) fn lower_dynamic_property_fetch(
         // PHP fetches a variable receiver after the property expression has evaluated.
         let name = super::super::scoped_writes::property_name(ctx, property, expr.span)
             .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
+        let pins = super::call_operand_owners::pin_in_flight_owners(ctx, &[name.value], expr.span);
         let object = lower_member_receiver(ctx, object, expr);
+        super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
         let ty = ctx.builder.value_php_type(object.value);
         known_native |= singular_object_class(&ty).is_some_and(|(class, nullable)| !nullable
             && crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
@@ -1232,8 +1161,10 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
         }
     }
     let result_type = dynamic_property_fetch_result_type(ctx, object.value, property, mode, expr);
+    let pins = super::call_operand_owners::pin_in_flight_owners(ctx, &[object.value], expr.span);
     let property = super::super::scoped_writes::property_name(ctx, property, expr.span)
         .unwrap_or_else(|| { let property = lower_expr(ctx, property); coerce_runtime_property_name(ctx, property, expr.span) });
+    super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
     lower_dynamic_property_fetch_from_operands(
         ctx, object, property, result_type, mode, false, expr,
     )
@@ -1276,6 +1207,9 @@ pub(super) fn lower_dynamic_property_fetch_or_select(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, known_native: bool, write_select: bool, expr: &Expr,
 ) -> LoweredValue {
+    if mode == PropertyFetchMode::Read && !write_select {
+        crate::ir_lower::nullability::require_non_null(ctx, object, &[property], &[], expr.span);
+    }
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     let ty = ctx.builder.value_php_type(object.value);
     let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
@@ -1304,21 +1238,38 @@ fn lower_dynamic_property_fetch_without_runtime_hooks(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::initialization_dynamic_properties::lower(ctx, object, property, mode, expr) {
+        return value;
+    }
+    lower_dynamic_property_fetch_physical(ctx, object, property, result_type, mode, expr)
+}
+
+/// Emits a physical property fetch without recursively selecting initialized magic slots.
+pub(super) fn lower_dynamic_property_fetch_physical(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
+) -> LoweredValue {
     if !mode.is_read() && scalar_property_probe_receiver(ctx, object.value) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
         release_owning_receiver_temporary(ctx, object, expr.span);
         return lower_null(ctx, expr);
     }
+    let immediate = if crate::ir_lower::initialization::enabled(ctx) {
+        Immediate::ProfiledPropertyFetch { mode, profile: crate::source::EvalSourceProfile::new(
+            crate::php_only::is_enabled(), ctx.semantic_profile) }
+    } else { Immediate::PropertyFetchMode(mode) };
+    let pins = crate::ir_lower::initialization::pin_read_operands(ctx, &[object.value, property.value], expr.span);
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
-        Some(Immediate::PropertyFetchMode(mode)),
+        Some(immediate),
         result_type,
         Op::DynamicPropGet.default_effects() | if mode == PropertyFetchMode::QuietRead {
             crate::ir::Effects::WRITES_HEAP | crate::ir::Effects::ALLOC_HEAP | crate::ir::Effects::REFCOUNT_OP
         } else { crate::ir::Effects::PURE },
         Some(expr.span),
     );
+    super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
     // A name computed for this read (`$o->{(string) $mixed}`) is a temporary the
     // lookup only reads; the result borrows from the object, never from it.
     if ctx.value_is_owning_temporary(property) {
@@ -1354,11 +1305,14 @@ pub(super) fn lower_property_probe_from_value(
     if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
         && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     { return native_xml_reads::probe(ctx, object, property, expr); }
+    if let Some(value) = super::initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Probe, expr) {
+        return value;
+    }
     lower_property_probe_without_native(ctx, object, property, PropertyFetchMode::Probe, expr)
 }
 
 /// Probes ordinary property storage without re-entering a native XML presence branch.
-fn lower_property_probe_without_native(
+pub(super) fn lower_property_probe_without_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
@@ -1383,6 +1337,9 @@ pub(super) fn lower_property_empty_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Empty, expr) {
+        return value;
+    }
     if property_can_be_uninitialized(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {
         return lower_initialized_property_value(ctx, object, property, expr);
@@ -1399,6 +1356,9 @@ pub(super) fn lower_property_isset_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Isset, expr) {
+        return value;
+    }
     // As for `??`: a typed slot that may still be uninitialized is probed, never read.
     if property_can_be_uninitialized(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {
@@ -1452,7 +1412,7 @@ fn scalar_property_probe_receiver(ctx: &LoweringContext<'_, '_>, value: ValueId)
 fn expr_receiver_type_for_probe(ctx: &LoweringContext<'_, '_>, object: &Expr) -> PhpType {
     match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
-        _ => infer_expr_type_syntactic(object),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     }
 }
 
@@ -1471,7 +1431,7 @@ pub(super) fn dynamic_property_get_result_type(
         return PhpType::Mixed;
     }
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let nullable = nullable || value_may_carry_container_miss(ctx, object);
     let normalized = class_name.trim_start_matches('\\');
@@ -1483,7 +1443,7 @@ pub(super) fn dynamic_property_get_result_type(
         };
     }
     let Some(class_info) = ctx.classes.get(normalized) else {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     // A class with a per-instance property hash can answer a name no declaration mentions, so the
     // declared-slot union below would describe the wrong storage: the hash holds boxed `mixed`.
@@ -1513,7 +1473,7 @@ pub(super) fn dynamic_property_get_result_type(
             }
         })
         .collect::<Vec<_>>();
-    normalize_union_members(members).unwrap_or_else(|| fallback_expr_type(expr))
+    normalize_union_members(members).unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile))
 }
 
 /// Returns whether php resolves `property` on `class_name` to a DYNAMIC property in this scope.

@@ -480,7 +480,7 @@ fn keeps_dynamic_eval_visible_local_in_memory() {
         b.set_entry(entry);
         b.position_at_end(entry);
         b.emit(Op::LanguageConstructCall, vec![],
-            Some(Immediate::ProfiledData { data: crate::ir::DataId::from_raw(0), strict_php: false }),
+            Some(Immediate::ProfiledData { data: crate::ir::DataId::from_raw(0), profile: crate::source::EvalSourceProfile::permissive(false) }),
             IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed, Ownership::MaybeOwned);
         let value = b.emit_const_i64(9);
         b.emit_store_local(slot, value);
@@ -504,7 +504,7 @@ fn exit_source_profile_keeps_local_promotion() {
         b.set_entry(entry);
         b.position_at_end(entry);
         b.emit(Op::LanguageConstructCall, vec![],
-            Some(Immediate::ProfiledData { data: crate::ir::DataId::from_raw(0), strict_php: true }),
+            Some(Immediate::StrictExit(crate::ir::DataId::from_raw(0))),
             IrType::Void, PhpType::Void, Ownership::NonHeap);
         let value = b.emit_const_i64(9);
         b.emit_store_local(slot, value);

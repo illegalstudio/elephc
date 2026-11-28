@@ -1,6 +1,6 @@
 //! Purpose:
-//! Normalizes PHP array key types from literal expressions and inferred value types.
-//! Captures PHP integer-string key coercion plus literal string-offset parsing.
+//! Classifies array key types and storage under the selected semantic profile.
+//! Keeps exact typed string keys separate from PHP string-offset parsing.
 //!
 //! Called from:
 //! - `crate::types::checker::inference`
@@ -8,13 +8,40 @@
 //! - `crate::codegen::expr::arrays::access::string_offset`
 //!
 //! Key details:
-//! - Key and offset normalization must match PHP because it affects array shapes and string access.
+//! - Array key policy is explicit; string offsets retain their independent PHP grammar.
 
 use crate::parser::ast::{Expr, ExprKind};
 
 use super::PhpType;
+use elephc_semantics::{SemanticProfile, StrictFeature};
 
-/// Determines the normalized PHP type for an array key expression.
+/// Classifies a static key without erasing its kind, original bytes or lexical exact-key policy.
+pub(crate) fn literal_array_key(
+    expr: &Expr, profile: elephc_semantics::SemanticProfile,
+) -> Option<elephc_semantics::array_keys::StringKey<'_>> {
+    use elephc_semantics::{array_keys::{classify_string_key, StringKey}, StrictFeature};
+    let exact = profile.contains(StrictFeature::ArrayKeys);
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(StringKey::Integer(*value)),
+        ExprKind::StringLiteral(value) => Some(classify_string_key(profile, value.as_bytes())),
+        ExprKind::BoolLiteral(value) if !exact => Some(StringKey::Integer(i64::from(*value))),
+        ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(*value))),
+        ExprKind::Null if !exact => Some(StringKey::String(b"")),
+        ExprKind::UnaryPlus(inner) => match crate::semantics::numeric::literal_unary_plus(inner)?.kind {
+            ExprKind::IntLiteral(value) => Some(StringKey::Integer(value)),
+            ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(value))),
+            _ => None,
+        },
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg().map(StringKey::Integer),
+            ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(-*value))),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Determines the stored key type without losing the selected array key policy.
 ///
 /// PHP integer-string key coercion: numeric strings like `"123"` become `PhpType::Int`
 /// when used as array keys. Float and boolean literals also coerce to integers.
@@ -22,7 +49,15 @@ use super::PhpType;
 /// expression is not a string literal, returns `PhpType::Mixed` to indicate ambiguous key type.
 ///
 /// Returns the key type to use during type checking and shape inference.
-pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType {
+/// Exact keys preserve strings and retain invalid source kinds for domain diagnostics.
+pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType, profile: SemanticProfile) -> PhpType {
+    if profile.contains(StrictFeature::ArrayKeys) {
+        return match &expr.kind {
+            ExprKind::IntLiteral(_) => PhpType::Int,
+            ExprKind::StringLiteral(_) => PhpType::Str,
+            _ => raw_ty,
+        };
+    }
     match &expr.kind {
         ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) => {
             PhpType::Int
@@ -54,13 +89,15 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
 ///
 /// An integer key forces hash storage unless it is exactly `0`.
 /// Boolean and float literals are tested after their PHP integer-key cast.
-/// A string key forces hash storage if it is a valid PHP integer string and not `"0"`.
+/// A PHP integer-string key forces hash storage unless it is `"0"`.
+/// Under exact keys every string requires hash storage, including `"0"`.
 /// Other expressions (variables, function calls, etc.) do not force hash storage
 /// and may use packed array optimization.
 ///
 /// Used during array shape inference to determine whether a statically-known
 /// key requires associative lookup semantics.
-pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
+pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr, profile: SemanticProfile) -> bool {
+    if profile.contains(StrictFeature::ArrayKeys) && matches!(expr.kind, ExprKind::StringLiteral(_)) { return true; }
     match &expr.kind {
         ExprKind::IntLiteral(value) => *value != 0,
         ExprKind::BoolLiteral(value) => *value,
@@ -78,7 +115,8 @@ pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
 /// A packed array of length `n` already holds keys `0..n-1`. Key `0` or `1` is an
 /// overwrite or the next contiguous slot; any higher key (or a negative key) may
 /// skip, so PHP must switch to hash storage before the write.
-pub(crate) fn nonempty_array_key_forces_hash_storage(expr: &Expr) -> bool {
+pub(crate) fn nonempty_array_key_forces_hash_storage(expr: &Expr, profile: SemanticProfile) -> bool {
+    if profile.contains(StrictFeature::ArrayKeys) && matches!(expr.kind, ExprKind::StringLiteral(_)) { return true; }
     match &expr.kind {
         ExprKind::IntLiteral(value) => *value < 0 || *value >= 2,
         ExprKind::FloatLiteral(value) => *value < 0.0 || *value >= 2.0,
@@ -88,7 +126,8 @@ pub(crate) fn nonempty_array_key_forces_hash_storage(expr: &Expr) -> bool {
 
 /// Keeps an empty array packed only when its first explicit key is provably zero.
 /// Unknown keys can be sparse or negative, so hash storage must not create typed holes.
-pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr) -> bool {
+pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr, profile: SemanticProfile) -> bool {
+    if profile.contains(StrictFeature::ArrayKeys) && matches!(expr.kind, ExprKind::StringLiteral(_)) { return true; }
     match &expr.kind {
         ExprKind::IntLiteral(value) => *value != 0,
         ExprKind::BoolLiteral(value) => *value,
@@ -105,8 +144,8 @@ pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr) -> bool {
 /// the gap where PHP promotes the array to a hash (`$a = [1, 2]; $a[5] = 3;` is
 /// `{"0":1,"1":2,"5":3}`). Without a length fact the only key bounded syntactically is one that
 /// is provably `0`; the checker adds the loop-counter proofs it owns.
-pub(crate) fn nonempty_array_key_stays_in_range(index: &Expr) -> bool {
-    !empty_array_key_requires_hash_storage(index)
+pub(crate) fn nonempty_array_key_stays_in_range(index: &Expr, profile: SemanticProfile) -> bool {
+    !empty_array_key_requires_hash_storage(index, profile)
 }
 
 /// Merges two array key types from adjacent elements into a unified key type.
@@ -125,12 +164,13 @@ pub(crate) fn merge_array_key_types(left: PhpType, right: PhpType) -> PhpType {
 
 /// Infers the array key type from a value type when no explicit key is provided.
 ///
-/// PHP uses this rule: `array_values()` on integers, booleans, or floats yields integer keys;
-/// strings yield `PhpType::Mixed` keys (ambiguous integer-string); other types preserve
-/// their own type as the key type.
+/// Constructors such as `array_fill_keys()` and `array_flip()` take new keys from values.
+/// PHP normalizes numeric scalar keys and permits integer-string conversion. Exact keys
+/// preserve source kinds so string metadata and invalid-domain diagnostics stay accurate.
 ///
 /// Returns the key type for an array element when the key expression is absent.
-pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
+pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType, profile: SemanticProfile) -> PhpType {
+    if profile.contains(StrictFeature::ArrayKeys) { return raw_ty; }
     match raw_ty {
         PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float => PhpType::Int,
         PhpType::Str => PhpType::Mixed,
@@ -138,7 +178,20 @@ pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
     }
 }
 
-pub(crate) use elephc_chopper::syntax::call_args::is_php_integer_array_key;
+#[cfg(test)]
+mod tests;
+
+/// Returns true if `value` is a PHP-valid integer array key.
+///
+/// A valid PHP integer string is a decimal integer (optionally signed) that fits in a signed
+/// 64-bit integer (`-9223372036854775808` to `9223372036854775807`). The string must contain
+/// no leading zeros (except `"0"` itself), no leading `+`, no whitespace, and only digits
+/// possibly prefixed by a single `-` or `+`.
+///
+/// Used to determine whether a string literal should be treated as an integer key.
+pub(crate) fn is_php_integer_array_key(value: &str) -> bool {
+    elephc_semantics::array_keys::php_integer_key(value.as_bytes()).is_some()
+}
 
 /// Parses a string literal as a PHP string-offset index, returning the integer value.
 ///

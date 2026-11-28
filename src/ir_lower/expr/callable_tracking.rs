@@ -64,52 +64,6 @@ pub(crate) fn reflection_method_binding_for_expr(
     reflection_method_reflected_target(ctx, expr)
 }
 
-/// Returns a safe static argument array that can be replayed for reflection forwarding.
-pub(crate) fn reflection_arg_array_binding_for_expr(expr: &Expr) -> Option<Vec<Expr>> {
-    let args = reflection_class_new_instance_args_value_without_locals(expr)?;
-    if args.iter().all(reflection_arg_expr_can_track) {
-        Some(args)
-    } else {
-        None
-    }
-}
-
-/// Returns true when replaying an argument expression cannot duplicate side effects.
-pub(super) fn reflection_arg_expr_can_track(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
-        | ExprKind::FloatLiteral(_)
-        | ExprKind::BoolLiteral(_)
-        | ExprKind::Null
-        | ExprKind::ConstRef(_)
-        | ExprKind::ClassConstant { .. }
-        | ExprKind::ScopedConstantAccess { .. }
-        | ExprKind::MagicConstant(_) => true,
-        ExprKind::Negate(inner) => matches!(
-            &inner.kind,
-            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
-        ),
-        ExprKind::NamedArg { value, .. } => reflection_arg_expr_can_track(value),
-        ExprKind::ArrayLiteral(items) => items.iter().all(reflection_arg_expr_can_track),
-        ExprKind::ArrayLiteralAssoc(entries) => entries.iter().all(|(key, value)| {
-            reflection_arg_array_key_can_track(key) && reflection_arg_expr_can_track(value)
-        }),
-        _ => false,
-    }
-}
-
-/// Returns true when an associative array key is stable enough for replay.
-pub(super) fn reflection_arg_array_key_can_track(expr: &Expr) -> bool {
-    matches!(
-        expr.kind,
-        ExprKind::StringLiteral(_)
-            | ExprKind::IntLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::FloatLiteral(_)
-    )
-}
-
 /// EIR value and callable binding produced by a callable-array assignment.
 pub(crate) struct LoweredCallableArrayAssignment {
     pub(crate) value: LoweredValue,

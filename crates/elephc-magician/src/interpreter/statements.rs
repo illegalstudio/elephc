@@ -13,6 +13,7 @@ mod abstract_requirements;
 mod abstract_method_calls;
 mod array_updates;
 mod array_append;
+mod array_parent_publication;
 mod attributes_magic_validation;
 mod core_attributes;
 mod callable_objects;
@@ -31,6 +32,7 @@ mod instance_property_access;
 mod interface_contracts;
 mod interface_member_validation;
 mod loop_statements;
+mod strict_switch;
 mod local_offset_writes;
 mod method_dispatch;
 mod native_argument_binding;
@@ -54,13 +56,18 @@ mod abstract_setter;
 mod readonly_property_writes;
 mod reference_writeback;
 mod scalar_offsets;
+mod false_array_completion;
 mod reflection_instantiation;
 mod static_method_dispatch;
 mod static_property_access;
 mod trait_declarations;
 
 use super::*;
-use property_write_receivers::{prepare_property_write_receiver, finish_property_write_receiver,
+pub(in crate::interpreter) use property_dimension_guards::supports_source_guard;
+pub(in crate::interpreter) use property_reference_owners::{
+    eval_property_reference_for_access, eval_static_property_reference_after_read,
+};
+use property_write_receivers::{prepare_property_write_receiver,
     eval_write_property_get_result, with_eval_property_write_operands, with_eval_named_property_write_operands,
     with_eval_named_property_write_result};
 pub(in crate::interpreter) use property_update_expressions::{
@@ -113,7 +120,7 @@ pub(in crate::interpreter) use native_static_references::*;
 use native_property_unset::*;
 pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
-use property_dispatch::*;
+pub(in crate::interpreter) use property_dispatch::execute_property_stmt;
 use property_dimension_unset::{eval_property_dimension_unset, eval_missing_unset_property};
 use property_dimension_writes::{
     eval_property_dimension_write, DimensionProperty,
@@ -124,7 +131,9 @@ pub(in crate::interpreter) use abstract_setter::*;
 use readonly_property_writes::*;
 pub(in crate::interpreter) use reference_writeback::*;
 pub(in crate::interpreter) use reflection_instantiation::*;
-use scalar_offsets::{eval_array_autovivification, eval_string_offset_write};
+use scalar_offsets::{eval_array_autovivification, eval_false_array_parent_diagnostic, eval_string_offset_write};
 pub(in crate::interpreter) use static_method_dispatch::*;
 pub(in crate::interpreter) use static_property_access::*;
 pub(in crate::interpreter) use trait_declarations::*;
+
+pub(in crate::interpreter) use core_attributes::warn_eval_discarded_instance_result;

@@ -50,11 +50,28 @@ impl Checker {
         &mut self, array: &Expr, index: &Expr, expr: &Expr,
         arr_ty: PhpType, idx_ty: PhpType, for_write: bool,
     ) -> Result<PhpType, CompileError> {
+        if !for_write {
+            crate::semantics::nullability::validate_receiver(self.semantic_profile,
+                self.semantic_source_mode, &arr_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
+        }
+        if !for_write && !self.null_probe_operations.contains(&expr.span) {
+            crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                &self.mixed_selection_receiver_view(array, &arr_ty), expr.span, "offset access", |member| match member {
+                    PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Buffer(_) => true,
+                    PhpType::Object(name) => self.object_type_supports_dimensions(name),
+                    _ => false,
+                })?;
+        }
+        if crate::semantics::mixed::uses_php_offset_key(&arr_ty) {
+            crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                &idx_ty, index.span, "PHP offset keys", crate::semantics::mixed::array_key_kind)?;
+        }
+        crate::semantics::array_keys::validate_receiver(self.semantic_profile, &arr_ty, &idx_ty, index.span)?;
         let buffer = matches!(arr_ty, PhpType::Buffer(_));
         self.buffer_read_observations.entry(expr.span)
             .and_modify(|previous| *previous &= buffer)
             .or_insert(buffer);
-        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone(), self.semantic_profile);
         match &arr_ty {
             PhpType::Str => {
                 if !is_valid_string_offset_index(index, &idx_ty) {

@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Interpolation keeps a formatting operand without absorbing a following explicit concatenation.
+#[test]
+fn test_parse_interpolation_preserves_formatting_and_concat_precedence() {
+    let program = parse_source(r#"<?php echo "row:$value" . 'tail';"#);
+    let StmtKind::Echo(expression) = &program[0].kind else { panic!("echo"); };
+    let ExprKind::BinaryOp { left, op: BinOp::Concat, right } = &expression.kind else { panic!("outer concat"); };
+    assert!(matches!(&right.kind, ExprKind::StringLiteral(text) if text == "tail"));
+    let ExprKind::BinaryOp { op: BinOp::Concat, right, .. } = &left.kind else { panic!("interpolation"); };
+    assert!(matches!(&right.kind, ExprKind::Cast {
+        target: elephc::parser::ast::CastType::StringFormat, expr,
+    } if matches!(&expr.kind, ExprKind::Variable(name) if name == "value")));
+}
+
 /// Verifies that `<?php echo @file_get_contents("missing.txt");` parses to an `Echo` of an
 /// `ErrorSuppress` wrapping a `FunctionCall`. The `@` prefix must not affect parsing.
 #[test]

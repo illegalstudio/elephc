@@ -162,6 +162,9 @@ pub(super) fn lower_initialized_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Probe, expr) {
+        return value;
+    }
     let hook_class = union_hook_probe_class(ctx, object.value, property);
     // The probe transfers its boxed result to the consumer. Clearing its owner slot
     // prevents a later Error allocation from being released through a stale pointer.

@@ -367,7 +367,7 @@ pub enum EvalBinOp {
     Spaceship,
 }
 
-/// PHP cast targets supported by runtime eval expressions.
+/// PHP cast and interpolation targets supported by runtime eval expressions.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalCastType {
     Array,
@@ -375,6 +375,8 @@ pub enum EvalCastType {
     Float,
     String,
     Bool,
+    /// Interpolation conversion, retaining its explicit formatting context.
+    StringFormat,
 }
 
 /// Unary operations supported by the initial EvalIR parser.

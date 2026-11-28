@@ -6,7 +6,7 @@ description: "Retrieves the default stream context."
 ## stream_context_get_default()
 
 ```php
-function stream_context_get_default(array $options = null): mixed
+function stream_context_get_default(array $options = null): resource
 ```
 
 Retrieves the default stream context.
@@ -14,7 +14,7 @@ Retrieves the default stream context.
 **Parameters**:
 - `$options` (`array`), default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `resource`
 
 ## Availability
 

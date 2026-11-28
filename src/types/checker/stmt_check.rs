@@ -60,9 +60,11 @@ impl Checker {
             | StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. }
             | StmtKind::StaticPropertyAssign { .. } | StmtKind::StaticPropertyArrayPush { .. }
             | StmtKind::StaticPropertyArrayAssign { .. })).then(|| self.snapshot_flow_exit(env));
+        let outer_source_mode = self.semantic_source_mode;
+        self.semantic_source_mode = stmt.source_mode;
         let outer_strict_types = self.strict_types;
         self.strict_types = stmt.strict_types;
-        let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
+        let result = crate::php_only::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
         // Global bindings record retirement separately before each source-order alias change.
@@ -70,6 +72,7 @@ impl Checker {
             self.record_statement_exception_flow(stmt, env, retirement.as_ref(), before_write);
         }
         self.strict_types = outer_strict_types;
+        self.semantic_source_mode = outer_source_mode;
         result
     }
 
@@ -119,7 +122,9 @@ impl Checker {
                 "Unresolved namespace/use statement",
             )),
             StmtKind::Echo(expr) => {
-                self.infer_type_with_assignment_effects(expr, env)?;
+                let ty = self.infer_type_with_assignment_effects(expr, env)?;
+                crate::semantics::strings::validate_formatting(self.semantic_profile,
+                    self.semantic_source_mode, &ty, expr.span)?;
                 Ok(())
             }
             StmtKind::Assign { .. }

@@ -68,12 +68,39 @@ pub unsafe extern "C" fn __elephc_eval_context_retain(ctx: *mut ElephcEvalContex
 /// introspection, matching the PHP interpreter where those names do not exist.
 ///
 /// Generated code emits this call while initializing the eval context, only in
-/// binaries compiled with `elephc build --strict-php`. The flag is thread-local and
+/// binaries compiled with `elephc build --php-only`. The flag is thread-local and
 /// elephc programs run every eval on the initializing thread, so one call
 /// covers the program lifetime.
 #[no_mangle]
-pub extern "C" fn __elephc_eval_set_strict_php(enabled: u8) {
-    crate::strict_php_mode::set_strict_php_mode(enabled != 0);
+pub extern "C" fn __elephc_eval_set_php_only(enabled: u8) {
+    crate::php_only_mode::set_php_only_mode(enabled != 0);
+}
+
+/// Installs a versioned semantic profile on a newly created native eval context.
+///
+/// # Safety
+/// `ctx` must be null or a live context allocated by the eval bridge.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_set_semantic_profile(
+    ctx: *mut ElephcEvalContext, version: u32, bits: u64,
+) -> i32 {
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(u64::from(version), bits) else {
+        return EvalStatus::AbiMismatch.code();
+    };
+    let Some(context) = (unsafe { ctx.as_mut() }) else { return EvalStatus::RuntimeFatal.code(); };
+    if context.abi_version() != ABI_VERSION { return EvalStatus::AbiMismatch.code(); }
+    #[cfg(not(test))]
+    {
+        use crate::interpreter::RuntimeValueOps;
+        let runtime = crate::runtime_hooks::ElephcRuntimeOps::new();
+        if runtime.fixed_semantic_profile().ok().flatten() != Some(profile) {
+            return EvalStatus::AbiMismatch.code();
+        }
+    }
+    match context.install_semantic_profile(profile) {
+        Ok(()) => EvalStatus::Ok.code(),
+        Err(status) => status.code(),
+    }
 }
 
 /// Selects the PHP language profile eval reports, so that a binary compiled
@@ -296,11 +323,23 @@ pub extern "C" fn __elephc_eval_opcache_apply_restart() {
 /// `ptr` must be readable for `len` bytes when `len > 0`.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached(ptr: *const u8, len: u64) -> u64 {
+    unsafe { __elephc_eval_opcache_rt_is_cached_profiled(ptr, len, elephc_semantics::SEMANTICS_ABI_VERSION as u64, 0) }
+}
+
+/// Uses the caller's exact semantic profile for this OPcache path operation.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached_profiled(
+    ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
+) -> u64 {
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(semantics_abi, semantic_bits) else { return 0; };
     let path = unsafe { borrow_path(ptr, len) };
     if path.as_os_str().is_empty() {
         return 0;
     }
-    u64::from(crate::script_cache::store::is_cached(&path))
+    u64::from(crate::script_cache::store::is_cached_with_semantics(&path, profile))
 }
 
 /// Retires the runtime cache's entry for `path`, as a FORCED `opcache_invalidate()` does,
@@ -365,11 +404,23 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_soft_invalidate(
 /// `ptr` must be readable for `len` bytes when `len > 0`.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile(ptr: *const u8, len: u64) -> u64 {
+    unsafe { __elephc_eval_opcache_rt_compile_profiled(ptr, len, elephc_semantics::SEMANTICS_ABI_VERSION as u64, 0) }
+}
+
+/// Uses the caller's exact semantic profile for this OPcache path operation.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile_profiled(
+    ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
+) -> u64 {
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(semantics_abi, semantic_bits) else { return 0; };
     let file = unsafe { borrow_path(ptr, len) };
     if file.as_os_str().is_empty() {
         return 0;
     }
-    if crate::script_cache::store::compile_file(&file) {
+    if crate::script_cache::store::compile_file_with_semantics(&file, profile) {
         return 1;
     }
     if let Some(reason) = crate::script_cache::store::compile_open_failure(&file) {
@@ -397,11 +448,23 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache(
     ptr: *const u8,
     len: u64,
 ) -> u64 {
+    unsafe { __elephc_eval_opcache_rt_in_file_cache_profiled(ptr, len, elephc_semantics::SEMANTICS_ABI_VERSION as u64, 0) }
+}
+
+/// Uses the caller's exact semantic profile for this OPcache path operation.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache_profiled(
+    ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
+) -> u64 {
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(semantics_abi, semantic_bits) else { return 0; };
     let path = unsafe { borrow_path(ptr, len) };
     if path.as_os_str().is_empty() {
         return 0;
     }
-    u64::from(crate::script_cache::file_cache_contains(&path))
+    u64::from(crate::script_cache::file_store::contains_with_semantics(&path, profile))
 }
 
 /// Copies one generated directive string out of the binary's read-only data.
@@ -458,7 +521,7 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
 /// Consumes a context owner and returns any owned persistent-value destructor exception.
 ///
 /// Generated code raises the returned Throwable after this Rust call returns. The final ABI
-/// owner drains static locals, static properties and materialized class constants while the
+/// owner drains static locals, static properties, class constants and dynamic constants while the
 /// dynamic destructor registry is still live. PCNTL registrations defer final reclamation.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP

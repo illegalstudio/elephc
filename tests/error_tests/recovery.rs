@@ -241,17 +241,12 @@ fn test_failed_list_unpack_inference_targets_no_undefined_cascade() {
     );
 }
 
-/// Regression for #597: a failed reference assignment still names its target. Poisoning an
-/// unbound target prevents the undefined source diagnostic from cascading to later target reads.
+/// A reference assignment to an undeclared source creates that source as initialized null.
 #[test]
-fn test_failed_reference_assignment_target_no_undefined_cascade() {
-    let messages =
-        checker_error_messages("<?php $target =& $missing; echo count($target);");
-    assert_eq!(
-        messages,
-        vec!["Undefined variable: $missing".to_string()],
-        "failed reference assignment must not leave its target undefined",
-    );
+fn test_reference_assignment_initializes_undeclared_source() {
+    let source = "<?php $target =& $missing; echo count($target);";
+    let result = check_source(source);
+    assert!(result.is_ok(), "reference assignment must initialize both aliases: {result:?}");
 }
 
 /// Regression for #597: a static local whose initializer fails must still be present in the local

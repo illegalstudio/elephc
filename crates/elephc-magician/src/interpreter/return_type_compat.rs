@@ -469,7 +469,8 @@ fn eval_return_variant_accepts_actual_variant(
         | (EvalParameterTypeVariant::Float, EvalParameterTypeVariant::Float)
         | (EvalParameterTypeVariant::Int, EvalParameterTypeVariant::Int)
         | (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Iterable)
-        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String) => true,
+        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String)
+        | (EvalParameterTypeVariant::Resource, EvalParameterTypeVariant::Resource) => true,
         // PHP accepts any class as `object`, but only once it has found the class.
         (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class(actual_name)) => {
             if let Some(actual) = eval_resolve_return_class_type_name(actual_name, actual_owner, pending_class, context) {

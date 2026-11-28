@@ -386,6 +386,7 @@ fn lower_hash_set_with_replacement(
     Ok(())
 }
 
+pub(super) use abi::HashKeyNormalization;
 /// Lowers `HashEntrySetReference`: binds one hash entry to a live managed reference cell.
 ///
 /// The entry may already belong to another reference set, so the write must DETACH it instead
@@ -518,19 +519,6 @@ fn hash_key_materialization_may_run_user_code(
     Ok(!raw_integer)
 }
 
-/// Whether a hash key goes through PHP's numeric-string normalization.
-///
-/// `Php` is every ordinary array and hash write. `RawString` exists only for descriptor
-/// argument containers, whose string keys are parameter names rather than PHP array keys.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum HashKeyNormalization {
-    /// `__rt_hash_normalize_key` decides: a numeric string becomes an integer key.
-    Php,
-    /// Normalize again without repeating a float diagnostic already emitted by this access.
-    PhpAlreadyDiagnosed,
-    /// A string key stays a string key, byte for byte.
-    RawString,
-}
 
 /// Lowers a descriptor-invoker argument write, keeping numeric-string keys as names.
 ///
@@ -876,7 +864,9 @@ fn lower_hash_get_aarch64(
     }
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
-    if warn_on_missing {
+    if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
+    } else if warn_on_missing {
         emit_undefined_hash_key_warning_aarch64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);
@@ -928,7 +918,9 @@ fn lower_hash_get_x86_64(
     }
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
-    if warn_on_missing {
+    if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
+    } else if warn_on_missing {
         emit_undefined_hash_key_warning_x86_64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);
@@ -1411,111 +1403,31 @@ fn materialize_numeric_cell_key_x86_64(
     Ok(())
 }
 
-/// Materializes a boxed Mixed key as the AArch64 hash key pair `x1`/`x2`.
+/// Materializes a boxed Mixed key through the shared target-aware key emitter.
 fn materialize_mixed_hash_key_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    key: ValueId,
-    normalization: HashKeyNormalization,
+    ctx: &mut FunctionContext<'_>, key: ValueId, normalization: HashKeyNormalization,
 ) -> Result<()> {
     if crate::codegen::stack_numeric::numeric_value(ctx.function, &ctx.numeric_values, key) {
         return materialize_numeric_cell_key_aarch64(ctx, key, normalization);
     }
-    let string_key = ctx.next_label("mixed_hash_key_string");
-    let null_key = ctx.next_label("mixed_hash_key_null");
-    let float_key = ctx.next_label("mixed_hash_key_float");
-    let scalar_key = ctx.next_label("mixed_hash_key_scalar");
-    let done = ctx.next_label("mixed_hash_key_done");
+    let stem = ctx.next_label("mixed_hash_key");
+    let (empty, _) = ctx.data.add_string(b"");
     ctx.load_value_to_reg(key, "x0")?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp x0, #1");                                      // string mixed keys need PHP numeric-string normalization
-    ctx.emitter.instruction(&format!("b.eq {}", string_key));                   // route string keys through the normal hash-key helper
-    ctx.emitter.instruction("cmp x0, #8");                                      // null mixed keys normalize to the empty string like PHP
-    ctx.emitter.instruction(&format!("b.eq {}", null_key));                     // route null keys to the empty-string key path
-    ctx.emitter.instruction("cmp x0, #0");                                      // integer mixed keys are already scalar hash keys
-    ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep integer keys as integer hash keys
-    ctx.emitter.instruction("cmp x0, #3");                                      // boolean mixed keys normalize like integer keys
-    ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep boolean keys as integer hash keys
-    ctx.emitter.instruction("cmp x0, #2");                                      // float mixed keys truncate toward zero, exactly like PHP
-    ctx.emitter.instruction(&format!("b.eq {}", float_key));                    // route float keys through the truncating conversion
-    ctx.emitter.instruction("mov x1, #0");                                      // unsupported mixed key tags fall back to integer key zero
-    ctx.emitter.instruction(&format!("b {}", scalar_key));                      // the float arm sits between here and the scalar path
-    ctx.emitter.label(&float_key);
-    ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
-    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
-        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
-        ctx.emitter.instruction("mov x0, x9");                                  // recover the normalized PHP integer key without another warning
-    } else {
-        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
-    }
-    ctx.emitter.instruction("mov x1, x0");                                      // use the diagnosed PHP integer key
-    ctx.emitter.label(&scalar_key);
-    ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
-    ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
-    ctx.emitter.label(&null_key);
-    emit_empty_string_hash_key_aarch64(ctx);                                   // null normalizes to the empty string "" hash key
-    ctx.emitter.instruction(&format!("b {}", done));                            // skip the string-key normalization path
-    ctx.emitter.label(&string_key);
-    if normalization != HashKeyNormalization::RawString {
-        abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
-    }
-    ctx.emitter.label(&done);
+    abi::emit_boxed_hash_key(ctx.emitter, normalization, &stem, &empty);
     Ok(())
 }
 
-/// Materializes a boxed Mixed key as the x86_64 hash key pair `rsi`/`rdx`.
+/// Materializes a boxed Mixed key through the shared target-aware key emitter.
 fn materialize_mixed_hash_key_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    key: ValueId,
-    normalization: HashKeyNormalization,
+    ctx: &mut FunctionContext<'_>, key: ValueId, normalization: HashKeyNormalization,
 ) -> Result<()> {
     if crate::codegen::stack_numeric::numeric_value(ctx.function, &ctx.numeric_values, key) {
         return materialize_numeric_cell_key_x86_64(ctx, key, normalization);
     }
-    let string_key = ctx.next_label("mixed_hash_key_string");
-    let null_key = ctx.next_label("mixed_hash_key_null");
-    let float_key = ctx.next_label("mixed_hash_key_float");
-    let scalar_key = ctx.next_label("mixed_hash_key_scalar");
-    let done = ctx.next_label("mixed_hash_key_done");
+    let stem = ctx.next_label("mixed_hash_key");
+    let (empty, _) = ctx.data.add_string(b"");
     ctx.load_value_to_reg(key, "rax")?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp rax, 1");                                      // string mixed keys need PHP numeric-string normalization
-    ctx.emitter.instruction(&format!("je {}", string_key));                     // route string keys through the normal hash-key helper
-    ctx.emitter.instruction("cmp rax, 8");                                      // null mixed keys normalize to the empty string like PHP
-    ctx.emitter.instruction(&format!("je {}", null_key));                       // route null keys to the empty-string key path
-    ctx.emitter.instruction("cmp rax, 0");                                      // integer mixed keys are already scalar hash keys
-    ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
-    ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
-    ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep boolean keys as integer hash keys
-    ctx.emitter.instruction("cmp rax, 2");                                      // float mixed keys truncate toward zero, exactly like PHP
-    ctx.emitter.instruction(&format!("je {}", float_key));                      // route float keys through the truncating conversion
-    ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
-    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
-    ctx.emitter.label(&float_key);
-    ctx.emitter.instruction("movq xmm0, rdi");                                  // move the raw IEEE-754 payload bits into an FP register
-    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
-        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
-        ctx.emitter.instruction("mov rax, r11");                                // recover the normalized PHP integer key without another warning
-    } else {
-        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
-    }
-    ctx.emitter.instruction("mov rsi, rax");                                    // use the diagnosed PHP integer key
-    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks the truncated float as an integer key
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after the float conversion
-    ctx.emitter.label(&null_key);
-    emit_empty_string_hash_key_x86_64(ctx);                                    // null normalizes to the empty string "" hash key
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the string-key normalization path
-    ctx.emitter.label(&scalar_key);
-    ctx.emitter.instruction("mov rsi, rdi");                                    // publish the unboxed scalar payload as key_lo
-    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after scalar selection
-    ctx.emitter.label(&string_key);
-    ctx.emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the hash key low word
-    if normalization != HashKeyNormalization::RawString {
-        abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
-    }
-    ctx.emitter.instruction("mov rsi, rax");                                    // move key_lo into the hash-set ABI register
-    ctx.emitter.label(&done);
+    abi::emit_boxed_hash_key(ctx.emitter, normalization, &stem, &empty);
     Ok(())
 }
 

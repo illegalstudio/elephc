@@ -15,9 +15,13 @@ use crate::errors::EvalParseError;
 use crate::eval_ir::EvalMagicConst;
 
 /// Converts a scanned numeric literal, rejecting a following identifier or digit.
-pub(super) fn decode_number(text: &str, after: &str) -> Option<TokenKind> {
+pub(super) fn decode_number(
+    text: &str,
+    after: &str,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<TokenKind, EvalParseError> {
     if after.chars().next().is_some_and(|ch| ch.is_alphanumeric() || ch == '_') {
-        return None;
+        return Err(EvalParseError::InvalidNumber);
     }
     let digits = text.replace('_', "");
     let radix = match digits.as_bytes() {
@@ -27,24 +31,31 @@ pub(super) fn decode_number(text: &str, after: &str) -> Option<TokenKind> {
         _ => None,
     };
     if let Some(radix) = radix {
-        return Some(eval_radix_int_or_float(&digits[2..], radix));
+        return integer_token(&digits[2..], radix, profile);
     }
     if !digits.contains(['.', 'e', 'E']) {
         if digits.len() > 1 && digits.starts_with('0') {
             let octal = &digits[1..];
-            return octal.bytes().all(|digit| matches!(digit, b'0'..=b'7'))
-                .then(|| eval_radix_int_or_float(octal, 8));
+            if !octal.bytes().all(|digit| matches!(digit, b'0'..=b'7')) {
+                return Err(EvalParseError::InvalidNumber);
+            }
+            return integer_token(octal, 8, profile);
         }
-        if let Ok(value) = digits.parse::<i64>() {
-            return Some(TokenKind::Int(value));
-        }
+        return integer_token(&digits, 10, profile);
     }
-    digits.parse::<f64>().ok().map(TokenKind::Float)
+    digits
+        .parse::<f64>()
+        .map(TokenKind::Float)
+        .map_err(|_| EvalParseError::InvalidNumber)
 }
 
 /// Decodes one double-quoted literal and returns its extent with the eval tokens.
-pub(super) fn decode_double_quoted(text: &str, line: i64) -> Result<(Vec<Token>, usize), EvalParseError> {
-    let mut lexer = LiteralCursor::new(text);
+pub(super) fn decode_double_quoted(
+    text: &str,
+    line: i64,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<(Vec<Token>, usize), EvalParseError> {
+    let mut lexer = LiteralCursor::new(text, profile);
     let tokens = lexer.lex_double_quoted(line)?;
     Ok((tokens, lexer.pos))
 }
@@ -53,15 +64,22 @@ pub(super) fn decode_double_quoted(text: &str, line: i64) -> Result<(Vec<Token>,
 pub(super) struct LiteralCursor<'a> {
     source: &'a str,
     pos: usize,
+    profile: elephc_semantics::SemanticProfile,
 }
 
 impl<'a> LiteralCursor<'a> {
     /// Creates a cursor at the start of the literal.
-    fn new(source: &'a str) -> Self {
+    fn new(source: &'a str, profile: elephc_semantics::SemanticProfile) -> Self {
         Self {
             source,
             pos: 0,
+            profile,
         }
+    }
+
+    /// Returns the immutable semantic policy inherited by nested interpolation.
+    pub(super) fn semantic_profile(&self) -> elephc_semantics::SemanticProfile {
+        self.profile
     }
 
     /// Reads a PHP identifier body at the current byte offset.
@@ -198,13 +216,20 @@ fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
 }
 
-/// Converts radix digits to an integer, or to a float when they overflow `i64`.
+/// Converts integer digits to an integer, or to a float when they overflow `i64`.
 ///
-/// PHP promotes an over-large literal in any base to a float rather than rejecting it, so the
-/// accumulation mirrors the compiler's `radix_digits_to_float`.
+/// PHP parses over-large decimal literals through its decimal float conversion. Other bases
+/// mirror the compiler's `radix_digits_to_float` accumulation.
 fn eval_radix_int_or_float(digits: &str, radix: u32) -> TokenKind {
     if let Ok(value) = i64::from_str_radix(digits, radix) {
         return TokenKind::Int(value);
+    }
+    if radix == 10 {
+        return TokenKind::Float(
+            digits
+                .parse::<f64>()
+                .expect("scanner only passes valid decimal digits"),
+        );
     }
     let radix_float = f64::from(radix);
     let mut value = 0.0_f64;
@@ -215,4 +240,24 @@ fn eval_radix_int_or_float(digits: &str, radix: u32) -> TokenKind {
         value = value * radix_float + f64::from(digit);
     }
     TokenKind::Float(value)
+}
+
+/// Keeps checked integer magnitude separate from PHP's default float promotion.
+fn integer_token(
+    digits: &str,
+    radix: u32,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<TokenKind, EvalParseError> {
+    use elephc_semantics::integer_literals::{classify_integer_digits, IntegerMagnitude};
+    use elephc_semantics::StrictFeature;
+
+    if profile.contains(StrictFeature::Overflow) {
+        return match classify_integer_digits(digits, radix) {
+            IntegerMagnitude::Signed(value) => Ok(TokenKind::Int(value)),
+            IntegerMagnitude::MinimumMagnitude => Ok(TokenKind::MinimumIntegerMagnitude),
+            IntegerMagnitude::Overflow => Err(EvalParseError::IntegerLiteralOverflow),
+            IntegerMagnitude::Invalid => Err(EvalParseError::InvalidNumber),
+        };
+    }
+    Ok(eval_radix_int_or_float(digits, radix))
 }

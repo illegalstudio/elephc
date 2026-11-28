@@ -8,10 +8,11 @@
 //! Key details:
 //! - Passes must preserve PHP-visible side effects and run after magic constants and type checking have produced canonical AST metadata.
 
-use crate::names::{php_symbol_key, Name};
+use crate::ast_visit::AstVisitor;
+use crate::names::{canonical_name_for_decl, php_symbol_key, Name};
 use crate::parser::ast::{
-    BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
+    ArrayEntry, BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr,
+    ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr, UseKind,
 };
 use crate::span::Span;
 use crate::codegen_support::platform::Target;
@@ -20,6 +21,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+mod semantic_context;
+pub use semantic_context::scoped_semantic_profile;
 mod binding_decisions;
 mod control;
 mod effect_analysis;
@@ -52,6 +55,168 @@ pub use binding_decisions::install_scalar_guard_arg_sites;
 pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source, active_scalar_return_needs_guard, active_return_boundary_releases_refused_value};
 pub use output::with_hosted_output;
 
+/// Rebuilds one key with statically selected matches before source-only constant folding.
+fn prepare_source_array_key_for_fold(
+    expr: &Expr,
+    profile: elephc_semantics::SemanticProfile,
+) -> Option<Expr> {
+    let kind = match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => return Some(expr.clone()),
+        ExprKind::UnaryPlus(inner) => {
+            ExprKind::UnaryPlus(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
+        }
+        ExprKind::Negate(inner) => {
+            ExprKind::Negate(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
+        }
+        ExprKind::Not(inner) => {
+            ExprKind::Not(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
+        }
+        ExprKind::BitNot(inner) => {
+            ExprKind::BitNot(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
+        }
+        ExprKind::Cast { target, expr: inner } => ExprKind::Cast {
+            target: target.clone(),
+            expr: Box::new(prepare_source_array_key_for_fold(inner, profile)?),
+        },
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(prepare_source_array_key_for_fold(left, profile)?),
+            op: op.clone(),
+            right: Box::new(prepare_source_array_key_for_fold(right, profile)?),
+        },
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => ExprKind::Ternary {
+            condition: Box::new(prepare_source_array_key_for_fold(condition, profile)?),
+            then_expr: Box::new(prepare_source_array_key_for_fold(then_expr, profile)?),
+            else_expr: Box::new(prepare_source_array_key_for_fold(else_expr, profile)?),
+        },
+        ExprKind::ShortTernary { value, default } => {
+            let _profile = scoped_semantic_profile(profile);
+            let value = fold::expr::fold_expr(prepare_source_array_key_for_fold(value, profile)?);
+            if condition_scalar_value(&value).is_some_and(|value| value.truthy()) {
+                return Some(value);
+            }
+            ExprKind::ShortTernary {
+                value: Box::new(value),
+                default: Box::new(prepare_source_array_key_for_fold(default, profile)?),
+            }
+        }
+        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
+            value: Box::new(prepare_source_array_key_for_fold(value, profile)?),
+            default: Box::new(prepare_source_array_key_for_fold(default, profile)?),
+        },
+        ExprKind::FunctionCall { name, args } => {
+            let canonical = php_symbol_key(name.as_canonical().trim_start_matches('\\'));
+            if !matches!(canonical.as_str(), "intval" | "floatval" | "strval")
+                || args.len() != 1
+            {
+                return None;
+            }
+            ExprKind::FunctionCall {
+                name: name.clone(),
+                args: vec![prepare_source_array_key_for_fold(&args[0], profile)?],
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
+            array: Box::new(prepare_source_array_key_for_fold(array, profile)?),
+            index: Box::new(prepare_source_array_key_for_fold(index, profile)?),
+        },
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .iter()
+                .map(|item| prepare_source_array_key_for_fold(item, profile))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items
+                .iter()
+                .map(|(key, value)| {
+                    Some((
+                        prepare_source_array_key_for_fold(key, profile)?,
+                        prepare_source_array_key_for_fold(value, profile)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .iter()
+                .map(|entry| match entry {
+                    ArrayEntry::Keyed(key, value) => Some(ArrayEntry::Keyed(
+                        prepare_source_array_key_for_fold(key, profile)?,
+                        prepare_source_array_key_for_fold(value, profile)?,
+                    )),
+                    ArrayEntry::Value(value) => Some(ArrayEntry::Value(
+                        prepare_source_array_key_for_fold(value, profile)?,
+                    )),
+                    ArrayEntry::Spread(_)
+                    | ArrayEntry::Reference(_)
+                    | ArrayEntry::KeyReference(_, _) => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } if name.is_fully_qualified() => return Some(expr.clone()),
+        ExprKind::Match { .. } => {
+            let selected = select_match_array_key_for_source(expr, profile)?;
+            return prepare_source_array_key_for_fold(&selected, profile);
+        }
+        _ => return None,
+    };
+    let mut prepared = expr.clone();
+    prepared.kind = kind;
+    Some(prepared)
+}
+
+/// Selects a statically matched arm without folding unresolved or unselected result expressions.
+pub(crate) fn select_match_array_key_for_source(
+    expr: &Expr,
+    profile: elephc_semantics::SemanticProfile,
+) -> Option<Expr> {
+    let ExprKind::Match {
+        subject,
+        arms,
+        default,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    let _profile = scoped_semantic_profile(profile);
+    let subject = fold::expr::fold_expr(prepare_source_array_key_for_fold(subject, profile)?);
+    let subject = scalar_value(&subject)?;
+    for (patterns, value) in arms {
+        for pattern in patterns {
+            let pattern = fold::expr::fold_expr(prepare_source_array_key_for_fold(
+                pattern, profile,
+            )?);
+            match pattern_matches_scalar(&subject, &pattern, CaseComparison::Strict) {
+                Some(true) => return Some(value.clone()),
+                Some(false) => {}
+                None => return None,
+            }
+        }
+    }
+    default.as_deref().cloned()
+}
+
+/// Folds one source expression only when pre-resolution folding and literal planning are safe.
+pub(crate) fn fold_array_key_for_source(
+    expr: &Expr, profile: elephc_semantics::SemanticProfile,
+) -> Option<Expr> {
+    let prepared = prepare_source_array_key_for_fold(expr, profile)?;
+    let _profile = scoped_semantic_profile(profile);
+    let folded = fold::expr::fold_expr(prepared);
+    crate::types::literal_array_key(&folded, profile)?;
+    Some(folded)
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -64,8 +229,27 @@ thread_local! {
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+    static ACTIVE_SOURCE_FOLD_USER_CALLS: RefCell<Option<HashSet<Span>>> = const { RefCell::new(None) };
     static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
     static ACTIVE_DEPRECATION_READING_CONSTANTS: RefCell<Option<Rc<HashSet<String>>>> = const { RefCell::new(None) };
+}
+
+/// Restores the enclosing user-function inventory after a source-only fold preview.
+struct SourceFoldUserFunctionsGuard {
+    functions: Option<HashSet<String>>,
+    calls: Option<HashSet<Span>>,
+}
+
+impl Drop for SourceFoldUserFunctionsGuard {
+    /// Restores the outer fold context after normal return or unwinding.
+    fn drop(&mut self) {
+        ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| {
+            slot.replace(self.functions.take());
+        });
+        ACTIVE_SOURCE_FOLD_USER_CALLS.with(|slot| {
+            slot.replace(self.calls.take());
+        });
+    }
 }
 
 /// Reports whether a user class constant named `name` may read a deprecated constant when it is
@@ -125,6 +309,48 @@ pub(crate) fn fold_constant_expression(expr: Expr) -> Expr {
     fold_expr(expr)
 }
 
+/// Evaluates a declaration producer with its physical policy and restores the consuming scope.
+pub(crate) fn with_expression_semantics<T>(profile: elephc_semantics::SemanticProfile,
+    source: crate::source::SourceProfile, f: impl FnOnce() -> T) -> T {
+    let _profile = scoped_semantic_profile(profile);
+    let _mode = semantic_context::scoped_source_mode(source.mode);
+    let _source = crate::source::scoped_parse_mode(source);
+    f()
+}
+
+/// Reports whether evaluating one source expression can throw under the selected profile.
+pub(crate) fn source_expression_may_throw(
+    expr: &Expr,
+    profile: elephc_semantics::SemanticProfile,
+) -> bool {
+    if matches!(&expr.kind, ExprKind::IncludeValue { .. }) {
+        return true;
+    }
+    let _profile = scoped_semantic_profile(profile);
+    effects::expr_effect(expr).may_throw || !exception_flow::active_expr_thrown_types(expr).is_empty()
+}
+
+/// Reports whether one source operand is a scalar literal that cannot dispatch user code.
+pub(crate) fn source_literal_scalar_operand(expr: &Expr) -> bool {
+    effects::literal_scalar_operand(expr)
+}
+
+/// Reports whether executing one source statement can throw under the selected profile.
+pub(crate) fn source_statement_may_throw(
+    stmt: &Stmt,
+    profile: elephc_semantics::SemanticProfile,
+) -> bool {
+    if matches!(
+        &stmt.kind,
+        StmtKind::Assign { value, .. } | StmtKind::Return(Some(value))
+            if matches!(&value.kind, ExprKind::IncludeValue { .. })
+    ) {
+        return true;
+    }
+    let _profile = scoped_semantic_profile(profile);
+    effects::stmt_may_throw(stmt)
+}
+
 /// Folds constants whose values or builtin availability depend on the compile target.
 ///
 /// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
@@ -169,6 +395,33 @@ pub(in crate::optimize) fn active_fold_user_function_exists(name: &str) -> bool 
     })
 }
 
+/// Reports whether source namespace resolution binds this call site to a user function.
+pub(in crate::optimize) fn active_source_fold_user_call(span: Span) -> bool {
+    ACTIVE_SOURCE_FOLD_USER_CALLS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|calls| calls.contains(&span))
+    })
+}
+
+/// Installs top-level declarations so source-only fold previews respect builtin shadowing.
+pub(crate) fn with_source_fold_user_functions<R>(
+    program: &Program,
+    action: impl FnOnce() -> R,
+) -> R {
+    let functions = collect_top_level_user_functions(program);
+    let calls = collect_source_fold_user_calls(program, &functions);
+    let previous_functions =
+        ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| slot.replace(Some(functions)));
+    let previous_calls =
+        ACTIVE_SOURCE_FOLD_USER_CALLS.with(|slot| slot.replace(Some(calls)));
+    let _guard = SourceFoldUserFunctionsGuard {
+        functions: previous_functions,
+        calls: previous_calls,
+    };
+    action()
+}
+
 /// Returns whether constant folding is currently evaluating a target-dependent guard condition.
 pub(in crate::optimize) fn active_target_guard_condition() -> bool {
     ACTIVE_TARGET_GUARD_CONDITION.with(|slot| *slot.borrow())
@@ -190,28 +443,148 @@ pub(in crate::optimize) fn fold_condition_expr(expr: Expr) -> Expr {
 /// Collects unconditional user functions that can shadow a builtin during `function_exists()`.
 fn collect_top_level_user_functions(program: &[Stmt]) -> HashSet<String> {
     let mut functions = HashSet::new();
-    collect_top_level_user_functions_from_block(program, &mut functions);
+    collect_top_level_user_functions_from_block(program, None, &mut functions);
     functions
 }
 
 /// Walks declaration-transparent compiler wrappers without treating conditional PHP blocks as eager.
 fn collect_top_level_user_functions_from_block(
     program: &[Stmt],
+    current_namespace: Option<&str>,
     functions: &mut HashSet<String>,
 ) {
+    let mut namespace = current_namespace.map(str::to_owned);
     for stmt in program {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
-                functions.insert(php_symbol_key(name));
+            StmtKind::NamespaceDecl { name } => {
+                namespace = source_namespace_name(name);
             }
-            StmtKind::Synthetic(body)
-            | StmtKind::NamespaceBlock { body, .. }
-            | StmtKind::IncludeOnceGuard { body, .. } => {
-                collect_top_level_user_functions_from_block(body, functions);
+            StmtKind::NamespaceBlock { name, body } => {
+                let block_namespace = source_namespace_name(name);
+                collect_top_level_user_functions_from_block(
+                    body,
+                    block_namespace.as_deref(),
+                    functions,
+                );
+            }
+            StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
+                let canonical = canonical_name_for_decl(namespace.as_deref(), name);
+                functions.insert(php_symbol_key(&canonical));
+            }
+            StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_top_level_user_functions_from_block(
+                    body,
+                    namespace.as_deref(),
+                    functions,
+                );
             }
             _ => {}
         }
     }
+}
+
+/// Returns the canonical namespace represented by one source namespace marker.
+fn source_namespace_name(name: &Option<Name>) -> Option<String> {
+    name.as_ref()
+        .map(Name::as_canonical)
+        .filter(|name| !name.is_empty())
+}
+
+/// Namespace state used to identify pre-resolution scalar-builtin call shadowing by span.
+struct SourceFoldCallCollector<'a> {
+    declarations: &'a HashSet<String>,
+    namespace: Option<String>,
+    function_imports: HashMap<String, String>,
+    namespace_blocks: Vec<(Option<String>, HashMap<String, String>)>,
+    user_calls: HashSet<Span>,
+}
+
+impl SourceFoldCallCollector<'_> {
+    /// Reports whether the current namespace and imports bind this call to user code.
+    fn call_is_user_function(&self, name: &Name) -> bool {
+        let canonical = php_symbol_key(name.as_canonical().trim_start_matches('\\'));
+        if name.is_fully_qualified() {
+            return self.declarations.contains(&canonical);
+        }
+        if !name.is_unqualified() {
+            return false;
+        }
+        if let Some(imported) = self.function_imports.get(&canonical) {
+            let imported = php_symbol_key(imported.trim_start_matches('\\'));
+            return imported != canonical || self.declarations.contains(&imported);
+        }
+        let local = canonical_name_for_decl(self.namespace.as_deref(), name.as_str());
+        self.declarations.contains(&php_symbol_key(&local))
+            || self.declarations.contains(&canonical)
+    }
+}
+
+impl AstVisitor for SourceFoldCallCollector<'_> {
+    /// Tracks namespace switches, namespace blocks and function imports in source order.
+    fn statement(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::NamespaceDecl { name } => {
+                self.namespace = source_namespace_name(name);
+                self.function_imports.clear();
+            }
+            StmtKind::NamespaceBlock { name, .. } => {
+                self.namespace_blocks.push((
+                    self.namespace.take(),
+                    std::mem::take(&mut self.function_imports),
+                ));
+                self.namespace = source_namespace_name(name);
+            }
+            StmtKind::UseDecl { imports } => {
+                for item in imports {
+                    if item.kind == UseKind::Function {
+                        self.function_imports.insert(
+                            php_symbol_key(&item.alias),
+                            item.name.as_canonical(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Restores the namespace that enclosed a braced namespace block.
+    fn statement_end(&mut self, stmt: &Stmt) {
+        if matches!(stmt.kind, StmtKind::NamespaceBlock { .. }) {
+            let (namespace, imports) = self
+                .namespace_blocks
+                .pop()
+                .expect("namespace visitor stack remains balanced");
+            self.namespace = namespace;
+            self.function_imports = imports;
+        }
+    }
+
+    /// Records only calls whose written binding resolves to a user declaration.
+    fn expression(&mut self, expr: &Expr) {
+        let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+            return;
+        };
+        if self.call_is_user_function(name) {
+            self.user_calls.insert(expr.span);
+        }
+    }
+}
+
+/// Collects exact call sites whose pre-resolution name binds to a user function.
+fn collect_source_fold_user_calls(
+    program: &Program,
+    declarations: &HashSet<String>,
+) -> HashSet<Span> {
+    let mut collector = SourceFoldCallCollector {
+        declarations,
+        namespace: None,
+        function_imports: HashMap::new(),
+        namespace_blocks: Vec::new(),
+        user_calls: HashSet::new(),
+    };
+    crate::ast_visit::walk_program(program, &mut collector);
+    collector.user_calls
 }
 
 /// Propagates scalar constants across statements and control flow.

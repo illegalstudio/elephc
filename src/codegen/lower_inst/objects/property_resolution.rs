@@ -991,7 +991,7 @@ pub(super) enum PropertyNameArm {
 /// the immediate cannot silently downgrade a value read into a silent probe.
 pub(super) fn property_fetch_mode(inst: &Instruction) -> PropertyFetchMode {
     match inst.immediate {
-        Some(Immediate::PropertyFetchMode(mode)) => mode,
+        Some(Immediate::PropertyFetchMode(mode) | Immediate::ProfiledPropertyFetch { mode, .. }) => mode,
         _ => PropertyFetchMode::Read,
     }
 }

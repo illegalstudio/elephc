@@ -18,7 +18,10 @@ impl Checker {
     /// Keeps callback literals available for contextual typing while visiting other argument effects.
     pub(super) fn infer_contextual_callback_effects(&mut self, arg: &Expr, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &arg.kind {
-            ExprKind::Closure { .. } => Ok(()),
+            ExprKind::Closure { capture_refs, .. } => {
+                self.prepare_reference_captures(capture_refs, env);
+                Ok(())
+            },
             ExprKind::FirstClassCallable(target) => self.infer_callable_receiver_effects(target, env),
             ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) =>
                 self.infer_contextual_callback_effects(value, env),
@@ -71,7 +74,7 @@ impl Checker {
             | ExprKind::ConstRef(_) | ExprKind::This | ExprKind::MagicConstant(_)
             | ExprKind::ClassConstant { .. } | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::ScopedConstantAccess { .. }
-            | ExprKind::BinaryOp { .. } | ExprKind::Negate(_) | ExprKind::Not(_)
+            | ExprKind::BinaryOp { .. } | ExprKind::UnaryPlus(_) | ExprKind::Negate(_) | ExprKind::Not(_)
             | ExprKind::BitNot(_) | ExprKind::Throw(_) | ExprKind::ErrorSuppress(_)
             | ExprKind::Print(_) | ExprKind::NullCoalesce { .. } | ExprKind::Pipe { .. }
             | ExprKind::Assignment { .. } | ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)
@@ -92,7 +95,7 @@ impl Checker {
 
     /// Preserves named/spread source order for every constructor form.
     fn infer_constructor_operand_effects(&mut self, args: &[Expr], env: &mut TypeEnv) -> Result<(), CompileError> {
-        for arg in &crate::types::call_args::expand_static_assoc_spread_args(args) {
+        for arg in &crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile) {
             self.infer_type_with_assignment_effects(arg, env)?;
         }
         Ok(())

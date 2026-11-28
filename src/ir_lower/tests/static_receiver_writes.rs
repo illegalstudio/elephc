@@ -285,7 +285,9 @@ NestedCompoundState::$owner = new NestedCompoundOwner(); nestedCompoundWrite();
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         let function = module.functions.iter().find(|function| function.name == "nestedCompoundWrite").unwrap();
-        let position = |op| function.instructions.iter().position(|inst| inst.op == op).unwrap();
+        let position = |op| function.instructions.iter().position(|inst| inst.op == op)
+            .unwrap_or_else(|| panic!("{target}: missing {op:?} in {:?}",
+                function.instructions.iter().map(|inst| inst.op).collect::<Vec<_>>()));
         assert!(position(crate::ir::Op::Call) < position(crate::ir::Op::LoadStaticProperty),
             "{target}: the compound RHS precedes receiver selection");
         assert!(position(crate::ir::Op::IsNull) < position(crate::ir::Op::PropGetForWrite),

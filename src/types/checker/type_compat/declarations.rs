@@ -298,6 +298,12 @@ impl Checker {
             // the parent's physical property or dimension storage.
             return Ok(());
         }
+        if *expected_ty == PhpType::Mixed
+            && crate::types::checked_property_references(self.semantic_profile)
+            && self.promote_live_property_reference_argument(arg, env)?
+        {
+            return Ok(());
+        }
         // Guards refine the current value, while a reference still addresses the original
         // slot. Coalescing assignments likewise keep nullable parameter storage alive.
         let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();
@@ -640,7 +646,7 @@ impl Checker {
                 return ty.clone();
             }
         }
-        infer_expr_type_syntactic(expression)
+        infer_expr_type_syntactic(expression, self.semantic_profile)
     }
 
     /// Semantically resolves a declaration default when it is a scoped constant access, then
@@ -653,13 +659,29 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        if let Some(default_ty) = self.resolved_declaration_default_type(default_expr)? {
+            self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
+        }
+        Ok(())
+    }
+
+    /// Infers an omitted value after producer binding while retaining its original declaration tree.
+    pub(crate) fn infer_bound_default(&mut self, value: &Expr, destination: &PhpType,
+        env: &TypeEnv) -> Result<PhpType, CompileError> {
+        self.infer_type(&crate::types::constant_binding::bind_value(value.clone(), destination), env)
+    }
+
+    /// Resolves a default's original kind while retaining deferred declaration failures.
+    pub(crate) fn resolved_declaration_default_type(
+        &mut self, default_expr: Option<&Expr>,
+    ) -> Result<Option<PhpType>, CompileError> {
         let Some(default_expr) = default_expr else {
-            return Ok(());
+            return Ok(None);
         };
         // PHP permits even a scalar-typed parameter to use an unbound object factory.
         // An explicit argument bypasses it; omission raises the scope Error before type binding.
         if crate::types::deferred_defaults::deferred_error_message(default_expr).is_some() {
-            return Ok(());
+            return Ok(None);
         }
         let default_ty = match &default_expr.kind {
             ExprKind::ScopedConstantAccess { receiver, name } => {
@@ -687,7 +709,7 @@ impl Checker {
             }
             _ => self.declaration_default_type(default_expr),
         };
-        self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
+        Ok(Some(default_ty))
     }
 
     /// Validates a declaration default while class-like schema metadata is still being built.
@@ -862,13 +884,15 @@ impl Checker {
         &mut self,
         ref_param_names: Vec<String>,
         param_names: Vec<String>,
-        pre_bound_own_storage: std::collections::HashMap<String, crate::types::PhpType>,
+        pre_bound: crate::types::checker::PreBoundLocals,
         body: &[crate::parser::ast::Stmt],
         f: F,
     ) -> Result<T, CompileError>
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
+        let pre_bound_own_storage: crate::types::TypeEnv = pre_bound.iter()
+            .map(|(name, entry)| (name.clone(), entry.storage.clone())).collect();
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
         self.definitely_bound_locals.extend(pre_bound_own_storage.keys().cloned());
         if self.current_class.is_some() { self.definitely_bound_locals.insert("this".to_string()); }
@@ -917,7 +941,8 @@ impl Checker {
         // enclosing scope, and keying on that silenced fresh closure locals that merely shared a
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
-        self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        self.seed_entry_binding_contracts(&pre_bound);
+        self.run_mixed_storage_scan(body, &pre_bound);
         let candidates = super::super::promotable_arrays::find_candidates(self, body);
         let saved_promotable_array_candidates =
             std::mem::replace(&mut self.promotable_array_candidates, candidates);

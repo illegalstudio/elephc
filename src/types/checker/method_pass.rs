@@ -271,13 +271,13 @@ impl Checker {
                     // The storage this frame already holds on entry: the parameters. `$this`,
                     // the superglobals and the seeded globals `method_env` also carries are not
                     // this frame's own storage, and none of them is markable anyway.
-                    let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
-                        method_param_names
-                            .iter()
-                            .filter_map(|name| {
-                                method_env.get(name).map(|ty| (name.clone(), ty.clone()))
-                            })
-                            .collect();
+                    let pre_bound_own_storage: crate::types::checker::PreBoundLocals =
+                        method_param_names.iter().filter_map(|name| {
+                            let ty = method_env.get(name)?;
+                            let declared = method.variadic.as_ref() == Some(name)
+                                || method.params.iter().any(|(param, hint, ..)| param == name && hint.is_some());
+                            Some((name.clone(), crate::types::checker::PreBoundLocal::parameter(ty, declared)))
+                        }).collect();
                     let return_facts = crate::optimize::ReturnBoundaryFacts::new(method.return_type.as_ref(),
                         method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
                     let body_walk = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
@@ -424,15 +424,7 @@ impl Checker {
                 &mut callable_array_return_sigs,
             );
         }
-        let raw_inferred = if return_infos.is_empty() {
-            None
-        } else {
-            let mut widest = return_infos[0].ty.clone();
-            for return_info in &return_infos[1..] {
-                widest = Self::wider_type(&widest, &return_info.ty);
-            }
-            Some(widest)
-        };
+        let raw_inferred = self.inferred_return_contract(&return_infos, Self::wider_type);
         let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
         let inferred_php_array = return_infos
             .iter()
@@ -496,11 +488,10 @@ impl Checker {
                     let skip_compat_check = matches!(declared, PhpType::Never);
                     if !skip_compat_check {
                         for return_info in &return_infos {
-                            if let Err(error) = self.require_compatible_return_hint(
+                            if let Err(error) = self.require_return_info_hint(
                                 type_ann,
                                 &declared,
-                                &return_info.ty,
-                                return_info.has_value,
+                                return_info,
                                 method.span,
                                 &format!("Method '{}::{}' return type", class.name, method.name),
                             ) {

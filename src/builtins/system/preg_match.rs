@@ -65,8 +65,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 ///
 /// Such calls run through the boxed-Mixed capture helper, so `$matches` becomes
 /// `array<mixed>` instead of the `array<string>` of the three-argument form.
-pub(crate) fn uses_extended_capture(args: &[crate::parser::ast::Expr]) -> bool {
-    passes_parameter_from(args, &["flags", "offset"], 3)
+pub(crate) fn uses_extended_capture(
+    args: &[crate::parser::ast::Expr], profile: elephc_semantics::SemanticProfile,
+) -> bool {
+    passes_parameter_from(args, &["flags", "offset"], 3, profile)
 }
 
 /// Returns true when a source-order argument list may pass a parameter at or after
@@ -78,10 +80,12 @@ pub(crate) fn passes_parameter_from(
     args: &[crate::parser::ast::Expr],
     named: &[&str],
     first_index: usize,
+    profile: elephc_semantics::SemanticProfile,
 ) -> bool {
-    let positional = crate::types::call_args::expand_planned_positional_spreads(args);
+    let positional = crate::types::call_args::expand_planned_positional_spreads(args, profile);
     let args = crate::types::call_args::expand_static_assoc_spread_args(
         positional.as_deref().unwrap_or(args),
+        profile,
     );
     args.iter().enumerate().any(|(index, arg)| match &arg.kind {
         ExprKind::NamedArg { name, .. } => named.contains(&name.as_str()),

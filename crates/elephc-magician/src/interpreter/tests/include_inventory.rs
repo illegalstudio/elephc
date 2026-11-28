@@ -177,7 +177,7 @@ fn generics_review_included_forward_calls() {
 
 /// Native generic includes must obey the same strict-PHP program guard as direct eval.
 #[test]
-fn generics_review_included_strict_php_guard() {
+fn generics_review_included_php_only_guard() {
     let fixture = IncludeFixture::new();
     fixture.write("piece.php", "<?php function identity<T>(T $value): T { return $value; } echo identity(7);");
     let mut context = ElephcEvalContext::new();
@@ -185,7 +185,7 @@ fn generics_review_included_strict_php_guard() {
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let program = parse_fragment(b"include 'piece.php';").unwrap();
-    let _guard = crate::strict_php_mode::scoped_enable();
+    let _guard = crate::php_only_mode::scoped_enable();
     assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values), Err(EvalStatus::ParseError));
     assert!(context.generic_function_template("identity").is_none());
     assert!(values.output.is_empty());

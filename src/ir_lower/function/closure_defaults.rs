@@ -27,6 +27,7 @@ pub(super) fn lower_helpers(
             by_ref_return: false, ref_params: Vec::new(), declared_params: Vec::new(),
             variadic: None, deprecation: None, is_generator: false,
         };
+        let default = signature.default_value(index).expect("present closure default");
         let body = [Stmt::new(StmtKind::Return(Some(default.clone())), default.span)];
         super::lower_closure_function_with_signature(
             parent, &name, &[], helper_signature, &body, &[], &[], None, name.clone(),

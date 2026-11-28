@@ -28,12 +28,15 @@ use super::stmts::apply_stmts;
 /// - Output: New `Expr` with conditionals applied, span preserved.
 pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
     let span = expr.span;
+    let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(rewrite_expr(*left, defines)),
             op,
             right: Box::new(rewrite_expr(*right, defines)),
         },
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(rewrite_expr(*inner, defines))),
@@ -270,5 +273,5 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         },
         other => other,
     };
-    Expr::new(kind, span)
+    Expr { kind, span, source_profile, producer_binding }
 }

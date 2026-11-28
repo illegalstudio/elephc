@@ -271,7 +271,7 @@ pub(crate) fn build_enum_info(
             }
             (Some(PhpType::Int), Some(expr)) => match fold_backing_value(
                 checker, global_constants, name, expr,
-            ) {
+            )? {
                 Some(FoldedBacking::Int(value)) => {
                     if let Some(first) = seen_int_values.insert(value, case.name.clone()) {
                         return Err(EnumBuildError::CaseValue(duplicate_backing_value(name, &first, case)));
@@ -282,7 +282,7 @@ pub(crate) fn build_enum_info(
             },
             (Some(PhpType::Str), Some(expr)) => match fold_backing_value(
                 checker, global_constants, name, expr,
-            ) {
+            )? {
                 Some(FoldedBacking::Str(value)) => {
                     if let Some(first) = seen_string_values.insert(value.clone(), case.name.clone()) {
                         return Err(EnumBuildError::CaseValue(duplicate_backing_value(name, &first, case)));
@@ -612,7 +612,8 @@ pub(crate) fn insert_enum_metadata(
     for constant in user_constants {
         constants.insert(
             constant.name.clone(),
-            resolve_lexical_class_value(&constant.value, name, None)?,
+            crate::types::constant_binding::bind_declared_value(
+                resolve_lexical_class_value(&constant.value, name, None)?, constant.type_expr.as_ref()),
         );
         if let Some(type_expr) = &constant.type_expr {
             constant_types.insert(

@@ -49,7 +49,7 @@ impl Drop for Fixture {
 fn application(fixture: &Fixture, source: &str) -> PathBuf {
     let log = fixture.0.join("lifecycle.log").to_string_lossy().replace('\\', "\\\\").replace('\'', "\\'");
     compile_web_with_flags(
-        &fixture.0, &source.replace("__LOG__", &log), "app", &["--web-lifecycle=application", "--strict-php"],
+        &fixture.0, &source.replace("__LOG__", &log), "app", &["--web-lifecycle=application", "--php-only"],
     )
 }
 
@@ -185,7 +185,7 @@ Worker::register(new FilterApplication());
         &fixture.0, source, "app",
         &[
             "--web-lifecycle=application",
-            "--strict-php",
+            "--php-only",
             "--ini",
             "filter.default=special_chars",
         ],

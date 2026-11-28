@@ -199,18 +199,61 @@ pub(crate) fn lower_nested_assignment_property_source(
     lower_property_write_source(ctx, object, property, expr, Some(mode)).value
 }
 
+/// Selects an attached property container from an already guarded receiver value.
+///
+/// Runtime class dispatch owns the receiver lease and passes a borrowed concrete view here.
+/// Keeping this entry point beside the ordinary property fetch prevents nested writers from
+/// rebuilding declared-slot, native and accessor selection locally.
+pub(crate) fn lower_nested_assignment_property_source_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    object_value: LoweredValue,
+    property: &str,
+    expr: &Expr,
+    mode: crate::ir_lower::stmt::PropertyDimensionFetchMode,
+) -> LoweredValue {
+    lower_property_write_source_from_value(
+        ctx,
+        object,
+        object_value,
+        property,
+        expr,
+        Some(mode),
+        true,
+        true,
+    )
+    .value
+}
+
+/// Returns whether a named property root needs exact runtime class selection before mutation.
+pub(crate) fn nested_property_requires_runtime_dispatch(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> bool {
+    match super::array_cast_source::array_cast_source_type_for_ir(ctx, object).codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => true,
+        PhpType::Object(class) => class.is_empty() || ctx.interfaces.contains_key(&class),
+        _ => false,
+    }
+}
+
 /// Admits only property roots whose nested update protocol operates on an attached boxed cell.
 pub(crate) fn nested_property_has_boxed_root(
     ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
 ) -> bool {
     let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, object);
-    let Some((class, _)) = singular_object_class(&ty) else {
-        return matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
-    };
-    class.is_empty() || ctx.interfaces.contains_key(class)
-        || crate::types::builtin_classes::native_property_method(class, property,
+    let Some((class, _)) = singular_object_class(&ty) else { return false; };
+    if class.is_empty() || ctx.interfaces.contains_key(class) { return false; }
+    crate::types::builtin_classes::native_property_method(class, property,
             elephc_builtin_contract::ObjectProperty::WriteSelect, ctx.classes).is_some()
         || property_is_splittable_container_slot(ctx, class, property, true)
+}
+
+/// Requires a statically known class before bypassing runtime magic-property dispatch.
+pub(crate) fn nested_property_has_static_boxed_root(
+    ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
+) -> bool {
+    nested_property_has_boxed_root(ctx, object, property)
 }
 
 /// Selects borrowed slot access only for the stable storage shape required by its consumer.
@@ -234,12 +277,14 @@ fn lower_property_write_source(
             Op::Borrow.default_effects(), Some(expr.span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         let selected = lower_property_write_source_from_value(
-            ctx, object, borrowed, property, expr, mode, true,
+            ctx, object, borrowed, property, expr, mode, true, false,
         );
         receiver.finish(ctx, expr.span);
         return selected;
     }
-    lower_property_write_source_from_value(ctx, object, object_value, property, expr, mode, false)
+    lower_property_write_source_from_value(
+        ctx, object, object_value, property, expr, mode, false, false,
+    )
 }
 
 /// Selects the property while an optional enclosing lease owns the already guarded receiver.
@@ -247,9 +292,14 @@ fn lower_property_write_source_from_value(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, object_value: LoweredValue,
     property: &str, expr: &Expr,
     mode: Option<crate::ir_lower::stmt::PropertyDimensionFetchMode>, scoped_receiver: bool,
+    dimension_guarded: bool,
 ) -> ByRefForeachPropertySource {
     let mixed_root = mode.is_some();
-    if let Some(mode) = mode {
+    let mutable_fetch = !matches!(
+        mode,
+        Some(crate::ir_lower::stmt::PropertyDimensionFetchMode::ReadWrite)
+    ) || readwrite_property_has_attached_array_slot(ctx, object_value.value, property);
+    if let Some(mode) = mode.filter(|_| !dimension_guarded) {
         crate::ir_lower::stmt::guard_property_dimension_fetch(ctx, object_value, property, expr.span, mode);
     }
     let object_type = ctx.builder.value_php_type(object_value.value);
@@ -265,7 +315,16 @@ fn lower_property_write_source_from_value(
             receiver: None,
         };
     }
-    if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root, scoped_receiver) {
+    if !mutable_fetch
+        || !property_fetch_for_write_applies(
+            ctx,
+            &object_value,
+            property,
+            expr,
+            mixed_root,
+            scoped_receiver,
+        )
+    {
         return ByRefForeachPropertySource {
             value: lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr),
             receiver: None,
@@ -312,6 +371,28 @@ fn lower_property_write_source_from_value(
         value: result,
         receiver: Some(object_value),
     }
+}
+
+/// Keeps compound reads attached only when the declared slot is already a concrete array.
+///
+/// Nullable, mixed, union, and uninitialized slots need the ordinary read path so PHP can raise
+/// before a write initializes storage. A non-null array slot has no scalar or missing state to
+/// preserve, and detaching its compound read would lose the property's COW publication target.
+fn readwrite_property_has_attached_array_slot(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    property: &str,
+) -> bool {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return false;
+    };
+    let Some(class_info) = ctx.classes.get(class_name.trim_start_matches('\\')) else {
+        return false;
+    };
+    class_info.visible_property(property).is_some_and(|(_, (_, ty))| {
+        ty.is_php_array()
+            || matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    })
 }
 
 /// Rejects an uninitialized typed container before its mutable foreach fetch reaches codegen.

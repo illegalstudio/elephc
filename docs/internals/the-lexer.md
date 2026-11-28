@@ -249,7 +249,10 @@ The lexer doesn't produce a single string token for this. Instead, it emits a se
 ```
 StringLiteral("Hello, ")
 Dot                        (implicit concatenation)
+StringFormat               (internal formatting prefix)
+LParen
 Variable("name")
+RParen
 Dot
 StringLiteral("!")
 ```
@@ -258,6 +261,12 @@ This is handled by `literals::scan_double_string_interpolated()`, which walks
 through the string character by character and emits the expression fragments
 needed by the parser. The `${...}` spellings are retained for PHP compatibility
 even though PHP 8.2 deprecates them.
+
+The internal `StringFormat` prefix becomes `CastType::StringFormat` in the AST.
+It preserves interpolation as an explicit formatting context through folding,
+source copies and EIR lowering. Ordinary concatenation remains a separate
+operation, so the staged string policy can require strings for `.` without
+rejecting numeric interpolation. The prefix cannot be written as a PHP keyword.
 
 ## Escape sequences
 

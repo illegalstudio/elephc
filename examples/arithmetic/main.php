@@ -11,6 +11,14 @@ echo "b % a = " . ($b % $a) . "\n";
 echo "2 + 3 * 4 = " . (2 + 3 * 4) . "\n";
 echo "(2 + 3) * 4 = " . ((2 + 3) * 4) . "\n";
 
+echo "abs(-3) = " . abs(-3) . ", intdiv(9, 2) = " . intdiv(9, 2) . "\n";
+
+echo "array_sum([1, 2.5]) = " . array_sum([1, 2.5]) . "\n";
+
+$power = pow(2, 3);
+echo "pow(2, 3) = " . $power . " (" . gettype($power) . ")\n";
+
+
 $overflow = PHP_INT_MAX + $argc;
 echo "overflow type = " . gettype($overflow) . "\n";
 
@@ -59,3 +67,7 @@ function pick_index(): int
 
 $scores = [7, 8];
 echo "scores[pick_index()]++ = " . $scores[pick_index()]++ . ", now " . $scores[0] . "\n";
+
+// Unary plus keeps a floating value's sign, including negative zero.
+$negative_zero = -0.0;
+echo 'unary plus preserves negative zero = ' . (fdiv(1.0, +$negative_zero) < 0.0 ? 'yes' : 'no') . "\n";

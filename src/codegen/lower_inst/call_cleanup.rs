@@ -158,6 +158,22 @@ pub(super) fn plan_call_arg_temp_cleanups(
     ref_params: &[bool],
     borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
 ) -> Result<Vec<CallArgTempCleanup>> {
+    plan_conversion_cleanups(ctx, args, param_types, ref_params, borrowed_stack_mixed_args, false)
+}
+
+/// Includes raw string conversions when construction cannot return an argument alias.
+pub(super) fn plan_constructor_arg_temp_cleanups(
+    ctx: &FunctionContext<'_>, args: &[ValueId], param_types: &[PhpType],
+    ref_params: &[bool], borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
+) -> Result<Vec<CallArgTempCleanup>> {
+    plan_conversion_cleanups(ctx, args, param_types, ref_params, borrowed_stack_mixed_args, true)
+}
+
+/// Preserves argument order for both publication and reverse-order retirement of conversions.
+fn plan_conversion_cleanups(
+    ctx: &FunctionContext<'_>, args: &[ValueId], param_types: &[PhpType],
+    ref_params: &[bool], borrowed_stack_mixed_args: &[BorrowedStackMixedArg], strings: bool,
+) -> Result<Vec<CallArgTempCleanup>> {
     let mut cleanups = Vec::new();
     for (index, (value, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
         if ref_params[index]
@@ -179,6 +195,14 @@ pub(super) fn plan_call_arg_temp_cleanups(
                 param_index: index,
                 offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
                 ty: widened_array_temp_type(&source_ty),
+            });
+        } else if strings && param_ty.codegen_repr() == PhpType::Str
+            && matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
+            cleanups.push(CallArgTempCleanup {
+                param_index: index,
+                offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
+                ty: PhpType::Str,
             });
         }
     }
@@ -249,7 +273,10 @@ pub(super) fn save_call_arg_temp_cleanup(
     let scratch = abi::tertiary_scratch_reg(ctx.emitter);
     let offset = arg_temp_bytes + cleanup.offset;
     abi::emit_temporary_stack_address(ctx.emitter, scratch, offset);
-    abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), scratch, 0);
+    let value_reg = if cleanup.ty == PhpType::Str {
+        abi::string_result_regs(ctx.emitter).0
+    } else { abi::int_result_reg(ctx.emitter) };
+    abi::emit_store_to_address(ctx.emitter, value_reg, scratch, 0);
     abi::emit_link_call_operand_owner_at_stack(ctx.emitter, scratch, false, offset + 16);
 }
 
@@ -267,11 +294,10 @@ pub(super) fn emit_call_arg_temp_cleanups(
     // order so a throwing destructor still unwinds every outstanding argument.
     for cleanup in call_args.cleanup_slots.iter().rev() {
         abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cleanup.offset + 16);
-        abi::emit_load_temporary_stack_slot(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            cleanup.offset,
-        );
+        let value_reg = if cleanup.ty == PhpType::Str {
+            abi::string_result_regs(ctx.emitter).0
+        } else { abi::int_result_reg(ctx.emitter) };
+        abi::emit_load_temporary_stack_slot(ctx.emitter, value_reg, cleanup.offset);
         let skip_cleanup_label = if let Some(result) = result_alias {
             let label = ctx.next_label("call_arg_temp_cleanup_result_alias");
             emit_branch_if_cleanup_temp_aliases_result(ctx, result, &label)?;
@@ -279,7 +305,11 @@ pub(super) fn emit_call_arg_temp_cleanups(
         } else {
             None
         };
-        abi::emit_decref_if_refcounted(ctx.emitter, &cleanup.ty);
+        if cleanup.ty == PhpType::Str {
+            super::ownership::release_loaded_string(ctx);
+        } else {
+            abi::emit_decref_if_refcounted(ctx.emitter, &cleanup.ty);
+        }
         if let Some(label) = skip_cleanup_label {
             ctx.emitter.label(&label);
         }

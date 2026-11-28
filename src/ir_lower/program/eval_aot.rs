@@ -9,11 +9,33 @@
 
 use super::*;
 
+/// Refuses source execution that cannot be compiled and verified ahead of time.
+pub(super) fn validate_dynamic_source_policy(module: &Module) -> Result<(), LoweringError> {
+    if !module.semantic_profile.contains(crate::semantics::StrictFeature::DynamicCode) {
+        return Ok(());
+    }
+    for function in all_lowered_functions(module) {
+        for (index, inst) in function.instructions.iter().enumerate() {
+            let runtime_source = match inst.op {
+                Op::LanguageConstructCall => language_construct_call_requires_eval(module, inst),
+                Op::EvalLiteralCall => eval_literal_call_requires_bridge(module, function, index, inst),
+                _ => false,
+            };
+            if runtime_source {
+                return Err(LoweringError::Unsupported(crate::errors::CompileError::new(
+                    inst.span.unwrap_or_else(crate::span::Span::dummy),
+                    "--strict-dynamic-code requires eval source fully verified and compiled ahead of time; this fragment needs the interpreter")));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Adds internal EIR functions for literal eval fragments accepted by the EIR AOT subset.
 pub(super) fn lower_literal_eval_aot_functions(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     let candidates = collect_literal_eval_aot_function_candidates(module);
@@ -38,6 +60,7 @@ pub(super) fn lower_literal_eval_aot_functions(
             EvalAotFunctionCandidate::Scope {
                 body,
                 reads,
+                use_read_params,
                 direct_writes,
                 flush_writes,
             } => {
@@ -48,6 +71,7 @@ pub(super) fn lower_literal_eval_aot_functions(
                     &name,
                     &body,
                     &reads,
+                    use_read_params,
                     &direct_writes,
                     &flush_writes,
                     module,
@@ -68,6 +92,7 @@ pub(super) enum EvalAotFunctionCandidate {
     Scope {
         body: Program,
         reads: BTreeSet<String>,
+        use_read_params: bool,
         direct_writes: BTreeSet<String>,
         flush_writes: BTreeSet<String>,
     },
@@ -88,7 +113,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
                 crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
                     &fragment,
                     module.source_path.as_deref(),
-                    eval_literal_strict_profile(inst),
+                    eval_literal_source_profile(module, inst),
                     |name, args| {
                         eval_literal_static_function_supported_by_module(module, name, args)
                     },
@@ -114,6 +139,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
             if !seen.insert(name.clone()) {
                 continue;
             };
+            let use_read_params = plan.uses_scope_read_params();
             let reads = plan.reads().clone();
             let direct_writes = plan.direct_writes().clone();
             let flush_writes = plan.flush_writes().clone();
@@ -125,6 +151,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
                 EvalAotFunctionCandidate::Scope {
                     body: program,
                     reads,
+                    use_read_params,
                     direct_writes,
                     flush_writes,
                 },
@@ -149,15 +176,12 @@ pub(crate) fn eval_literal_fragment_from_inst(
     module.data.strings.get(data.as_raw() as usize).cloned()
 }
 
-/// Returns the strict-PHP source profile attached to one literal eval instruction.
-pub(super) fn eval_literal_strict_profile(inst: &crate::ir::Instruction) -> bool {
-    matches!(
-        inst.immediate,
-        Some(Immediate::ProfiledData {
-            strict_php: true,
-            ..
-        })
-    )
+/// Reads a literal eval's complete source policy, including legacy EIR compatibility.
+pub(super) fn eval_literal_source_profile(module: &Module, inst: &crate::ir::Instruction) -> crate::source::EvalSourceProfile {
+    match inst.immediate {
+        Some(Immediate::ProfiledData { profile, .. }) => profile,
+        _ => crate::source::EvalSourceProfile::new(false, module.semantic_profile),
+    }
 }
 
 /// Iterates every function-like body already materialized into the EIR module.
@@ -177,13 +201,7 @@ pub(in crate::ir_lower) fn all_lowered_functions(module: &Module) -> impl Iterat
 pub(super) fn typed_builtin_target(
     inst: &crate::ir::Instruction,
 ) -> Option<crate::ir::RuntimeFnId> {
-    match inst.immediate {
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
-        Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
-        )) => Some(target),
-        _ => None,
-    }
+    inst.runtime_function()
 }
 
 /// Returns whether a typed builtin callback operand needs descriptor invocation support.

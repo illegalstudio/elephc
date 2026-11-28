@@ -101,6 +101,28 @@ impl PassOrigin {
 }
 
 impl Instruction {
+    /// Exposes typed builtin identity to metadata consumers while leaving the full call policy intact.
+    pub fn runtime_function(&self) -> Option<RuntimeFnId> {
+        match self.immediate { Some(Immediate::RuntimeCall(target)) => target.function_id(), _ => None }
+    }
+
+    /// Returns the explicit operation policy, leaving legacy PHP numeric instructions unchanged.
+    pub fn arithmetic_policy(&self) -> elephc_semantics::arithmetic_policy::ArithmeticPolicy {
+        match self.immediate {
+            Some(Immediate::NumericOperation { policy, .. } | Immediate::NumericUpdate { policy, .. }
+                | Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { policy, .. }
+                    | RuntimeCallTarget::NumericUnary { policy, .. })) => policy,
+            _ => elephc_semantics::arithmetic_policy::ArithmeticPolicy::PERMISSIVE,
+        }
+    }
+
+    /// Reads the original invocation policy without inheriting a synthetic emitter's source mode.
+    pub fn strict_comparisons(&self) -> bool {
+        matches!(self.immediate, Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+            strict_comparisons: true, ..
+        })))
+    }
+
     /// Creates a new instruction payload with all semantic metadata attached.
     pub fn new(
         op: Op,
@@ -169,6 +191,7 @@ impl Instruction {
                     | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
                 )) => false,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { target, .. }))
                 | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
                     target,
                     ..
@@ -212,9 +235,25 @@ impl Instruction {
     }
 }
 
+/// Selects binding enforcement independently from transient source evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalBindingRole { Contract, Source, DeclaredSource }
+
+/// Source name and producer contract carried out of line to preserve compact EIR instructions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalScopeStoreImmediate {
+    pub name: DataId,
+    pub contract: Option<PhpType>,
+    pub role: EvalBindingRole,
+}
+
 /// Literal or metadata operand attached to an opcode.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Immediate {
+    /// Throws on an absent ordinary dimension read without repeating key normalization.
+    CheckedElementRead,
+    /// Calls an initialized-slot getter under a receiver/property recursion guard.
+    InitializedGetter { method: DataId, property: DataId },
     I64(i64),
     F64(f64),
     Bool(bool),
@@ -231,7 +270,7 @@ pub enum Immediate {
     PromotableArray,
     /// Marks `DynamicObjectNewMixed` as `ReflectionClass::newInstance()` rather than
     /// `new $class`, so constructor refusals raise `ReflectionException` instead of `Error`.
-    ReflectionConstruction,
+    ReflectionConstruction { uses_runtime_arg_container: bool },
     /// Marks `NormalizeCallable` on a value declared `callable`: a runtime name it resolves is
     /// limited to user functions, static methods and the builtin names written as literals at
     /// declared callables (`Module::declared_callable_names`).
@@ -241,12 +280,14 @@ pub enum Immediate {
     /// limited exactly like `DeclaredCallableNames`, so the conversion and `$callable()` agree.
     DeclaredCallableFactory(bool),
     Data(DataId),
-    /// Data-pool reference carrying the strict-PHP profile of its physical call site.
+    /// Names an exit/die call that must validate its status using PHP strict_types.
+    StrictExit(DataId),
+    /// Data-pool reference carrying the complete source policy of its physical call site.
     ProfiledData {
         /// Referenced string or name data.
         data: DataId,
-        /// Whether strict PHP is effective at this call site.
-        strict_php: bool,
+        /// Immutable syntax visibility and semantic guarantees.
+        profile: crate::source::EvalSourceProfile,
     },
     LocalSlot(LocalSlotId),
     LocalSlotPair {
@@ -265,6 +306,11 @@ pub enum Immediate {
         suffix_and_type: u32,
     },
     GlobalName(DataId),
+    /// Static scope name plus the first producer's inferred binding contract.
+    /// Runtime scope identity decides whether this name is fresh or already imported.
+    EvalScopeStore(Box<EvalScopeStoreImmediate>),
+    /// Copies a scope producer onto an independent native local reference owner.
+    EvalBindingCopy { source: DataId, destination: LocalSlotId, owner: LocalSlotId },
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
     RuntimeRef(RuntimeId),
@@ -294,6 +340,8 @@ pub enum Immediate {
     ReflectionPropertyRef {
         class: u32,
         property: u32,
+        /// User read policy; a permissive word marks trusted physical access.
+        profile: crate::source::EvalSourceProfile,
     },
     FieldRef {
         layout: u32,
@@ -307,6 +355,10 @@ pub enum Immediate {
     MixedTag(u8),
     TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
+    /// Source operation semantics that must survive cloning and optimizer specialization.
+    NumericOperation { op: MixedNumericOp, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy },
+    /// PHP increment/decrement with explicit source arithmetic semantics.
+    NumericUpdate { increment: bool, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy },
     /// Ordered add/sub/mul operations in an unboxed checked numeric chain.
     CheckedNumericChain(Box<CheckedNumericChainImmediate>),
     CmpPredicate(CmpPredicate),
@@ -320,6 +372,11 @@ pub enum Immediate {
     /// raising, warning variant, so an emitter that forgets the immediate cannot silently turn a
     /// value read into a silent probe.
     PropertyFetchMode(PropertyFetchMode),
+    /// Retains the physical source policy without changing dynamic-name fetch semantics.
+    ProfiledPropertyFetch {
+        mode: PropertyFetchMode,
+        profile: crate::source::EvalSourceProfile,
+    },
     /// Compact metadata for `Op::IterStart`.
     IterStart(IterStartMetadata),
 }
@@ -609,6 +666,8 @@ pub enum MixedNumericOp {
     Sub,
     Mul,
     Pow,
+    Div,
+    Mod,
 }
 
 /// php's fetch mode for one object property access, php-src's `BP_VAR_R` vs `BP_VAR_IS`.
@@ -699,6 +758,9 @@ impl PhpTypePredicate {
 }
 
 impl MixedNumericOp {
+    /// Identifies the operations supported by sequential PHP-promoting integer overflow chains.
+    pub fn supports_checked_chain(self) -> bool { matches!(self, Self::Add | Self::Sub | Self::Mul) }
+
     /// Returns the lower-case textual spelling used by the EIR printer.
     pub fn as_eir(self) -> &'static str {
         match self {
@@ -706,6 +768,8 @@ impl MixedNumericOp {
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
             MixedNumericOp::Pow => "pow",
+            MixedNumericOp::Div => "div",
+            MixedNumericOp::Mod => "mod",
         }
     }
 }
@@ -1039,8 +1103,20 @@ pub enum Op {
     ConstEnumCase,
     LoadCalledClassId,
     DataAddr,
+    /// Identifies an addressable local slot without reading or retaining its current PHP value.
+    /// Prepared by-reference graphs resolve this binding after all source arguments finish.
+    LocalPlace,
     LoadLocal,
     StoreLocal,
+    /// Publishes a consuming hash writeback, retiring the old box when the slot uses Mixed.
+    StoreLocalRetiringBox,
+    /// Writes a PHP local's initialized/unbound state without changing its physical value.
+    /// Operand is Bool; the immediate identifies the source binding's local slot.
+    SetLocalBindingState,
+    /// Reads whether the live binding retains its native source origin, excluding eval-created bindings.
+    GetNativeBindingState,
+    /// Reads whether the current contract is established or transported through an eval scope.
+    GetEvalBindingState,
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
@@ -1059,6 +1135,8 @@ pub enum Op {
     /// publisher clears and retires before the displaced value's destructor can execute.
     StoreRefCell,
     PromoteLocalRefCell,
+    /// Registers the result PHP type as the hidden owner's exact binding contract.
+    BindLocalRefContract,
     AliasLocalRefCell,
     /// Retains a nullable owner or authenticates an incoming managed by-ref parameter cell.
     /// Immediate: source/destination slots. Borrowed frame arguments produce null owners.
@@ -1073,10 +1151,17 @@ pub enum Op {
     /// Detaches the named owner's record, preserving newer fixed return-lease records.
     PopCallOperandOwner,
     LoadGlobal,
-    /// Borrows the process-lifetime boxed value slot of a named global for a local reference.
+    /// Tests program-symbol presence without dereferencing or creating its boxed value.
+    GlobalBindingPresent,
+    /// Removes the program name before retiring its wrapper, preserving escaped old cells.
+    UnsetGlobal,
+    /// Acquires a managed activation lease sharing the boxed program symbol's reference identity.
+    /// The result must be adopted into a guarded reference owner before replacing a local name.
     LoadGlobalRefCell,
     StoreGlobal,
     LoadStaticLocal,
+    /// Borrows the process-lifetime managed cell for an activation static binding.
+    LoadStaticLocalRefCell,
     StoreStaticLocal,
     InitStaticLocal,
     /// Answers whether a static local's one-time initializer has not run yet: `I64` 1 before
@@ -1095,6 +1180,9 @@ pub enum Op {
     StoreStaticProperty,
     StaticPropInitialized,
     LoadReflectionStaticProperty,
+    /// Bypasses member visibility with the static store's optional Bool and source owner.
+    /// A fourth borrowed parking-slot operand selects converted ReflectionClass argument
+    /// retirement before publication, including publication before a destructor error escapes.
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
     IAdd,
@@ -1186,6 +1274,8 @@ pub enum Op {
     /// Consumes an owned indexed array bound to a pointer-array slot and returns it with raw
     /// `?ptr<T>` words: boxed Mixed slots (from a runtime bridge) become null or address words.
     ArrayToPointerWords,
+    /// Widens hash values to Mixed. A local-slot immediate identifies a storeback that
+    /// must retire the source box when the final frame stores the hash inside Mixed.
     HashToMixed,
     MixedCastBool,
     MixedCastInt,
@@ -1488,7 +1578,19 @@ pub enum Op {
     LanguageConstructCall,
     EvalLiteralCall,
     EvalScopeGet,
+    /// Observes visible binding flags independently of the boxed payload.
+    EvalScopeContains,
+    /// Borrows the immutable descriptor of the current producer, or zero for an open origin.
+    EvalScopeBindingType,
     EvalScopeSet,
+    /// Publishes a checked native binding type independently from its snapshot storage shape.
+    EvalScopeBindLocalType,
+    /// Records the first executed native producer without changing an existing binding's contract.
+    EvalScopeStartBinding,
+    /// Ends an inferred scope origin before another native binding reuses the same name.
+    EvalScopeEndBinding,
+    /// Copies immutable producer metadata while retaining independent value/reference ownership.
+    EvalScopeCopyBindingType,
     EvalFunctionCall,
     EvalFunctionCallArray,
     EvalFunctionExists,
@@ -1554,6 +1656,10 @@ pub enum Op {
     Warn,
     ThrowException,
     ThrowError,
+    ThrowTypeError,
+    ThrowValueError,
+    ThrowArithmeticError,
+    ThrowOutOfBounds,
     ThrowErrorValue,
     TryPushHandler,
     TryPopHandler,
@@ -1586,6 +1692,18 @@ pub enum Op {
 }
 
 impl Op {
+    /// Includes catchable arithmetic failure and unwinding for an explicitly checked operation.
+    pub fn arithmetic_effects(self, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy) -> Effects {
+        // Numeric string warnings may enter arbitrary PHP callbacks before arithmetic completes.
+        if matches!(self, Op::MixedNumericBinop | Op::StrIncDec) && policy.checked_overflow() { return Effects::php_callback(); }
+        self.default_effects() | if policy.checked_overflow() { Op::ThrowArithmeticError.default_effects() } else { Effects::PURE }
+    }
+
+    /// Includes catchable absence failure in an ordinary dimension-read contract.
+    pub fn checked_element_read_effects(self) -> Effects {
+        self.default_effects() | Self::ThrowOutOfBounds.default_effects()
+    }
+
     /// Returns the conservative default effect set for this opcode.
     pub fn default_effects(self) -> Effects {
         use Effects as E;
@@ -1598,6 +1716,7 @@ impl Op {
             | ConstBool
             | ConstClassName
             | DataAddr
+            | LocalPlace
             | IAdd
             | ISub
             | IMul
@@ -1650,18 +1769,24 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
+            LoadStaticLocalRefCell => E::READS_GLOBAL,
+            GlobalBindingPresent => E::READS_GLOBAL,
+            UnsetGlobal => E::php_callback(),
+            LoadGlobalRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
             LoadLocalRefCellPtr => E::READS_LOCAL,
             LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
+            StoreLocal | SetLocalBindingState | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
             }
             // A refcounted cell publishes replacement storage and can run the previous payload's
             // destructor immediately, so the store has the full user-code effect boundary.
-            StoreRefCell => E::all(),
+            StoreRefCell | StoreLocalRetiringBox => E::all(),
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
+            BindLocalRefContract => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             // The last cell owner can run an arbitrary payload destructor.
@@ -1671,7 +1796,7 @@ impl Op {
             PushCallOperandOwner | PopCallOperandOwner => {
                 E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
-            LoadGlobal | LoadGlobalRefCell
+            LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
             | StaticLocalUninitialized
@@ -1684,13 +1809,16 @@ impl Op {
             | CatchCurrent => E::READS_GLOBAL,
             // Address selection can raise a catchable typed-uninitialized error or a
             // late-static visibility fatal before exposing the writable symbol slot.
-            LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
+            LoadStaticPropertyRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
+            // A recursive initializer loser can retire a value with a PHP destructor.
+            InitStaticLocal => E::php_callback(),
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            // Declared slots can reject a value with a catchable TypeError before the write.
-            StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::WRITES_LOCAL | E::MAY_THROW,
-            StoreGlobal
-            | StoreStaticLocal
-            | InitStaticLocal
+            // Declaration conversion and displaced-value cleanup can reenter arbitrary PHP.
+            StoreStaticProperty | StoreReflectionStaticProperty => E::php_callback(),
+            // Publishing a program value retires its previous owner and may execute PHP.
+            StoreGlobal => E::php_callback(),
+            StoreStaticLocal
             | IncludeOnceMark
             | FunctionVariantMark
             | TryPushHandler
@@ -1894,8 +2022,13 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
-            EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
-            EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
+            GetNativeBindingState | GetEvalBindingState => E::READS_LOCAL,
+            EvalScopeBindLocalType | EvalScopeStartBinding => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            EvalScopeCopyBindingType => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            EvalScopeEndBinding => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
+            EvalScopeGet | EvalScopeContains => E::READS_HEAP | E::MAY_FATAL,
+            EvalScopeBindingType => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             EvalConstantFetch | EvalConstantFetchOrGlobal => {
                 E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
@@ -1932,7 +2065,8 @@ impl Op {
             ThrowNamedParameterOverwrite => {
                 E::MAY_THROW | E::READS_HEAP | E::ALLOC_HEAP | E::WRITES_GLOBAL
             }
-            ThrowError | ThrowErrorValue => {
+            ThrowError | ThrowErrorValue | ThrowTypeError | ThrowValueError
+            | ThrowArithmeticError | ThrowOutOfBounds => {
                 E::MAY_THROW
                     | E::READS_GLOBAL
                     | E::WRITES_GLOBAL
@@ -1947,12 +2081,16 @@ impl Op {
         }
     }
 
-    /// Returns the exact effects of extracting a concrete payload from a Mixed cell.
-    /// Heap payloads and callable descriptors acquire an independent runtime reference.
+    /// Returns the conservative effects of extracting a concrete payload from a Mixed cell.
+    /// Heap payloads and callable descriptors acquire an independent runtime reference. String
+    /// extraction may persist the borrowed payload when the result owns it, so every string
+    /// unbox carries that heap-write barrier even when a particular borrowed result skips it.
     pub fn mixed_unbox_effects(result_type: &PhpType) -> Effects {
         let result_type = result_type.codegen_repr();
         let effects = Self::MixedUnbox.default_effects();
-        if result_type.is_refcounted() || result_type == PhpType::Callable {
+        if result_type.is_refcounted()
+            || matches!(result_type, PhpType::Callable | PhpType::Str)
+        {
             effects | Effects::REFCOUNT_OP | Effects::WRITES_HEAP
         } else {
             effects
@@ -2033,8 +2171,13 @@ impl Op {
             ConstEnumCase => "const_enum_case",
             LoadCalledClassId => "load_called_class_id",
             DataAddr => "data_addr",
+            LocalPlace => "local_place",
             LoadLocal => "load_local",
             StoreLocal => "store_local",
+            StoreLocalRetiringBox => "store_local_retiring_box",
+            SetLocalBindingState => "set_local_binding_state",
+            GetNativeBindingState => "get_native_binding_state",
+            GetEvalBindingState => "get_eval_binding_state",
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
@@ -2042,6 +2185,7 @@ impl Op {
             LoadRefCellValue => "load_ref_cell_value",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
+            BindLocalRefContract => "bind_local_ref_contract",
             AliasLocalRefCell => "alias_local_ref_cell",
             RetainLocalRefCell => "retain_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
@@ -2050,9 +2194,12 @@ impl Op {
             PushCallOperandOwner => "push_call_operand_owner",
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
+            GlobalBindingPresent => "global_binding_present",
+            UnsetGlobal => "unset_global",
             LoadGlobalRefCell => "load_global_ref_cell",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
+            LoadStaticLocalRefCell => "load_static_local_ref_cell",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
             StaticLocalUninitialized => "static_local_uninitialized",
@@ -2251,7 +2398,13 @@ impl Op {
             ClosureBind => "closure_bind",
             LanguageConstructCall => "language_construct_call",
             EvalLiteralCall => "eval_literal_call",
+            EvalScopeBindLocalType => "eval_scope_bind_local_type",
+            EvalScopeStartBinding => "eval_scope_start_binding",
+            EvalScopeEndBinding => "eval_scope_end_binding",
+            EvalScopeCopyBindingType => "eval_scope_copy_binding_type",
             EvalScopeGet => "eval_scope_get",
+            EvalScopeContains => "eval_scope_contains",
+            EvalScopeBindingType => "eval_scope_binding_type",
             EvalScopeSet => "eval_scope_set",
             EvalFunctionCall => "eval_function_call",
             EvalFunctionCallArray => "eval_function_call_array",
@@ -2301,6 +2454,10 @@ impl Op {
             Warn => "warn",
             ThrowException => "throw_exception",
             ThrowError => "throw_error",
+            ThrowTypeError => "throw_type_error",
+            ThrowValueError => "throw_value_error",
+            ThrowArithmeticError => "throw_arithmetic_error",
+            ThrowOutOfBounds => "throw_out_of_bounds",
             ThrowErrorValue => "throw_error_value",
             TryPushHandler => "try_push_handler",
             TryPopHandler => "try_pop_handler",

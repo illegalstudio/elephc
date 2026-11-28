@@ -48,7 +48,7 @@ pub(super) fn eval_property_compound_assign_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     validate_property_write_receiver(object, property, "assign", context, values)?;
     if let Some(result) = super::super::runtime_ops::simplexml_properties::update(
-        values, object, property, op, right, false,
+        values, object, property, op, right, false, context,
     )? { return Ok(result); }
     let current = eval_write_property_get_result(object, property, context, values)?;
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
@@ -74,13 +74,13 @@ pub(super) fn eval_property_inc_dec_value(
         let one = values.int(1)?;
         let operation = if increment { EvalBinOp::Add } else { EvalBinOp::Sub };
         let result = super::super::runtime_ops::simplexml_properties::update(
-            values, object, property, operation, one, !prefix,
+            values, object, property, operation, one, !prefix, context,
         ).and_then(|result| result.ok_or(EvalStatus::RuntimeFatal));
         return finish_synthesized_method_arguments(result, vec![one], context, values);
     }
     let current = eval_write_property_get_result(object, property, context, values)?;
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
-    let updated = match eval_inc_dec_value(current, increment, values) {
+    let updated = match eval_inc_dec_value(current, increment, context, values) {
         Ok(updated) => updated,
         Err(status) => return finish_synthesized_method_arguments(Err(status), vec![current], context, values),
     };

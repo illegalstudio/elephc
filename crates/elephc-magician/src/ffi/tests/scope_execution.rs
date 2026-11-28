@@ -152,12 +152,24 @@ fn scope_mark_global_alias_records_target_name() {
             global_name.len() as u64,
         )
     };
+    let mut out_flags = 0;
+    let get_status = unsafe {
+        __elephc_eval_scope_get(
+            scope,
+            name.as_ptr(),
+            name.len() as u64,
+            std::ptr::null_mut(),
+            &mut out_flags,
+        )
+    };
     let target = unsafe { (*scope).global_alias_target("alias").map(str::to_string) };
     unsafe {
         __elephc_eval_scope_free(scope);
     }
 
     assert_eq!(status, EvalStatus::Ok.code());
+    assert_eq!(get_status, EvalStatus::Ok.code());
+    assert_ne!(out_flags & SCOPE_FLAG_GLOBAL_ALIAS, 0);
     assert_eq!(target.as_deref(), Some("source"));
 }
 
@@ -199,4 +211,24 @@ fn scope_unset_and_clear_dirty_update_flags() {
     assert_eq!(out_flags & SCOPE_FLAG_UNSET, SCOPE_FLAG_UNSET);
     assert_eq!(out_flags & SCOPE_FLAG_DIRTY, SCOPE_FLAG_DIRTY);
     assert_eq!(out_flags & SCOPE_FLAG_PRESENT, 0);
+}
+
+/// A null imported pointer ends the binding, while nonzero boxed handles remain visible.
+#[test]
+fn scope_null_import_detaches_without_conflating_boxed_null() {
+    let scope = __elephc_eval_scope_new();
+    let name = b"imported";
+    let mut thrown = std::ptr::null_mut();
+    let mut out_cell = std::ptr::null_mut();
+    let mut out_flags = 0;
+    for cell in [std::ptr::null_mut(), 1usize as *mut RuntimeCell, std::ptr::null_mut()] {
+        assert_eq!(unsafe { __elephc_eval_scope_set(scope, name.as_ptr(), name.len() as u64,
+            cell, 0, &mut thrown) }, EvalStatus::Ok.code());
+        assert!(thrown.is_null());
+        assert_eq!(unsafe { __elephc_eval_scope_get(scope, name.as_ptr(), name.len() as u64,
+            &mut out_cell, &mut out_flags) }, EvalStatus::Ok.code());
+        assert_eq!(out_cell, cell);
+        assert_eq!(out_flags & SCOPE_FLAG_PRESENT != 0, !cell.is_null());
+    }
+    unsafe { __elephc_eval_scope_free(scope); }
 }

@@ -16,14 +16,16 @@ use super::*;
 
 /// Collects PHP-visible locals that the current conservative scope sync can round-trip.
 pub(super) fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
-    eval_sync_function_locals(ctx.function)
+    eval_sync_function_locals(ctx.function,
+        ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+            || ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization))
         .into_iter()
         .filter(|local| !local_uses_eval_global_sync(ctx, Some(&local.name)))
         .collect()
 }
 
 /// Maps PHP parameter names to their active COW shadows, never exposing incoming ABI duplicates.
-fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
+fn eval_sync_function_locals(function: &Function, include_null_bindings: bool) -> Vec<EvalSyncLocal> {
     let shadows = function.locals.iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
         .filter_map(|local| local.name.as_deref()?.strip_suffix("#cow"))
@@ -47,7 +49,7 @@ fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
                 return None;
             }
             let ty = local.php_type.codegen_repr();
-            eval_sync_type_supported(&ty).then_some(EvalSyncLocal {
+            (eval_sync_type_supported(&ty) || (include_null_bindings && ty == PhpType::Void)).then_some(EvalSyncLocal {
                 name: name.to_string(), slot: local.id, ty,
             })
         }).collect()
@@ -66,7 +68,10 @@ pub(super) fn filter_eval_sync_locals_by_name(
 
 /// Returns true when a local name is backed by program-global storage during eval.
 pub(super) fn local_uses_eval_global_sync(ctx: &FunctionContext<'_>, name: Option<&str>) -> bool {
-    name.is_some_and(|name| main_name_uses_eval_global_scope(ctx, name))
+    name.is_some_and(|name| {
+        main_name_uses_eval_global_scope(ctx, name)
+            || direct_eval_global_alias_names(ctx).contains(name)
+    })
 }
 
 /// Returns true when a main-scope name has actual EIR global storage to synchronize.
@@ -75,18 +80,53 @@ pub(super) fn main_name_uses_eval_global_scope(ctx: &FunctionContext<'_>, name: 
 }
 
 /// Collects caller-scope `global` aliases that eval fragments inherit by name.
-pub(super) fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Vec<EvalGlobalAlias> {
+pub(super) fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Result<Vec<EvalGlobalAlias>> {
+    let mut aliases = direct_eval_global_alias_names(ctx)
+        .into_iter()
+        .map(|name| (name, None))
+        .collect::<BTreeMap<_, _>>();
+    for inst in &ctx.function.instructions {
+        if inst.op != Op::LoadGlobalRefCell {
+            continue;
+        }
+        let Some(name) = global_instruction_name(ctx, inst) else {
+            continue;
+        };
+        if aliases.contains_key(name) {
+            continue;
+        }
+        let slot = ctx
+            .function
+            .locals
+            .iter()
+            .find(|local| {
+                local.kind == LocalKind::PhpLocal && local.name.as_deref() == Some(name)
+            })
+            .map(|local| local.id)
+            .ok_or_else(|| {
+                CodegenIrError::invalid_module(format!(
+                    "eval global alias ${name} has no activation slot"
+                ))
+            })?;
+        aliases.insert(name.to_string(), Some(slot));
+    }
+    Ok(aliases
+        .into_iter()
+        .map(|(name, local_slot)| EvalGlobalAlias {
+            global_name: name.clone(),
+            name,
+            local_slot,
+        })
+        .collect())
+}
+
+/// Collects aliases whose storage role cannot detach while the activation runs.
+fn direct_eval_global_alias_names(ctx: &FunctionContext<'_>) -> BTreeSet<String> {
     ctx.function
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::GlobalAlias)
-        .filter_map(|local| {
-            let name = local.name.clone()?;
-            Some(EvalGlobalAlias {
-                global_name: name.clone(),
-                name,
-            })
-        })
+        .filter_map(|local| local.name.clone())
         .collect()
 }
 
@@ -158,7 +198,8 @@ pub(super) fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Op
             // Only real global storage instructions make a name a program
             // global; eval scope ops reference names through the same data
             // pool without any global storage behind them.
-            if !matches!(inst.op, Op::LoadGlobal | Op::LoadGlobalRefCell | Op::StoreGlobal) {
+            if !matches!(inst.op, Op::LoadGlobal | Op::LoadGlobalRefCell | Op::StoreGlobal
+                | Op::GlobalBindingPresent | Op::UnsetGlobal) {
                 continue;
             }
             if !is_typed_superglobal {
@@ -266,42 +307,24 @@ fn flush_eval_scope_locals_with_mask(
     access_mask_offset: Option<usize>,
 ) -> Result<()> {
     for local in locals {
-        let skip = access_mask_offset.map(|offset| {
-            let skip = ctx.next_label("eval_scope_flush_unaccessed");
-            (offset, skip)
-        });
-        if let Some((offset, skip)) = &skip {
-            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
+        let skip = (access_mask_offset.is_some() || ctx.binding_state_offsets.contains_key(&local.slot))
+            .then(|| ctx.next_label("eval_scope_flush_uninitialized_or_unaccessed"));
+        if let Some(skip) = &skip {
+            if let Some(offset) = access_mask_offset {
+                emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, skip);
+            }
+            crate::codegen::local_binding_state::branch_if_uninitialized(ctx, local.slot, skip);
         }
         ctx.load_eval_local_snapshot_to_mixed(local.slot)?;
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED | EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT);
-        emit_eval_native_local_type(ctx, local);
-        if let Some((_, skip)) = skip {
+        super::native_local_contracts::emit_eval_native_local_type(ctx, local)?;
+        if let Some(skip) = skip {
             ctx.emitter.label(&skip);
         }
     }
     Ok(())
-}
-
-/// Rejects invalid object-reference assignments inside eval, before a surrounding catch executes.
-fn emit_eval_native_local_type(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
-    let expected = match &local.ty {
-        PhpType::Object(class) if !class.is_empty() => class.as_str(),
-        PhpType::Object(_) => "object",
-        _ => "",
-    };
-    let (name, name_len) = ctx.data.add_string(local.name.as_bytes());
-    let (ty, ty_len) = ctx.data.add_string(expected.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &name);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), name_len as i64);
-    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &ty);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), ty_len as i64);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_native_type_v1");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
 }
 
 /// Flushes only dynamic-eval globals selected by the parsed fragment's access mask.
@@ -395,7 +418,9 @@ fn main_eval_local_supplies_global(ctx: &FunctionContext<'_>, name: &str) -> boo
         && ctx.function.locals.iter().any(|local| {
             local.kind == LocalKind::PhpLocal
                 && local.name.as_deref() == Some(name)
-                && eval_sync_type_supported(&local.php_type.codegen_repr())
+                && (eval_sync_type_supported(&local.php_type.codegen_repr())
+                    || (ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+                        && local.php_type == PhpType::Void))
         })
 }
 
@@ -442,7 +467,7 @@ mod tests {
         }
         let text = function.add_local(Some("text".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
         expected.push(("text".to_string(), text));
-        let actual = eval_sync_function_locals(&function).into_iter()
+        let actual = eval_sync_function_locals(&function, false).into_iter()
             .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
@@ -471,7 +496,7 @@ mod tests {
         ] {
             function.add_local(Some(hidden), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
         }
-        let actual = eval_sync_function_locals(&function).into_iter()
+        let actual = eval_sync_function_locals(&function, false).into_iter()
             .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
         assert_eq!(actual, vec![("__elephc_func_arg_value".to_string(), visible)]);
     }

@@ -19,7 +19,7 @@ pub(super) fn lower_lazy_isset(
     if php_symbol_key(name.trim_start_matches('\\')) != "isset" {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     if args.is_empty() {
@@ -75,6 +75,9 @@ pub(super) fn lower_lazy_isset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     arg: &Expr,
 ) -> Option<LoweredValue> {
+    if let Some(value) = initialization_probes::boolean(ctx, arg, initialization_probes::Probe::Isset, arg) {
+        return Some(value);
+    }
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
@@ -112,10 +115,12 @@ pub(super) fn lower_lazy_isset_operand(
             // A receiver whose class is unknown until run time has no `property_isset_action`
             // answer, so the eager fallback would take the RAISING value-read arm of the Mixed
             // declared-slot ladder. php answers `false` for a property this scope may not reach.
-            if !property_probe_needs_runtime_name_form(ctx, object) {
+            if !property_probe_needs_runtime_name_form(ctx, object)
+                && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+                && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability) {
                 return None;
             }
-            let object = lower_expr(ctx, object);
+            let object = lower_member_probe_receiver(ctx, object, arg);
             let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
@@ -175,10 +180,13 @@ pub(super) fn lower_lazy_empty(
         return None;
     }
     if args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
+    }
+    if let Some(value) = initialization_probes::boolean(ctx, &args[0], initialization_probes::Probe::Empty, expr) {
+        return Some(value);
     }
     if ctx.classes.contains_key("SimpleXMLElement") {
         if let Some(value) = nullsafe_chain::lower_empty(ctx, &args[0]) {
@@ -253,7 +261,7 @@ pub(super) fn lower_lazy_empty_without_native(
     if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
         match property_isset_action(ctx, object, property, &args[0]) {
             Some(IssetPropertyAction::Initialized) => {
-                let object = lower_member_receiver(ctx, object, &args[0]);
+                let object = lower_member_probe_receiver(ctx, object, &args[0]);
                 return Some(lower_initialized_property_empty(
                     ctx, object, property, name, &args[0],
                 ));
@@ -262,7 +270,7 @@ pub(super) fn lower_lazy_empty_without_native(
             // name, so `empty()` answers true without reading (and without a warning). The
             // receiver expression still runs, as PHP evaluates it before the probe.
             Some(IssetPropertyAction::AlwaysFalse) => {
-                let receiver = lower_member_receiver(ctx, object, &args[0]);
+                let receiver = lower_member_probe_receiver(ctx, object, &args[0]);
                 crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(args[0].span));
                 return Some(lower_bool_literal(ctx, true, expr));
             }
@@ -270,8 +278,10 @@ pub(super) fn lower_lazy_empty_without_native(
         }
         // Same reason as `isset()`: php's `empty()` is a silent probe, so an inaccessible or
         // never-created name answers `true` instead of raising.
-        if property_probe_needs_runtime_name_form(ctx, object) {
-            let object = lower_expr(ctx, object);
+        if property_probe_needs_runtime_name_form(ctx, object)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability) {
+            let object = lower_member_probe_receiver(ctx, object, &args[0]);
             let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
@@ -280,7 +290,7 @@ pub(super) fn lower_lazy_empty_without_native(
         if property_existence_magic_class(ctx, object, property, "__get").is_some()
             && property_existence_magic_class(ctx, object, property, "__isset").is_none()
         {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_probe_receiver(ctx, object, &args[0]);
             let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
@@ -437,7 +447,8 @@ fn lower_nullable_receiver_empty(
 /// Returns an expression that can be named twice with the effects of evaluating `expr` once,
 /// plus the hidden temp holding the value when one was needed.
 ///
-/// A variable or a literal already is one; anything else is lowered once into a hidden temp,
+/// Literals can be reused. Initialization-checked variable reads must run before a null branch
+/// can discard their values; other expressions are also lowered once into a hidden temp,
 /// which the caller hands to `release_evaluated_once` as soon as both reads are done. A hidden
 /// temp, not a one-shot owned temp: its loads borrow from the slot, so the `offsetExists` and
 /// `offsetGet` calls can both name it without consuming its reference.
@@ -447,8 +458,9 @@ pub(super) fn evaluate_once(
     arg: &Expr,
 ) -> (Expr, Option<String>) {
     match expr.kind {
-        ExprKind::Variable(_)
-        | ExprKind::This
+        ExprKind::Variable(_) if !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+            || ctx.source_mode == crate::source::SourceMode::Internal => (expr.clone(), None),
+        ExprKind::This
         | ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

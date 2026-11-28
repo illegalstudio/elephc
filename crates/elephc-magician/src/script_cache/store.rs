@@ -1,8 +1,9 @@
 //! Purpose:
-//! The process-wide runtime script cache: one entry per canonical path holding the
-//! parsed form of a dynamically included PHP file (one program, see `segments`), plus
-//! the statistics the OPcache API reports about it. The invariants are written up in
-//! `docs/internals/eval-runtime.md`, "Runtime script cache".
+//! The process-wide runtime script cache: independently reusable parser entries per
+//! canonical path and semantic profile, holding the parsed form of a dynamically
+//! included PHP file (one program, see `segments`), plus the statistics the OPcache API
+//! reports about it. The invariants are written up in `docs/internals/eval-runtime.md`,
+//! "Runtime script cache".
 //!
 //! Called from:
 //! - `crate::interpreter::include_exec` for every runtime include/require.
@@ -24,8 +25,9 @@
 //!   and matching what the compile-time manifest emulation already does.
 
 use super::config::{config, ScriptCacheConfig};
-use super::segments::{segment_script, ParseMode, ScriptSegment};
-use std::collections::HashMap;
+use super::segments::{segment_script_with_semantics, ParseMode, ScriptSegment};
+use elephc_semantics::SemanticProfile;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -44,6 +46,24 @@ struct Entry {
     last_used: i64,
     revalidate_at: i64,
     discarded: bool,
+}
+
+/// Identifies one independently reusable parser result in the process cache.
+///
+/// The path alone is the PHP-visible script identity, while the semantic profile is part of
+/// the compiled artifact identity. Keeping both here prevents one eval context from retiring
+/// another context's timestamp-free entry merely because it parses with different guarantees.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct EntryKey {
+    path: PathBuf,
+    semantic_profile: SemanticProfile,
+}
+
+impl EntryKey {
+    /// Pairs an already canonicalized path with the profile which parses its source.
+    fn new(path: &Path, semantic_profile: SemanticProfile) -> Self {
+        Self { path: path.to_path_buf(), semantic_profile }
+    }
 }
 
 /// A read-only view of one cached script, for the `opcache_get_status()` surface.
@@ -78,7 +98,7 @@ pub struct ScriptCacheStats {
 /// The process-wide cache state.
 #[derive(Debug, Default)]
 struct ScriptCache {
-    entries: HashMap<PathBuf, Entry>,
+    entries: HashMap<EntryKey, Entry>,
     hits: u64,
     misses: u64,
     used_memory: usize,
@@ -216,19 +236,25 @@ pub(super) fn mtime_seconds(metadata: &std::fs::Metadata) -> Option<i64> {
 /// cannot be opened, so the caller's missing-include diagnostics are unchanged. When
 /// the cache is disabled this reads and segments the file exactly as the uncached
 /// path always did, storing nothing.
+#[cfg(test)]
 pub(crate) fn load_script(path: &Path) -> io::Result<Arc<[ScriptSegment]>> {
+    load_script_with_semantics(path, SemanticProfile::PERMISSIVE)
+}
+
+/// Loads one file with the immutable parser profile of the executing context.
+pub(crate) fn load_script_with_semantics(path: &Path, profile: SemanticProfile) -> io::Result<Arc<[ScriptSegment]>> {
     let config = config();
     if !config.enabled {
         // No entry will hold this result, so the byte-keyed parse memo is what keeps a
         // repeated include off the parser — exactly as the inline loop did before.
         let bytes = std::fs::read(path)?;
-        return Ok(Arc::from(segment_script(&bytes, ParseMode::Memoized)));
+        return Ok(Arc::from(segment_script_with_semantics(&bytes, ParseMode::Memoized, profile)));
     }
     let key = cache_key(path);
-    if let Some(segments) = serve_warm_entry(&key, &config)? {
+    if let Some(segments) = serve_warm_entry(&key, &config, profile)? {
         return Ok(segments);
     }
-    fill_entry(&key, path, &config)
+    fill_entry(&key, path, &config, profile)
 }
 
 /// Returns a warm entry's segments when one is present and still considered fresh.
@@ -238,10 +264,12 @@ pub(crate) fn load_script(path: &Path) -> io::Result<Arc<[ScriptSegment]>> {
 fn serve_warm_entry(
     key: &Path,
     config: &ScriptCacheConfig,
+    profile: SemanticProfile,
 ) -> io::Result<Option<Arc<[ScriptSegment]>>> {
     let now = request_now();
     let mut cache = lock_script_cache();
-    let Some(entry) = cache.entries.get(key) else {
+    let entry_key = EntryKey::new(key, profile);
+    let Some(entry) = cache.entries.get(&entry_key) else {
         return Ok(None);
     };
     if entry.discarded {
@@ -261,16 +289,16 @@ fn serve_warm_entry(
             // script is not left live behind it. Leaving it made the next include serve the
             // OLD version once `validate_timestamps` was turned off. MEASURED: reference
             // printed `B B`, elephc `B A`.
-            let entry = cache.entries.get_mut(key).expect("entry was just observed");
+            let entry = cache.entries.get_mut(&entry_key).expect("entry was just observed");
             entry.discarded = true;
             cache.generation = cache.generation.wrapping_add(1);
             return Ok(None);
         }
         let freq = config.revalidate_freq as i64;
-        let entry = cache.entries.get_mut(key).expect("entry was just observed");
+        let entry = cache.entries.get_mut(&entry_key).expect("entry was just observed");
         entry.revalidate_at = now.saturating_add(freq);
     }
-    let entry = cache.entries.get_mut(key).expect("entry was just observed");
+    let entry = cache.entries.get_mut(&entry_key).expect("entry was just observed");
     entry.hits += 1;
     entry.last_used = now;
     let segments = Arc::clone(&entry.segments);
@@ -293,6 +321,7 @@ fn fill_entry(
     key: &Path,
     path: &Path,
     config: &ScriptCacheConfig,
+    profile: SemanticProfile,
 ) -> io::Result<Arc<[ScriptSegment]>> {
     // ONE HANDLE FOR BOTH the bytes and the metadata that will be stored beside them.
     //
@@ -324,7 +353,7 @@ fn fill_entry(
     // `validate_timestamps=0` with `max_file_size=1` — and again with the file blacklisted —
     // over a source changed since it was stored: reference ran the stored version, elephc
     // re-read the new one.
-    let from_disk = super::file_store::load_entry(config, key, mtime, file_size);
+    let from_disk = super::file_store::load_entry_with_semantics(config, key, mtime, file_size, profile);
     let parsed_here = from_disk.is_none();
     if parsed_here {
         // `opcache.blacklist_filename` is decided before any compile accounting, and the
@@ -337,7 +366,7 @@ fn fill_entry(
         // counter is of refusals, not of distinct files.
         if super::blacklist::blocks(key) {
             let segments: Arc<[ScriptSegment]> =
-                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+                Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile));
             lock_script_cache().blacklist_misses += 1;
             return Ok(segments);
         }
@@ -357,7 +386,7 @@ fn fill_entry(
         let unrecordable = reads_timestamp && mtime.unwrap_or(0) == 0;
         if unrecordable || !config.admits_age(mtime, request_now()) {
             let segments: Arc<[ScriptSegment]> =
-                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+                Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile));
             lock_script_cache().misses += 1;
             return Ok(segments);
         }
@@ -369,7 +398,7 @@ fn fill_entry(
         // refusal is. Placing it after `misses += 1` made elephc report BOTH.
         if !config.admits_size(file_size) {
             let segments: Arc<[ScriptSegment]> =
-                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+                Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile));
             lock_script_cache().blacklist_misses += 1;
             return Ok(segments);
         }
@@ -377,7 +406,7 @@ fn fill_entry(
     let (segments, stored_mtime, stored_revalidate): (Arc<[ScriptSegment]>, Option<i64>, i64) =
         match from_disk {
             Some(entry) => (Arc::from(entry.segments), entry.mtime, entry.revalidate),
-            None => (Arc::from(segment_script(&bytes, ParseMode::Fresh)), None, 0),
+            None => (Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile)), None, 0),
         };
     let now = request_now();
     let mut cache = lock_script_cache();
@@ -438,13 +467,14 @@ fn fill_entry(
         // with the real mtime and recompiles. MEASURED across two processes over an unchanged
         // source: reference's reader missed on the library, elephc's hit.
         let recorded = if config.validate_timestamps { mtime } else { Some(0) };
-        super::file_store::store_entry(
+        super::file_store::store_entry_with_semantics(
             config,
             key,
             recorded,
             file_size,
             fresh_revalidate_at(config, now),
             &segments,
+            profile,
         );
     }
     // A PENDING RESTART CLOSES ADMISSION. `opcache_reset()` schedules rather than flushes,
@@ -473,14 +503,15 @@ fn fill_entry(
         .iter()
         .map(ScriptSegment::memory_footprint)
         .sum::<usize>();
-    let replacing = cache.entries.get(key).map_or(0, |entry| entry.footprint);
-    if !cache.admits_entry(key, footprint, replacing, config) {
+    let entry_key = EntryKey::new(key, profile);
+    let replacing = cache.entries.get(&entry_key).map_or(0, |entry| entry.footprint);
+    if !cache.admits_entry(&entry_key, footprint, replacing, config) {
         return Ok(segments);
     }
     cache.used_memory = cache.used_memory - replacing + footprint;
     cache.generation = cache.generation.wrapping_add(1);
     cache.entries.insert(
-        key.to_path_buf(),
+        entry_key,
         Entry {
             segments: Arc::clone(&segments),
             // Recorded only under validation, as php-src's `cache_script_in_shared_memory`
@@ -529,6 +560,18 @@ fn fresh_revalidate_at(config: &ScriptCacheConfig, now: i64) -> i64 {
 }
 
 impl ScriptCache {
+    /// Counts PHP-visible cached scripts, whose identity is the canonical path.
+    ///
+    /// Profile variants occupy independent internal capacity and memory, but status exposes
+    /// one row per path. Discarded variants still retain that row until a restart.
+    fn visible_script_count(&self) -> usize {
+        self.entries
+            .keys()
+            .map(|key| key.path.as_path())
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
     /// Returns whether one more entry fits, latching `cache_full` when it does not.
     ///
     /// php-src stops storing new scripts once either the byte budget or the entry
@@ -536,7 +579,7 @@ impl ScriptCache {
     /// Replacing an existing entry is always allowed: it frees its own footprint.
     fn admits_entry(
         &mut self,
-        key: &Path,
+        key: &EntryKey,
         footprint: usize,
         replacing: usize,
         config: &ScriptCacheConfig,
@@ -626,15 +669,13 @@ pub fn apply_pending_restart() -> bool {
 pub fn discard(path: &Path) -> bool {
     let key = cache_key(path);
     let mut cache = lock_script_cache();
-    // The mutable borrow of `entries` has to end before `generation` can be touched, so the
-    // flag is read back rather than bumped inside the match arm.
-    let discarded = match cache.entries.get_mut(&key) {
-        Some(entry) => {
+    let mut discarded = false;
+    for (entry_key, entry) in &mut cache.entries {
+        if entry_key.path == key {
             entry.discarded = true;
-            true
+            discarded = true;
         }
-        None => false,
-    };
+    }
     if discarded {
         cache.generation = cache.generation.wrapping_add(1);
     }
@@ -675,6 +716,7 @@ pub fn discard(path: &Path) -> bool {
 /// but does not report.
 pub fn invalidate(path: &Path, force: bool) -> bool {
     let key = cache_key(path);
+    let config = config();
     // THE ON-DISK ENTRY GOES FIRST, AND UNCONDITIONALLY. php-src calls
     // `zend_file_cache_invalidate` outside the `force || !validate_timestamps || stale`
     // test, so an invalidate that deliberately KEEPS the in-memory entry still drops the
@@ -694,8 +736,9 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
     // the disk, unlink the source, `opcache_invalidate($p, true)` in a fresh process —
     // reference `false`, elephc `true`; both removed the disk entry.
     let was_live = is_present(&key);
-    super::file_store::invalidate(&config(), &key);
-    if !force && config().validate_timestamps && !entry_is_stale(&key) {
+    super::file_store::invalidate(&config, &key);
+    if !force && config.validate_timestamps {
+        discard_stale_profiles(&key);
         return was_live;
     }
     // A SECOND INVALIDATE RETIRES NOTHING. `discard` answers whether an entry is PRESENT,
@@ -713,30 +756,36 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
     was_live
 }
 
-/// Returns whether `key`'s entry no longer matches the file on disk — php-src's
-/// `do_validate_timestamps(...) == FAILURE`.
+/// Discards only live profile variants that no longer match the file on disk.
 ///
 /// THE TIMESTAMP ONLY. php-src hands that function a `NULL` size output and compares the
 /// mtime, so a rewrite that changes the length while preserving the timestamp leaves the
-/// entry valid. Comparing the size here too made such a file stale and retired an entry
-/// reference keeps.
+/// matching variants valid. Comparing the size here too would retire an entry reference keeps.
 ///
-/// A path with NO entry is not stale; there is nothing to be stale about, and reporting it
-/// so would make the predicate above take a branch that has no work to do. A file that can
-/// no longer be stated IS stale: it was cached and is now unreadable, which is the strongest
-/// possible reason not to keep serving it.
+/// Discarded profile variants are ignored because they can no longer be served. One stale
+/// live profile must not retire a sibling recorded at the current timestamp.
 ///
 /// NO `is_unrecorded` SHORT-CIRCUIT HERE, unlike the include and query paths: php-src's
 /// `accel_invalidate` calls `do_validate_timestamps` directly, so an entry admitted without
-/// a timestamp compares `0` against the real mtime and is stale.
-fn entry_is_stale(key: &Path) -> bool {
-    let cache = lock_script_cache();
-    let Some(entry) = cache.entries.get(key) else {
-        return false;
-    };
-    let timestamp = entry.timestamp;
-    drop(cache);
-    file_timestamp(key) != timestamp
+/// a timestamp fails immediately. That remains stale when a missing file also maps to the
+/// local timestamp sentinel `0`.
+fn discard_stale_profiles(key: &Path) -> bool {
+    let timestamp = file_timestamp(key);
+    let mut cache = lock_script_cache();
+    let mut discarded = false;
+    for (entry_key, entry) in &mut cache.entries {
+        if entry_key.path == key
+            && !entry.discarded
+            && (entry.timestamp == 0 || entry.timestamp != timestamp)
+        {
+            entry.discarded = true;
+            discarded = true;
+        }
+    }
+    if discarded {
+        cache.generation = cache.generation.wrapping_add(1);
+    }
+    discarded
 }
 
 /// Returns whether a path has a live cache entry — present, not discarded, and not known to
@@ -771,10 +820,16 @@ fn entry_is_stale(key: &Path) -> bool {
 /// seen at once where reference, having just renewed, keeps vouching for the entry until
 /// the renewed window lapses.
 pub fn is_cached(path: &Path) -> bool {
+    is_cached_with_semantics(path, SemanticProfile::PERMISSIVE)
+}
+
+/// Reports a usable memory entry only for the requesting semantic profile.
+pub fn is_cached_with_semantics(path: &Path, profile: SemanticProfile) -> bool {
     let key = cache_key(path);
+    let entry_key = EntryKey::new(&key, profile);
     let (timestamp, revalidate_at) = {
         let cache = lock_script_cache();
-        match cache.entries.get(&key) {
+        match cache.entries.get(&entry_key) {
             Some(entry) if !entry.discarded => (entry.timestamp, entry.revalidate_at),
             _ => return false,
         }
@@ -787,7 +842,7 @@ pub fn is_cached(path: &Path) -> bool {
     let fresh = file_timestamp(&key) == timestamp;
     if fresh {
         let mut cache = lock_script_cache();
-        if let Some(entry) = cache.entries.get_mut(&key) {
+        if let Some(entry) = cache.entries.get_mut(&entry_key) {
             entry.revalidate_at = now.saturating_add(config.revalidate_freq as i64);
             // The renewed deadline is what `opcache_get_status()['scripts']` reports as
             // `revalidate`, so a snapshot taken before it is stale. MEASURED: status, then
@@ -803,8 +858,8 @@ pub fn is_cached(path: &Path) -> bool {
 fn is_present(key: &Path) -> bool {
     lock_script_cache()
         .entries
-        .get(key)
-        .is_some_and(|entry| !entry.discarded)
+        .iter()
+        .any(|(entry_key, entry)| entry_key.path == key && !entry.discarded)
 }
 
 /// Reads and caches a script without executing it, as `opcache_compile_file()` does.
@@ -829,7 +884,7 @@ fn is_present(key: &Path) -> bool {
 /// return the entry's footprint to the budget, so the refill would count the same bytes
 /// twice and the entry would be weighed against `max_accelerated_files` as a NEW one.
 pub fn compile_file(path: &Path) -> bool {
-    compile_file_inner(path)
+    compile_file_with_semantics(path, SemanticProfile::PERMISSIVE)
 }
 
 /// Why `opcache_compile_file()` could not OPEN `path`, as the `strerror` text php-src's stream
@@ -858,7 +913,7 @@ pub(crate) fn compile_open_failure_warnings(display: &str, reason: &str) -> [Str
 
 /// Compiles one file into the cache for `opcache_compile_file()`, serving a warm entry as a hit;
 /// answers whether the file is cached without a parse error.
-fn compile_file_inner(path: &Path) -> bool {
+pub fn compile_file_with_semantics(path: &Path, profile: SemanticProfile) -> bool {
     let config = config();
     if !config.enabled {
         return false;
@@ -871,12 +926,12 @@ fn compile_file_inner(path: &Path) -> bool {
     // `hits: 0` and a reset `last_used` — so repeated calls moved every figure the wrong way
     // and dragged `opcache_hit_rate` down with them. MEASURED on reference PHP 8.5.10: three
     // calls give `hits=2 misses=0` beyond the first, against `hits=0 misses=2` here.
-    match serve_warm_entry(&key, &config) {
+    match serve_warm_entry(&key, &config, profile) {
         Ok(Some(_)) => return true,
         Ok(None) => {}
         Err(_) => return false,
     }
-    match fill_entry(&key, path, &config) {
+    match fill_entry(&key, path, &config, profile) {
         Ok(segments) => !segments
             .iter()
             .any(|segment| matches!(segment, ScriptSegment::ParseError(_))),
@@ -899,7 +954,7 @@ pub fn stats() -> ScriptCacheStats {
     ScriptCacheStats {
         hits: cache.hits,
         misses: cache.misses,
-        num_cached_scripts: cache.entries.len(),
+        num_cached_scripts: cache.visible_script_count(),
         used_memory: cache.used_memory,
         cache_full: cache.cache_full,
         oom_restarts: cache.oom_restarts,
@@ -910,22 +965,51 @@ pub fn stats() -> ScriptCacheStats {
     }
 }
 
-/// Returns one entry per cached script, sorted by path for a deterministic surface.
+/// Returns one PHP-visible row per cached path, sorted for a deterministic surface.
 ///
-/// A discarded entry reports `timestamp = 0`, which is the single field php-src moves
-/// on a discard and the one the compile-time manifest emulation already moves.
+/// Semantic profiles remain separate internal artifacts, but OPcache exposes a map keyed
+/// only by path. Their hits and footprints are therefore summed into that one row, while
+/// freshness fields come from the most recently used live variant. Discarded siblings do
+/// not hide a live row. A path whose variants are all discarded reports `timestamp = 0`,
+/// which is the single field php-src moves on a discard and the one the compile-time
+/// manifest emulation already moves.
 pub fn cached_scripts() -> Vec<CachedScriptInfo> {
     let cache = lock_script_cache();
-    let mut scripts: Vec<CachedScriptInfo> = cache
-        .entries
-        .iter()
-        .map(|(path, entry)| CachedScriptInfo {
-            full_path: path.clone(),
-            hits: entry.hits,
-            memory_consumption: entry.footprint,
-            last_used_timestamp: entry.last_used,
-            timestamp: if entry.discarded { 0 } else { entry.timestamp },
-            revalidate_at: entry.revalidate_at,
+    let mut entries_by_path: HashMap<&Path, Vec<&Entry>> = HashMap::new();
+    for (key, entry) in &cache.entries {
+        entries_by_path.entry(&key.path).or_default().push(entry);
+    }
+    let mut scripts: Vec<CachedScriptInfo> = entries_by_path
+        .into_iter()
+        .map(|(path, entries)| {
+            let newest_live = entries
+                .iter()
+                .copied()
+                .filter(|entry| !entry.discarded)
+                .max_by_key(|entry| (entry.last_used, entry.timestamp, entry.revalidate_at));
+            let representative = newest_live.unwrap_or_else(|| {
+                entries
+                    .iter()
+                    .copied()
+                    .max_by_key(|entry| (entry.last_used, entry.timestamp, entry.revalidate_at))
+                    .expect("a grouped cache path must contain an entry")
+            });
+            CachedScriptInfo {
+                full_path: path.to_path_buf(),
+                hits: entries.iter().map(|entry| entry.hits).sum(),
+                memory_consumption: entries.iter().map(|entry| entry.footprint).sum(),
+                last_used_timestamp: entries
+                    .iter()
+                    .map(|entry| entry.last_used)
+                    .max()
+                    .expect("a grouped cache path must contain an entry"),
+                timestamp: if newest_live.is_some() {
+                    representative.timestamp
+                } else {
+                    0
+                },
+                revalidate_at: representative.revalidate_at,
+            }
         })
         .collect();
     scripts.sort_by(|left, right| left.full_path.cmp(&right.full_path));

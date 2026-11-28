@@ -20,7 +20,10 @@ pub(super) struct PendingConversion {
 /// Catches only the conversion callback while preserving all older write operand owners.
 pub(super) fn capture(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
-) -> PendingConversion {
+) -> Option<PendingConversion> {
+    if !super::static_false_parent::parent_requires_scalar_normalization(ctx, parent) {
+        return None;
+    }
     let exception = ctx.declare_owned_hidden_temp(PhpType::Object("Throwable".into()));
     ctx.clear_owned_hidden_temp(&exception, Some(span));
     let slot = ctx.local_slots[&exception];
@@ -50,14 +53,15 @@ pub(super) fn capture(
     branch_to(ctx, after);
     ctx.builder.position_at_end(after);
     ctx.clear_static_callable_locals();
-    PendingConversion { exception, flag }
+    Some(PendingConversion { exception, flag })
 }
 
 /// Completes only eligible pending dimensions, then rethrows; returns on the no-error path.
 pub(super) fn handle_pending(
-    ctx: &mut LoweringContext<'_, '_>, pending: PendingConversion, key: Option<LoweredValue>,
+    ctx: &mut LoweringContext<'_, '_>, pending: Option<PendingConversion>, key: Option<LoweredValue>,
     span: Span, action: impl FnOnce(&mut LoweringContext<'_, '_>),
 ) {
+    let Some(pending) = pending else { return; };
     let flag = ctx.load_local(&pending.flag, Some(span));
     let initialized = ctx.initialized_slots_snapshot();
     let raised = ctx.builder.create_named_block("nested.false.pending", Vec::new());
@@ -67,7 +71,7 @@ pub(super) fn handle_pending(
         else_target: normal, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(raised);
-    if let Some(key) = key {
+    if let Some(key) = key.filter(|key| !key_always_completes(ctx, *key)) {
         let invalid_array = predicate(ctx, key, crate::ir::PhpTypePredicate::Array, span);
         let invalid_object = predicate(ctx, key, crate::ir::PhpTypePredicate::Object, span);
         let invalid = or(ctx, invalid_array, invalid_object, span);
@@ -105,6 +109,28 @@ pub(super) fn handle_pending(
         Op::PopCallOperandOwner.default_effects(), Some(span));
 }
 
+/// Omits pending-key branches when the emitted value is guaranteed to complete the write.
+pub(super) fn key_always_completes(ctx: &LoweringContext<'_, '_>, key: LoweredValue) -> bool {
+    match (key.ir_type, ctx.builder.value_php_type(key.value)) {
+        (IrType::I64, PhpType::Int | PhpType::Bool) => true,
+        // A general string slot may still contain the missing-value sentinel.
+        (IrType::Str, PhpType::Str) => key_is_string_literal(ctx, key.value),
+        _ => false,
+    }
+}
+
+/// Follows the ownership instructions used to keep a literal alive during nested writes.
+fn key_is_string_literal(ctx: &LoweringContext<'_, '_>, mut value: crate::ir::ValueId) -> bool {
+    while let Some(producer) = ctx.builder.value_defining_instruction(value) {
+        match (producer.op, producer.operands.as_slice()) {
+            (Op::ConstStr, _) => return true,
+            (Op::Borrow | Op::Acquire, [source]) => value = *source,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Catches a completion error to append the original callback exception before propagating it.
 fn complete_and_rethrow(
     ctx: &mut LoweringContext<'_, '_>, pending: &PendingConversion, span: Span,
@@ -132,8 +158,22 @@ fn complete_and_rethrow(
 }
 
 /// Builds the PHP array/object key TypeError without allocating an unconsumed stored-value box.
-fn raise_invalid_key_type_error(
+pub(in crate::ir_lower) fn raise_invalid_key_type_error(
     ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
+) {
+    raise_invalid_key_type_error_for_operation(ctx, key, span, "access");
+}
+
+/// Builds PHP's unset-specific array/object key TypeError.
+pub(in crate::ir_lower) fn raise_invalid_unset_key_type_error(
+    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
+) {
+    raise_invalid_key_type_error_for_operation(ctx, key, span, "unset");
+}
+
+/// Builds one invalid-key diagnostic while preserving its owned key through message creation.
+fn raise_invalid_key_type_error_for_operation(
+    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span, operation: &str,
 ) {
     let ty = ctx.builder.value_php_type(key.value);
     let name = ctx.declare_synthetic_php_local(ty.clone());
@@ -154,7 +194,9 @@ fn raise_invalid_key_type_error(
     }, span);
     let message = Expr::new(ExprKind::BinaryOp {
         left: Box::new(Expr::new(ExprKind::BinaryOp {
-            left: Box::new(Expr::new(ExprKind::StringLiteral("Cannot access offset of type ".into()), span)),
+            left: Box::new(Expr::new(ExprKind::StringLiteral(
+                format!("Cannot {operation} offset of type "),
+            ), span)),
             op: crate::parser::ast::BinOp::Concat, right: Box::new(kind),
         }, span)),
         op: crate::parser::ast::BinOp::Concat,

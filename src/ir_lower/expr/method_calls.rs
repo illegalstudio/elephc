@@ -109,12 +109,12 @@ pub(super) fn lower_method_call(
     }
     if op == Op::MethodCall {
         if let Some(value) =
-            lower_reflection_function_invoke_call(ctx, Some(object_expr), method, args, expr)
+            lower_reflection_function_invoke_call(ctx, Some(object_expr), object, method, args, expr)
         {
             return value;
         }
         if let Some(value) =
-            lower_reflection_method_invoke_call(ctx, Some(object_expr), method, args, expr)
+            lower_reflection_method_invoke_call(ctx, Some(object_expr), object, method, args, expr)
         {
             return value;
         }

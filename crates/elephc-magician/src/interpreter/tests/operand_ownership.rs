@@ -634,7 +634,7 @@ fn native_bound_argument_cleanup_preserves_borrowed_inputs() {
     let mut context = ElephcEvalContext::new();
     let borrowed = values.int(7).unwrap();
     let default = values.string("default").unwrap();
-    let args = [borrowed.borrowed(), default].into_iter().map(|value| BoundMethodArg {
+    let args = [borrowed.borrowed(), default].into_iter().map(|value| BoundMethodArg { source_type: None,
         value, ref_target: None, variadic_ref_targets: Vec::new(),
     }).collect::<Vec<_>>();
     release_native_bound_args(&args, &mut context, &mut values).unwrap();
@@ -650,7 +650,7 @@ fn native_reference_writeback_retains_replacement_storage() {
     let original = values.int(7).unwrap();
     let converted = values.string("7").unwrap();
     scope.set("value", original, ScopeCellOwnership::Owned);
-    let args = vec![BoundMethodArg {
+    let args = vec![BoundMethodArg { source_type: None,
         value: converted,
         ref_target: Some(EvalReferenceTarget::Variable {
             scope: &mut scope, name: "value".into(),
@@ -1024,10 +1024,13 @@ fn dynamic_callable_binding_failure_releases_prepared_defaults() {
         &[Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Bool], false)),
           Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Class("MissingTarget".into())], true))],
         &[Some(EvalExpr::Const(EvalConst::Bool(false))), Some(EvalExpr::Const(EvalConst::Null))], &[false, false], &[false, false],
-        vec![EvaluatedCallArg { evaluation_owner: None, name: Some("target".into()), value: caller.borrowed(), ref_target: None }],
+        vec![EvaluatedCallArg { source_type: None, evaluation_owner: None, name: Some("target".into()), value: caller.borrowed(), ref_target: None }],
         EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
     );
-    assert!(matches!(result, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(result.err(), Some(EvalStatus::UncaughtThrowable));
+    let thrown = context.take_pending_throw().expect("a refused binding owns its TypeError");
+    assert_eq!(values.object_classes.get(&(thrown.as_ptr() as usize)).map(String::as_str), Some("TypeError"));
+    values.release(thrown).unwrap();
     assert_eq!(values.cell_owners.get(&(caller.as_ptr() as usize)), Some(&1));
     let defaults = values.values.iter().filter(|(_, value)| **value == FakeValue::Bool(false))
         .map(|(cell, _)| *cell).collect::<Vec<_>>();

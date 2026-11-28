@@ -40,7 +40,7 @@ pub(super) fn lower_boxed_usort(
         return None;
     }
     let sig = call_signature(ctx, name, false)?;
-    let plan = plan_call_args(&sig, args, expr.span, false, false).ok()?;
+    let plan = plan_call_args(&sig, args, expr.span, false, false, ctx.semantic_profile).ok()?;
     let (array, callback, array_first) = match plan.regular_args.as_slice() {
         [PlannedRegularArg::Source { source_index: array_index, expr: array },
             PlannedRegularArg::Source { source_index: callback_index, expr: callback }] =>
@@ -53,6 +53,16 @@ pub(super) fn lower_boxed_usort(
         }
         _ => return None,
     };
+    // Apply the checked reference-storage plan before selecting the raw or boxed sorter.
+    // Argument lowering must not promote a receiver after this dispatch has inspected it.
+    if let ExprKind::Variable(name) = &array.kind {
+        if ctx.boxed_reference_promotion_is_authorized(name, array.span)
+            && !ctx.is_ref_bound_local(name)
+            && ctx.local_is_promotable_to_ref_cell(name)
+        {
+            ctx.promote_local_mixed_ref_cell(name, Some(array.span));
+        }
+    }
     let boxed_local = if let ExprKind::Variable(name) = &array.kind {
         ctx.local_slots.get(name).filter(|slot|
             ctx.builder.local_php_type(**slot).codegen_repr() == PhpType::Mixed)

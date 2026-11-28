@@ -69,6 +69,9 @@ pub(super) fn eval_native_property_unset_result(
     let native_class = eval_native_private_property_unset_scope(object_class, property, context, values)?
         .or_else(|| context.class_native_parent_name(object_class))
         .unwrap_or_else(|| object_class.to_string());
+    if native_class.eq_ignore_ascii_case("stdClass") {
+        return values.unset_native_typed_property(object, property);
+    }
     let Some((owner, visibility, write_visibility, is_static)) =
         eval_reflection_aot_property_access_metadata(&native_class, property, values)?
     else {

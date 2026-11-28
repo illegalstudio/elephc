@@ -46,7 +46,7 @@ on first use and reused from the existing per-user cache root. See
 | Option | Meaning |
 |---|---|
 | `--php-version VERSION` | Select the PHP profile; otherwise use project detection. Also accepts `--php-version=VERSION`. |
-| `--strict-php` | Hide elephc extension builtins in evaluated code. |
+| `--php-only` | Hide elephc extension builtins in evaluated code. |
 | `--with-<capability>` | Enable an optional eval capability at host build time. Web and monitoring modes are unavailable. |
 | `--ini KEY=VALUE` | Override project INI settings; repeatable, last value wins. Also accepts `--ini=KEY=VALUE`. Nonempty `opcache.preload` is unsupported. |
 | `--heap-size=BYTES` | Set session heap size, using the compiler's normal limits/default. |
@@ -73,7 +73,7 @@ the report format.
 | `--timeout SECONDS` | Seconds an isolated test may run before `SIGALRM` ends it and it is reported as an error. Default `60`; `0` disables. Also accepts `--timeout=SECONDS`. |
 | `--junit FILE` | Write a JUnit XML report to `FILE`, resolved against the working directory. Also accepts `--junit=FILE`. |
 | `--help`, `-h` | Show the subcommand usage. |
-| compile options | `--strict-php`, `--with-<crate>`, `--heap-size`, `--php-version`, `--define`, `--ini`, `--quiet`, and the other ordinary options are forwarded to the compiler. |
+| compile options | `--php-only`, `--with-<crate>`, `--heap-size`, `--php-version`, `--define`, `--ini`, `--quiet`, and the other ordinary options are forwarded to the compiler. |
 
 The project root is the nearest directory, starting at `PATH` itself, that holds a
 `composer.json`; both its `autoload` and `autoload-dev` sections resolve project and
@@ -315,9 +315,9 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--export-constant NAME` / `--export-constant=NAME` | Fully qualified constant name; repeatable | None | Select a top-level source constant for `--emit phpext`. Exported classes include their public class constants automatically. |
 | `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
-| `--check` | — | off | Run checks and write nothing (`elephc check` is the same); exported code also receives EIR cdylib call-graph safety validation. |
-| `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
-| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
+| `--check` | - | off | Run checks and write nothing (`elephc check` is the same); exported code also receives EIR cdylib call-graph safety validation. |
+| `--php-only` | - | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [PHP-only mode](#php-only-mode). |
+| `--strict-locals` | - | off | Keep local binding types stable, including integer/float changes. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
@@ -547,20 +547,20 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 | `--heap-size=BYTES` | integer ≥ 65536, at most 1073741824 | `134217728` (128 MB, PHP's default `memory_limit`) | Size of the program's runtime heap. It is reserved as zero-filled memory, so pages the program never touches cost nothing. Also sizes the shared string-result arena, so string-producing builtins are bounded by this budget rather than a fixed 64 KiB cap. The 1 GiB maximum keeps the emitted heap and side tables inside AArch64's ±4 GiB `ADRP` window; a larger value is rejected at compile time instead of failing in the linker. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
 
-## Strict PHP mode
+## PHP-only mode
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--strict-php` | — | off | Accept only PHP-compatible constructs in PHP-mode user files; LFC and compiler-generated source remain extension-enabled. |
+| `--php-only` | - | off | Accept only PHP-compatible constructs in PHP-mode user files; LFC and compiler-generated source remain extension-enabled. |
 
-Under `--strict-php` the compiler rejects the
+Under `--php-only` the compiler rejects the
 [beyond-PHP extensions](../beyond-php/pointers.md) at the source level in every
 physical PHP-mode file:
 
 - extension syntax — `ifdef` blocks, `packed class`, `extern` declarations,
   `ptr_cast<T>(...)`, `buffer_new<T>(...)`, typed local variable declarations
   (`int $x = 5;`), and `ptr`/`buffer<T>` type annotations — is reported with a
-  `rejected by --strict-php` diagnostic, one error per violation, wherever the
+  `rejected by --php-only` diagnostic, one error per violation, wherever the
   construct appears (statement bodies, closures, class members, and PHP
   attribute arguments alike);
 - extension builtins (`ptr_*`, `zval_*`, `buffer_*`, `class_attribute_*`) behave
@@ -577,35 +577,330 @@ physical PHP-mode file:
 
 The audit covers a PHP entry plus every PHP-mode `include`/`require`d and
 autoloaded user file. Physical `.lfc` files are always extension-enabled, even
-when reached from a strict PHP entry; conversely, PHP included by an LFC entry
+when reached from a PHP-only entry; conversely, PHP included by an LFC entry
 is still audited. Compiler-injected preludes (PDO, timezone, image, web, …) are
-exempt, so programs using those PHP-level APIs keep compiling in strict mode.
+exempt, so programs using those PHP-level APIs keep compiling in PHP-only mode.
 This same call-site profile controls direct and dynamic calls,
 `function_exists()`, `is_callable()`, first-class callables, and `eval()`.
 
-Strict mode also reaches `eval()`, matching PHP's runtime semantics for eval'd
-code: the compiled binary marks the eval bridge as strict, so extension
-builtins do not exist inside eval'd fragments either — calling one is a runtime
+PHP-only mode also reaches `eval()`, matching PHP's runtime semantics for eval'd
+code: the compiled binary marks the eval bridge as PHP-only, so extension
+builtins do not exist inside eval'd fragments either, calling one is a runtime
 fatal (like any unknown function in eval), `function_exists()`/`is_callable()`
 report them as missing, and extension syntax in a fragment is a runtime parse
 error. Fragments are never rejected at compile time: PHP only fails eval'd code
-when it actually executes, and strict mode preserves that. User functions that
+when it actually executes, and PHP-only mode preserves that. User functions that
 shadow extension names remain callable from eval'd code.
 
-`--strict-php` may be combined with `--define`. LFC `ifdef` blocks consume the
+`--php-only` may be combined with `--define`. LFC `ifdef` blocks consume the
 symbol normally, while a PHP-mode file containing `ifdef` is rejected by the
-strict audit before conditional compilation can remove either branch. Supplying
+PHP-only audit before conditional compilation can remove either branch. Supplying
 an otherwise unused define is valid.
 
-Strict mode guarantees that the *constructs* used are PHP-compatible; it does
-not change elephc's static-subset semantics. A strict-valid program can still be
+PHP-only mode guarantees that the *constructs* used are PHP-compatible; it does
+not change elephc's static-subset semantics. A PHP-only-valid program can still be
 rejected by the type checker in places where the PHP interpreter would run it.
+
+`--strict-php` has been renamed to `--php-only`; the old option is rejected.
+Semantic strictness is configured separately through the `--strict-*` family.
+Enabling `--php-only` does not enable semantic strictness, and semantic strictness
+does not restrict LFC syntax.
+
+## Strict semantic profiles
+
+The shared option catalog resolves independent `--strict-<feature>` requests.
+`--strict` selects the complete catalog, including `--strict-opcache`.
+An explicit `--no-strict-<feature>` overrides the umbrella in either argument
+order. Repeating an explicit feature option uses the last value.
+
+All sixteen guarantees are available individually and through `--strict`:
+locals, coercions, overflow, arithmetic, casts, bools, comparisons, nullability,
+mixed, strings, array-types, array-keys, initialization, indexing, dynamic-code
+and opcache. The same resolved profile reaches compiler, eval, runtime and cache
+boundaries. `--strict-mixed` requires narrowing dynamic producers before an
+incompatible consumer. `--strict-array-types` retains array content contracts
+separately from the binding's outer value kind. Intentional `mixed` and union
+declarations preserve their explicit openness.
+
+See [the complete strict example](../../examples/strict-mode/main.php).
+
+### Dynamic values and array contents
+
+`--strict-mixed` checks the source alternatives before an operation uses a dynamic
+value. A compatible current occupant alone does not prove that an explicitly
+`mixed` producer has been narrowed. Use predicates such as `is_int()` or
+`is_array()` on the reached path. Source evidence crosses calls and `eval`
+boundaries separately from the physical storage representation.
+
+`--strict-array-types` retains the key and element contracts established by a
+successful array producer. Empty arrays acquire content contracts when their
+first elements are stored. An explicit `array<mixed>` or union element type
+allows intentional heterogeneous contents. These checks cover element writes,
+mutating builtins and references; they do not enable `--strict-locals`.
+
+A typed array declaration continues to constrain its contents independently of
+these inferred-array rules. `--strict-array-keys` separately controls exact key
+identity and accepted key kinds.
+
+### Non-null values
+
+`--strict-nullability` checks ordinary dimension and member receivers and values
+bound to non-null declarations, parameters, returns and builtin inputs before
+PHP conversions can erase null. A statically known invalid null is a compile
+error; a dynamic null throws a catchable `TypeError`. Property aliases preserve
+their declaration checks, and a rejected write keeps the previous value.
+
+Explicit nullable and mixed contracts, null tests, nullsafe short-circuiting,
+`isset`, `empty` and `??` retain their intentional null behavior. Keys and member
+names evaluated inside a probe are ordinary expressions. An ordinary access after
+a successful nullsafe hop still checks a real null. Other non-null conversions
+retain their own policies, independently of `declare(strict_types=0)`.
+
+The rule applies to included PHP/LFC source, runtime eval and REPL submissions.
+Existing static-subset diagnostics still apply, including opaque mixed values
+passed to unsupported container parameter layouts. Native Reflection invocation
+requires a statically known target; runtime-selected or lost targets throw an
+explicit unsupported-target `Error`. Runtime eval retains its Reflection dispatch.
+See `examples/strict-nullability/main.php` for a runnable example.
+
+### Initialized reads
+
+`--strict-initialization` requires every ordinary local or property read to
+observe initialized storage. A statically absent binding is a compile error;
+conditional initialization, `unset()` and runtime-selected storage are checked
+when read and throw a catchable `Error`. Initialized `null` remains a value.
+
+Intentional probes (`isset`, `empty`, `??`) and nullsafe receiver short-circuiting
+keep their absence behavior. Property reads retain getter and visibility protocols; reflection's
+physical property reads check the physical slot. The rule also applies in
+literal and runtime eval, included source and REPL sessions. It is independent
+of local type stability and `declare(strict_types=0)`.
+
+```php
+function displaySetting(bool $load): void {
+    if ($load) { $setting = 'ready'; }
+    echo $setting ?? 'not loaded';
+    try { echo $setting; }
+    catch (Error $error) { echo 'initialize the setting first'; }
+}
+```
+
+See `examples/strict-initialization/main.php` for a runnable example.
+
+### Checked indexing
+
+`--strict-indexing` makes an ordinary missing array/hash key or an out-of-range
+string byte offset throw `OutOfBoundsException`. Initialized null is a present
+value. Valid negative string offsets keep PHP byte indexing. The rule applies
+to literal source, included files, runtime eval and REPL submissions, independently
+of `declare(strict_types=0)`.
+
+Intentional `isset`, `empty`, `??` and supported writable-root probes retain
+their absence behavior. A key expression still runs ordinarily and may throw;
+receivers and keys are evaluated once. Writes and explicit reference slot
+creation retain their existing protocols. Overloaded object dimensions keep
+their `ArrayAccess` or native object hooks, without an additional `offsetExists`
+call. Key coercion, non-null requirements and mixed-value narrowing remain
+independent rules.
+
+```php
+$stock = ['pens' => 12, 'paper' => null];
+echo $stock['ink'] ?? 'optional';
+try { echo $stock['ink']; }
+catch (OutOfBoundsException $error) { echo 'unknown item'; }
+```
+
+See `examples/strict-indexing/main.php` for a runnable example.
+
+### Exact array keys
+
+`--strict-array-keys` preserves integer and string key identity. Numeric strings
+are hashed from their original bytes: `"1"`, `1` and `"01"` are three separate
+keys. Strings retain their byte length, embedded NUL bytes and case. No Unicode
+normalization is applied. Hash collisions compare both key kind and original
+value.
+
+PHP array dimensions and key-producing builtins accept only integer or string
+keys. A proven invalid key is a compile error, including in source that an
+optimizer would remove. Dynamic invalid keys throw `TypeError` before PHP key
+coercion. Reads, writes, probes, aliases and callable forwarding use the same
+original-key checks. String offsets and `ArrayAccess` object offsets keep their
+own contracts. An optional null column selector in `array_column()` remains
+valid.
+
+```php
+$values = ["1" => "string", 1 => "integer", "01" => "leading zero"];
+echo count($values); // 3 with --strict-array-keys
+```
+
+See `examples/strict-array-keys/main.php` for a complete program. Source-known
+Reflection calls preserve the same key checks. A Reflection target selected only
+at runtime, or lost at a control-flow join, is explicitly refused by the current
+adapter; see [Reflection lowering](../internals/the-codegen.md).
+
+### Strict value coercions
+
+`--strict-coercions` requires values to match their declared contract before
+implicit adaptation. An integer cannot satisfy a float declaration, and a number
+cannot satisfy a string or boolean declaration. Nullable and union declarations
+retain their explicitly accepted alternatives. These checks cover parameters,
+returns, defaults, typed locals/properties and builtin value inputs, including
+named arguments, unpacking, callables, Reflection, eval and reference writes.
+
+Known incompatible source produces a compile diagnostic before folding. Dynamic
+incompatibility throws `TypeError` before the callee runs or a failed write
+changes its destination. Argument side effects retain source order. A native
+write through an alias of an eval-declared property must satisfy every live
+property declaration before execution continues after the assignment.
+
+Explicit conversions such as `(float) $value`, `intval` and `strval` remain
+intentional conversions. Formatting and concatenation retain their independently
+selected contracts; use `--strict-strings` for string-only concatenation. This
+option applies regardless of `declare(strict_types=0)` or `strict_types=1`.
+The [strict semantics example](../../examples/strict-semantics/main.php)
+demonstrates an exact float parameter and an explicit conversion.
+
+### Strict integer overflow
+
+`--strict-overflow` checks integer literal spellings and integer addition,
+subtraction, multiplication, power, negation, updates and their numeric builtin
+counterparts. Proven overflowing source produces a compile diagnostic. A value
+that overflows during execution throws a catchable `ArithmeticError` before a
+failed assignment or reference write changes its destination.
+
+Explicit float literals and floating-point operations keep IEEE 754 behavior,
+including infinity. This option alone preserves PHP numeric coercions and negative
+integer power; combine it with `--strict-arithmetic` for the separate numeric
+operand and result-kind rules. The same checks apply inside eval and the REPL.
+
+### Strict comparisons
+
+`--strict-comparisons` rejects loose equality (`==`, `!=` and `<>`). Use `===`
+or `!==` for identity. Ordering requires operands of the same scalar kind;
+numeric strings use bytewise ordering, and integer/float pairs require an
+explicit conversion. Arrays and objects, including native value classes,
+cannot use automatic ordering. `switch` matches by identity.
+
+Searches through `in_array` and `array_search` require an explicit true `strict`
+argument. Automatic PHP comparison APIs, including `sort`, `max`, `min` and
+`array_unique`, are rejected. Use an explicit comparator or an identity-based
+loop. User comparators in `usort`, `uasort`, `uksort`, `array_udiff` and
+`array_uintersect` must return an actual integer; their results are not cast.
+
+Known violations produce compile diagnostics before folding. Dynamic ordering,
+mode and comparator-result failures throw `TypeError`. The same contracts apply
+through callables, Reflection, eval and REPL. Casts, arithmetic, boolean
+conditions and implicit parameter conversions remain controlled by their own
+flags. The [label example](../../examples/strict-comparisons/main.php) shows
+bytewise sorting and explicit identity membership.
+
+### Strict casts
+
+`--strict-casts` checks explicit numeric conversions through `(int)`, `(float)`,
+`intval`, `floatval` and numeric `settype` targets. Integer conversions truncate
+fractions toward zero and require a finite result in the signed 64-bit range.
+Decimal strings are checked exactly, including exponents and integer endpoints,
+without an intermediate float. Numeric strings must be complete; `intval` with
+an explicit base validates that base and the complete digit sequence.
+
+Known invalid conversions produce compile diagnostics before folding. Dynamic
+range and string-domain failures throw `ValueError`; unsupported original kinds,
+such as arrays and ordinary objects used numerically, throw `TypeError`.
+Reviewed native object conversion contracts retain their original input before
+checking. Floating results retain IEEE infinity, NaN and signed zero.
+A conversion rejected during validation leaves its destination unchanged.
+
+The contract applies through callables, Reflection, eval, REPL and library entry
+points. Typed property references retain their live declaration constraints.
+Implicit bindings keep their existing rules unless `--strict-coercions` is also
+selected. The [strict casts example](../../examples/strict-casts/main.php)
+demonstrates exact integer conversion and a caught string-domain error.
+
+### Strict arithmetic
+
+`--strict-arithmetic` accepts int and float operands for numeric operators,
+requires integer operands for `%`, bitwise operators and shifts, and makes `/`
+return float even for an exact integer division. Integer power requires a
+nonnegative exponent; use a float operand for a floating result such as `2.0 ** -1`.
+The reviewed native object operator contracts remain available.
+
+Known invalid operands produce a compile diagnostic before constant folding.
+Dynamic invalid operands throw `TypeError`; negative integer exponents throw
+`ArithmeticError`. These rules also apply inside eval and the REPL, and to the
+numeric contracts of `abs`, `pow`, `intdiv`, `array_sum` and `array_product`.
+
+This option alone preserves PHP integer-to-float overflow promotion and the
+ordinary PHP binding rules for user function parameters. Each independently
+selected guarantee retains its own scope.
+
+### Strict booleans
+
+`--strict-bools` requires boolean values in conditions (`if`, loops, ternaries),
+logical operands (`!`, `&&`, `||`, `and`, `or`, `xor`), and predicate callback
+results (`array_filter`, `array_any`, `array_all`, `array_find`, `iterator_apply`).
+Known incompatible types produce a compile diagnostic. A mixed value with a
+nonboolean runtime kind throws a catchable `TypeError`. Lazy operators evaluate
+only their selected operand; xor evaluates both operands before checking them.
+
+Use an explicit `(bool)` cast when PHP truthiness is intended. `isset`, `empty`,
+null coalescing, nullsafe access, and callback-free `array_filter` keep their
+explicit probing or data-filtering contracts. The rule also applies inside eval,
+with either interpreter execution engine. The REPL forwards the guarantee to
+each submitted fragment. It is independent of
+`declare(strict_types=1)` and applies to PHP and LFC user source.
+
+### Strict strings
+
+`--strict-strings` requires original string values for `.` and `.=`. It refuses
+implicit conversion of numbers, booleans, null, arrays and Stringable objects in
+concatenation. Known violations produce a compile diagnostic before folding;
+dynamic violations throw a catchable `TypeError`. A failed compound write leaves
+its destination unchanged, and rejected object operands do not invoke `__toString`.
+
+Echo, print and interpolation remain intentional formatting contexts for scalars
+and Stringable objects. Arrays require an explicit conversion or formatter.
+Use `(string) $value`, interpolation, or a formatter before concatenation when
+conversion is intended. Ordinary function argument coercion remains available
+unless another independently selected guarantee rejects it.
+
+These rules also apply to literal and runtime eval, native callable entry points
+and REPL fragments. PHP and LFC user source share the contract. The
+[`strict-strings` example](../../examples/strict-strings/main.php) formats a row
+number explicitly and concatenates the resulting text.
+
+### Strict dynamic code
+
+`--strict-dynamic-code` requires source to be verified during compilation.
+Ordinary static includes keep their existing compilation path. `eval()` accepts
+literal source only, and the fragment must be compilable ahead of time. A literal
+fragment that still needs the interpreter is rejected with a diagnostic.
+Opaque source and nested runtime includes/eval cannot bypass this restriction
+through the eval bridge. Source validation also checks unreachable branches and
+nested literal fragments before constant folding.
+
+```php
+<?php
+// elephc build --strict-dynamic-code main.php
+eval('echo "Verified source", PHP_EOL;');
+```
+
+The REPL needs runtime source execution, so strict-dynamic-code cannot be enabled
+for its generated host. Other independently available flags can be forwarded
+without enabling strict-dynamic-code.
 
 ## Strict locals mode
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. |
+| `--strict-locals` | - | off | Keep local binding types stable, including integer/float changes. |
+
+Assignments preserve scalar, null and nominal object contracts, including writes
+through untyped references. A dynamically typed candidate is checked before the
+previous value changes. Subclasses and explicitly declared union members remain
+valid, and an explicit `mixed` binding remains open. For inferred arrays, this
+guarantee preserves the PHP `array` kind; key and element restrictions belong to
+their respective strict options. Existing declared array element types remain
+authoritative.
 
 By default (permissive mode) an **untyped** local variable is allowed to
 change type during its lifetime in three shapes that would otherwise be a
@@ -622,7 +917,9 @@ compile error:
   never run. The name must also be never reference-aliased. A later read of a
   killed `$a` is an `Undefined variable: $a` error, and a later assignment
   binds `$a` fresh, at any type, with no warning. This is
-  **mode-independent** — it behaves identically under `--strict-locals`.
+  **mode-independent** for these straight-line bindings. Strict ordinary conditional
+  locals additionally track binding presence: an executed `unset` ends their logical
+  contract without requiring this physical slot-retirement optimization.
 - **Straight-line retype.** A plain statement-form reassignment at the same
   eligibility (`$a = 0; $a = "ciao";`, and a compound form that parses as a
   plain assignment, such as `$x = 1; $x .= "a";`) re-binds the name to a fresh
@@ -636,14 +933,14 @@ compile error:
   fresh arithmetic result and the name is not a parameter: a counter name
   reused by a later loop
   (`for ($i = $n - 1; …)` after `for ($i = 0; …)`) then keeps one slot per
-  loop. This is a storage decision with no typing effect, so `--strict-locals`
-  does not change it.
+  loop. Under `--strict-locals`, a storage split must also preserve the original
+  numeric binding contract; an integer binding cannot widen to float.
 - **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
   — and the same shape for a single-branch retype of an outer binding, or a
   heterogeneous loop-carried local — compiles instead of failing, as
   whole-frame boxed `Mixed` storage for that local, with a warning:
   ```text
-  $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+  $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to enforce binding contracts)
   ```
   The warning is a performance signal as much as a correctness one: every read
   of a `Mixed`-storage local goes through boxed dispatch instead of a plain
@@ -677,9 +974,23 @@ this body binds with `global`, a `static` name, or a superglobal or seeded name
 A **declared type** always stays strict in both modes: a typed local
 (`int $x = 5;`) and a class property never retype or box to `Mixed` —
 reassigning one incompatibly is a compile error exactly as before. A
-**parameter type hint** is not such a declaration: it constrains the incoming
-argument, not the local, so a type-hinted parameter is exactly as eligible as an
-untyped one (a by-REFERENCE parameter stays excluded, by the rule above).
+**parameter type hint** in permissive mode constrains the incoming argument,
+so a type-hinted parameter is eligible like an untyped one (a by-REFERENCE
+parameter stays excluded, by the rule above). With `--strict-locals`, a numeric
+parameter also retains its numeric binding contract after entry.
+
+An inferred or declared numeric contract also follows a local passed to an
+untyped or `mixed` reference parameter. A dynamic float written through that
+parameter raises `TypeError` before replacing an integer occupant. Explicit
+numeric unions retain every declared alternative, and an explicit `mixed`
+binding remains open. Detaching a binding with `unset()` or leaving its frame
+retires its reference contract.
+
+An opaque `eval()` also retains an already initialized native numeric binding's
+contract. Incompatible interpreted writes raise `TypeError` before changing the
+native value. Future frame slots do not establish an earlier binding contract;
+explicit null alternatives, numeric unions, `mixed`, and `unset()` retain their
+respective behavior.
 
 Beyond those shared exclusions the shapes are gated differently:
 
@@ -739,24 +1050,151 @@ Beyond those shared exclusions the shapes are gated differently:
   already absorbs every assignment, since the advice to compile with
   `--strict-locals` would be false there.
 
-`--strict-locals` restores the hard error for the two warning shapes above:
+`--strict-locals` checks ordinary statements in constant top-level branches too,
+including branches used to select an autoloader. An unreachable branch cannot
+hide a known incompatible write to a live binding:
 
 ```text
-Type error: cannot reassign $a from int to string
+--strict-locals: cannot reassign $a from int to string
 ```
 
-`eval()`'d code — whether AOT-lowered from a literal fragment or run through
-the optional Magician interpreter bridge — reads and writes its locals through
-a boxed `Mixed` scope representation rather than a typed frame slot, so it was
-never subject to the monomorphic-local check `--strict-locals` restores.
-`--strict-locals` therefore has no effect inside `eval()` fragments.
+Fresh ordinary frame locals can start with different contracts on exclusive paths.
+The first producer on the executed path fixes the binding's contract. After a join,
+a dynamic write checks that actual contract before changing the value and throws
+`TypeError` if it fails. An executed `unset` ends that binding, including inside a
+branch or loop; a later assignment creates a fresh contract. Independent copies
+retain the source contract after the original name is unset. An explicitly mixed
+producer remains open. These source facts also survive constant propagation and
+other optimizations; boxed storage alone never makes a binding open.
+
+Numeric bindings also retain their original PHP kinds. `$count = $argc;
+$count = 1.5;` is rejected with `--strict-locals`. A dynamic assignment is checked
+before storage changes and throws `TypeError` on a wrong kind. The same rule
+covers compound assignments and prefix/postfix updates. When integer arithmetic
+promotes to float, storing the result in an integer binding throws `TypeError`
+and preserves the previous value. A standalone overflowing expression retains
+PHP promotion unless `--strict-overflow` is separately enabled.
+
+The same membership rule protects inferred string, boolean, null, object and PHP
+array bindings. A conversion with `settype()` validates the converted value before
+publication, including direct calls, runtime-selected types and callable aliases.
+Native inferred callable bindings require a callable value, including function names
+(case-insensitive), valid callable arrays, closures and invokable objects. A
+missing name or method fails before the old value changes. Native iterable parameters
+retain their array-or-Traversable contract during reassignment. These checks also
+apply through reference aliases and assignment expressions.
+Resource producers keep their declared alternatives: for example, `fopen()` and
+`tmpfile()` produce `resource|false`. Such a binding accepts false and other
+resources, and rejects integers or true. Native and interpreted stores preserve
+the previous value on failure, including reference aliases, copies and eval.
+Resource kinds remain distinct from their integer handle representation; a
+successful replacement also retains the resource subtype. This adds no PHP
+`resource` type-hint keyword: a class named `resource` keeps its ordinary meaning.
+A rejected conversion preserves the original value; explicit `mixed` declarations
+remain open. Passing a value through `call_user_func()` uses a separate argument
+cell rather than attaching the caller's binding contract to that copy.
+
+Function, closure and method parameters retain their declared binding contract
+inside the body, including functions created by runtime eval. Union and nullable
+parameters accept every declared alternative; mixed and untyped parameters stay
+open. A variadic parameter has an array binding inside the body; its element hint
+is checked when arguments enter. Ordinary PHP argument conversion still applies
+unless `--strict-coercions` is enabled separately. Inferred closure bindings accept
+other callable values without adopting the first closure's incidental signature. By-value
+closure captures copy the source binding contract, including union/null alternatives
+and open mixed origins. The contract survives the defining activation and closure
+rebinding; unsetting the captured local permits a fresh binding.
+Static locals keep the successful initializer's producer contract across
+calls, including union and mixed alternatives. Initialization completes before an
+older local of the same name is detached; failed initialization leaves it intact.
+Unsetting or rebinding the local does not replace the persistent static value.
+An executed conditional `unset` starts a new activation-local binding with its
+replacement producer's contract. The other path keeps the static contract, and
+aliases captured before detachment still observe the persistent value.
+A reached `global` declaration connects the activation name to the program value.
+It replaces the old parameter or local type view with the program source's view,
+including when the old binding was a persistent static. A declared mixed program
+source stays open even when the displaced parameter was concrete. Detaching an
+incoming reference this way leaves the caller's variable intact.
+Unsetting or rebinding that local name leaves the program entry intact. References
+captured before detachment keep observing the program value; value captures keep
+an independent snapshot. A conditional detach affects only its executed path,
+including across runtime eval. With `--strict-locals`, the detached path starts a
+fresh producer contract, while the attached path keeps the program contract.
+Re-declaring `global` reconnects the name to the program value.
+Replacing an existing local during `global` can
+run its destructor before the alias is published. If that destructor throws, the
+local remains null and the program value stays intact.
+For ordinary assignments to a global, the replacement is visible before the old
+value's destructor runs, and remains valid if that destructor throws.
+Reflection snapshots copy ordinary unescaped values and preserve references already
+shared with an activation or an escaping alias. Writes through a shared snapshot
+validate the same static contract before changing its value.
+See the [runtime plugin example](https://github.com/illegalstudio/elephc/blob/main/examples/strict-eval-locals/main.php).
+
+Exclusive first assignments to owned frame locals retain the executed producer
+when the variable is passed by reference to a function, callable, method or
+constructor. An inferred integer binding stays integer, and an inferred float
+binding stays float. A branch initialized from an explicitly mixed producer stays
+open. A rejected reference write leaves the current value intact.
+
+An ordinary conditional `unset()` of a native parameter passed by value can start
+a new local binding. The path that keeps the parameter retains its declared
+contract; the path that unsets it uses the replacement producer's contract.
+Parameters without an annotation stay open even when native inference specializes
+their input representation. Variadic collectors keep their array contract until
+unset, and caller-owned objects, arrays and resources keep their own lifetimes.
+
+Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`
+declarations remain open. Nullable numeric bindings keep their declared null
+alternative: an `int|null` binding accepts null and integers, and rejects float.
+Prefix/postfix updates validate before changing even a shared nullable reference;
+`--strict-locals` reports a promoted result as `TypeError`, while separately enabled
+`--strict-overflow` reports arithmetic overflow as `ArithmeticError`. A legitimate `unset` ends the old binding and permits a
+new kind. These checks do not enable `--strict-coercions`, `--strict-arithmetic`,
+`--strict-casts` or `--strict-comparisons`. See
+[`examples/strict-locals/main.php`](https://github.com/illegalstudio/elephc/blob/main/examples/strict-locals/main.php).
+
+Native bindings retain their contracts when literal AOT eval or the optional
+Magician interpreter writes through their imported scope entries. Rejected writes
+throw `TypeError` before changing the original value or its aliases. Each assignment
+is validated in source order: a later compatible assignment cannot cancel an earlier
+rejection, and earlier accepted writes remain visible if a later write fails. Scope-only
+literal fragments remain compiled code and can compose with `--strict-dynamic-code`.
+A variable first created by a literal fragment keeps its first producer's inferred
+contract across later literal fragments in that activation. An imported `mixed`
+binding or a new binding from an explicitly `mixed` producer remains open. `unset`
+ends the inferred binding before a subsequent literal fragment establishes a new
+one. Identical fragment bodies retain separate contracts for each activation.
+Native reads preserve a literal-created binding's contract across subsequent
+literal eval calls. Snapshots follow actual initialization paths: reserved frame
+storage and an unexecuted conditional declaration do not establish a binding.
+Literal-created bindings retain their contracts in later native assignments and
+by-reference calls. Rejected candidates preserve the current value, and valid
+writes remain visible to subsequent eval calls. Bindings first established by
+runtime-provided source also retain their successful producer contracts across
+native re-entry. Interpreter assignments copy producer facts before evaluating
+the right-hand side, keep explicit `mixed` producers open, and validate aliases
+before mutation. Native copies use the checker-provided binding contract, separately
+from the frame representation. Conditional producers and declared function/builtin
+returns retain their permitted alternatives. `unset` retires the inferred origin
+before rebinding. Conditional native origins apply only on paths that actually
+initialized them. A binding first created by eval keeps its own origin on later
+calls, including repeated loop iterations and names recreated after eval `unset`.
+After eval recreates an inferred native name, later native writes validate the
+original candidate against its replacement contract before changing the value.
+An independent native copy retains the producer's contract through constant
+propagation, later eval calls and source rebinding. The value and binding remain
+independent; a producer declared `mixed` keeps the copied binding open.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill
 and the straight-line retype end a binding and give the name a different frame
-slot. Both therefore step aside for the whole body — `unset()` is a plain
-typing no-op there, and an incompatible reassignment is the hard error in both
-modes, whether the `eval()` call sits above or below it. The branch-divergent
+slot. Both therefore step aside for the whole body: `unset()` is a plain
+typing no-op there. An incompatible reassignment before crossing an eval
+barrier is a hard error in both modes. After the barrier, `--strict-locals`
+checks writes against the surviving runtime binding, including a replacement
+created by eval. The branch-divergent
 shape is unaffected, because a boxed `Mixed` slot is exactly what the eval
 scope wants:
 
@@ -782,6 +1220,25 @@ Cannot re-bind $a here: 2 statements in this program sit at line 2 column 1 and 
 
 The message names both causes because it cannot distinguish them. Keep the two
 assignments type-compatible, or move one statement to a different line or column.
+
+Forming a reference to an undeclared local creates a null value. This also applies
+to `use (&$value)` after `unset($value)`, to a contextual callback capture and to
+`$alias = &$value`. The new reference source has an open producer contract, so
+later stores can choose another value kind. Existing bindings keep their contracts:
+an explicit `$value = null` still has a null contract under `--strict-locals`.
+Escaped aliases retain the old binding after its original name is unset.
+Creating an unused closure still creates its reference-captured names, without
+running its body.
+Passing an undeclared plain local to a known function, method or constructor's
+reference parameter creates
+an open null binding at that argument's position. Later arguments see the name
+and any intervening changes to the same reference, even if the callee has an empty
+body. Named arguments and tracked callable signatures follow the same rule.
+Nullsafe calls create argument bindings only when the receiver is non-null.
+Scope enumeration observes executed bindings, including null values, and excludes
+bindings from skipped branches and later statements.
+Omitted defaults stay in the callee's scope; unpacked values do not create plain
+local names in the caller.
 
 **Migrating.** The `unset()` kill is the one shape that can reject code that
 compiled before. Reading a variable after a straight-line `unset()` of it is now
@@ -965,7 +1422,7 @@ The other 36 directives of the PHP 8.5 set are runtime-overridable.
 > file-granularity (`PHPRC`, `PHP_INI_SCAN_DIR`); `PHP_INI_opcache_jit=…`,
 > `opcache_jit=…` and `opcache.jit=…` in the environment all do nothing
 > (verified on PHP 8.5.6). `ELEPHC_INI_*` is elephc's answer to `-d` for an AOT
-> binary whose `php.ini` is compiled in, and `--strict-php` does not reject it
+> binary whose `php.ini` is compiled in, and `--php-only` does not reject it
 > because it is not a language construct.
 
 ## Diagnostics and debugging

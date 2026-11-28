@@ -9,12 +9,14 @@
 //! - Each helper uses the original expression lowerer, including its scalar fallback.
 //! - Borrowed parameters preserve operand order and callers retain their original cleanup.
 //! - Synthetic helpers are absent from PHP declaration and instrumentation inventories.
+//! - Trusted and user operators have distinct helper identities when semantic guarantees apply.
 
 use crate::ir::{IrHeapKind, IrType, Module, Op, Immediate};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::synthetic_class::*;
 use crate::types::{FunctionSig, PhpType};
+use crate::source::SourceMode;
 
 const PREFIX: &str = "__eir_boxed_operator@";
 
@@ -54,7 +56,10 @@ pub(super) fn lower_call(
         ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_) => "dec",
         _ => operations().into_iter().find(|(candidate, _)| candidate == op)?.1,
     };
-    let callee = ctx.intern_function_name(&format!("{PREFIX}{suffix}"));
+    let trusted = ctx.source_mode == SourceMode::Internal
+        && ctx.semantic_profile != elephc_semantics::SemanticProfile::PERMISSIVE;
+    let name = helper_name(suffix, trusted);
+    let callee = ctx.intern_function_name(&name);
     let mut boxes = Vec::new();
     let operands = [lhs, rhs].into_iter().map(|value| {
         if value.ir_type == mixed { return value.value; }
@@ -89,31 +94,38 @@ pub(super) fn lower_call(
 /// Materializes only helpers referenced by completed native bodies, without recursive outlining.
 pub(super) fn lower_requested(module: &mut Module) {
     for (op, suffix) in operations() {
-        let name = format!("{PREFIX}{suffix}");
-        if !module.data.function_names.contains(&name) { continue; }
-        let result_type = match op {
-            BinOp::Spaceship => PhpType::Int,
-            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => PhpType::Bool,
-            _ => PhpType::Mixed,
-        };
-        let signature = FunctionSig {
-            params: vec![("left".into(), PhpType::Mixed), ("right".into(), PhpType::Mixed)],
-            param_type_exprs: vec![Some(t_mixed()); 2], param_attributes: vec![Vec::new(); 2],
-            defaults: vec![None; 2], return_type: result_type, declared_return: true,
-            by_ref_return: false, ref_params: vec![false; 2], declared_params: vec![true; 2],
-            variadic: None, deprecation: None, is_generator: false,
-        };
-        let expression = match suffix {
-            "inc" => Expr::new(ExprKind::PreIncrement("left".into()), crate::span::Span::dummy()),
-            "dec" => Expr::new(ExprKind::PreDecrement("left".into()), crate::span::Span::dummy()),
-            _ => e_binop(e_var("left"), op, e_var("right")),
-        };
-        let mut function = super::function::lower_builtin_callable_body(
-            module, &name, &signature, false,
-            vec![s_return(expression)],
-        );
-        function.flags.is_internal = true;
-        function.flags.is_synthetic = true;
-        module.add_function(function);
+        for (trusted, source_mode) in [(false, SourceMode::Lfc), (true, SourceMode::Internal)] {
+            let name = helper_name(suffix, trusted);
+            if !module.data.function_names.contains(&name) { continue; }
+            let result_type = match op {
+                BinOp::Spaceship => PhpType::Int,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => PhpType::Bool,
+                _ => PhpType::Mixed,
+            };
+            let signature = FunctionSig {
+                params: vec![("left".into(), PhpType::Mixed), ("right".into(), PhpType::Mixed)],
+                param_type_exprs: vec![Some(t_mixed()); 2], param_attributes: vec![Vec::new(); 2],
+                defaults: vec![None; 2], return_type: result_type, declared_return: true,
+                by_ref_return: false, ref_params: vec![false; 2], declared_params: vec![true; 2],
+                variadic: None, deprecation: None, is_generator: false,
+            };
+            let expression = match suffix {
+                "inc" => Expr::new(ExprKind::PreIncrement("left".into()), crate::span::Span::dummy()),
+                "dec" => Expr::new(ExprKind::PreDecrement("left".into()), crate::span::Span::dummy()),
+                _ => e_binop(e_var("left"), op.clone(), e_var("right")),
+            };
+            let mut function = super::function::lower_operator_callable_body(
+                module, &name, &signature, source_mode,
+                vec![s_return(expression)],
+            );
+            function.flags.is_internal = true;
+            function.flags.is_synthetic = true;
+            module.add_function(function);
+        }
     }
+}
+
+/// Partitions implementation operators without changing existing permissive helper names.
+fn helper_name(operation: &str, trusted: bool) -> String {
+    format!("{PREFIX}{operation}{}", if trusted { "@internal" } else { "" })
 }

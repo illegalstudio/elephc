@@ -27,8 +27,9 @@ pub(super) fn reflection_parameter_default_export(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
     needs_source_export: bool,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<String> {
-    let exporter = DefaultExporter { current_class, current_info };
+    let exporter = DefaultExporter { current_class, current_info, profile };
     if matches!(default.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
         return if exporter.is_literal(default) {
             exporter.export_value(default)
@@ -38,7 +39,7 @@ pub(super) fn reflection_parameter_default_export(
         return exporter.export(default);
     }
     if needs_source_export {
-        if let Some(value) = reflection_literal_parameter_default_value(default) {
+        if let Some(value) = reflection_literal_parameter_default_value(default, profile) {
             return Some(reflection_dump_default_value(&value));
         }
         return exporter.export(default);
@@ -55,6 +56,7 @@ pub(super) fn reflection_parameter_default_export(
 
 /// The class scope a default is written in, which `self::class` and `parent::class` resolve against.
 struct DefaultExporter<'a> {
+    profile: elephc_semantics::SemanticProfile,
     current_class: &'a str,
     current_info: Option<&'a crate::types::ClassInfo>,
 }
@@ -77,6 +79,7 @@ impl DefaultExporter<'_> {
             // A dump exports syntax without evaluating it, even if resolving the constant
             // later would fail. Builtin and user references use the same resolved spelling.
             ExprKind::ConstRef(name) => Some(reflection_dump_text(name.as_str().trim_start_matches('\\'))),
+            ExprKind::UnaryPlus(inner) => Some(format!("+{}", self.export(inner)?)),
             ExprKind::Negate(inner) => Some(format!("-{}", self.export(inner)?)),
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 let receiver = match receiver {
@@ -166,9 +169,8 @@ impl DefaultExporter<'_> {
             | ExprKind::StringLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null => true,
-            ExprKind::Negate(inner) => {
-                matches!(inner.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_))
-            }
+            ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner).is_some(),
+            ExprKind::Negate(inner) => matches!(inner.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)),
             ExprKind::ClassConstant { receiver } => self.class_name_of(receiver).is_some(),
             ExprKind::ArrayLiteral(items) => items.iter().all(|item| self.is_literal(item)),
             ExprKind::ArrayLiteralAssoc(pairs) => pairs
@@ -199,7 +201,7 @@ impl DefaultExporter<'_> {
         }
         let value = if let ExprKind::ClassConstant { receiver } = &expr.kind {
             ReflectionParameterDefaultValue::Str(reflection_dump_text(&self.class_name_of(receiver)?))
-        } else { reflection_literal_parameter_default_value(expr)? };
+        } else { reflection_literal_parameter_default_value(expr, self.profile)? };
         Some(reflection_dump_default_value(&value))
     }
 
@@ -211,6 +213,8 @@ impl DefaultExporter<'_> {
             ExprKind::StringLiteral(value) => Some(export_php_string(value)),
             ExprKind::BoolLiteral(value) => Some(value.to_string()),
             ExprKind::Null => Some("null".to_string()),
+            ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+                .and_then(|number| self.export_literal(&number)),
             ExprKind::Negate(inner) => match inner.kind {
                 ExprKind::IntLiteral(value) => Some(value.checked_neg()?.to_string()),
                 ExprKind::FloatLiteral(value) => Some(reflection_dump_float(-value)),
@@ -271,8 +275,13 @@ impl DefaultExporter<'_> {
 
     /// Normalizes one folded array key the way PHP stores it.
     fn literal_key(&self, key: &Expr) -> Option<LiteralKey> {
+        if self.profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+            && (matches!(key.kind, ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::Null)
+                || matches!(&key.kind, ExprKind::Negate(inner) if matches!(inner.kind, ExprKind::FloatLiteral(_)))) { return None; }
         match &key.kind {
             ExprKind::IntLiteral(value) => Some(LiteralKey::Int(*value)),
+            ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+                .and_then(|number| self.literal_key(&number)),
             ExprKind::Negate(inner) => match inner.kind {
                 ExprKind::IntLiteral(value) => Some(LiteralKey::Int(value.checked_neg()?)),
                 ExprKind::FloatLiteral(value) => integral_float_key(-value).map(LiteralKey::Int),
@@ -280,9 +289,9 @@ impl DefaultExporter<'_> {
             },
             ExprKind::BoolLiteral(value) => Some(LiteralKey::Int(i64::from(*value))),
             ExprKind::FloatLiteral(value) => integral_float_key(*value).map(LiteralKey::Int),
-            ExprKind::StringLiteral(value) => Some(literal_string_key(value)),
+            ExprKind::StringLiteral(value) => Some(literal_string_key(value, self.profile)),
             ExprKind::ClassConstant { receiver } => {
-                Some(literal_string_key(&reflection_dump_text(&self.class_name_of(receiver)?)))
+                Some(literal_string_key(&reflection_dump_text(&self.class_name_of(receiver)?), self.profile))
             }
             _ => None,
         }
@@ -306,9 +315,10 @@ impl DefaultExporter<'_> {
 }
 
 /// Normalizes key identity from PHP bytes before comparing different source escape spellings.
-fn literal_string_key(value: &str) -> LiteralKey {
+fn literal_string_key(value: &str, profile: elephc_semantics::SemanticProfile) -> LiteralKey {
     let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
-    if let Some(index) = std::str::from_utf8(&bytes).ok().and_then(canonical_integer_key) {
+    if let elephc_semantics::array_keys::StringKey::Integer(index) =
+        elephc_semantics::array_keys::classify_string_key(profile, &bytes) {
         return LiteralKey::Int(index);
     }
     let mut canonical = String::with_capacity(value.len());
@@ -352,17 +362,4 @@ fn export_php_string(value: &str) -> String {
     }
     quoted.push('\'');
     quoted
-}
-
-/// Returns the integer a string array key becomes in PHP (`"5"` does, `"05"` and `"5 "` do not).
-fn canonical_integer_key(value: &str) -> Option<i64> {
-    let digits = value.strip_prefix('-').unwrap_or(value);
-    let canonical = !digits.is_empty()
-        && digits.bytes().all(|byte| byte.is_ascii_digit())
-        && (digits == "0" || !digits.starts_with('0'))
-        && value != "-0";
-    if !canonical {
-        return None;
-    }
-    value.parse().ok()
 }

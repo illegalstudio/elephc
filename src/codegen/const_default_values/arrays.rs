@@ -36,6 +36,7 @@ pub(in crate::codegen) fn resolve_array_const_default(
     }
     if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(
         &expr.kind, crate::codegen_support::compile_php_version(),
+        context.module.semantic_profile,
     ) {
         return resolve_array_const_default(&Expr::new(folded, expr.span), context, depth);
     }
@@ -169,12 +170,15 @@ fn resolve_array_const_default_key(
     depth: usize,
     reads: &mut Vec<(String, String)>,
 ) -> Option<ConstDefaultArrayKey> {
-    if let Some(key) = resolve_literal_array_const_default_key(expr) {
+    if let Some(key) = resolve_literal_array_const_default_key(expr, context.module.semantic_profile) {
         return Some(key);
     }
     let value = resolve_const_default_at(expr, context, depth + 1)?;
     collect_enum_reads(&value, reads);
-    match without_enum_effects(value) {
+    let value = without_enum_effects(value);
+    if context.module.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        && matches!(value, ConstDefaultValue::Scalar { kind: CONST_DEFAULT_NULL | CONST_DEFAULT_BOOL | CONST_DEFAULT_FLOAT, .. }) { return None; }
+    match value {
         ConstDefaultValue::Scalar {
             kind: CONST_DEFAULT_NULL,
             ..
@@ -193,7 +197,7 @@ fn resolve_array_const_default_key(
         } => Some(ConstDefaultArrayKey::Int(
             crate::types::php_float_array_key(f64::from_bits(payload as u64))
         )),
-        ConstDefaultValue::String(value) => const_default_string_array_key(&value),
+        ConstDefaultValue::String(value) => const_default_string_array_key(&value, context.module.semantic_profile),
         _ => None,
     }
 }
@@ -201,16 +205,21 @@ fn resolve_array_const_default_key(
 /// Resolves one literal static array key.
 pub(in crate::codegen) fn resolve_literal_array_const_default_key(
     expr: &Expr,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ConstDefaultArrayKey> {
+    if profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        && matches!(expr.kind, ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::Null) { return None; }
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(ConstDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ConstDefaultArrayKey::Int(i64::from(*value))),
         ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int(crate::types::php_float_array_key(*value))),
-        ExprKind::StringLiteral(value) => const_default_string_array_key(value),
+        ExprKind::StringLiteral(value) => const_default_string_array_key(value, profile),
         ExprKind::Null => Some(ConstDefaultArrayKey::String(String::new())),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| resolve_literal_array_const_default_key(&number, profile)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(ConstDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int(crate::types::php_float_array_key(-*value))),
+            ExprKind::FloatLiteral(value) if !profile.contains(elephc_semantics::StrictFeature::ArrayKeys) => Some(ConstDefaultArrayKey::Int(crate::types::php_float_array_key(-*value))),
             _ => None,
         },
         _ => None,

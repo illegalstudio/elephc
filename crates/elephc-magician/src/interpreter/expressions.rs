@@ -25,11 +25,11 @@ mod evaluation;
 mod owned;
 
 use owned::*;
-pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr, eval_output_value};
+pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr, eval_output_value, eval_static_property_get_with_result_ownership};
 
 pub(in crate::interpreter) use evaluation::{
-    eval_array_access_object_matches, eval_array_get_result, eval_binary_result, eval_cast_value,
-    eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
+    eval_array_access_object_matches, eval_array_get_result, eval_array_get_reference_result, eval_array_get_quiet_result, eval_binary_result, eval_cast_value,
+    eval_dynamic_class_name, eval_dynamic_class_name_fetch_result, eval_dynamic_member_name, eval_match_expr, eval_new_object_result,
 };
 use evaluation::*;
 
@@ -59,31 +59,43 @@ pub(in crate::interpreter) fn eval_owned_expr(
 }
 
 /// Evaluates the quiet property probe required by PHP null coalescing.
-fn eval_null_coalesce_value(
+pub(super) fn eval_null_coalesce_value(
     expr: &EvalExpr,
     own_result: bool,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if (context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed))
+        && super::nullsafe_chains::has_nullsafe(expr) {
+        return super::nullsafe_chains::evaluate_receiver(expr, true, context, scope, values)?
+            .map_or_else(|| values.null(), Ok);
+    }
     match expr {
         EvalExpr::PropertyGet { object, property } => {
-            with_owned_receiver(object, context, scope, values, |object, context, _, values| {
-                if !eval_property_isset_result(object, property, context, values)? {
+            with_eval_probe_operands(&[object], context, scope, values, |args, context, _, values| {
+                let object = args[0].borrowed();
+                if !initialization::coalesce_uses_getter(object, property, context, values)
+                    && !eval_property_isset_result(object, property, context, values)? {
                     return values.null();
                 }
                 eval_property_get_with_result_ownership(object, property, context, values, true)
             })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
-            with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+            with_eval_probe_operands(&[object], context, scope, values, |args, context, scope, values| {
+                let object = args[0].borrowed();
                 let property = eval_dynamic_member_name(property, context, scope, values)?;
-                if !eval_property_isset_result(object, &property, context, values)? {
+                if !initialization::coalesce_uses_getter(object, &property, context, values)
+                    && !eval_property_isset_result(object, &property, context, values)? {
                     return values.null();
                 }
                 eval_property_get_with_result_ownership(object, &property, context, values, true)
             })
         }
+        EvalExpr::ArrayGet { .. } if probe_reads::uses_quiet_roots(context) =>
+            probe_reads::eval_owned(expr, context, scope, values),
         _ => eval_expr_with_result_ownership(expr, context, scope, values, own_result),
     }
 }
@@ -96,6 +108,21 @@ fn eval_expr_with_result_ownership(
     values: &mut impl RuntimeValueOps,
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && mixed_class_sources::handles(expr) {
+        return mixed_class_sources::evaluate(expr,context,scope,values).map(|result|result.0);
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && nullsafe_chains::receiver(expr).is_some() {
+        return nullsafe_chains::evaluate_with_source(expr,false,false,context,scope,values)?
+            .map_or_else(||values.null(),|result|Ok(result.0));
+    }
+    if (context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed))
+        && super::nullsafe_chains::has_nullsafe(expr) {
+        return super::nullsafe_chains::evaluate_receiver(expr, false, context, scope, values)?
+            .map_or_else(|| values.null(), Ok);
+    }
     match expr {
         EvalExpr::DeferredDefaultError(message) => throwables::eval_throw_error(message, context, values),
         EvalExpr::Array(elements) => {
@@ -109,9 +136,9 @@ fn eval_expr_with_result_ownership(
                     )
                 })
             {
-                eval_assoc_array(elements, context, scope, values)
+                eval_assoc_array(elements, context, scope, values, None)
             } else {
-                eval_indexed_array(elements, context, scope, values)
+                eval_indexed_array(elements, context, scope, values, None)
             }
         }
         EvalExpr::ArrayGet { array, index } => {
@@ -240,21 +267,14 @@ fn eval_expr_with_result_ownership(
             if let Some(value) = visible_scope_cell(context, scope, name) {
                 if own_result { copy_scope_value(value, context, values) } else { Ok(value) }
             } else {
-                values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
-                values.null()
+                initialization::missing_variable(name, context, values)
             }
         }
         EvalExpr::Assign { name, value } => {
-            let value = eval_owned_expr(value, context, scope, values)?;
-            for replaced in set_owned_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                values,
-            )? {
-                eval_release_value(context, values, replaced)?;
-            }
+            let mut producer = local_binding_origins::prepare_assignment(value, context, scope);
+            let value = local_binding_origins::evaluate_assignment(value, name, &mut producer, context, scope, values)?;
+            let replaced = store_local_with_origin(context, scope, name.clone(), value, producer, values)?;
+            retire_scope_replacements(replaced, context, values)?;
             // The scope owns the stored cell; the expression result borrows that owner so
             // `eval_owned_expr` retains once when the surrounding call needs its own lease.
             Ok(value.borrowed())
@@ -425,8 +445,11 @@ fn eval_expr_with_result_ownership(
                 };
                 return eval_expr(selected, context, scope, values);
             }
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+                return mixed_eval::evaluate(expr,context,scope,values).map(|result|result.0);
+            }
             let condition = eval_owned_expr(condition, context, scope, values)?;
-            let truthy = values.truthy(condition);
+            let truthy = eval_boolean_condition(condition, context, values);
             if matches!(truthy, Ok(true)) { return Ok(condition); }
             let released = eval_release_value(context, values, condition);
             truthy?;

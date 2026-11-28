@@ -184,10 +184,10 @@ pub(super) fn lower_boxed_set(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    if ctx.builder.value_php_type(receiver.value).codegen_repr() != PhpType::Mixed {
-        ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
-            key_already_diagnosed.then_some(Immediate::Bool(true)),
-            Op::RuntimeCall.default_effects(), Some(span));
+    if super::array_write_core::boxed_receiver_has_array_contract(ctx, receiver)
+        || ctx.builder.value_php_type(receiver.value).codegen_repr() != PhpType::Mixed
+    {
+        emit_boxed_array_set(ctx, receiver, key, value, span, key_already_diagnosed);
         return;
     }
     let string = ctx.emit_value(
@@ -210,12 +210,24 @@ pub(super) fn lower_boxed_set(
     branch_to(ctx, merge);
     ctx.builder.position_at_end(array_block);
     ctx.restore_initialized_slots(initialized.clone());
-    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        Op::RuntimeCall.default_effects(), Some(span));
+    crate::ir_lower::expr::lower_array_access_set_or(ctx, receiver, key, value, span, |ctx| {
+        emit_boxed_array_set(ctx, receiver, key, value, span, key_already_diagnosed);
+    });
     branch_to(ctx, merge);
     ctx.builder.position_at_end(merge);
     ctx.restore_initialized_slots(initialized);
+}
+
+/// Stages raw keys only for the array fallback, after signature-aware object dispatch.
+fn emit_boxed_array_set(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
+    key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
+) {
+    let key = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, key, span);
+    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value.value, value.value],
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
+        Op::RuntimeCall.default_effects(), Some(span));
+    key.finish(ctx, span);
 }
 
 /// Tests whether the selected cell still belongs to PHP after key conversion ran user code.

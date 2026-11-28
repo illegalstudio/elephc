@@ -1,0 +1,1 @@
+boolean:-:integer|double:-:integer|NULL:-:integer|string:1:integer|string:2:integer|string:3:integer|array:-:integer|object:-:integer|object:-:integer|F:7|F:8|E:TypeError|L:next|M:5|E:TypeError|string:1:object|object|D|TE:RuntimeException|DD|

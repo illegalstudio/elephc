@@ -79,24 +79,24 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
     current_class: Option<&str>,
     sig: &FunctionSig,
 ) -> InvokerDefaults {
-    let context = ConstDefaultContext {
-        module,
-        current_class,
-    };
+    let context = ConstDefaultContext::new(module, current_class);
     sig.defaults
         .iter()
-        .map(|default| {
+        .enumerate()
+        .map(|(index, default)| {
             let default = default.as_ref()?;
+            let bound_default = sig.default_value(index)?;
             if let Some(message) = deferred_error_message(default) {
                 return Some(InvokerDefaultValue::DeferredError(message.to_string()));
             }
             if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
-                function.callable_default.as_ref().is_some_and(|value|
-                    value == default && value.span == default.span)
+                !crate::ir_lower::is_reflection_default_helper(&function.name)
+                    && function.callable_default.as_ref().is_some_and(|value|
+                        value.same_value_producer(&bound_default))
                     && function.lexical_class.as_deref() == current_class) {
                 return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
             }
-            let value = resolve_const_default(default, &context)?;
+            let value = resolve_const_default(&bound_default, &context)?;
             let value = normalize_invoker_default(module, value)?;
             materializable(module, &value).then_some(value)
         })
@@ -233,7 +233,8 @@ fn normalize_object_args_for_signature(
         if slot.is_some() {
             continue;
         }
-        let default = resolve_const_default(sig.defaults.get(index)?.as_ref()?, &default_context)?;
+        let bound_default = sig.default_value(index)?;
+        let default = resolve_const_default(&bound_default, &default_context)?;
         *slot = Some(normalize_invoker_default(module, default)?);
     }
 

@@ -13,7 +13,9 @@ Run interactive PHP through eval with persistent variables and declarations.\n\
 The native session host is compiled on first use and cached under elephc/repl.\n\n\
 Options:\n\
   --php-version VERSION  Select PHP compatibility (otherwise use the project profile)\n\
-  --strict-php           Hide elephc extensions from evaluated code\n\
+  --php-only            Hide elephc extensions from evaluated code\n\
+  --strict-<feature>    Forward an independently selected semantic guarantee\n\
+  --no-strict-<feature> Override a guarantee selected by --strict\n\
   --with-<capability>    Enable an optional eval capability, e.g. regex or pdo\n\
   --ini KEY=VALUE        Override a project INI setting (repeatable)\n\
   --heap-size=BYTES      Set the session heap size\n\
@@ -42,6 +44,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<ReplCommand, String> {
         return Ok(ReplCommand { help: true, ..Default::default() });
     }
     let mut command = ReplCommand::default();
+    let mut strict_requests = elephc_semantics::StrictRequests::default();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -52,7 +55,10 @@ pub(crate) fn parse_args(args: &[String]) -> Result<ReplCommand, String> {
                     .ok_or_else(|| format!("{arg} requires a value"))?;
                 command.compile_args.extend([arg.clone(), value.clone()]);
             }
-            "--strict-php" | "--heap-debug" | "--gc-stats" => command.compile_args.push(arg.clone()),
+            "--php-only" | "--heap-debug" | "--gc-stats" => command.compile_args.push(arg.clone()),
+            _ if strict_requests.apply_arg(arg) => {
+                command.compile_args.push(arg.clone());
+            }
             _ if arg.starts_with("--internal-build-host=") => {
                 if command.build_output.is_some() { return Err("duplicate internal build destination".into()); }
                 let path = &arg["--internal-build-host=".len()..];
@@ -71,6 +77,9 @@ pub(crate) fn parse_args(args: &[String]) -> Result<ReplCommand, String> {
             }
             _ => return Err(format!("unrecognized REPL option '{arg}'")),
         }
+    }
+    if strict_requests.resolve().contains(elephc_semantics::StrictFeature::DynamicCode) {
+        return Err("elephc repl executes runtime source; disable --strict-dynamic-code with --no-strict-dynamic-code".into());
     }
     Ok(command)
 }
@@ -95,5 +104,25 @@ mod tests {
         assert!(parsed.quiet && parsed.no_history);
         assert_eq!(parsed.compile_args, &args[2..]);
         assert!(parse_args(&["--ini".into()]).is_err());
+    }
+
+    /// Forwards catalogued strict options and overrides without maintaining another flag list.
+    #[test]
+    fn strict_profile_repl_forwards_catalogued_options() {
+        for spec in elephc_semantics::FEATURES {
+            for flag in [format!("--{}", spec.flag), format!("--no-{}", spec.flag)] {
+                let parsed = parse_args(&[flag.clone()]);
+                if spec.feature == elephc_semantics::StrictFeature::DynamicCode && !flag.starts_with("--no-") {
+                    assert!(parsed.unwrap_err().contains("strict-dynamic-code"));
+                } else {
+                    assert_eq!(parsed.unwrap().compile_args, vec![flag]);
+                }
+            }
+        }
+        for flags in [["--strict", "--no-strict-dynamic-code"], ["--no-strict-dynamic-code", "--strict"]] {
+            assert_eq!(parse_args(&flags.map(String::from)).unwrap().compile_args, flags);
+        }
+        assert!(parse_args(&["--strict".into()]).unwrap_err().contains("strict-dynamic-code"));
+        assert!(parse_args(&["--strict-php".into()]).is_err());
     }
 }

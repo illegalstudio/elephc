@@ -21,8 +21,10 @@ pub(super) fn eval_reflection_function_new(
         Some(target) => eval_reflection_function_closure_target_name(target),
         None => eval_reflection_function_name_arg(args[0], context, values)?,
     };
-    let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
-    if let Some(closure) = context.closure(&requested_name).cloned() {
+    let function_name = closure_target.as_ref().is_none_or(eval_reflection_target_uses_function_name)
+        .then_some(requested_name.as_str());
+    let lookup_name = function_name.map(|name| name.trim_start_matches('\\').to_ascii_lowercase());
+    if let Some(closure) = function_name.and_then(|name| context.closure(name)).cloned() {
         // Its parameter reflectors' default factories reach the closure through this object.
         let previous = context.replace_reflected_closure(closure_target.is_some().then_some(args[0]));
         let result = (|| {
@@ -62,7 +64,7 @@ pub(super) fn eval_reflection_function_new(
         context.replace_reflected_closure(previous);
         return result;
     }
-    if let Some(function) = context.function(&lookup_name).cloned() {
+    if let Some(function) = lookup_name.as_deref().and_then(|name| context.function(name)).cloned() {
         let required_parameter_count = eval_reflection_required_parameter_count(
             function.parameter_defaults(),
             function.parameter_is_variadic(),
@@ -95,7 +97,7 @@ pub(super) fn eval_reflection_function_new(
         })
         .map(Some);
     }
-    if let Some(function) = context.native_function(&lookup_name) {
+    if let Some(function) = lookup_name.as_deref().and_then(|name| context.native_function(name)) {
         let reflected_name = requested_name.trim_start_matches('\\');
         let required_parameter_count = function.required_param_count();
         let parameters = eval_reflection_native_function_parameters(reflected_name, &function);
@@ -117,7 +119,7 @@ pub(super) fn eval_reflection_function_new(
         })
         .map(Some);
     }
-    if eval_builtin_uses_owned_arguments(&lookup_name) {
+    if let Some(lookup_name) = lookup_name.filter(|name| eval_declared_builtin_exists(name)) {
         let object = values.new_object("ReflectionFunction")?;
         let result = eval_native_constructor_with_evaluated_args(
             "ReflectionFunction", object, positional_args(args), context, values,
@@ -181,6 +183,17 @@ pub(super) fn eval_reflection_function_closure_target_name(target: &EvalClosureO
         EvalClosureObjectTarget::InvokableObject { .. } => String::from("__invoke"),
         EvalClosureObjectTarget::ObjectMethod { method, .. }
         | EvalClosureObjectTarget::StaticMethod { method, .. } => method.clone(),
+    }
+}
+
+/// Reports whether a closure's display name can resolve to a free function's metadata.
+pub(super) fn eval_reflection_target_uses_function_name(target: &EvalClosureObjectTarget) -> bool {
+    match target {
+        EvalClosureObjectTarget::ForeignContext { target, .. } => eval_reflection_target_uses_function_name(target),
+        EvalClosureObjectTarget::Named(_) | EvalClosureObjectTarget::BoundNamed { .. }
+        | EvalClosureObjectTarget::NativeDescriptor { .. } => true,
+        EvalClosureObjectTarget::InvokableObject { .. } | EvalClosureObjectTarget::ObjectMethod { .. }
+        | EvalClosureObjectTarget::StaticMethod { .. } => false,
     }
 }
 

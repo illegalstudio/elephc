@@ -24,6 +24,15 @@ pub(super) fn coerce_to_return_type(
     source: Option<Span>,
 ) -> LoweredValue {
     let return_php_type = ctx.return_php_type.clone();
+    if ctx.return_type_is_declared && crate::semantics::nullability::non_null_contract(&return_php_type) {
+        crate::ir_lower::nullability::require_non_null(ctx, value, &[], &[], span.unwrap_or_else(Span::dummy));
+    }
+    let value = if ctx.return_type_is_declared
+        && crate::ir_lower::conversion_boundaries::active(ctx, &return_php_type) {
+        let span = span.unwrap_or_else(Span::dummy);
+        let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, value, &return_php_type, span);
+        crate::ir_lower::conversion_boundaries::value_storage(ctx, checked, &return_php_type, span)
+    } else { value };
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
     guard_declared_callable_return_value(ctx, value, span.unwrap_or_else(Span::dummy));
@@ -277,7 +286,7 @@ pub(super) fn coerce_return_scalar_source(
 }
 
 /// Coerces an integer-or-null value into the two-word tagged-scalar return shape.
-pub(super) fn coerce_to_tagged_scalar(
+pub(in crate::ir_lower) fn coerce_to_tagged_scalar(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<Span>,
@@ -448,6 +457,23 @@ pub(super) fn coerce_to_string(
             Op::FToStr.default_effects(),
             span,
         ),
+        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
+            if !ctx.return_type_is_declared =>
+        {
+            // An inferred string result can still be PHP null when it forwards an untyped
+            // parameter that received a missing typed-array element. The parameter ABI boxes
+            // that sentinel as canonical Mixed null. This is an implicit storage boundary, not
+            // an explicit `(string)` cast, so extract it back into string storage and let
+            // MixedUnbox restore the missing-string sentinel instead of converting it to `""`.
+            ctx.emit_owned_value(
+                Op::MixedUnbox,
+                vec![value.value],
+                None,
+                PhpType::Str,
+                Op::mixed_unbox_effects(&PhpType::Str),
+                span,
+            )
+        }
         _ => ctx.emit_value(
             Op::Cast,
             vec![value.value],

@@ -232,17 +232,25 @@ fn emit_string_null_bool(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resul
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
-            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
-            ctx.emitter.instruction("cmp x1, x9");                              // distinguish a missing string from a real empty string
+            crate::codegen_support::sentinels::emit_compare_null_string(ctx.emitter, "x1", "x9");
             ctx.emitter.instruction("cset x0, eq");                             // materialize true only for the null string representation
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(value, "rax", "rdx")?;
-            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
-            ctx.emitter.instruction("cmp rax, r10");                            // distinguish a missing string from a real empty string
+            crate::codegen_support::sentinels::emit_compare_null_string(ctx.emitter, "rax", "r10");
             ctx.emitter.instruction("sete al");                                 // materialize true only for the null string representation
             ctx.emitter.instruction("movzx rax, al");                           // widen the null predicate byte
         }
+    }
+    Ok(())
+}
+
+/// Tests logical string identity even when concrete string storage can contain PHP null.
+pub(super) fn emit_string_kind_bool(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    emit_string_null_bool(ctx, value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("eor x0, x0, #1"),             // a genuine empty or nonempty string is the complement of the null marker
+        Arch::X86_64 => ctx.emitter.instruction("xor rax, 1"),                  // a genuine empty or nonempty string is the complement of the null marker
     }
     Ok(())
 }
@@ -332,8 +340,8 @@ pub(super) fn emit_mixed_tag_eq(
 /// Loads a concrete runtime tag without paying for `__rt_mixed_unbox` on ordinary cells.
 ///
 /// A boxed cell's first word is its concrete tag. A null pointer means the null tag (8), and
-/// only a nested Mixed wrapper (tag 7) needs the peeling helper, which can reach an integer,
-/// string, array, or null payload. The returned register holds the concrete tag.
+/// Nested Mixed wrappers use the peeling helper. Ordinary string-shaped cells are classified
+/// without mutating them, so legacy missing-string markers still denote PHP null.
 fn emit_concrete_mixed_tag(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -348,6 +356,7 @@ fn emit_concrete_mixed_tag(
         ),
         PhpType::Mixed | PhpType::Union(_) => {
             let peeled = ctx.next_label("mixed_tag_peeled");
+            let ordinary = ctx.next_label("mixed_tag_ordinary");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     ctx.emitter.instruction("mov x10, x0");                     // keep the cell across the fast tag load
@@ -355,10 +364,13 @@ fn emit_concrete_mixed_tag(
                     ctx.emitter.instruction(&format!("cbz x10, {peeled}"));     // stop once null already carries the tag
                     ctx.emitter.instruction("ldr x0, [x10]");                   // read the concrete tag from the cell's first word
                     ctx.emitter.instruction("cmp x0, #7");                      // does this cell wrap another Mixed value?
-                    ctx.emitter.instruction(&format!("b.ne {peeled}"));         // an ordinary cell already carries its concrete tag
+                    ctx.emitter.instruction(&format!("b.ne {ordinary}"));       // ordinary cells need only logical string-null classification
                     ctx.emitter.instruction("mov x0, x10");                     // pass the nested wrapper to the peeling helper
                     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");     // peel nested wrappers to their concrete tag
-                    ctx.emitter.label(&peeled);
+                    abi::emit_jump(ctx.emitter, &peeled);
+                    ctx.emitter.label(&ordinary);
+                    crate::codegen_support::sentinels::emit_normalize_boxed_string_tag(
+                        ctx.emitter, "x0", "x10", "x9", &peeled);
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction("mov r10, rax");                    // keep the cell across the fast tag load
@@ -367,10 +379,13 @@ fn emit_concrete_mixed_tag(
                     ctx.emitter.instruction(&format!("jz {peeled}"));           // stop once null already carries the tag
                     ctx.emitter.instruction("mov rax, QWORD PTR [r10]");        // read the concrete tag from the cell's first word
                     ctx.emitter.instruction("cmp rax, 7");                      // does this cell wrap another Mixed value?
-                    ctx.emitter.instruction(&format!("jne {peeled}"));          // an ordinary cell already carries its concrete tag
+                    ctx.emitter.instruction(&format!("jne {ordinary}"));        // ordinary cells need only logical string-null classification
                     ctx.emitter.instruction("mov rax, r10");                    // pass the nested wrapper to the peeling helper
                     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");     // peel nested wrappers to their concrete tag
-                    ctx.emitter.label(&peeled);
+                    abi::emit_jump(ctx.emitter, &peeled);
+                    ctx.emitter.label(&ordinary);
+                    crate::codegen_support::sentinels::emit_normalize_boxed_string_tag(
+                        ctx.emitter, "rax", "r10", "r11", &peeled);
                 }
             }
             Ok(abi::int_result_reg(ctx.emitter).to_string())

@@ -33,10 +33,19 @@ fn eval_local_offset_write(
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
     let mut result = (|| {
-        let index = index.map(|index| eval_owned_expr(index, context, scope, values)).transpose()?;
-        if let Some(index) = index { operands.push(index); }
-        let value = eval_owned_expr(value, context, scope, values)?;
+        let (index, key_source) = match index {
+            Some(index) => {
+                let (key, source) = evaluate_member_value(index, context, scope, values)?;
+                operands.push(key); (Some(key), source)
+            }
+            None => (None, None),
+        };
+        let (value, producer) = evaluate_member_value(value, context, scope, values)?;
         operands.push(value);
+        let receiver_source = local_binding_origins::source_view(&EvalExpr::LoadVar(name.to_string()), context, scope)
+            .as_ref().map(crate::eval_ir::generic_type);
+        let key_source_type = index.map(|key| write_source_domains::source_type(key_source.as_ref(), key, context, values)).transpose()?.flatten();
+        write_source_domains::offset(receiver_source.as_ref(), key_source_type.as_ref(), index.is_some(), context, values)?;
         let current = visible_scope_cell(context, scope, name).map(|cell| values.retain(cell)).transpose()?;
         if let Some(current) = current { operands.push(current); }
         let tag = current.map(|cell| values.type_tag(cell)).transpose()?;
@@ -83,37 +92,81 @@ fn eval_local_offset_write(
                 }
             }
         }
+        let mut published_generation = None;
+        let mut captured_parent = false;
         let array = match current {
             Some(cell) if matches!(tag, Some(EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)) => cell,
             _ => {
+                let was_false = tag == Some(EVAL_TAG_BOOL)
+                    && !values.truthy(current.ok_or(EvalStatus::RuntimeFatal)?)?;
                 let array = eval_array_autovivification(current, index.is_none(), context, values)?;
                 operands.push(array);
-                array
+                write_back_owned_variable_ref_target(scope, name, array, context, values)?;
+                published_generation = scope_entry(context, scope, name).map(|entry| entry.generation());
+                if was_false {
+                    let published = visible_scope_cell(context, scope, name).ok_or(EvalStatus::RuntimeFatal)?;
+                    let captured = values.retain_value_cell(published)?;
+                    operands.push(captured);
+                    captured_parent = true;
+                    captured
+                } else { array }
             }
         };
-        let declared = generic_local_contracts(scope, name, context);
-        let replacement = if let Some(index) = index {
-            let index = match normalized_array_string_index(index, values)? {
-                Some(normalized) => { operands.push(normalized); normalized }
-                None => index,
+        super::false_array_completion::with_completion(captured_parent, index, context, values, |context, values| {
+            let declared = generic_local_element_contracts(scope, name, context);
+            write_source_domains::elements(&declared, array, producer.as_ref(), value, context, values)?;
+            let origin;
+            let replacement = if let Some(index) = index {
+                checked_array_keys::for_receiver(array, index, context, values)?;
+                let index = match normalized_array_string_index(index, context.semantic_profile(), values)? {
+                    Some(normalized) => { operands.push(normalized); normalized }
+                    None => index,
+                };
+                origin = local_binding_origins::prepare_array_local_write(scope, name, array, Some(index),
+                    value, producer.as_ref().map(|source| &source.ty), context, values)?;
+                for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
+                let receiver = if origin.is_some() && !captured_parent {
+                    let detached = copy_scope_value(array, context, values)?;
+                    operands.push(detached); detached
+                } else { array };
+                let replacement = if captured_parent { array }
+                    else { eval_array_set_target_for_index(receiver, index, values)? };
+                if replacement != receiver {
+                    operands.push(replacement);
+                    context.clone_array_element_aliases(receiver, replacement, None);
+                }
+                eval_array_element_reference_write(replacement, index, value, context, values)?;
+                values.array_set(replacement, index, value)?;
+                replacement
+            } else {
+                origin = local_binding_origins::prepare_array_local_write(scope, name, array, None,
+                    value, producer.as_ref().map(|source| &source.ty), context, values)?;
+                let receiver = if origin.is_some() && !captured_parent {
+                    let detached = copy_scope_value(array, context, values)?;
+                    operands.push(detached); detached
+                } else { array };
+                eval_array_append_owned_value_with_type(receiver, value, &declared, context, values)?
             };
-            for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
-            let replacement = eval_array_set_target_for_index(array, index, values)?;
-            if replacement != array {
-                operands.push(replacement);
-                context.clone_array_element_aliases(array, replacement, None);
+            if let Some(origin) = &origin {
+                if let Some(reference) = visible_scope_cell(context, scope, name) {
+                    if values.is_reference(reference)? {
+                        array_reference_contracts::validate_new_owner(reference, replacement,
+                            std::slice::from_ref(origin), context, values)?;
+                    }
+                }
             }
-            eval_array_element_reference_write(replacement, index, value, context, values)?;
-            values.array_set(replacement, index, value)?;
-            replacement
-        } else {
-            eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
-        };
-        if visible_scope_cell(context, scope, name) == Some(replacement) {
-            mark_scope_binding_changed(context, scope, name)?;
-            return Ok(());
-        }
-        write_back_owned_variable_ref_target(scope, name, replacement, context, values)
+            if captured_parent { return Ok(()); }
+            if published_generation.is_some_and(|generation|
+                scope_entry(context, scope, name).map(|entry| entry.generation()) != Some(generation)) {
+                return Ok(());
+            }
+            if visible_scope_cell(context, scope, name) == Some(replacement) {
+                mark_scope_binding_changed(context, scope, name)?;
+            } else {
+                write_back_owned_variable_ref_target(scope, name, replacement, context, values)?;
+            }
+            local_binding_origins::publish_array_local_write(scope, name, origin, context, values)
+        })
     })();
     for operand in operands.into_iter().rev() {
         let released = eval_release_value(context, values, operand);
@@ -139,10 +192,10 @@ pub(super) fn reject_weak_map_append(
 
 /// Allocates a normalized integer key only after the live receiver has selected array semantics.
 fn normalized_array_string_index(
-    index: RuntimeCellHandle, values: &mut impl RuntimeValueOps,
+    index: RuntimeCellHandle, profile: elephc_semantics::SemanticProfile, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if values.type_tag(index)? == EVAL_TAG_STRING {
-        if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?) {
+        if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?, profile) {
             return values.int(key).map(Some);
         }
     }

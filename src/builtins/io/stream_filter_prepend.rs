@@ -5,11 +5,9 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates stream resource arg[0], then matches on a literal filter name
-//!   to link the appropriate runtime libraries (zlib, iconv, bz2). Returns `Mixed`.
-//! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT
-//!   re-infer args[2..]. The source deliberately does not infer arg[1] in the
-//!   StringLiteral branch (harmless since the common path infers it side-effect-free).
+//! - The checker validates the stream and returns the catalog's resource-or-false alternatives.
+//! - The semantic requirements hook selects libraries for known filter names.
+//! - Arguments are inferred by the registry before the check hook runs.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -25,11 +23,7 @@ builtin! {
     requirements: crate::builtins::semantics::stream_filter_requirements,
 }
 
-/// Validates the stream resource and links required filter libraries for known literal filter names.
-///
-/// Checks that arg[0] is a stream resource. For a string-literal arg[1], links the appropriate
-/// system library: `z` for zlib filters, `iconv` (macOS only) for iconv filters, `bz2` for
-/// bzip2 filters. Dynamic filter names are routed through the runtime filter registry. Returns `Mixed`.
+/// Validates the stream and preserves false as the filter-creation failure alternative.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -51,5 +45,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             cx.checker.infer_type(&cx.args[1], cx.env)?;
         }
     }
-    Ok(PhpType::Mixed)
+    Ok(PhpType::Union(vec![PhpType::Resource(None), PhpType::False]))
 }

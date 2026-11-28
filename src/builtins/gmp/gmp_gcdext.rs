@@ -9,5 +9,5 @@
 
 builtin! {
     contract: "gmp_gcdext",
-    semantics: crate::builtins::gmp::keyed_array_semantics(),
+    semantics: crate::builtins::gmp::array_semantics(),
 }

@@ -98,16 +98,32 @@ pub(super) fn parse_prefix(
     }
 
     match &tokens[*pos].0 {
-        Token::Plus if crate::syntax::parser::runtime_fragment() => parse_unary(tokens, pos, span, |inner| {
-            ExprKind::Runtime(Box::new(RuntimeExpr::UnaryPlus(*inner)))
-        }, 35),
-        Token::Plus => parse_unary(tokens, pos, span, |inner| {
-            ExprKind::BinaryOp {
-                left: Box::new(Expr::new(ExprKind::IntLiteral(0), inner.span)),
-                op: crate::syntax::parser::ast::BinOp::Add,
-                right: inner,
-            }
-        }, 35),
+        Token::StringFormat => {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 35)?;
+            Ok(Expr::new(ExprKind::Cast {
+                target: crate::syntax::parser::ast::CastType::StringFormat,
+                expr: Box::new(inner),
+            }, span))
+        }
+        Token::Plus if crate::syntax::parser::runtime_fragment() => {
+            parse_unary(tokens, pos, span, |inner| {
+                ExprKind::Runtime(Box::new(RuntimeExpr::UnaryPlus(*inner)))
+            }, 35)
+        }
+        Token::Plus => parse_unary(tokens, pos, span, ExprKind::UnaryPlus, 35),
+        Token::Minus if matches!(tokens.get(*pos + 1), Some((Token::MinimumIntegerMagnitude, _)))
+            && !matches!(tokens.get(*pos + 2), Some((Token::StarStar | Token::LParen | Token::LBracket
+                | Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::PlusPlus | Token::MinusMinus, _))) => {
+            let end = tokens[*pos + 1].1.span;
+            *pos += 2;
+            Ok(Expr::new(ExprKind::IntLiteral(i64::MIN), Span::with_end_from(span, end)))
+        }
+        Token::MinimumIntegerMagnitude => Err(CompileError::semantic_violation(
+            span,
+            elephc_semantics::StrictFeature::Overflow,
+            "--strict-overflow: positive integer literal is outside signed 64-bit range",
+        )),
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
@@ -730,8 +746,7 @@ fn parse_group_or_cast(
 ///
 /// Distinguishes indexed (`[a, b]`) and associative (`[key => value]`) forms while
 /// preserving leading positional elements that appear before the first keyed entry.
-/// Supports spread elements via `...`; spreads in keyed literals are parsed for
-/// source-order progress but remain limited by the associative-array representation.
+/// Spreads and trailing implicit keys use ordered entries until semantic planning.
 fn parse_array_literal(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -760,15 +775,12 @@ fn parse_array_literal_with_terminator(
     *pos += 1;
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
-    // Non-empty when an explicit key must stay ordered with a spread or with a bare entry whose
-    // implicit key depends on the selected PHP profile (negative integer keys before PHP 8.3).
+    // Ordered entries preserve spreads and implicit keys after an explicit key. The shared
+    // semantic planner chooses append history after the PHP and exact-key policies are known.
     let mut mixed_elems: Vec<ArrayEntry> = Vec::new();
     let keep_implicit_keys = crate::syntax::parser::runtime_fragment();
     let mut is_assoc = false;
     let mut first = true;
-    let mut next_auto_key = 0i64;
-    let mut auto_key_initialized = false;
-    let mut auto_key_overflowed = false;
     while *pos < tokens.len() && tokens[*pos].0 != *closing {
         if !first {
             if tokens[*pos].0 != Token::Comma {
@@ -836,54 +848,41 @@ fn parse_array_literal_with_terminator(
             let reference_span = take_reference_marker(tokens, pos);
             let value = parse_expr(tokens, pos)?;
             let value = wrap_reference_element(reference_span, value)?;
-            auto_key_overflowed |= explicit_integer_array_key(&expr) == Some(i64::MAX);
-            update_next_auto_key_from_explicit_key(
-                &expr,
-                &mut next_auto_key,
-                &mut auto_key_initialized,
-            );
             if mixed_elems.is_empty() {
                 assoc_elems.push((expr, value));
             } else {
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
             }
         } else if is_assoc || matches!(expr.kind, ExprKind::Reference(_)) {
+            if !is_assoc {
+                if elems.iter().any(|elem| matches!(elem.kind, ExprKind::Spread(_))) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Reference array elements after a spread are not supported; give the element an explicit key",
+                    ));
+                }
+                let key = Expr::new(ExprKind::IntLiteral(elems.len() as i64), expr.span);
+                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
+                assoc_elems.push((key, expr));
+                is_assoc = true;
+                first = false;
+                continue;
+            }
             if matches!(expr.kind, ExprKind::Reference(_))
-                && ((!is_assoc && elems.iter().any(|elem| matches!(elem.kind, ExprKind::Spread(_))))
-                    || (is_assoc && !mixed_elems.is_empty()))
+                && mixed_elems.iter().any(|entry| matches!(entry, ArrayEntry::Spread(_)))
             {
-                // A bare reference after a spread needs the runtime-selected next integer key
-                // before its entry can be promoted; that shape is not materialized yet.
                 return Err(CompileError::new(
                     expr.span,
-                    "Reference array elements after a spread are not supported; give the element \
-                     an explicit key",
+                    "Reference array elements after a spread are not supported; give the element an explicit key",
                 ));
             }
-            if !is_assoc {
-                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
-                is_assoc = true;
-            }
-            if (auto_key_overflowed || next_auto_key < 0) && mixed_elems.is_empty() {
-                // Preserve implicit keys for profile-dependent negative cursors and overflow.
-                // Runtime construction raises overflow only if this value is evaluated.
+            // Preserve trailing implicit keys for the selected source profile.
+            if mixed_elems.is_empty() {
                 migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
             }
-            if mixed_elems.is_empty() {
-                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
-                assoc_elems.push((key, expr));
-            } else {
-                // A bare element after a spread cannot be given a key here: the spread decides
-                // how many integer slots it consumed, and only the runtime knows that.
-                mixed_elems.push(ArrayEntry::Value(expr));
-            }
-            auto_key_overflowed |= next_auto_key == i64::MAX;
-            next_auto_key = next_auto_key.saturating_add(1);
-            auto_key_initialized = true;
+            mixed_elems.push(ArrayEntry::Value(expr));
         } else {
             elems.push(expr);
-            next_auto_key += 1;
-            auto_key_initialized = true;
         }
         first = false;
     }
@@ -1008,68 +1007,4 @@ fn promote_indexed_array_items_to_assoc(
             mixed_elems.push(ArrayEntry::Value(elem));
         }
     }
-}
-
-/// Advances the automatic integer key cursor after a statically known integer key.
-///
-/// The first integer-like key seeds the cursor unconditionally so a leading
-/// negative key continues from there (PHP 8.3 semantics); later keys only
-/// raise it.
-fn update_next_auto_key_from_explicit_key(
-    key: &Expr,
-    next_auto_key: &mut i64,
-    auto_key_initialized: &mut bool,
-) {
-    if let Some(value) = explicit_integer_array_key(key) {
-        let candidate = value.saturating_add(1);
-        if !*auto_key_initialized || candidate > *next_auto_key {
-            *next_auto_key = candidate;
-        }
-        *auto_key_initialized = true;
-    }
-}
-
-/// Returns the integer key PHP assigns to an explicit array key literal,
-/// covering the int-normalizing forms: bools, integral floats, canonical
-/// numeric strings, and negated numeric literals.
-fn explicit_integer_array_key(key: &Expr) -> Option<i64> {
-    match &key.kind {
-        ExprKind::IntLiteral(value) => Some(*value),
-        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
-        ExprKind::FloatLiteral(value) => integral_float_array_key(*value),
-        ExprKind::StringLiteral(value) => php_integer_string_array_key(value),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => value.checked_neg(),
-            ExprKind::FloatLiteral(value) => integral_float_array_key(-*value),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Returns the integer key for a float literal PHP casts without truncation.
-fn integral_float_array_key(value: f64) -> Option<i64> {
-    if !value.is_finite() || value.fract() != 0.0 {
-        return None;
-    }
-    if value < i64::MIN as f64 || value >= i64::MAX as f64 {
-        return None;
-    }
-    Some(value as i64)
-}
-
-/// Returns the integer key for a canonical PHP integer string ("0", no
-/// leading zeros, no "-0"); other strings stay string keys.
-fn php_integer_string_array_key(value: &str) -> Option<i64> {
-    if value == "0" {
-        return value.parse().ok();
-    }
-    let digits = value.strip_prefix('-').unwrap_or(value);
-    if digits.is_empty()
-        || digits.starts_with('0')
-        || !digits.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    value.parse().ok()
 }

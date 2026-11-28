@@ -57,6 +57,10 @@ pub(super) fn bind_current(
     if by_ref {
         let slot = ctx.declare_local(value_name, foreach_ref_value_type(source));
         ctx.release_ref_cell_owner(value_name, Some(span));
+        // An earlier iteration may have detached this name and stored an owned raw value.
+        // The displaced pin keeps its payload alive until the new reference is published.
+        ctx.emit_void(Op::ReleaseRawLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseRawLocalSlot.default_effects(), Some(span));
         ctx.emit_void(Op::IterCurrentValueRef, vec![iterator.value],
             Some(Immediate::LocalSlot(slot)), Op::IterCurrentValueRef.default_effects(), Some(span));
         ctx.mark_ref_bound_local(value_name);

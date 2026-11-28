@@ -368,6 +368,7 @@ fn promote_local_slot_for_ref_cell(
     let local_ty = ctx.local_php_type(slot)?;
     let offset = ctx.local_offset(slot)?;
     abi::emit_load(ctx.emitter, &local_ty, offset);
+    super::local_stores::canonicalize_missing_mixed_slot(ctx, &local_ty, offset);
     retain_promoted_ref_cell_value(ctx, &local_ty);
     abi::emit_push_result_value(ctx.emitter, &local_ty);
     abi::emit_load_int_immediate(

@@ -21,10 +21,16 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = 'binary(/^codegen_tests_/) and test(~simplexml_php_src)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
-# ARM shard 11 lost its runner while these four catalog-sized XML bundles ran together.
+# These XML fixtures spend most of their existing deadlines compiling one program.
+# Reserve the shard pool while retaining their deadlines and assertions.
+[[profile.ci.overrides]]
+filter = 'test(=codegen::simplexml_php_src::cases::test_php_src_simplexml_027) or test(/^codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_(aot|eval)_bundle$/)'
+threads-required = "num-test-threads"
+
+# ARM shard 11 lost its runner while these catalog-sized XML bundles ran together.
 # Serialize only their scheduling, preserving their assertions and existing bundle budget.
 [[profile.ci.overrides]]
-filter = 'binary(/^codegen_tests_/) and (test(=codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_bundle) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_(aot|eval)_bundle$/) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
 test-group = 'simplexml-large-bundles'
 
 # These two single-compile XML catalog probes each reached 360s twice while
@@ -37,10 +43,10 @@ threads-required = "num-test-threads"
 
 # The 200,000-node projection completed AOT but exceeded the unchanged 60s runtime
 # limit in eval while sharing its ARM64 shard. Preserve both modes and reserve the pool.
-# The indexed-incdec eval probe also reached its 360s deadline twice in x86_64
-# assembly after 211s of EIR work and 131s of codegen. Keep its source and deadline.
+# The indexed-incdec eval probe also exceeded its x86_64 budget as one program.
+# Schedule the declared, erased and subclass receiver cases independently.
 [[profile.ci.overrides]]
-filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::projections::test_simplexml_large_repeated_projection_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::projections::test_simplexml_large_repeated_projection_bundle) or test(/^codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_(typed|mixed|subclass)_eval_bundle$/))'
 threads-required = "num-test-threads"
 
 # This AOT/eval GMP/XML pair reached its 360s deadline twice during x86_64
@@ -64,19 +70,18 @@ threads-required = "num-test-threads"
 filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_bundle) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_unoptimized_bundle)'
 threads-required = "num-test-threads"
 
-# These five SimpleXML fixtures compile ONE catalog-sized program each, so they cannot be split
-# further. One such compile emits about 276 MB of assembly and measured 1101s on a local macOS
-# host after the recent catalog growth, well past the previous 600s budget. Twenty-five periods
-# bound a hang; they also reserve the pool so the catalog compile does not share CPU with other
-# fixtures. The fix for the cost itself is tracked in Code Journal plan 52bad3e9 (eval-catalog
-# compile time). This must stay ahead of the bundle budget below: the first match wins.
+# These SimpleXML cases each compile a catalog-sized program. One such compile emits about
+# 276 MB of assembly and measured 1101s on a local macOS host after the catalog grew.
+# Twenty-five periods bound a hang, and reserving the pool keeps each compile independent
+# of other fixtures. Code Journal plan 52bad3e9 tracks the catalog cost. Keep this override
+# ahead of the general bundle budget.
 [[profile.default.overrides]]
-filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_(typed|mixed|subclass)_eval_bundle$/) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(/^codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_(native|lifetime_native|visibility_native)_bundle$/) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
 slow-timeout = { period = "60s", terminate-after = 25 }
 threads-required = "num-test-threads"
 
 [[profile.ci.overrides]]
-filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_(typed|mixed|subclass)_eval_bundle$/) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(/^codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_(native|lifetime_native|visibility_native)_bundle$/) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
 slow-timeout = { period = "60s", terminate-after = 25 }
 threads-required = "num-test-threads"
 

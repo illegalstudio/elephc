@@ -13,6 +13,7 @@
 //! - Shared literal markers preserve escaped bytes and avoid collisions with private-use source text.
 //! - Every synthetic token carries the line of the opening quote, keeping `__LINE__`
 //!   stable across multi-line literals.
+//! - Each interpolated operand carries a formatting prefix, distinct from ordinary concatenation.
 //! - PHP simple syntax allows exactly one `[offset]` or `->prop` after `$name`; anything
 //!   deeper requires the complex `{$expr}` form.
 //! - Malformed offsets (`"$a[]"`, `"$a[ 0]"`, `"$a['k']"`) are refused, matching PHP's
@@ -58,7 +59,7 @@ impl LiteralCursor<'_> {
                 '{' if braced_interpolation(self.remaining().as_bytes()) == Some(BracedInterpolation::CurlyDollar) => {
                     self.bump_char();
                     let inner = self.capture_braced_expr()?;
-                    let part = tokenize_interpolated_fragment(&inner, line)?;
+                    let part = tokenize_interpolated_fragment(&inner, line, self.semantic_profile())?;
                     has_interpolation = true;
                     push_interp_part(&mut tokens, &mut current, part, line);
                 }
@@ -70,7 +71,7 @@ impl LiteralCursor<'_> {
                         let inner_raw = self.capture_braced_expr()?;
                         // Re-prepend the `$` so the captured text is a valid expression.
                         let inner = format!("${inner_raw}");
-                        let part = tokenize_interpolated_fragment(&inner, line)?;
+                        let part = tokenize_interpolated_fragment(&inner, line, self.semantic_profile())?;
                         has_interpolation = true;
                         push_interp_part(&mut tokens, &mut current, part, line);
                         continue;
@@ -172,22 +173,21 @@ impl LiteralCursor<'_> {
                 part.push(Token::new(TokenKind::DollarIdent(name), line));
             }
             Some(ch) if ch == '-' || ch.is_ascii_digit() => {
-                let mut digits = String::new();
-                if ch == '-' {
-                    digits.push('-');
-                    self.bump_char();
-                }
-                while let Some(digit) = self.peek_char() {
-                    if !digit.is_ascii_digit() {
-                        break;
-                    }
-                    digits.push(digit);
-                    self.bump_char();
-                }
-                let value = digits
-                    .parse::<i64>()
-                    .map_err(|_| EvalParseError::InvalidNumber)?;
-                part.push(Token::new(TokenKind::Int(value), line));
+                let Some((len, key)) = elephc_semantics::array_keys::scan_simple_interpolation_numeric_key(
+                    self.remaining().as_bytes(),
+                ) else {
+                    return Err(EvalParseError::InvalidNumber);
+                };
+                let kind = match key {
+                    elephc_semantics::array_keys::StringKey::Integer(value) => TokenKind::Int(value),
+                    elephc_semantics::array_keys::StringKey::String(value) => TokenKind::String(
+                        std::str::from_utf8(value)
+                            .expect("interpolation numeric spellings are ASCII")
+                            .to_owned(),
+                    ),
+                };
+                self.skip_bytes(len);
+                part.push(Token::new(kind, line));
             }
             _ => {
                 let key = self.lex_ident();
@@ -346,7 +346,10 @@ fn push_interp_part(
         ));
     }
     tokens.push(Token::new(TokenKind::Dot, line));
+    tokens.push(Token::new(TokenKind::StringFormat, line));
+    tokens.push(Token::new(TokenKind::LParen, line));
     tokens.extend(part);
+    tokens.push(Token::new(TokenKind::RParen, line));
 }
 
 /// Tokenizes captured `{$expr}` source as a standalone parenthesized expression.
@@ -357,8 +360,9 @@ fn push_interp_part(
 fn tokenize_interpolated_fragment(
     inner: &str,
     line: i64,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<Vec<Token>, EvalParseError> {
-    let fragment = super::tokenize(inner)?;
+    let fragment = super::tokenize_with_semantics(inner, profile)?;
     let mut part = vec![Token::new(TokenKind::LParen, line)];
     part.extend(
         fragment

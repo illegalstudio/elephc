@@ -71,6 +71,7 @@ pub(super) fn lower_expression(scope: &Scope<'_>, expr: Expr) -> Option<EvalExpr
                 CastType::Int => EvalCastType::Int,
                 CastType::Float => EvalCastType::Float,
                 CastType::String => EvalCastType::String,
+                CastType::StringFormat => EvalCastType::StringFormat,
                 CastType::Bool => EvalCastType::Bool,
                 CastType::Object => return None,
             },

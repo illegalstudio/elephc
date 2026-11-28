@@ -568,10 +568,13 @@ ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
 
-The validator keeps dominator membership in dense bitsets throughout each check.
-Precomputed singleton flags retain the existing unreachable-continuation rules.
-This avoids materializing a hash set for every block during storage trials and
-debug pass checks, while preserving same-block ordering and dominance diagnostics.
+The validator reuses the immediate-dominator analysis and records a half-open
+preorder interval for each reachable block. A block dominates another when the
+second block's preorder position lies inside the first block's interval. The
+validator's graph includes implicit edges from handler installation to catch
+blocks. Unreachable continuations have empty intervals, so their cross-block
+uses still skip dominance checks. Same-block ordering and dominance diagnostics
+are unchanged.
 
 For a canonical counter that lacks a static overflow proof,
 `bounded_mixed_counter/versioning.rs` can retain the original loop and add a

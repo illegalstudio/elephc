@@ -16,9 +16,10 @@
 //! - Malformed simple offsets are PHP parse errors (measured against PHP 8.5.6) and are
 //!   pinned as refusals so a future rewrite cannot start silently accepting them.
 
-use super::tokenize;
+use super::{tokenize, tokenize_with_semantics};
 use super::TokenKind;
 use crate::errors::EvalParseError;
+use elephc_semantics::{SemanticProfile, StrictFeature};
 
 /// Preserves hexadecimal/octal bytes and keeps private-use source characters distinct from byte markers.
 #[test]
@@ -39,6 +40,35 @@ fn kinds(source: &str) -> Vec<TokenKind> {
         .into_iter()
         .map(super::Token::into_kind)
         .collect()
+}
+
+/// Keeps PHP simple-interpolation integer grammar independent of exact array-key mode.
+#[test]
+fn canonical_simple_offset_is_integer_in_every_array_key_profile() {
+    for exact in [false, true] {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+        let tokens = tokenize_with_semantics(r#""$a[1]";"#, profile)
+            .expect("fragment should tokenize")
+            .into_iter()
+            .map(super::Token::into_kind)
+            .collect::<Vec<_>>();
+        assert!(tokens.contains(&TokenKind::Int(1)), "exact={exact}: {tokens:?}");
+        assert!(!tokens.contains(&TokenKind::String("1".to_owned())), "exact={exact}: {tokens:?}");
+    }
+}
+
+/// Numeric-looking simple offsets retain the PHP key kind observed by `ArrayAccess`.
+#[test]
+fn numeric_simple_offsets_preserve_php_key_kinds() {
+    for spelling in ["-9223372036854775808", "0x10", "-0x10", "0b10", "0o10", "1_0"] {
+        let tokens = kinds(&format!(r#""$a[{spelling}]";"#));
+        assert!(tokens.contains(&TokenKind::String(spelling.to_owned())), "{spelling}: {tokens:?}");
+    }
+    let tokens = kinds(r#""$a[-9223372036854775807]";"#);
+    assert!(tokens.contains(&TokenKind::Int(-9_223_372_036_854_775_807)), "{tokens:?}");
+    for spelling in ["0x", "0b", "0o", "1_"] {
+        assert!(tokenize(&format!(r#""$a[{spelling}]";"#)).is_err(), "{spelling}");
+    }
 }
 
 /// Returns the parse error a fragment produces, failing the test if it tokenizes.
@@ -130,7 +160,10 @@ fn simple_variable_expands_to_parenthesized_concat() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("v"),
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
             TokenKind::Eof,
@@ -147,7 +180,10 @@ fn surrounding_literal_text_is_concatenated() {
             TokenKind::LParen,
             string("pre-"),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("v"),
+            TokenKind::RParen,
             TokenKind::Dot,
             string("-post"),
             TokenKind::RParen,
@@ -166,10 +202,13 @@ fn bare_offset_key_becomes_a_string_key() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("a"),
             TokenKind::LBracket,
             string("k"),
             TokenKind::RBracket,
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
             TokenKind::Eof,
@@ -186,10 +225,13 @@ fn negative_offset_key_becomes_one_negative_integer() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("a"),
             TokenKind::LBracket,
             TokenKind::Int(-1),
             TokenKind::RBracket,
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
             TokenKind::Eof,
@@ -206,10 +248,13 @@ fn variable_offset_key_stays_a_variable() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("a"),
             TokenKind::LBracket,
             var("k"),
             TokenKind::RBracket,
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
             TokenKind::Eof,
@@ -226,9 +271,12 @@ fn simple_property_access_is_interpolated() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("o"),
             TokenKind::Arrow,
             TokenKind::Ident("p".to_string()),
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
             TokenKind::Eof,
@@ -249,7 +297,10 @@ fn arrow_followed_by_a_digit_is_literal_text() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("o"),
+            TokenKind::RParen,
             TokenKind::Dot,
             string("->1"),
             TokenKind::RParen,
@@ -268,11 +319,14 @@ fn complex_interpolation_nests_the_fragment() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             TokenKind::LParen,
             var("a"),
             TokenKind::LBracket,
             string("k"),
             TokenKind::RBracket,
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
@@ -290,7 +344,10 @@ fn brace_without_dollar_is_literal_text() {
             TokenKind::LParen,
             string("{ "),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("s"),
+            TokenKind::RParen,
             TokenKind::Dot,
             string(" }"),
             TokenKind::RParen,
@@ -309,8 +366,11 @@ fn legacy_dollar_brace_form_interpolates() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             TokenKind::LParen,
             var("v"),
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
@@ -351,7 +411,10 @@ fn dollar_without_identifier_is_literal_text() {
             TokenKind::LParen,
             string("$"),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("s"),
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
             TokenKind::Eof,
@@ -368,8 +431,9 @@ fn dollar_without_identifier_is_literal_text() {
 fn interpolated_tokens_carry_the_opening_quote_line() {
     let tokens = tokenize("$x;\n\"a\n$v\nb\";\n$y;").expect("fragment should tokenize");
     let lines: Vec<i64> = tokens.iter().map(super::Token::line).collect();
-    // `$x` `;` on line 1, then the literal's nine tokens
-    // (`(` `"a\n"` `.` `$v` `.` `"\nb"` `)`) all stamped with its opening-quote line 2,
+    // `$x` `;` on line 1, then the literal's ten tokens
+    // (`(` `"a\n"` `.` `StringFormat` `(` `$v` `)` `.` `"\nb"` `)`) all stamped with
+    // its opening-quote line 2,
     // the `;` after the closing quote on line 4, then `$y` `;` on line 5 and EOF.
     assert_eq!(
         kinds("$x;\n\"a\n$v\nb\";\n$y;"),
@@ -379,7 +443,10 @@ fn interpolated_tokens_carry_the_opening_quote_line() {
             TokenKind::LParen,
             string("a\n"),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("v"),
+            TokenKind::RParen,
             TokenKind::Dot,
             string("\nb"),
             TokenKind::RParen,
@@ -389,7 +456,7 @@ fn interpolated_tokens_carry_the_opening_quote_line() {
             TokenKind::Eof,
         ]
     );
-    assert_eq!(lines, vec![1, 1, 2, 2, 2, 2, 2, 2, 2, 4, 5, 5, 5]);
+    assert_eq!(lines, vec![1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 5, 5, 5]);
 }
 
 /// Verifies `"$a[]"` is refused. PHP 8.5.6: `syntax error, unexpected token "]"`.
@@ -455,11 +522,14 @@ fn nested_literal_inside_braces_is_captured_verbatim() {
             TokenKind::LParen,
             string(""),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             TokenKind::LParen,
             var("a"),
             TokenKind::LBracket,
             string("}{"),
             TokenKind::RBracket,
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,

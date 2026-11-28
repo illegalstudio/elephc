@@ -19,6 +19,7 @@ pub(in crate::interpreter) fn eval_echo_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     with_eval_void_operands(&[expr], context, scope, values, |args, context, _, values| {
+        checked_strings::formatting(args[0], context, values)?;
         let value = eval_string_context_value(args[0].borrowed(), context, values)?;
         if value == args[0] {
             values.echo(value)
@@ -36,8 +37,11 @@ pub(in crate::interpreter) fn eval_unary_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_operands(&[expr], context, scope, values, |args, _, _, values| {
-        eval_unary_value(op, args[0], values)
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        return mixed_eval::unary(op, expr, context, scope, values).map(|result| result.0);
+    }
+    with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
+        eval_unary_value(op, args[0], context, values)
     })
 }
 
@@ -45,43 +49,38 @@ pub(in crate::interpreter) fn eval_unary_expr(
 pub(in crate::interpreter) fn eval_unary_value(
     op: EvalUnaryOp,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match op {
         EvalUnaryOp::Plus | EvalUnaryOp::Negate => {
-            if op == EvalUnaryOp::Negate {
-                let tag = values.type_tag(value)?;
-                if tag == EVAL_TAG_FLOAT {
-                    let bits = values.raw_value_word(value)? ^ (1_u64 << 63);
-                    return values.raw_word_value(EVAL_TAG_FLOAT, bits);
-                }
-                if tag == EVAL_TAG_OBJECT {
-                    if let Some(result) = runtime_ops::object_operators::negate(values, value)? {
-                        return Ok(result);
-                    }
+            use elephc_semantics::numeric_unary::NumericUnaryOp;
+            let numeric = if op == EvalUnaryOp::Plus { NumericUnaryOp::Plus } else { NumericUnaryOp::Negate };
+            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+                if op == EvalUnaryOp::Negate {
+                    if let Some(result) = runtime_ops::object_operators::negate(values, value)? { return Ok(result); }
+                } else {
+                    let zero = values.int(0)?;
+                    let result = runtime_ops::object_operators::arithmetic(values,
+                        elephc_builtin_contract::ObjectArithmetic::Add, zero, value)
+                        .and_then(|result| match result {
+                            Some(result) => Ok(result),
+                            None => checked_numeric::unary(numeric, value, context, values),
+                        });
+                    return finish_synthesized_method_arguments(result, [zero], context, values);
                 }
             }
-            let zero = values.int(0)?;
-            let result = if op == EvalUnaryOp::Plus {
-                values.add(zero, value)
-            } else {
-                values.sub(zero, value)
-            };
-            let released = values.release(zero);
-            match (result, released) {
-                (Err(status), _) => Err(status),
-                (Ok(result), Err(status)) => {
-                    if !result.is_borrowed() { let _ = values.release(result); }
-                    Err(status)
-                }
-                (Ok(result), Ok(())) => Ok(result),
-            }
+            checked_numeric::unary(numeric, value, context, values)
         }
         EvalUnaryOp::LogicalNot => {
-            let truthy = values.truthy(value)?;
+            let truthy = eval_boolean_condition(value, context, values)?;
             values.bool_value(!truthy)
         }
-        EvalUnaryOp::BitNot => values.bit_not_dispatch(value),
+        EvalUnaryOp::BitNot => {
+            if let Some(result) = runtime_ops::object_operators::bit_not(values, value)? { return Ok(result); }
+            numeric_domains::require_unary(elephc_semantics::numeric_domains::NumericOperator::BitNot, value, context, values)?;
+            values.bit_not(value)
+        }
     }
 }
 
@@ -104,6 +103,9 @@ pub(in crate::interpreter) fn eval_binary_expr(
             eval_condition(right, context, scope, values)?
         };
         return values.bool_value(result);
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        return mixed_eval::binary(op, left, right, context, scope, values).map(|result| result.0);
     }
     with_eval_operands(&[left, right], context, scope, values, |args, context, _, values| {
         eval_binary_result(op, args[0], args[1], context, values)
@@ -173,7 +175,7 @@ pub(in crate::interpreter) fn with_eval_call_arguments_with_modes<V: RuntimeValu
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (arguments, receiver_owners) = eval_owned_call_arg_values(args, modes, context, scope, values)?;
     let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
-        |argument, index| modes.by_reference(argument.name.as_deref(), index));
+        |argument, index| modes.needs_evaluation_owner(argument.name.as_deref(), index));
     let receiver_owners = receiver_owners.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
     with_runtime_owners(&(&argument_owners, &receiver_owners), || {
         let result = consume(borrowed_arguments, context, scope, values);
@@ -211,6 +213,22 @@ pub(in crate::interpreter) fn finish_eval_argument_values(
     })
 }
 
+/// Retires rooted check operands while preserving the original failure without creating a PHP result.
+pub(in crate::interpreter) fn finish_eval_void_arguments(
+    result: Result<(), EvalStatus>, arguments: impl IntoIterator<Item = RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let arguments = arguments.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&arguments, || {
+        let mut released = Ok(());
+        for argument in &arguments {
+            let cleanup = release_expr_result(argument.take(), context, values);
+            if released.is_ok() { released = cleanup; }
+        }
+        result.and(released)
+    })
+}
+
 #[cfg(test)]
 pub(in crate::interpreter) use with_eval_call_arguments as with_eval_method_arguments;
 
@@ -235,11 +253,21 @@ pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>
         Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V,
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_eval_array_call_arguments_with_sources(array, None, context, values, consume)
+}
+
+/// Keeps tuple entry evidence beside the established extraction, normalization and owner boundary.
+pub(in crate::interpreter) fn with_eval_array_call_arguments_with_sources<V: RuntimeValueOps>(
+    array: RuntimeCellHandle, source: Option<&ArgumentSource>, context: &mut ElephcEvalContext,
+    values: &mut V, consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let arguments = eval_array_call_arg_values(array, context, values)?;
-    let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
+    let (mut borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
         |argument, _| argument.ref_target.is_some());
     with_runtime_owners(&argument_owners, || {
-        let result = consume(borrowed_arguments, context, values);
+        let result = array_argument_sources::apply(array, source, &mut borrowed_arguments, context, values)
+            .and_then(|()| consume(borrowed_arguments, context, values));
         finish_eval_argument_owners(result, &argument_owners, context, values)
     })
 }
@@ -251,10 +279,18 @@ pub(in crate::interpreter) fn eval_condition(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let value = eval_owned_expr(expr, context, scope, values)?;
-    let result = values.truthy(value);
+    let projection = mixed_guards::prepare(expr, context, scope, values)?;
+    let (value,source)=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        mixed_eval::evaluate(expr,context,scope,values)?
+    } else {(eval_owned_expr(expr,context,scope,values)?,None)};
+    let source=source.map(mixed_source_proofs::value_source).unwrap_or_else(||elephc_generics::Type::atom("mixed"));
+    let result=mixed_source_proofs::require_condition(&source,context,values)
+        .and_then(|()|eval_boolean_condition(value,context,values));
     let released = eval_release_value(context, values, value);
-    result.and_then(|result| released.map(|()| result))
+    let result = result.and_then(|result| released.map(|()| result))?;
+    mixed_guards::record(expr, result, context, scope);
+    mixed_guards::record_projection(projection, result, context, scope);
+    Ok(result)
 }
 
 /// Keeps a quiet probe's receiver alive and retires its lease on success or failure.
@@ -267,7 +303,7 @@ pub(in crate::interpreter) fn with_eval_probe_operand<V: RuntimeValueOps>(
         RuntimeCellHandle, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<bool, EvalStatus>,
 ) -> Result<bool, EvalStatus> {
-    let owner = eval_owned_expr(expr, context, scope, values)?;
+    let owner = probe_reads::eval_owned(expr, context, scope, values)?;
     let result = probe(owner.borrowed(), context, scope, values);
     let cleanup = eval_release_value(context, values, owner);
     result.and_then(|answer| cleanup.map(|()| answer))
@@ -283,10 +319,31 @@ pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
         &[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_value_operands(args, false, context, scope, values, consume)
+}
+
+/// Reads a quiet receiver chain followed by ordinary source operands with shared cleanup.
+pub(in crate::interpreter) fn with_eval_probe_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_value_operands(args, true, context, scope, values, consume)
+}
+
+/// Shares operand preparation and returned-value cleanup across ordinary and quiet roots.
+fn with_value_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], probe_first: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
     let prepared = (|| {
-        for arg in args {
-            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+        for (index, arg) in args.iter().enumerate() {
+            let value = with_runtime_owners(&operands, || if probe_first && index == 0 {
+                probe_reads::eval_owned(arg, context, scope, values)
+            } else { eval_owned_expr(arg, context, scope, values) })?;
             operands.push(value);
         }
         Ok(())
@@ -306,10 +363,31 @@ pub(in crate::interpreter) fn with_eval_void_operands<V: RuntimeValueOps>(
         &[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
+    with_void_operands(args, false, context, scope, values, consume)
+}
+
+/// Gives a quiet receiver and ordinary keys to a statement consumer with shared owner cleanup.
+pub(in crate::interpreter) fn with_eval_probe_void_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<(), EvalStatus>,
+) -> Result<(), EvalStatus> {
+    with_void_operands(args, true, context, scope, values, consume)
+}
+
+/// Shares statement-operand preparation without confusing a quiet root with its ordinary key.
+fn with_void_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], probe_first: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<(), EvalStatus>,
+) -> Result<(), EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
     let prepared = (|| {
-        for arg in args {
-            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+        for (index, arg) in args.iter().enumerate() {
+            let value = with_runtime_owners(&operands, || if probe_first && index == 0 {
+                probe_reads::eval_owned(arg, context, scope, values)
+            } else { eval_owned_expr(arg, context, scope, values) })?;
             operands.push(value);
         }
         Ok(())
@@ -334,7 +412,21 @@ pub(in crate::interpreter) fn with_eval_value_lease<V: RuntimeValueOps>(
     consume: impl FnOnce(RuntimeCellHandle, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
     let value = if value.is_borrowed() { values.retain(value)? } else { value };
-    let result = consume(value, context, values);
-    let released = eval_release_value(context, values, value);
-    result.and(released)
+    let owner = RuntimeOwnerSlot::new(value);
+    with_runtime_owners(&owner, || {
+        let result = consume(value, context, values);
+        let released = eval_release_value(context, values, owner.take());
+        result.and(released)
+    })
+}
+
+/// Applies condition semantics separately from explicit casts and builtin data filtering.
+pub(in crate::interpreter) fn eval_boolean_condition(
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Bools)
+        && values.type_tag(value)? != EVAL_TAG_BOOL {
+        return throwables::eval_throw_type_error("--strict-bools requires bool in a condition", context, values);
+    }
+    values.truthy(value)
 }

@@ -37,7 +37,7 @@ description: "Compiler internals for fopen(): lowering path, type checks, and ru
 ## Signature summary
 
 ```php
-function fopen(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed
+function fopen(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): resource|false
 ```
 
 ## What the type checker enforces

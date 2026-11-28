@@ -38,6 +38,7 @@ builtin! {
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: BuiltinArgumentLowering::Standard,
+        array_key_input: None,
         // The runtime callable wrapper forwards its operands to the same injected helper, so a
         // runtime-selected name (`$f = $argv[1] ?? "array_rand"; $f(...)`) reaches one
         // implementation too. The wrapper hands the helper a boxed `mixed` value, and the

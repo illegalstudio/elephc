@@ -345,6 +345,24 @@ pub(crate) fn link_with_plan_and_inputs(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<Vec<(PathBuf, Option<String>)>, LinkError> {
+    with_link_command(target, emit, bin_path, obj_path, runtime_object_path, plan,
+        forced_whole_archive, command::execute_link_command).map(|(_, inputs)| inputs)
+}
+
+/// Captures a staged fixture's real linker diagnostics without exiting its owning test process.
+#[cfg(test)]
+pub(crate) fn link_test_fixture(
+    target: Target, bin_path: &Path, obj_path: &Path, runtime_object_path: &Path, plan: &LinkPlan,
+) -> Result<process::Output, LinkError> {
+    with_link_command(target, Emit::Executable, bin_path, obj_path, runtime_object_path, plan,
+        &[], command::capture_link_command).map(|(output, _)| output)
+}
+
+/// Shares archive resolution, SDK selection and cleanup between normal and captured execution.
+fn with_link_command<R>(
+    target: Target, emit: Emit, bin_path: &Path, obj_path: &Path, runtime_object_path: &Path,
+    plan: &LinkPlan, forced_whole_archive: &[String], execute: impl FnOnce(command::RenderedCommand) -> R,
+) -> Result<(R, Vec<(PathBuf, Option<String>)>), LinkError> {
     let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
     let inputs = resolved.plan.items().iter().filter_map(|item| match item {
         LinkItem::StaticArchive { path, origin, .. } => {
@@ -394,12 +412,12 @@ pub(crate) fn link_with_plan_and_inputs(
         mac_sdk,
         &homebrew_paths,
     );
-    command::execute_link_command(rendered);
+    let output = execute(rendered);
 
     if let Some(prepared) = prepared {
         prepared.cleanup();
     }
-    Ok(inputs)
+    Ok((output, inputs))
 }
 
 /// Rejects a cached host when an auto-built bridge has newer local source inputs.

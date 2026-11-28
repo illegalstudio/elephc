@@ -33,7 +33,7 @@ pub(super) fn try_lower(
     if args.iter().any(is_spread_arg) { return None; }
     let sig = signature?;
     let span = args.first()?.span;
-    let plan = crate::types::call_args::plan_call_args(sig, args, span, true, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(sig, args, span, true, false, ctx.semantic_profile).ok()?;
     if plan.has_spread_args() || !plan.variadic_args.is_empty() { return None; }
     // The planner keeps a plain positional call as a passthrough. Named calls carry
     // the separate source-to-parameter mapping, including any omitted defaults.
@@ -188,7 +188,7 @@ fn safe_read(ctx: &LoweringContext<'_, '_>, expr: &Expr, string: bool, property_
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) => !string,
         ExprKind::Null => true,
         ExprKind::ConstRef(name) => ctx.constant_value(name).is_some_and(|(value, _)| {
-            matches!(value, ExprKind::StringLiteral(_)) == string
+            matches!(value.kind, ExprKind::StringLiteral(_)) == string
         }),
         ExprKind::Variable(name) => !ctx.local_uses_global_storage(name)
             && !ctx.extern_globals.contains_key(name)

@@ -630,6 +630,8 @@ pub(super) fn lower_unset_readonly_property_element(
             else_args: Vec::new(),
         });
         ctx.builder.position_at_end(remove);
+        let prepared = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, index_value, expr.span);
+        let index_value = prepared.value;
         ctx.emit_void(
             Op::OffsetUnset,
             vec![value.value, index_value.value],
@@ -637,6 +639,7 @@ pub(super) fn lower_unset_readonly_property_element(
             Op::OffsetUnset.default_effects(),
             Some(expr.span),
         );
+        prepared.finish(ctx, expr.span);
         if let Some(owner) = owner {
             retire_owned_call_operand(ctx, owner, expr.span);
         }

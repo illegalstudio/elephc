@@ -15,7 +15,7 @@ use crate::errors::CompileWarning;
 use crate::parser::ast::Program;
 
 use super::index::AutoloadIndex;
-use super::rule::{collect_register_calls, AutoloadRule};
+use super::rule::{collect_register_calls_with_semantics, AutoloadRule};
 
 /// PHP's spl_autoload_extensions default. Read by `spl_autoload_extensions()`
 /// when no value has been set yet.
@@ -42,6 +42,7 @@ impl Registry {
     /// the registry plus the program with consumed register sites stripped
     /// so the runtime stub doesn't see closure bodies containing
     /// non-foldable `require_once` statements.
+    #[allow(dead_code)] // Compatibility entry point for permissive library callers and tests.
     pub fn build(project_root: &Path, program: Program) -> (Self, Program) {
         Self::build_excluding(project_root, program, &std::collections::HashSet::new())
     }
@@ -53,8 +54,19 @@ impl Registry {
         program: Program,
         excluded: &std::collections::HashSet<String>,
     ) -> (Self, Program) {
+        Self::build_excluding_with_semantics(project_root, program, excluded,
+            elephc_semantics::SemanticProfile::PERMISSIVE)
+    }
+
+    /// Collects loader setup under the immutable profile used by the rest of the compiler.
+    pub fn build_excluding_with_semantics(
+        project_root: &Path,
+        program: Program,
+        excluded: &std::collections::HashSet<String>,
+        profile: elephc_semantics::SemanticProfile,
+    ) -> (Self, Program) {
         let psr4 = AutoloadIndex::from_project_root_excluding(project_root, excluded);
-        let (program, rules, warnings) = collect_register_calls(program);
+        let (program, rules, warnings) = collect_register_calls_with_semantics(program, profile);
         // Synthesise alias subclasses after closure collection so the
         // alias decls don't get confused with autoloader sources.
         let program = super::alias::collect_aliases(program);

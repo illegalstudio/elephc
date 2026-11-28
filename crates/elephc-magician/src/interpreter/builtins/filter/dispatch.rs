@@ -98,6 +98,7 @@ pub(in crate::interpreter) fn eval_filter_values_result(
         .iter()
         .copied()
         .map(|value| EvaluatedCallArg {
+            source_type: None,
             evaluation_owner: None,
             name: None,
             value,

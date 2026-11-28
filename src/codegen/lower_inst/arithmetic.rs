@@ -304,6 +304,7 @@ pub(super) fn lower_int_checked_binop(
     if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
         return stack_cell::lower(ctx, inst, offset);
     }
+    let helper = if inst.op == Op::ICheckedPow && inst.arithmetic_policy().checked_overflow() { "__rt_int_pow_or_throw" } else { helper };
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let lhs_reg = abi::int_result_reg(ctx.emitter);
@@ -598,7 +599,8 @@ pub(super) fn lower_mixed_numeric_binop(
     let op = expect_mixed_numeric_op(inst)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    if matches!(op, MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)
+    if inst.arithmetic_policy().is_permissive()
+        && matches!(op, MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)
         && is_mixed_like(&lhs_ty)
         && ctx.value_ir_type(lhs)? == IrType::Heap(IrHeapKind::Mixed)
     {
@@ -640,7 +642,14 @@ pub(super) fn lower_mixed_numeric_binop(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
         }
     }
-    abi::emit_call_label(ctx.emitter, mixed_numeric_helper(op));
+    let helper = if inst.arithmetic_policy().checked_overflow() {
+        match op {
+            MixedNumericOp::Add => "__rt_strict_mixed_numeric_add", MixedNumericOp::Sub => "__rt_strict_mixed_numeric_sub",
+            MixedNumericOp::Mul => "__rt_strict_mixed_numeric_mul", MixedNumericOp::Pow => "__rt_strict_mixed_numeric_pow",
+            MixedNumericOp::Div => "__rt_strict_mixed_numeric_div", MixedNumericOp::Mod => "__rt_strict_mixed_numeric_mod",
+        }
+    } else { mixed_numeric_helper(op)? };
+    abi::emit_call_label(ctx.emitter, helper);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     if left_box_temp {
         decref_mixed_temp_at(ctx, 32);
@@ -711,7 +720,7 @@ fn decref_mixed_temp_at(ctx: &mut FunctionContext<'_>, offset: usize) {
 /// Returns the mixed numeric operation immediate attached to the EIR instruction.
 fn expect_mixed_numeric_op(inst: &Instruction) -> Result<MixedNumericOp> {
     match inst.immediate {
-        Some(Immediate::MixedNumericOp(op)) => Ok(op),
+        Some(Immediate::MixedNumericOp(op) | Immediate::NumericOperation { op, .. }) => Ok(op),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing mixed numeric op immediate",
             inst.op.name()
@@ -720,11 +729,13 @@ fn expect_mixed_numeric_op(inst: &Instruction) -> Result<MixedNumericOp> {
 }
 
 /// Maps a mixed numeric operation to the target-aware runtime helper label.
-fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
-    match op {
+fn mixed_numeric_helper(op: MixedNumericOp) -> Result<&'static str> {
+    Ok(match op {
         MixedNumericOp::Add => "__rt_mixed_numeric_add",
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
         MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
-    }
+        MixedNumericOp::Div | MixedNumericOp::Mod => return Err(CodegenIrError::invalid_module(
+            "boxed division and remainder require an explicit checked numeric policy")),
+    })
 }

@@ -20,8 +20,9 @@ use crate::types::{array_key_type_from_value_type, PhpType};
 builtin! {
     contract: "array_combine",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayCombine,
+    semantics: crate::builtins::semantics::with_array_key_input(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayCombine),
+        crate::builtins::array_key_inputs::ArrayKeyInput::Values { argument: 0 },
     ),
 }
 
@@ -54,7 +55,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     };
     Ok(PhpType::AssocArray {
-        key: Box::new(array_key_type_from_value_type(key_elem)),
+        key: Box::new(array_key_type_from_value_type(key_elem, cx.checker.semantic_profile)),
         value: Box::new(val_elem),
     })
 }

@@ -59,7 +59,7 @@ fn sorted_constant_entries(ctx: &FunctionContext<'_>) -> Vec<(String, ExprKind, 
         .module
         .global_constants
         .iter()
-        .map(|(name, (value, ty))| (name.clone(), value.clone(), ty.clone()))
+        .map(|(name, (value, ty))| (name.clone(), crate::codegen::const_default_values::materialized_global_constant(ctx.module, value).kind, ty.clone()))
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
@@ -151,8 +151,13 @@ fn emit_boxed_constant_value(
     value: &ExprKind,
     declared_type: &PhpType,
 ) -> Result<()> {
+    if let ExprKind::UnaryPlus(inner) = value {
+        if let Some(number) = crate::semantics::numeric::literal_unary_plus(inner) {
+            return emit_boxed_constant_value(ctx, &number.kind, declared_type);
+        }
+    }
     let needs_resolution = match value {
-        ExprKind::ArrayLiteralMixed(_) => true,
+        ExprKind::UnaryPlus(_) | ExprKind::ArrayLiteralMixed(_) => true,
         ExprKind::ArrayLiteral(items) => items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))),
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, _)| match &key.kind {
             ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_)
@@ -163,9 +168,7 @@ fn emit_boxed_constant_value(
         _ => false,
     };
     if needs_resolution {
-        let context = crate::codegen::const_default_values::ConstDefaultContext {
-            module: ctx.module, current_class: None,
-        };
+        let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, None);
         let expression = Expr::new(value.clone(), crate::span::Span::synthetic());
         let normalized = crate::codegen::const_default_values::resolve_const_default(&expression, &context)
             .and_then(crate::codegen::const_default_values::resolved_literal_default)
@@ -180,7 +183,8 @@ fn emit_boxed_constant_value(
             } else {
                 let (value, ty) = ctx.module.global_constants.get(name.as_str()).cloned()
                     .ok_or_else(|| unsupported_constant_value(value))?;
-                emit_boxed_constant_value(ctx, &value, &ty)?;
+                let value = crate::codegen::const_default_values::materialized_global_constant(ctx.module, &value);
+                emit_boxed_constant_value(ctx, &value.kind, &ty)?;
             }
         }
         ExprKind::IntLiteral(value) => {
@@ -237,9 +241,7 @@ fn emit_boxed_constant_value(
         // A constant expression kept unfolded (one reading a deprecated constant, which the
         // compiler never folds so the read still reports) holds the value it evaluates to.
         other => {
-            let context = crate::codegen::const_default_values::ConstDefaultContext {
-                module: ctx.module, current_class: None,
-            };
+            let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, None);
             let expression = Expr::new(other.clone(), crate::span::Span::synthetic());
             let normalized = crate::codegen::const_default_values::resolve_const_default(&expression, &context)
                 .and_then(crate::codegen::const_default_values::resolved_literal_default)
@@ -279,6 +281,10 @@ fn emit_boxed_array_constant<'a>(
 
 /// Materializes a folded constant array key through the ordinary PHP key normalizer.
 fn emit_constant_array_key(ctx: &mut FunctionContext<'_>, key: &ExprKind) -> Result<()> {
+    if let ExprKind::UnaryPlus(inner) = key {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| unsupported_constant_value(key))?;
+        return emit_constant_array_key(ctx, &number.kind);
+    }
     let lo = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let hi = abi::int_arg_reg_name(ctx.emitter.target, 2);
     let integer = match key {

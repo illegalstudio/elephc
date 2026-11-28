@@ -31,6 +31,7 @@ builtin! {
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly(
             "get_called_class() requires the lexical class scope of its direct call",

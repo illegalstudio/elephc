@@ -111,6 +111,19 @@ impl PhpType {
         self.is_php_array() || self.codegen_repr() == Self::Mixed
     }
 
+    /// Returns whether a proven heap view can borrow its payload directly from a `Mixed` box.
+    pub(crate) fn supports_borrowed_mixed_payload_view(&self) -> bool {
+        matches!(
+            self.codegen_repr(),
+            Self::Str
+                | Self::Array(_)
+                | Self::AssocArray { .. }
+                | Self::Object(_)
+                | Self::Callable
+                | Self::Iterable
+        )
+    }
+
     /// Returns whether a value of this type can be invoked as a PHP callable: a Closure
     /// descriptor (`Callable`) or a value declared `callable` (`DeclaredCallable`).
     pub(crate) fn is_callable_like(&self) -> bool {

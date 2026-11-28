@@ -40,7 +40,7 @@ mod tests {
     /// Prelude names have global PHP fallback even when the file declares no prelude itself.
     #[test]
     fn prelude_function_fallback_without_injected_declarations() {
-        let _strict = crate::strict_php::scoped_enable();
+        let _strict = crate::php_only::scoped_enable();
         assert_eq!(
             resolved_calls("<?php namespace App; Mt_SrAnD(42); lcg_value(); getrandmax();"),
             ["mt_srand", "lcg_value", "getrandmax"],
@@ -64,7 +64,7 @@ mod tests {
     fn prelude_function_fallback_respects_contract_visibility() {
         let source = "<?php namespace App; read_exif_data('photo.jpg'); __elephc_array_rand([1]);";
         assert_eq!(resolved_calls(source), ["read_exif_data", "App\\__elephc_array_rand"]);
-        let _strict = crate::strict_php::scoped_enable();
+        let _strict = crate::php_only::scoped_enable();
         assert_eq!(resolved_calls(source), ["App\\read_exif_data", "App\\__elephc_array_rand"]);
     }
 }
@@ -75,13 +75,13 @@ impl Symbols {
     pub(super) fn canonical_function(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
         let extension_builtin =
-            crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+            crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
                 &key,
                 true,
             )
             .then(|| canonical_builtin_function_name(name))
             .flatten();
-        if !crate::strict_php::is_enabled() && extension_builtin.is_some() {
+        if !crate::php_only::is_enabled() && extension_builtin.is_some() {
             return extension_builtin;
         }
         self.functions
@@ -93,7 +93,7 @@ impl Symbols {
                 let contract = elephc_builtin_contract::lookup(name)?;
                 (contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided
                     && !contract.internal
-                    && (!contract.extension || !crate::strict_php::is_enabled()))
+                    && (!contract.extension || !crate::php_only::is_enabled()))
                     .then(|| contract.name.to_string())
             })
     }

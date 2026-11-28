@@ -760,7 +760,7 @@ fn expr_is_string_valued(expr: &Expr, state: &AliasState<'_>) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(_) => true,
         ExprKind::BinaryOp { op: BinOp::Concat, .. } => true,
-        ExprKind::Cast { target: CastType::String, .. } => true,
+        ExprKind::Cast { target: CastType::String | CastType::StringFormat, .. } => true,
         ExprKind::Variable(name) => state.string_valued_locals.contains(name),
         _ => false,
     }
@@ -950,7 +950,7 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
         | ExprKind::InstanceOf { .. }
-        | ExprKind::Negate(_)
+        | ExprKind::UnaryPlus(_) | ExprKind::Negate(_)
         | ExprKind::Not(_)
         | ExprKind::BitNot(_)
         | ExprKind::PtrCast { .. }
@@ -1013,7 +1013,7 @@ fn builtin_result_is_proven_independent(name: &str) -> bool {
 /// other way frees the caller's string underneath it, which is why anything this cannot prove
 /// answers `None` rather than guessing: `None` costs a release the caller can always make.
 fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
-    if !matches!(target, CastType::String) {
+    if !matches!(target, CastType::String | CastType::StringFormat) {
         return ReturnArgAlias::None;
     }
     if !expr_keeps_str_slot(inner, state) {
@@ -1224,7 +1224,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
                 apply_expr_effects(target, state);
             }
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

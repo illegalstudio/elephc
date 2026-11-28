@@ -838,7 +838,7 @@ fn test_error_preg_grep_wrong_types() {
     );
     expect_error(
         r#"<?php preg_grep("/a/", "x");"#,
-        "Function 'preg_grep' parameter $array expects array<mixed>, got string",
+        "Function 'preg_grep' parameter $array expects array, got string",
     );
     expect_error(
         r#"<?php preg_grep("/a/", [], "x");"#,

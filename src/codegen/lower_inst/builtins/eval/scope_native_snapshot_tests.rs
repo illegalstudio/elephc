@@ -69,3 +69,28 @@ fn native_reference_reload_preserves_shared_wrapper_identity_on_every_target() {
         assert!(shared < cast, "{name}: already committed canonical writes must bypass the legacy projection");
     }
 }
+
+/// Snapshot retirement uses the bounded cleanup ABI and leaves global callback scopes materialized.
+#[test]
+fn native_snapshot_retirement_uses_guarded_cleanup_on_every_target() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for main_scope in [false, true] {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let function = crate::codegen::shared_helper::helper_function("scope_retirement", PhpType::Void);
+            let layout = crate::codegen::frame::layout_for_function(&function, target, false, false, false);
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            let mut shared = SharedCodegenState::default();
+            {
+                let mut ctx = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                    &mut shared, layout, false, false, false, None);
+                ctx.is_main = main_scope;
+                status::retire_native_scope_snapshots(&mut ctx);
+            }
+            let asm = emitter.output();
+            assert_eq!(asm.contains("__elephc_eval_scope_retire_native_snapshots"), !main_scope, "{name}: {asm}");
+            assert_eq!(asm.contains("__rt_cleanup_invoke"), !main_scope, "{name}: {asm}");
+        }
+    }
+}

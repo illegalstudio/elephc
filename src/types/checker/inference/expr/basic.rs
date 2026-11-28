@@ -22,6 +22,23 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if let ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name)
+            | ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) = &expr.kind {
+            if let Some(ty) = env.get(name) {
+                crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                    ty, expr.span, "increment or decrement", |member| matches!(member,
+                        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Void)
+                        || crate::types::object_operators::binary_plan_with_classes(
+                            &crate::parser::ast::BinOp::Add, member, &PhpType::Int, &self.classes).is_some())?;
+                if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes).is_none() {
+                    if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
+                        elephc_semantics::numeric_domains::NumericOperator::Update) {
+                        crate::semantics::numeric::validate_unary_type(rule, ty, expr.span)?;
+                    }
+                }
+            }
+        }
         match &expr.kind {
             ExprKind::IncludeValue { .. } => unreachable!(
                 "ExprKind::IncludeValue must be expanded by the resolver"
@@ -44,6 +61,12 @@ impl Checker {
                     // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
                     // warning is emitted by EIR lowering at the read site so it carries the
                     // caller's file/line and participates in `@` suppression and handlers.
+                    Err(error) if self.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+                        && self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && error.message.starts_with("Undefined variable: $") => {
+                        return Err(CompileError::new(expr.span,
+                            &elephc_semantics::initialization::variable_message(name)));
+                    }
                     Err(error) if !self.strict_locals
                         && error.message.starts_with("Undefined variable: $") => PhpType::Void,
                     Err(error) => return Err(error),
@@ -52,24 +75,35 @@ impl Checker {
                 self.record_local_value_read(name, expr.span, &ty, env);
                 Ok(ty)
             }
-            ExprKind::Negate(inner) => {
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => {
+                let negate = matches!(expr.kind, ExprKind::Negate(_));
                 let ty = self.infer_type(inner, env)?;
+                let operation = if negate { crate::parser::ast::BinOp::Sub } else { crate::parser::ast::BinOp::Add };
+                crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                    &ty, expr.span, "unary arithmetic", |member| matches!(member,
+                        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Str)
+                        || crate::types::object_operators::binary_plan_with_classes(
+                            &operation, &PhpType::Int, member, &self.classes).is_some())?;
                 if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
-                    &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
-                ) {
-                    return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
+                    &operation, &PhpType::Int, &ty, &self.classes,
+                ) { return Ok(plan.result_type(&operation)); }
+                if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
+                    elephc_semantics::numeric_domains::NumericOperator::Unary) {
+                    crate::semantics::numeric::validate_unary_type(rule, &ty, expr.span)?;
                 }
+                if !negate { self.check_arithmetic_string_operand(inner, &ty, expr)?; }
                 match ty {
                     PhpType::Int => {
-                        if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
+                        if !negate || matches!(&inner.kind, ExprKind::IntLiteral(value) if *value != i64::MIN) {
                             Ok(PhpType::Int)
                         } else {
-                            Ok(PhpType::Mixed)
+                            Ok(crate::semantics::mixed::integer_result(self.semantic_profile, self.semantic_source_mode))
                         }
                     }
                     PhpType::Float => Ok(PhpType::Float),
+                    PhpType::Str if !negate => Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode)),
                     PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => {
-                        Ok(PhpType::Mixed)
+                        Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                     }
                     // Negating a counter is ordinary arithmetic — `$i = 4; $i++; echo -$i;` is
                     // `-5` in php — and the union stays the union: negation cannot turn a float
@@ -77,17 +111,20 @@ impl Checker {
                     ref ty if ty.is_int_float_union() => Ok(ty.clone()),
                     _ => Err(CompileError::new(
                         expr.span,
-                        "Cannot negate a non-numeric value",
+                        if negate { "Cannot negate a non-numeric value" } else { "Cannot apply unary plus to a non-numeric value" },
                     )),
                 }
             }
             ExprKind::Not(inner) => {
-                self.infer_type(inner, env)?;
+                let ty = self.infer_type(inner, env)?;
+                self.require_boolean_type(&ty, inner.span)?;
                 Ok(PhpType::Bool)
             }
             ExprKind::ErrorSuppress(inner) => self.infer_type(inner, env),
             ExprKind::Print(inner) => {
-                self.infer_type(inner, env)?;
+                let ty = self.infer_type(inner, env)?;
+                crate::semantics::strings::validate_formatting(self.semantic_profile,
+                    self.semantic_source_mode, &ty, inner.span)?;
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
@@ -104,7 +141,9 @@ impl Checker {
                     }
                     Ok(result)
                 },
-                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
+                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env)
+                    || (self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && self.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)) {
                     PhpType::Int
                 } else { PhpType::Mixed }),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
@@ -184,7 +223,9 @@ impl Checker {
                 let mut key_ty: Option<PhpType> = None;
                 let mut val_ty: Option<PhpType> = None;
                 for (k, v) in pairs {
-                    let kt = normalized_array_key_type(k, self.infer_type(k, env)?);
+                    let raw_key = self.infer_type(k, env)?;
+                    crate::semantics::array_keys::validate(self.semantic_profile, &raw_key, k.span)?;
+                    let kt = normalized_array_key_type(k, raw_key, self.semantic_profile);
                     let vt = self.infer_type(v, env)?;
                     self.record_element_value_view(v, &vt, env);
                     let vt = self.element_storage_type(v, vt);
@@ -227,7 +268,8 @@ impl Checker {
                             self.infer_type(source, env)?
                         }
                         ArrayEntry::Keyed(key, value) => {
-                            self.infer_type(key, env)?;
+                            let key_ty = self.infer_type(key, env)?;
+                            crate::semantics::array_keys::validate(self.semantic_profile, &key_ty, key.span)?;
                             self.infer_type(value, env)?
                         }
                         ArrayEntry::Value(value) => self.infer_type(value, env)?,
@@ -367,7 +409,8 @@ impl Checker {
                 then_expr,
                 else_expr,
             } => {
-                self.infer_type(condition, env)?;
+                let condition_ty = self.infer_type(condition, env)?;
+                self.require_boolean_type(&condition_ty, condition.span)?;
                 // Flow-narrowing across the branches: `$x instanceof X ? ... : ...` (and the other
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
@@ -392,6 +435,7 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
+                self.require_boolean_type(&value_ty, value.span)?;
                 let default_ty = self.match_arm_result_type(default, env)?;
                 let arms = [(&**value, value_ty), (&**default, default_ty)];
                 if let Some(buffer) = buffer_merge_result_type("a `?:`", &arms, expr.span)? {
@@ -405,13 +449,18 @@ impl Checker {
                 self.validate_finally_throw_type(&thrown_ty, expr.span)?;
                 Ok(PhpType::Void)
             }
-            ExprKind::Cast { target, expr } => {
-                let source_ty = self.infer_type(expr, env)?;
+            ExprKind::Cast { target, expr: inner } => {
+                let source_ty = self.infer_type(inner, env)?;
                 use crate::parser::ast::CastType;
+                self.validate_explicit_numeric_cast(self.semantic_source_mode, target, &source_ty, expr.span)?;
+                if *target == CastType::StringFormat {
+                    crate::semantics::strings::validate_formatting(self.semantic_profile,
+                        self.semantic_source_mode, &source_ty, inner.span)?;
+                }
                 Ok(match target {
                     CastType::Int => PhpType::Int,
                     CastType::Float => PhpType::Float,
-                    CastType::String => PhpType::Str,
+                    CastType::String | CastType::StringFormat => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
                     // Shared with EIR lowering so the static type always names the storage
                     // the lowered conversion produces.
@@ -443,6 +492,39 @@ impl Checker {
             }
             _ => unreachable!("non-basic expression routed to basic inference"),
         }
+    }
+}
+
+impl Checker {
+    /// Shares known-kind diagnostics between cast syntax and registered explicit conversion builtins.
+    pub(crate) fn validate_explicit_numeric_cast(&self, source: crate::source::SourceMode,
+        target: &crate::parser::ast::CastType, ty: &PhpType, span: crate::span::Span) -> Result<(), CompileError> {
+        if crate::semantics::conversions::checked_casts(self.semantic_profile, source)
+            && matches!(target, crate::parser::ast::CastType::Int | crate::parser::ast::CastType::Float)
+            && !checked_numeric_cast_possible(ty, &self.classes, &self.interfaces, target) {
+            return Err(CompileError::new(span, elephc_semantics::numeric_cast::NumericCastFailure::UnsupportedKind.message()));
+        }
+        Ok(())
+    }
+}
+
+/// Keeps known scalar and reviewed object domains distinct from dynamically guarded alternatives.
+fn checked_numeric_cast_possible(ty: &PhpType, classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
+    target: &crate::parser::ast::CastType) -> bool {
+    match ty {
+        PhpType::Int | PhpType::Narrow(_) | PhpType::Float | PhpType::Bool | PhpType::False
+        | PhpType::Void | PhpType::Never | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar => true,
+        PhpType::Union(members) => members.iter().any(|member| checked_numeric_cast_possible(member, classes, interfaces, target)),
+        PhpType::Object(name) if name.is_empty() || interfaces.contains_key(name) => true,
+        PhpType::Object(_) => {
+            let cast = if *target == crate::parser::ast::CastType::Int { crate::types::object_operators::ObjectCast::Int }
+                else { crate::types::object_operators::ObjectCast::Float };
+            crate::types::object_operators::cast_class(ty)
+                .or_else(|| crate::types::object_operators::cast_class_with_classes(ty, classes))
+                .is_some_and(|class| crate::types::object_operators::cast_method(class, cast).is_some())
+        }
+        _ => false,
     }
 }
 

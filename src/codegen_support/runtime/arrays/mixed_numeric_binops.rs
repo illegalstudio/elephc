@@ -30,6 +30,7 @@ use crate::codegen_support::{
 ///         x86_64 rax=left Mixed*, rdi=right Mixed*
 /// Output: boxed Mixed pointer in the integer result register (x0 / rax)
 pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
+    super::strict_mixed_numeric::emit_basic(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_numeric_binops_linux_x86_64(emitter);
         return;

@@ -335,6 +335,11 @@ pub fn generated_local_name(stem: &str) -> String {
     format!("{stem}{GENERATED_LOCAL_MARKER}")
 }
 
+/// Names immutable producer metadata carried beside a PHP closure capture.
+pub fn captured_contract_local_name(source: &str) -> String {
+    generated_local_name(&format!("__elephc_capture_contract_{source}"))
+}
+
 /// Returns whether a local's storage name was synthesized by the compiler.
 ///
 /// This is the ONE predicate every PHP-visible variable enumeration consults, so AOT

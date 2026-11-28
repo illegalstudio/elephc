@@ -183,7 +183,6 @@ fn lower_ordinary_assignment_expr(
         assigned_name.and_then(|_| reflection_property_binding_for_expr(ctx, value));
     let reflected_method =
         assigned_name.and_then(|_| reflection_method_binding_for_expr(ctx, value));
-    let reflected_args = assigned_name.and_then(|_| reflection_arg_array_binding_for_expr(value));
     let fiber_start_sig =
         assigned_name.and_then(|_| crate::ir_lower::fibers::start_sig_for_expr(ctx, value));
     let callable_array = assigned_name
@@ -194,6 +193,8 @@ fn lower_ordinary_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
+        let contract_store = crate::ir_lower::conversion_boundaries::local_store(ctx, name, lowered, expr.span);
+        let lowered = contract_store.as_ref().map_or(lowered, |stored| stored.0);
         let lowered = if ctx.integer_local_declarations.contains(name) {
             coerce_integer_arithmetic(ctx, lowered, &PhpType::Int, expr.span)
         } else {
@@ -211,7 +212,9 @@ fn lower_ordinary_assignment_expr(
         );
         let is_ref_bound = ctx.is_ref_bound_local(name);
         let existing_type = ctx.local_types.get(name).cloned();
-        let php_type = if let Some(storage) = crate::ir_lower::stmt::union_local_storage_type(ctx, name, value, &value_php_type) {
+        let php_type = if let Some((_, contract)) = contract_store {
+            contract
+        } else if let Some(storage) = crate::ir_lower::stmt::union_local_storage_type(ctx, name, value, &value_php_type) {
             storage
         } else if is_static || is_ref_bound {
             existing_type.unwrap_or(value_php_type)
@@ -222,6 +225,7 @@ fn lower_ordinary_assignment_expr(
         let (lowered, php_type) =
             crate::ir_lower::stmt::retype_value_for_pointer_local(ctx, name, lowered, expr.span)
                 .unwrap_or((lowered, php_type));
+        crate::ir_lower::local_binding_origins::prepare(ctx, name, expr.span);
         ctx.store_local(name, lowered, php_type, Some(expr.span));
         result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array
@@ -241,9 +245,6 @@ fn lower_ordinary_assignment_expr(
         }
         if let Some((reflected_class, reflected_method)) = reflected_method {
             ctx.bind_reflection_method_local(name, reflected_class, reflected_method);
-        }
-        if let Some(reflected_args) = reflected_args {
-            ctx.bind_reflection_arg_array_local(name, reflected_args);
         }
         if let Some(sig) = fiber_start_sig {
             ctx.bind_fiber_start_sig(name, sig);
@@ -751,12 +752,12 @@ fn runtime_name_value_needs_boxing(
 
 /// Emits PHP's warning for a decrement that leaves a null local unchanged.
 fn emit_null_decrement_warning(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    if crate::codegen_support::compile_php_version() < crate::php_version::PhpVersion::Php83 { return; }
     let message = lower_expr(
         ctx,
         &Expr::new(
             ExprKind::StringLiteral(
-                "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n"
-                    .into(),
+                elephc_semantics::numeric::NULL_DECREMENT_WARNING.into(),
             ),
             span,
         ),
@@ -794,6 +795,11 @@ pub(super) fn lower_inc_dec(
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
+    let update_policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    let checked_update = update_policy.checked_overflow();
+    let guarded_update = !update_policy.is_permissive()
+        || (ctx.source_mode != crate::source::SourceMode::Internal
+            && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Locals));
     let op = if increment { BinOp::Add } else { BinOp::Sub };
     if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
         &op, &existing_type, &PhpType::Int, ctx.classes,
@@ -801,20 +807,26 @@ pub(super) fn lower_inc_dec(
         let return_old = if post {
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
         } else { old };
+        let old_pins = if guarded_update && post { pin_in_flight_owners(ctx, &[return_old.value], expr.span) } else { Vec::new() };
         let one = lower_int_literal(ctx, 1, expr);
         let new = object_operators::lower_object_binary_values(ctx, old, &op, one, expr)
             .or_else(|| object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,
                 |ctx| lower_str_inc_dec(ctx, old, increment, expr)));
         if let Some(new) = new {
             let stored_type = if plan.result_type(&op).is_int_float_union() { PhpType::Mixed } else { existing_type };
-            ctx.store_local(name, new, stored_type, Some(expr.span));
+            store_checked_update(ctx, name, new, stored_type, expr.span);
+            unpin_in_flight_owners(ctx, old_pins, expr.span);
             return if post { return_old } else { ctx.load_local(name, Some(expr.span)) };
         }
+        unpin_in_flight_owners(ctx, old_pins, expr.span);
+    }
+    if !matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
+        crate::ir_lower::numeric_domains::unary(ctx, old, elephc_semantics::numeric_domains::NumericOperator::Update, expr.span);
     }
     if matches!(existing_type.codegen_repr(), PhpType::Void) {
         if increment {
             let one = lower_int_literal(ctx, 1, expr);
-            ctx.store_local(name, one, PhpType::Int, Some(expr.span));
+            store_checked_update(ctx, name, one, PhpType::Int, expr.span);
             return if post { old } else { ctx.load_local(name, Some(expr.span)) };
         }
         emit_null_decrement_warning(ctx, expr.span);
@@ -826,12 +838,14 @@ pub(super) fn lower_inc_dec(
         } else {
             old
         };
+        let old_pins = if guarded_update && post { pin_in_flight_owners(ctx, &[return_old.value], expr.span) } else { Vec::new() };
         let one = lower_int_literal(ctx, 1, expr);
         let op = if increment { BinOp::Add } else { BinOp::Sub };
         let new = object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,
             |ctx| lower_str_inc_dec(ctx, old, increment, expr))
             .unwrap_or_else(|| lower_str_inc_dec(ctx, old, increment, expr));
-        ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
+        store_checked_update(ctx, name, new, PhpType::Mixed, expr.span);
+        unpin_in_flight_owners(ctx, old_pins, expr.span);
         return if post {
             return_old
         } else {
@@ -843,6 +857,12 @@ pub(super) fn lower_inc_dec(
     }
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
+    if checked_update {
+        let operation = if increment { MixedNumericOp::Add } else { MixedNumericOp::Sub };
+        let new = crate::ir_lower::checked_arithmetic::binary(ctx, operand, operation, one, expr.span);
+        store_checked_update(ctx, name, new, PhpType::Int, expr.span);
+        return if post { old } else { ctx.load_local(name, Some(expr.span)) };
+    }
     // Guards and coalescing can prove an int read while its slot stays nullable.
     // Accepted updates still need checked arithmetic and a boxed result at overflow.
     let nullable_int = matches!(&existing_type, PhpType::Union(members)
@@ -851,7 +871,10 @@ pub(super) fn lower_inc_dec(
     let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int) || nullable_int;
     // An incoming typed reference addresses the caller's tagged cell, which cannot hold a
     // float. Use the existing checked scalar-storage diagnostic instead of writing float bits.
-    let fixed_tagged_reference = nullable_int && ctx.is_ref_bound_local(name);
+    let checked_local_binding = ctx.local_store_contracts.get(
+        &(ctx.loop_storage_scope.clone(), expr.span, name.to_string()))
+        .is_some_and(|contract| contract.feature == elephc_semantics::StrictFeature::Locals);
+    let fixed_tagged_reference = nullable_int && ctx.is_ref_bound_local(name) && !checked_local_binding;
     let iop = match (increment, checked_int_local, fixed_tagged_reference) {
         (true, _, true) => Op::ICheckedAddToInt,
         (false, _, true) => Op::ICheckedSubToInt,
@@ -881,10 +904,18 @@ pub(super) fn lower_inc_dec(
         )
         .expect("integer inc/dec produces a value");
     let new = LoweredValue { value: new, ir_type: result_ir_type };
-    ctx.store_local(name, new, result_php_type, Some(expr.span));
+    store_checked_update(ctx, name, new, result_php_type, expr.span);
     if post {
         old
     } else {
         ctx.load_local(name, Some(expr.span))
     }
+}
+
+/// Validates an update result before writing its original binding, preserving PHP arithmetic.
+fn store_checked_update(ctx: &mut LoweringContext<'_, '_>, name: &str,
+    value: LoweredValue, ty: PhpType, span: Span) {
+    let (value, ty) = crate::ir_lower::conversion_boundaries::local_store(ctx, name, value, span)
+        .unwrap_or((value, ty));
+    ctx.store_local(name, value, ty, Some(span));
 }

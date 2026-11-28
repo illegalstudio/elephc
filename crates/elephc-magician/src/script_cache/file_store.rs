@@ -110,7 +110,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 35 adds the `@` and `throw` expressions, `const` statements, the `@` token, and the
 /// by-reference return flag of eval functions and closures.
 /// Format 36 adds the enum-case receiver check of property fetches in `const` initializers.
-pub(crate) const FORMAT_VERSION: u32 = 36;
+/// Format 37 combines the Chopper payload and its semantic profile with those AST changes.
+pub(crate) const FORMAT_VERSION: u32 = 37;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
@@ -126,10 +127,14 @@ fn system_id() -> String {
 /// used, so this struct is the contract rather than a convenience wrapper.
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct CacheFile {
+    // The leading magic and format fields remain first for the bounded raw-header check.
     /// Guards against reading a file that is not one of ours at all.
     magic: u64,
     /// Guards against an older or newer stored shape. See [`FORMAT_VERSION`].
     format_version: u32,
+    /// The neutral semantic ABI and exact parser policy which produced these segments.
+    semantics_abi: u32,
+    semantic_bits: u64,
     /// The canonical source path, so a file-name hash collision is a miss, not a mix-up.
     ///
     /// Its BYTES, as the filesystem names the file (see [`path_bytes`]). It was a lossy
@@ -164,13 +169,29 @@ fn cache_dir(config: &ScriptCacheConfig) -> Option<PathBuf> {
     Some(Path::new(&file_cache.path).join(system_id()))
 }
 
-/// Returns the file one script's entry is stored in.
+/// Returns the file one script-and-profile entry is stored in.
 ///
-/// The name is a 64-bit hash of the canonical path rather than the path itself: a path can
-/// be longer than a file name may be, and can contain separators. The full path is carried
-/// in the header, so the hash only has to spread entries out, not identify them.
+/// The name combines a 64-bit hash of the canonical path with the semantic ABI and exact
+/// profile. A path can be longer than a file name may be and can contain separators, while
+/// different eval contexts must retain independent saved scripts. The complete identity is
+/// still carried in the header, so a hash collision remains a miss rather than wrong code.
+fn entry_path_with_semantics(
+    dir: &Path,
+    canonical: &Path,
+    profile: elephc_semantics::SemanticProfile,
+) -> PathBuf {
+    dir.join(format!(
+        "{:016x}-{:08x}-{:016x}.bin",
+        stable_hash(path_bytes(canonical)),
+        elephc_semantics::SEMANTICS_ABI_VERSION,
+        profile.bits()
+    ))
+}
+
+/// Returns the permissive entry path used by format-focused tests.
+#[cfg(test)]
 fn entry_path(dir: &Path, canonical: &Path) -> PathBuf {
-    dir.join(format!("{:016x}.bin", stable_hash(path_bytes(canonical))))
+    entry_path_with_semantics(dir, canonical, elephc_semantics::SemanticProfile::PERMISSIVE)
 }
 
 /// The bytes that identify a script: the path exactly as the filesystem names it.
@@ -212,6 +233,7 @@ pub(crate) fn stable_hash(bytes: &[u8]) -> u64 {
 ///
 /// Returns `None` for every failure mode — absent, foreign, stale, unreadable or corrupt —
 /// because each of them means the same thing to the caller: parse the file instead.
+#[cfg(test)]
 pub(crate) fn load(
     config: &ScriptCacheConfig,
     canonical: &Path,
@@ -239,14 +261,27 @@ pub(crate) struct DiskEntry {
 /// `validate_timestamps=0` recorded none, so once validation was turned back on the entry
 /// was never re-checked and a changed source kept running the stored version. MEASURED:
 /// reference printed `A B-longer`, elephc `A A`.
+#[cfg(test)]
 pub(crate) fn load_entry(
     config: &ScriptCacheConfig,
     canonical: &Path,
     mtime: Option<i64>,
     size: u64,
 ) -> Option<DiskEntry> {
+    load_entry_with_semantics(config, canonical, mtime, size, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Reads an entry only when its semantic ABI and profile match the requesting context.
+pub(crate) fn load_entry_with_semantics(
+    config: &ScriptCacheConfig,
+    canonical: &Path,
+    mtime: Option<i64>,
+    size: u64,
+    profile: elephc_semantics::SemanticProfile,
+) -> Option<DiskEntry> {
     let dir = cache_dir(config)?;
-    let bytes = std::fs::read(entry_path(&dir, canonical)).ok()?;
+    let entry_path = entry_path_with_semantics(&dir, canonical, profile);
+    let bytes = std::fs::read(&entry_path).ok()?;
     // The header is checked on the RAW BYTES, before anything is decoded. The same two fields
     // are re-checked below on the decoded struct, and that is not redundant: the decoded check
     // can only reject what the decoder already agreed to build, so it cannot protect the
@@ -266,7 +301,9 @@ pub(crate) fn load_entry(
         .allow_trailing_bytes()
         .with_limit(bytes.len() as u64);
     let cached: CacheFile = decoder.deserialize(&bytes).ok()?;
-    if cached.magic != MAGIC || cached.format_version != FORMAT_VERSION {
+    if cached.magic != MAGIC || cached.format_version != FORMAT_VERSION
+        || elephc_semantics::SemanticProfile::from_abi(u64::from(cached.semantics_abi), cached.semantic_bits) != Ok(profile)
+    {
         return None;
     }
     // IDENTITY IS UNCONDITIONAL, FRESHNESS IS NOT, and the two were conflated here.
@@ -282,7 +319,9 @@ pub(crate) fn load_entry(
     // the cache is authoritative. MEASURED across two processes sharing a cache directory
     // with the source rewritten between them — reference runs the STORED version, elephc
     // re-read the new one, which is the opposite of what the directive asks for.
-    if cached.path != path_bytes(canonical) {
+    if cached.path != path_bytes(canonical)
+        || !cached.segments.iter().all(|segment| segment.matches_semantic_profile(profile))
+    {
         return None;
     }
     // The TIMESTAMP ALONE, for the same reason as the in-memory path: php-src validates a
@@ -299,7 +338,7 @@ pub(crate) fn load_entry(
         // MEASURED, a query rejects version A, then `validate_timestamps` is turned off and
         // the file included — reference runs the new source, elephc resurrected A.
         if !super::file_cache::file_cache_config().read_only {
-            let _ = std::fs::remove_file(entry_path(&dir, canonical));
+            let _ = std::fs::remove_file(&entry_path);
         }
         return None;
     }
@@ -316,7 +355,7 @@ pub(crate) fn load_entry(
 /// created if possible, and any I/O failure leaves the caller with a working — merely
 /// uncached — include.
 ///
-/// Test-only since round 10: production writes go through [`store_entry`], which also records
+/// Test-only since round 10: production writes go through [`store_entry_with_semantics`], which also records
 /// the revalidation deadline.
 #[cfg(test)]
 pub(crate) fn store(
@@ -330,6 +369,7 @@ pub(crate) fn store(
 }
 
 /// [`store`], also recording the writer's revalidation deadline. See [`DiskEntry::revalidate`].
+#[cfg(test)]
 pub(crate) fn store_entry(
     config: &ScriptCacheConfig,
     canonical: &Path,
@@ -337,6 +377,19 @@ pub(crate) fn store_entry(
     size: u64,
     revalidate: i64,
     segments: &[ScriptSegment],
+) {
+    store_entry_with_semantics(config, canonical, mtime, size, revalidate, segments, elephc_semantics::SemanticProfile::PERMISSIVE);
+}
+
+/// Persists the parser profile alongside the immutable parsed segments.
+pub(crate) fn store_entry_with_semantics(
+    config: &ScriptCacheConfig,
+    canonical: &Path,
+    mtime: Option<i64>,
+    size: u64,
+    revalidate: i64,
+    segments: &[ScriptSegment],
+    profile: elephc_semantics::SemanticProfile,
 ) {
     if super::file_cache::file_cache_config().read_only {
         return;
@@ -350,6 +403,8 @@ pub(crate) fn store_entry(
     let payload = CacheFile {
         magic: MAGIC,
         format_version: FORMAT_VERSION,
+        semantics_abi: elephc_semantics::SEMANTICS_ABI_VERSION,
+        semantic_bits: profile.bits(),
         path: path_bytes(canonical).to_vec(),
         mtime,
         size,
@@ -368,7 +423,7 @@ pub(crate) fn store_entry(
     // name as predictable as the old `<entry>.tmp<pid>` it would truncate whatever a symlink
     // planted there pointed at. The collision half is not hypothetical even without an
     // attacker: PIDs are reused, and `--web` preforks several workers over one directory.
-    let target = entry_path(&dir, canonical);
+    let target = entry_path_with_semantics(&dir, canonical, profile);
     let Some((mut file, temp)) = create_temp_entry(&target) else {
         return;
     };
@@ -455,17 +510,24 @@ fn create_temp_entry_named(
 ///
 /// This is what `opcache_is_script_cached_in_file_cache()` answers, so it applies the same
 /// validation a read does: reporting an entry that a read would reject would be a lie.
+#[cfg(test)]
 pub(crate) fn contains(canonical: &Path) -> bool {
+    contains_with_semantics(canonical, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Answers whether disk has an entry usable under this context's parser policy.
+pub(crate) fn contains_with_semantics(canonical: &Path, profile: elephc_semantics::SemanticProfile) -> bool {
     let Ok(metadata) = std::fs::metadata(canonical) else {
         return false;
     };
     let canonical = std::fs::canonicalize(canonical).unwrap_or_else(|_| canonical.to_path_buf());
     let mtime = super::store::mtime_seconds(&metadata);
-    load(
+    load_entry_with_semantics(
         &super::config::config(),
         &canonical,
         mtime,
         metadata.len(),
+        profile,
     )
     .is_some()
 }
@@ -480,8 +542,9 @@ pub(crate) fn contains(canonical: &Path) -> bool {
 /// UNLIKE `load`, THIS DOES NOT VALIDATE. `load` refuses an entry whose recorded mtime,
 /// size or path no longer match the source, which is right when deciding whether to EXECUTE
 /// it and wrong when deciding whether to DELETE it: a stale entry is exactly the one that
-/// most needs removing, and validating first would skip it. The path is derived from the
-/// canonical source path alone, so a mismatch cannot make this delete someone else's entry.
+/// most needs removing, and validating first would skip it. Every semantic variant of the
+/// path is removed. The legacy path-only name is removed too, so upgrading the naming scheme
+/// cannot leave an invalidated script behind as dead data.
 ///
 /// A missing directory, a missing entry and a read-only cache are all "nothing to remove"
 /// rather than errors — the same posture as `store`, which is silent when it cannot write.
@@ -498,7 +561,23 @@ pub(crate) fn invalidate(config: &ScriptCacheConfig, canonical: &Path) -> bool {
     let Some(dir) = cache_dir(config) else {
         return false;
     };
-    std::fs::remove_file(entry_path(&dir, canonical)).is_ok()
+    let path_hash = stable_hash(path_bytes(canonical));
+    let legacy = dir.join(format!("{path_hash:016x}.bin"));
+    let mut removed = std::fs::remove_file(legacy).is_ok();
+    let prefix = format!("{path_hash:016x}-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return removed;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with(&prefix) && name.ends_with(".bin") {
+            removed |= std::fs::remove_file(entry.path()).is_ok();
+        }
+    }
+    removed
 }
 
 #[cfg(test)]
@@ -518,6 +597,14 @@ mod tests {
     use super::super::file_cache::{set_file_cache_config, FileCacheConfig};
     use super::super::segments::{segment_script, ParseMode};
     use super::*;
+
+    /// Owns a test-created directory through assertion failures as well as successful reads.
+    struct OwnedTestDirectory(PathBuf);
+
+    impl Drop for OwnedTestDirectory {
+        /// Removes exactly the directory assigned by this test's configuration helper.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
 
     /// Points the thread's file cache at a fresh directory and returns it.
     fn configure(name: &str, read_only: bool) -> (ScriptCacheConfig, PathBuf) {
@@ -542,7 +629,8 @@ mod tests {
     /// Verifies a stored script comes back with the same segment shape.
     #[test]
     fn a_stored_script_round_trips() {
-        let (config, _dir) = configure("roundtrip", false);
+        let (config, dir) = configure("roundtrip", false);
+        let _owned_directory = OwnedTestDirectory(dir);
         let source = b"<?php $a = 1; ?>tail<?php $b = 2;";
         let segments = segment_script(source, ParseMode::Fresh);
         let path = Path::new("/tmp/elephc-file-store-roundtrip.php");
@@ -555,6 +643,24 @@ mod tests {
             Some(segments.len()),
             "the entry must come back with every segment"
         );
+    }
+
+    /// Serialized interpolation retains its formatting cast instead of becoming an implicit concat.
+    #[test]
+    fn strict_string_cached_interpolation_preserves_formatting_context() {
+        use crate::eval_ir::{EvalBinOp, EvalCastType, EvalExpr, EvalStmt};
+        let (config, dir) = configure("string_formatting", false);
+        let _owned_directory = OwnedTestDirectory(dir.clone());
+        let source = br#"<?php echo "$number";"#;
+        let segments = segment_script(source, ParseMode::Fresh);
+        let path = dir.join("formatting.php");
+        store(&config, &path, Some(42), source.len() as u64, &segments);
+        let loaded = load(&config, &path, Some(42), source.len() as u64).expect("cached formatting");
+        let ScriptSegment::Code(program) = &loaded[0] else { panic!("cached program"); };
+        let EvalStmt::Echo(EvalExpr::Binary { op: EvalBinOp::Concat, right, .. }) =
+            &program.statements()[0] else { panic!("interpolation"); };
+        assert!(matches!(&**right, EvalExpr::Cast { target: EvalCastType::StringFormat, expr }
+            if matches!(&**expr, EvalExpr::LoadVar(name) if name == "number")));
     }
 
     /// Verifies a source whose TIMESTAMP moved is refused, and one whose size alone moved is
@@ -677,6 +783,7 @@ mod tests {
     #[test]
     fn an_entry_from_an_older_format_version_is_refused() {
         let (config, dir) = configure("old_version", false);
+        let _owned_directory = OwnedTestDirectory(dir.clone());
         let source = b"<?php $a = 1;";
         let segments = segment_script(source, ParseMode::Fresh);
         let path = Path::new("/tmp/elephc-file-store-old-version.php");
@@ -832,7 +939,8 @@ mod tests {
     /// parses the script, rather than half-decoding one into execution.
     #[test]
     fn a_hostile_length_prefix_is_refused_not_allocated() {
-        let (config, _dir) = configure("hostile", false);
+        let (config, fixture_dir) = configure("hostile", false);
+        let _cleanup = OwnedTestDirectory(fixture_dir);
         let dir = cache_dir(&config).expect("cache dir configured");
         std::fs::create_dir_all(&dir).expect("entry dir");
         let path = Path::new("/tmp/elephc-file-store-hostile.php");
@@ -840,7 +948,9 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&MAGIC.to_le_bytes());
         bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        // A `String` length of 2^60: the decoder would reserve it before reading a byte of it.
+        bytes.extend_from_slice(&elephc_semantics::SEMANTICS_ABI_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        // A path length of 2^60: the decoder would reserve it before reading a byte of it.
         bytes.extend_from_slice(&(1u64 << 60).to_le_bytes());
         bytes.extend_from_slice(b"short");
         std::fs::write(entry_path(&dir, path), &bytes).expect("hostile entry written");

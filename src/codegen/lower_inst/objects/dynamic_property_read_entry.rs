@@ -468,8 +468,12 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     }
 
     ctx.emitter.label(&stdclass_label);
-    emit_runtime_stdclass_get_for_stacked_name(ctx, inst, 16, 0)?;
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if ctx.property_read_requires_initialization() {
+        lower_runtime_allow_dynamic_prop_get(ctx, inst, 8, 16, 0, 32)?;
+    } else {
+        emit_runtime_stdclass_get_for_stacked_name(ctx, inst, 16, 0)?;
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);

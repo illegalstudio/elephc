@@ -70,6 +70,7 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 /// scalar-only unions with no array member remain compile-time errors.
 pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    cx.checker.require_mixed_countable_type(&ty, cx.args[0].span)?;
     match &ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
         PhpType::Union(members) if members.iter().any(|member|

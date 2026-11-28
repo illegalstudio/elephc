@@ -51,6 +51,7 @@ fn reject_invalid_binding(
         false, signature.variadic.is_some()
             && !crate::func_args::sig_collects_surplus_args(signature),
         &assoc_spread_sources(ctx, args),
+        ctx.semantic_profile,
     );
     let error = match plan {
         Ok(plan) => plan.statically_missing_positionals(signature).map(|(provided, required)| {
@@ -67,6 +68,7 @@ fn reject_invalid_binding(
         }),
         Err(error) => Some(method_argument_error(
             class, method, signature, args, error,
+            ctx.semantic_profile,
         )),
     };
     if let Some(error) = error {
@@ -167,7 +169,7 @@ fn staged_argument_bindings(
             _ => projected.push(source),
         }
     }
-    let projected = crate::types::call_args::expand_static_assoc_spread_args(&projected);
+    let projected = crate::types::call_args::expand_static_assoc_spread_args(&projected, ctx.semantic_profile);
     if projected.iter().any(is_spread_arg) { return Vec::new(); }
     // Defaults are placeholders for the shared planner's omitted-slot provenance only.
     // They are never evaluated, and guard iteration stops at the first required omission.
@@ -177,7 +179,7 @@ fn staged_argument_bindings(
     for default in partial.defaults.iter_mut().take(regular) {
         if default.is_none() { *default = Some(Expr::new(ExprKind::Null, span)); }
     }
-    crate::types::call_args::plan_call_args(&partial, &projected, span, false, false)
+    crate::types::call_args::plan_call_args(&partial, &projected, span, false, false, ctx.semantic_profile)
         .map(|plan| {
             let defaults = plan.default_argument_mask();
             plan.normalized_args().into_iter().take(regular).enumerate()
@@ -208,11 +210,12 @@ fn statically_supplied_argument_count(args: &[Expr]) -> Option<usize> {
 fn method_argument_error(
     class: &str, method: &str, signature: &FunctionSig, args: &[Expr],
     error: crate::types::call_args::CallArgPlanError,
+    profile: elephc_semantics::SemanticProfile,
 ) -> MethodArgumentError {
     use crate::types::call_args::CallArgPlanError;
     let (exception_class, message) = match error {
         CallArgPlanError::MissingRequired { param_idx, .. } => {
-            let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+            let expanded = crate::types::call_args::expand_static_assoc_spread_args(args, profile);
             let later_named_parameter = expanded.iter().any(|arg| {
                 let ExprKind::NamedArg { name, .. } = &arg.kind else { return false };
                 crate::types::call_args::named_param_index(

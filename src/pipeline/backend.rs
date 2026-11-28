@@ -267,7 +267,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         generated_user_asm.asm
     };
     let user_asm = if emit == Emit::Phpext {
-        match crate::phpext::build::assembly(&user_asm, heap_size, target, runtime_features) {
+        match crate::phpext::build::assembly_with_semantics(&user_asm, heap_size, target, runtime_features, ir_module.semantic_profile) {
             Ok(asm) => asm,
             Err(error) => { eprintln!("PHP extension error: {error}"); process::exit(1); }
         }
@@ -332,11 +332,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("runtime-cache");
     let phase_started = Instant::now();
-    let runtime_object = match runtime_cache::prepare_runtime_object_for_emit(
+    let runtime_object = match runtime_cache::prepare_runtime_object_for_emit_with_semantics(
         heap_size,
         target,
         runtime_features,
         emit,
+        ir_module.semantic_profile,
     ) {
         Ok(runtime_object) => runtime_object,
         Err(err) => {

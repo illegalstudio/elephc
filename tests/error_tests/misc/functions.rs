@@ -82,7 +82,7 @@ fn test_error_closure_ref_param_requires_variable() {
 fn test_error_function_typed_param_rejects_wrong_argument() {
     expect_error(
         "<?php function foo(int $x) { echo $x; } foo(\"hello\");",
-        "Function 'foo' parameter $x expects int, got string — PHP throws `TypeError` for the non-numeric string \"hello\" at an `int` parameter",
+        "Function 'foo' parameter $x expects int, got string: PHP throws `TypeError` for the non-numeric string \"hello\" at an `int` parameter",
     );
 }
 
@@ -711,14 +711,13 @@ fn test_error_by_value_self_capture_still_undefined() {
     );
 }
 
-/// Verifies that a by-ref capture of a variable that is NOT the assignment
-/// target is still rejected as undefined (issue #382 guard).
+/// A by-reference capture is a reference-forming source, so a missing variable starts as null
+/// independently of the closure assignment target.
 #[test]
-fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
-    expect_error(
-        "<?php $g = function() use(&$h) { return $h; };",
-        "Undefined variable in use()",
-    );
+fn test_by_ref_capture_creates_a_missing_source() {
+    let source = "<?php $g = function() use(&$h) { return $h; };";
+    expect_no_error(source);
+    expect_no_error_strict(source);
 }
 
 /// Issue #892: the MIRROR of the test above — a NON-nullable by-reference parameter handed

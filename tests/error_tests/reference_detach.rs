@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Detachment ends an ordinary local alias and permits a fresh binding with a new type.
-//! - Conditional, global, static, declared and eval-visible bindings retain their existing handling.
+//! - Conditional, global, declared and eval-visible bindings retain their existing handling.
+//! - A static binding keeps persistent storage while each function activation may detach its name.
 
 use super::*;
 
@@ -55,7 +56,6 @@ fn test_reference_detach_rejects_conditional_and_shared_storage() {
         "<?php $text = 'x'; $saved = function() use (&$text) { return $text; }; eval('return null;'); unset($text); echo $saved();",
         "<?php function shared() { global $text; } $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved();",
         "<?php $text = 'x'; function shared() { global $text; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } shared();",
-        "<?php function shared() { static $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } shared();",
         "<?php string $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved();",
         "<?php $values = ['x']; foreach ($values as &$text) { $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); }",
     ] {
@@ -63,6 +63,22 @@ fn test_reference_detach_rejects_conditional_and_shared_storage() {
             .unwrap_or_else(|error| panic!("{}\n{source}", error.message));
         assert!(result.local_ref_detach_sites.is_empty(), "{source}: {:?}", result.local_ref_detach_sites);
     }
+}
+
+/// An activation may detach its local name without abandoning a static binding's persistent cell.
+#[test]
+fn test_reference_detach_accepts_static_activation_storage() {
+    let result = check_source_full(
+        "<?php function shared() { static $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); $text = 1; echo $saved(), ':', $text; } shared();",
+    )
+    .expect("the detached static activation must accept a fresh local binding");
+    assert_eq!(result.local_ref_detach_sites.len(), 1);
+    assert!(
+        result
+            .local_ref_detach_sites
+            .values()
+            .any(|names| names.contains("text"))
+    );
 }
 
 /// An incoming by-reference parameter can detach its callee-local name from caller storage.

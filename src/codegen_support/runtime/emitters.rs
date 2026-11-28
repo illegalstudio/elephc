@@ -24,6 +24,9 @@ use crate::codegen_support::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    super::semantic_guards::emit(emitter);
+    super::strict_comparators::emit(emitter);
+    super::strict_numeric::emit(emitter);
     diagnostics::emit_diagnostics(emitter, features);
     // The filter bridge is linked by any program that injects its prelude, and by the
     // eval bridge's dynamic catalog. Emit the stubs in both cases; `filter_regex` only

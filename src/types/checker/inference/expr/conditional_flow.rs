@@ -20,6 +20,8 @@ use super::super::super::{Checker, GuardedLocalStorage, NarrowedLocalOrigin};
 pub(in crate::types::checker) struct ConditionalFlow {
     all_locals: bool,
     bound_entry: HashSet<String>,
+    inferred_entry: TypeEnv,
+    inferred_joined: Option<TypeEnv>,
     bound_joined: Option<HashSet<String>>,
     storage: HashMap<String, GuardedLocalStorage>,
     origins: HashMap<String, NarrowedLocalOrigin>,
@@ -36,6 +38,7 @@ pub(in crate::types::checker) struct ConditionalFlow {
 pub(in crate::types::checker) struct FlowSnapshot {
     pub views: TypeEnv,
     pub bound: HashSet<String>,
+    inferred: TypeEnv,
     storage: HashMap<String, GuardedLocalStorage>,
     origins: HashMap<String, NarrowedLocalOrigin>,
 }
@@ -68,6 +71,8 @@ impl Checker {
         }).collect();
         ConditionalFlow {
             all_locals, bound_entry: self.definitely_bound_locals.clone(),
+            inferred_entry: self.inferred_local_contracts.clone(),
+            inferred_joined: Some(self.inferred_local_contracts.clone()),
             bound_joined: Some(self.definitely_bound_locals.clone()),
             storage: self.guarded_union_types.clone(),
             origins: self.narrowed_local_origins.clone(),
@@ -77,7 +82,7 @@ impl Checker {
 
     /// Saves an edge before a branch restores its temporary read views.
     pub(in crate::types::checker) fn snapshot_flow_exit(&self, env: &TypeEnv) -> FlowSnapshot {
-        let mut edge = FlowSnapshot { views: env.clone(), bound: self.definitely_bound_locals.clone(), storage: self.guarded_union_types.clone(),
+        let mut edge = FlowSnapshot { inferred: self.inferred_local_contracts.clone(), views: env.clone(), bound: self.definitely_bound_locals.clone(), storage: self.guarded_union_types.clone(),
             origins: self.narrowed_local_origins.clone() };
         for (name, origin) in &edge.origins {
             let Some(view) = edge.views.get_mut(name) else { continue; };
@@ -103,6 +108,7 @@ impl Checker {
             if origin.view.is_some() { origin.view = edge.views.get(name).cloned(); }
         }
         self.definitely_bound_locals = edge.bound.clone();
+        self.inferred_local_contracts = edge.inferred.clone();
         *env = edge.views.clone();
     }
 
@@ -154,6 +160,7 @@ impl Checker {
         for edge in &edges[1..] {
             let edge = self.flow_snapshot_in_guard_scope(edge, guards);
             joined.bound.retain(|name| edge.bound.contains(name));
+            self.join_inferred_contracts(&mut joined.inferred, &edge.inferred);
             for (name, view) in &edge.views {
                 let next_storage = self.snapshot_storage_type(&edge, name).expect("edge local");
                 let physical = self.snapshot_storage_type(&joined, name).map_or_else(
@@ -187,6 +194,7 @@ impl Checker {
     /// Restores tail storage without reopening guard-origin scopes that ended in the body.
     pub(in crate::types::checker) fn restore_tail_flow_storage(&mut self, edge: &FlowSnapshot) {
         self.definitely_bound_locals = edge.bound.clone();
+        self.inferred_local_contracts = edge.inferred.clone();
         self.guarded_union_types = edge.storage.clone();
         for name in edge.views.keys() {
             if self.narrowed_local_origins.get(name).is_some_and(|origin|
@@ -213,6 +221,7 @@ impl Checker {
     /// Restores an alternative's entry contracts without discarding other checker metadata.
     fn restore_conditional_flow(&mut self, flow: &ConditionalFlow) {
         self.definitely_bound_locals = flow.bound_entry.clone();
+        self.inferred_local_contracts = flow.inferred_entry.clone();
         self.guarded_union_types = flow.storage.clone();
         self.narrowed_local_origins = flow.origins.clone();
         self.restore_introduced_storage(flow, flow);
@@ -241,6 +250,7 @@ impl Checker {
         &mut self, flow: &ConditionalFlow, entry: &ConditionalFlow,
     ) {
         self.guarded_union_types = entry.storage.clone();
+        self.inferred_local_contracts = entry.inferred_entry.clone();
         self.restore_introduced_storage(flow, entry);
     }
 
@@ -274,11 +284,13 @@ impl Checker {
     /// Restores presence facts after a diagnostic-only branch walk.
     pub(in crate::types::checker) fn restore_conditional_bindings(&mut self, flow: &ConditionalFlow) {
         self.definitely_bound_locals = flow.bound_entry.clone();
+        self.inferred_local_contracts = flow.inferred_entry.clone();
     }
 
     /// Starts an exhaustive set of binding alternatives without a skipped entry path.
     pub(in crate::types::checker) fn exclude_conditional_binding_entry(&self, flow: &mut ConditionalFlow) {
         flow.bound_joined = None;
+        flow.inferred_joined = None;
     }
 
     /// Joins reads over the alternatives alone when no implicit skip path reaches the join.
@@ -292,6 +304,7 @@ impl Checker {
 
     /// Includes an implicit skip path in a statement branch binding join.
     pub(in crate::types::checker) fn observe_conditional_binding_exit(&self, flow: &mut ConditionalFlow) {
+        self.observe_inferred_contracts(flow, &self.inferred_local_contracts);
         if let Some(bound) = &mut flow.bound_joined {
             bound.retain(|name| self.definitely_bound_locals.contains(name));
         } else { flow.bound_joined = Some(self.definitely_bound_locals.clone()); }
@@ -330,6 +343,7 @@ impl Checker {
         flow.stored.extend(flow.origins.iter().filter(|(name, before)| edge.origins.get(*name)
             .is_some_and(|after| before.binding_revision != after.binding_revision)).map(|(name, _)| name.clone()));
         if reads {
+            self.observe_inferred_contracts(flow, &edge.inferred);
             if let Some(bound) = &mut flow.bound_joined { bound.retain(|name| edge.bound.contains(name)); }
             else { flow.bound_joined = Some(edge.bound.clone()); }
         }
@@ -387,6 +401,23 @@ impl Checker {
         }
     }
 
+    /// Records reachable producer contracts without adding a skipped path to exhaustive arms.
+    fn observe_inferred_contracts(&self, flow: &mut ConditionalFlow, incoming: &TypeEnv) {
+        if let Some(joined) = &mut flow.inferred_joined {
+            self.join_inferred_contracts(joined, incoming);
+        } else { flow.inferred_joined = Some(incoming.clone()); }
+    }
+
+    /// Unions possible source contracts for diagnostics; runtime bindings retain their own origin.
+    fn join_inferred_contracts(&self, joined: &mut TypeEnv, incoming: &TypeEnv) {
+        for (name, contract) in incoming {
+            let contract = joined.get(name).map_or_else(|| contract.clone(), |previous|
+                if *previous == PhpType::Mixed || *contract == PhpType::Mixed { PhpType::Mixed }
+                else { self.normalize_union_type(vec![previous.clone(), contract.clone()]) });
+            joined.insert(name.clone(), contract);
+        }
+    }
+
     /// Joins PHP value alternatives while retaining an existing object supertype.
     pub(in crate::types::checker) fn join_flow_views(&self, left: &PhpType, right: &PhpType) -> PhpType {
         if left == right || (matches!((left, right), (PhpType::Object(_), PhpType::Object(_)))
@@ -424,6 +455,7 @@ impl Checker {
     /// Conservatively carries finally writes to a jump whose guarded view was already saved.
     pub(in crate::types::checker) fn join_finally_flow_snapshot(&self, edge: &mut FlowSnapshot, after: &FlowSnapshot) {
         edge.bound = after.bound.clone();
+        self.join_inferred_contracts(&mut edge.inferred, &after.inferred);
         for (name, ty) in &after.views {
             if let Some(before) = edge.views.get(name).cloned() {
                 let common_guard = edge.origins.get(name).filter(|previous|
@@ -584,6 +616,7 @@ impl Checker {
     /// Removes the logical zero-iteration exit while retaining entry storage requirements.
     pub(in crate::types::checker) fn exclude_target_entry_exit(&self, flow: &mut ConditionalFlow) {
         flow.bound_joined = None;
+        flow.inferred_joined = None;
         flow.joined.clear();
     }
 
@@ -614,6 +647,7 @@ impl Checker {
     /// Updates tracked reads and invalidates contracts that no longer cover all possible writes.
     fn publish_conditional_flow(&mut self, flow: ConditionalFlow, env: &mut TypeEnv) {
         self.definitely_bound_locals = flow.bound_joined.unwrap_or(flow.bound_entry);
+        self.inferred_local_contracts = flow.inferred_joined.unwrap_or(flow.inferred_entry);
         // Raw entries are value proofs, so an optional arm cannot publish a new one.
         // Include keys absent from flow.views: their unchanged Int read hides the write.
         self.guarded_union_types.retain(|name, storage| {

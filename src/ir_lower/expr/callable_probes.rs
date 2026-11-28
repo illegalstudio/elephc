@@ -19,7 +19,7 @@ pub(super) fn lower_static_is_callable(
     if php_symbol_key(name.trim_start_matches('\\')) != "is_callable" || args.len() != 1 {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     // Eval can declare callable targets after static metadata has been built.
@@ -130,6 +130,13 @@ pub(super) fn lower_static_call_user_func(
                 && static_callable_binding_for_expr(ctx, callback_arg)
                     .is_some_and(|target| matches!(target, StaticCallableBinding::InstanceMethod { .. }))
             {
+                return None;
+            }
+            if crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode)
+                && callable_descriptor_signature_for_expr(ctx, callback_arg)
+                    .is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
+                // Flattening an array of values into a direct call invents writable caller
+                // arguments. Keep its value container through descriptor invocation instead.
                 return None;
             }
             if let Some(callback_args) = static_call_user_func_array_args(arg_array) {

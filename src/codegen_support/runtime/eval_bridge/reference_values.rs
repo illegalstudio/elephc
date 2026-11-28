@@ -26,50 +26,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
         }
     }
     label_c_global(emitter, "__elephc_eval_value_reference_is_shared");
-    if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("cbz x0, __elephc_eval_reference_unshared");        // null cannot own a PHP reference
-        emitter.instruction("ldr x9, [x0]");                                    // inspect the boxed runtime tag
-        emitter.instruction("cmp x9, #7");                                      // persistent references use nested Mixed storage
-        emitter.instruction("b.ne __elephc_eval_reference_unshared");           // ordinary boxes have no writable reference
-        emitter.instruction("ldr x9, [x0, #16]");                               // inspect the persistent reference flag
-        emitter.instruction("cmp x9, #1");                                      // flag one identifies a PHP reference
-        emitter.instruction("b.ne __elephc_eval_reference_unshared");           // unrelated nested boxes remain ordinary
-        emitter.instruction("ldr w9, [x0, #-12]");                              // read the wrapper's physical owner count
-        emitter.instruction("ldr x10, [x0, #-8]");                              // inspect an artificial collector pin
-        emitter.instruction("ubfx x10, x10, #18, #1");                          // isolate the collector-only owner bit
-        emitter.instruction("sub w9, w9, w10");                                 // PHP sharing excludes collector pins
-        super::super::reference_cells::subtract_validation_pins(
-            emitter, "x0", "x9", "x10", "x11", "__elephc_eval_reference_shared",
-        );
-        emitter.instruction("cmp w9, #1");                                      // one owner separates during array COW
-        emitter.instruction("cset x0, hi");                                     // another owner keeps the reference shared
-        emitter.instruction("ret");                                             // return the sharing predicate
-        emitter.label("__elephc_eval_reference_unshared");
-        emitter.instruction("mov x0, #0");                                      // report a singleton or ordinary value
-        emitter.instruction("ret");                                             // leave the borrowed wrapper untouched
-    } else {
-        emitter.instruction("test rdi, rdi");                                   // null cannot own a PHP reference
-        emitter.instruction("jz __elephc_eval_reference_unshared");             // skip an absent boxed value
-        emitter.instruction("cmp QWORD PTR [rdi], 7");                          // persistent references use nested Mixed storage
-        emitter.instruction("jne __elephc_eval_reference_unshared");            // ordinary boxes have no writable reference
-        emitter.instruction("cmp QWORD PTR [rdi + 16], 1");                     // inspect the persistent reference flag
-        emitter.instruction("jne __elephc_eval_reference_unshared");            // unrelated nested boxes remain ordinary
-        emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                   // read the wrapper's physical owner count
-        emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                    // inspect an artificial collector pin
-        emitter.instruction("shr r10, 18");                                     // position the collector-only owner bit
-        emitter.instruction("and r10d, 1");                                     // isolate the collector pin
-        emitter.instruction("sub eax, r10d");                                   // PHP sharing excludes collector pins
-        super::super::reference_cells::subtract_validation_pins(
-            emitter, "rdi", "rax", "r10", "r11", "__elephc_eval_reference_shared",
-        );
-        emitter.instruction("cmp eax, 1");                                      // one owner separates during array COW
-        emitter.instruction("seta al");                                         // another owner keeps the reference shared
-        emitter.instruction("movzx eax, al");                                   // normalize the sharing predicate
-        emitter.instruction("ret");                                             // leave the borrowed wrapper untouched
-        emitter.label("__elephc_eval_reference_unshared");
-        emitter.instruction("xor eax, eax");                                    // report a singleton or ordinary value
-        emitter.instruction("ret");                                             // return the sharing predicate
-    }
+    crate::codegen_support::abi::emit_jump(emitter, "__rt_reference_is_shared");
+    emit_retain_value_cell(emitter);
     label_c_global(emitter, "__elephc_eval_value_reference_replace");
     if emitter.target.arch == Arch::AArch64 {
         emitter.instruction("b __rt_reference_replace");                        // return the previous owned value using the unchanged two-argument convention
@@ -77,5 +35,39 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("mov rax, rdi");                                    // pass the persistent reference identity through the internal value register
         emitter.instruction("mov rdi, rsi");                                    // pass the borrowed replacement value through the internal second argument
         emitter.instruction("jmp __rt_reference_replace");                      // transfer the previous owner back to Rust for explicit cleanup
+    }
+}
+
+/// Pins a reference's current child through the target-aware internal Mixed calling convention.
+fn emit_retain_value_cell(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_retain_value_cell_v1");
+    abi::emit_frame_prologue(emitter, 16);
+    let result = abi::int_result_reg(emitter);
+    let argument = abi::int_arg_reg_name(emitter.target, 0);
+    abi::emit_reg_move(emitter, result, argument);
+    abi::emit_call_label(emitter, "__rt_mixed_deref");
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// All targets adapt the C argument before dereferencing and retaining the same value cell.
+    #[test]
+    fn eval_reference_value_pin_uses_live_identity_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let symbol = emitter.target.extern_symbol("__elephc_eval_value_retain_value_cell_v1");
+            emit_retain_value_cell(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains(&symbol), "{name}: {asm}");
+            assert!(asm.find("__rt_mixed_deref").unwrap() < asm.find("__rt_incref").unwrap(), "{name}: {asm}");
+            assert!(!asm.contains("__rt_mixed_clone"), "{name}: a value copy erases storage identity");
+            if name.ends_with("x86_64") { assert!(asm.contains("mov rax, rdi"), "{name}: {asm}"); }
+        }
     }
 }

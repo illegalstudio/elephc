@@ -43,6 +43,12 @@ pub(super) fn lower_arg_with_signature(
 fn lower_signature_argument(
     ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, arg: &Expr,
 ) -> crate::ir::ValueId {
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        super::super::reference_local_validators::prepare_argument_binding(ctx, arg);
+    }
+    if let Some(value) = super::prepared_builtin_refs::lower_argument(ctx, sig, index, arg) {
+        return value;
+    }
     if sig.ref_params.get(index).copied().unwrap_or(false)
         && index < crate::types::call_args::regular_param_count(sig)
         && ctx.call_argument_evaluation_scopes.last().is_some_and(|scope|
@@ -55,7 +61,7 @@ fn lower_signature_argument(
         ctx.builder.mark_reference_argument_owner(owner);
         // Receiver cleanup can throw after the cell binds, including into a same-frame catch.
         publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
-        lower_ref_assign_property(ctx, &alias, arg, arg.span);
+        crate::ir_lower::stmt::lower_ref_assign(ctx, &alias, arg, arg.span);
         let variable = Expr::new(ExprKind::Variable(alias), arg.span);
         return lower_arg_with_signature(ctx, sig, index, &variable);
     }
@@ -916,6 +922,10 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
+    if crate::ir_lower::conversion_boundaries::parameter_active(ctx, param_ty) {
+        // The parameter-order pass checks original kinds after all caller expressions finish.
+        return value;
+    }
     // A `mixed` or `object|null` source is checked from a rooted copy first; the re-reading
     // guard below keeps the `Class|false` / `Class|null` unions it already covered.
     let by_reference = sig.ref_params.get(index).copied().unwrap_or(false);
@@ -983,7 +993,8 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_iterable_param_storage(ctx, value, Some(arg.span));
     }
-    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) && param_ty == PhpType::Str
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {
@@ -1703,7 +1714,7 @@ fn apply_scalar_param_cast(
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
     match cast {
-        CastType::String => coerce_to_string_at_span(ctx, value, span),
+        CastType::String | CastType::StringFormat => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
         CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
@@ -1840,7 +1851,8 @@ pub(super) fn coerce_operands_to_params_with_checks(
     // `int`/`float` binding, a string conversion) reads a borrowed value and never releases a
     // box an owner still points at.
     let publish = needs_coercion.iter().any(|needs| *needs)
-        || deferred_positional.iter().any(|deferred| *deferred);
+        || deferred_positional.iter().any(|deferred| *deferred)
+        || sig.params.iter().take(limit).any(|(_, ty)| crate::ir_lower::conversion_boundaries::parameter_active(ctx, ty));
     if publish {
         // Source evaluation has completed, but any parameter conversion below can throw.
         // Publish the one last source value that did not need protection during source
@@ -1889,6 +1901,17 @@ pub(super) fn coerce_operands_to_params_with_checks(
         let Some((_, param_ty)) = sig.params.get(index) else {
             continue;
         };
+        if crate::semantics::nullability::non_null_contract(param_ty) {
+            let original = lowered_value_from_id(ctx, operands[index]);
+            crate::ir_lower::nullability::require_non_null(ctx, original, &[], &[], Span::dummy());
+        }
+        if crate::ir_lower::conversion_boundaries::active(ctx, param_ty) {
+            let value = lowered_value_from_id(ctx, operands[index]);
+            let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, value, param_ty, Span::dummy());
+            let checked = crate::ir_lower::conversion_boundaries::value_storage(ctx, checked, param_ty, Span::dummy());
+            operands[index] = root_evaluated_call_argument(ctx, checked, Span::dummy()).value;
+            continue;
+        }
         let value = operands[index];
         if let Some(check) = object_checks.iter().find(|check| check.index == index
             && (!check.callable || check_callables))
@@ -1935,7 +1958,14 @@ pub(super) fn coerce_operands_to_params_with_checks(
         }
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
-        if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+        if matches!(param_ty, PhpType::Object(_))
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+            && crate::ir_lower::conversion_boundaries::parameter_active(ctx, &param_ty) {
+            let original = lowered_value_from_id(ctx, value);
+            let checked = crate::ir_lower::conversion_boundaries::object_parameter(
+                ctx, original, &param_ty, Span::dummy());
+            operands[index] = root_evaluated_call_argument(ctx, checked, Span::dummy()).value;
+        } else if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
                 value,
                 ir_type: IrType::I64,
@@ -2488,14 +2518,17 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
-    let literal_bound = rewrite_literal_param_bindings(sig, args);
+    let literal_bound = if ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions) {
+        None
+    } else { rewrite_literal_param_bindings(sig, args) };
     let args = literal_bound.as_deref().unwrap_or(args);
     if crate::func_args::sig_collects_surplus_args(sig) {
         if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, "", false) {
             return operands;
         }
     }
-    if crate::types::call_args::has_named_args(args) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) {
         begin_deferred_object_param_checks(ctx);
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
@@ -2512,7 +2545,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         return operands;
     }
     let static_spread_args = if has_static_call_spread_args(args) {
-        Some(expand_static_call_spread_args(args))
+        Some(expand_static_call_spread_args(args, ctx.semantic_profile))
     } else {
         None
     };
@@ -2636,10 +2669,10 @@ fn lower_omitted_defaults_and_tail(
     capture_values: bool,
 ) {
     for idx in fixed_arg_count..regular_param_count {
-        let Some(Some(default)) = sig.defaults.get(idx) else {
+        let Some(default) = sig.default_value(idx) else {
             break;
         };
-        let value = lower_arg_with_signature(ctx, sig, idx, default);
+        let value = lower_arg_with_signature(ctx, sig, idx, &default);
         // A later default can still throw (`array $l = [], int $n = 1 % 0`): root this one.
         let later_throws = sig.defaults.iter().take(regular_param_count).skip(idx + 1)
             .flatten().any(|later| !default_is_inert(later));
@@ -2787,7 +2820,7 @@ fn receiver_class_name(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<S
             let info = ctx.classes.get(parent_class.trim_start_matches('\\'))?;
             info.visible_property(property)?.1.1.clone()
         }
-        _ => infer_expr_type_syntactic(object),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     };
     crate::types::checker::single_object_class_name(&ty)
 }

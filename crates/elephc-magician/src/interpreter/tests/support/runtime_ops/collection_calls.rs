@@ -10,6 +10,27 @@
 
 macro_rules! impl_fake_collection_call_ops {
     () => {
+    /// Models the ordinary array cast with independently owned container storage.
+    fn cast_array(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let result = match self.get(value) {
+            FakeValue::Array(_) | FakeValue::Assoc(_) => return self.copy_value(value),
+            FakeValue::Null => FakeValue::Array(Vec::new()),
+            FakeValue::Object(properties) => FakeValue::Assoc(properties.into_iter()
+                .map(|(name, value)| {
+                    let key = eval_numeric_string_array_key(name.as_bytes(), self.fixed_profile.unwrap_or_default()).map(FakeKey::Int)
+                        .unwrap_or_else(|| FakeKey::String(name.into_bytes()));
+                    (key, value)
+                }).collect()),
+            _ => {
+                let scalar = self.copy_value(value)?;
+                let array = self.alloc(FakeValue::Array(vec![scalar.borrowed()]));
+                self.transfer_reference_value_owner(scalar);
+                return Ok(array);
+            },
+        };
+        Ok(self.alloc(result))
+    }
+
     /// Creates a fake indexed array cell.
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_new(capacity)
@@ -49,6 +70,12 @@ macro_rules! impl_fake_collection_call_ops {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_get(array, index)
+    }
+    /// Performs one fake lookup and preserves an owned null hit separately from absence.
+    fn array_get_checked(&mut self, array: RuntimeCellHandle, index: RuntimeCellHandle,
+        preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        self.runtime_array_get_checked(array, index, preserve_reference)
     }
     /// Retains a fake raw slot for reference-preserving argument expansion.
     fn array_get_preserving_references(
@@ -114,6 +141,19 @@ macro_rules! impl_fake_collection_call_ops {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus> {
         self.runtime_property_set(object, property, value)
+    }
+    /// Removes a fake property entry through the existing authorized native-unset capability.
+    fn unset_native_typed_property(
+        &mut self, object: RuntimeCellHandle, property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let Some(FakeValue::Object(properties)) = self.values.get_mut(&(object.as_ptr() as usize)) else {
+            return Ok(false);
+        };
+        // Fake property entries borrow stable handles, as in runtime_property_set.
+        if let Some(index) = properties.iter().position(|(name, _)| name == property) {
+            properties.remove(index);
+        }
+        Ok(true)
     }
     /// Reports no fake AOT static property match.
     fn static_property_get(

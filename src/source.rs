@@ -1,5 +1,5 @@
 //! Purpose:
-//! Re-exports the syntax crate's source profile and applies physical-file finalization.
+//! Re-exports source profiles from the shared syntax crate and finalizes physical programs.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` for the entry source.
@@ -38,15 +38,17 @@ pub(crate) fn canonical_span_source_path(span: crate::span::Span) -> Option<Stri
 #[allow(unused_imports)]
 pub use elephc_chopper::syntax::source::{
     composer_source_stem, current_parse_mode, current_strict_types, declare_strict_types,
-    is_composer_source_path, scoped_parse_mode, with_parse_mode, SourceMode, SourceProfile,
+    is_composer_source_path, scoped_parse_mode, with_parse_mode, EvalSourceProfile, SourceMode,
+    SourceProfile,
 };
 
 /// Applies path-dependent post-parse processing shared by every physical source loader.
 ///
-/// Magic constants retain the real path, strict PHP audits the unfiltered physical
-/// program, and conditional compilation runs after it so inactive extension syntax in a
-/// PHP file cannot evade the audit. `goto` lowering closes the sequence, so no later pass
-/// ever sees a jump.
+/// Written declarations are audited before PHP normalization can widen them. Magic constants
+/// retain the real path, strict PHP audits the unfiltered physical program, and conditional
+/// compilation runs after it so inactive extension syntax in a PHP file cannot evade the audit.
+/// `goto` lowering closes the sequence, so no later pass ever sees a jump.
+#[allow(dead_code)] // Default-profile compatibility entry point for library callers and tests.
 pub fn finalize_physical_program(
     program: Program,
     source: &str,
@@ -54,11 +56,28 @@ pub fn finalize_physical_program(
     mode: SourceMode,
     defines: &HashSet<String>,
 ) -> Result<Program, CompileError> {
+    finalize_physical_program_with_semantics(program, source, path, mode, defines,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Finalizes physical source with immutable semantic validation before any source pruning.
+pub fn finalize_physical_program_with_semantics(
+    program: Program,
+    source: &str,
+    path: &Path,
+    mode: SourceMode,
+    defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
+) -> Result<Program, CompileError> {
+    crate::semantics::nullability::validate_original_declarations(&program, semantic_profile)
+        .map_err(|error| error.with_file(path.display().to_string()))?;
     let program = crate::magic_constants::substitute_file_and_scope_constants(program, path);
-    crate::strict_php::check_file_with_mode(&program, &path.display().to_string(), mode)?;
+    crate::php_only::check_file_with_mode(&program, &path.display().to_string(), mode)?;
+    crate::semantics::validate_source(&program, semantic_profile)
+        .map_err(|error| error.with_file(path.display().to_string()))?;
     // Generic doc-comment annotations are applied AFTER the strict audit, and that order is the
     // whole point of the surface: a `@template` file is valid PHP — the annotations are
-    // comments — so `--strict-php` must keep accepting it. Applying them first made the audit
+    // comments - so `--php-only` must keep accepting it. Applying them first made the audit
     // see the injected `<T>` and `array<T>` and reject a file php-src parses happily.
     //
     // Per physical file, because the lexer discards comments and they are recovered from the
@@ -71,6 +90,10 @@ pub fn finalize_physical_program(
     // statement list once the branch is spliced in.
     crate::goto_lowering::lower_program(program, &path.display().to_string())
 }
+
+#[cfg(test)]
+#[path = "source/expression_origins.rs"]
+mod expression_origins;
 
 #[cfg(test)]
 mod tests {
@@ -131,10 +154,10 @@ mod tests {
 
     /// Verifies strict PHP applies only to PHP-mode user source.
     #[test]
-    fn strict_php_is_source_mode_aware() {
-        assert!(SourceMode::Php.strict_php_is_effective(true));
-        assert!(!SourceMode::Php.strict_php_is_effective(false));
-        assert!(!SourceMode::Lfc.strict_php_is_effective(true));
-        assert!(!SourceMode::Internal.strict_php_is_effective(true));
+    fn php_only_is_source_mode_aware() {
+        assert!(SourceMode::Php.php_only_is_effective(true));
+        assert!(!SourceMode::Php.php_only_is_effective(false));
+        assert!(!SourceMode::Lfc.php_only_is_effective(true));
+        assert!(!SourceMode::Internal.php_only_is_effective(true));
     }
 }

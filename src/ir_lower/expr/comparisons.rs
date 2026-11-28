@@ -18,7 +18,7 @@ pub(super) fn lower_compare(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
+    let (lhs, left_pins) = object_operators::capture_comparison_operand(ctx, lhs, right, left.span);
     let mut pending = [lhs];
     let (rhs, pending_pins) = if left_pins.is_empty() {
         lower_with_pending_owners(ctx, &mut pending, expr.span, |ctx| {
@@ -30,6 +30,11 @@ pub(super) fn lower_compare(
     let lhs = pending[0];
     unpin_in_flight_owners(ctx, pending_pins, left.span);
     unpin_in_flight_owners(ctx, left_pins, left.span);
+    if crate::semantics::comparisons::active(ctx.semantic_profile, ctx.source_mode)
+        && crate::semantics::comparisons::is_ordering(op)
+    {
+        return super::strict_ordering::lower(ctx, lhs, op, rhs, left, right, expr);
+    }
     // A literal null never reaches a class comparison handler in PHP: object-versus-null
     // uses the engine's standard ordering. The checker already excludes it, but lowering
     // sees the boxed operand type, so gate on the source shapes as well.
@@ -47,7 +52,7 @@ pub(super) fn lower_compare(
 }
 
 /// Lowers ordinary PHP comparisons after an internal value-class handler is excluded.
-fn lower_compare_values(
+pub(super) fn lower_compare_values(
     ctx: &mut LoweringContext<'_, '_>, mut lhs: LoweredValue, op: &BinOp,
     mut rhs: LoweredValue, left: &Expr, right: &Expr, expr: &Expr, pin_operands: bool,
 ) -> LoweredValue {

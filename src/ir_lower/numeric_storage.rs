@@ -305,6 +305,9 @@ fn readonly_calls(ctx: &LoweringContext<'_, '_>) -> HashMap<InstId, HashSet<usiz
                     definition.ref_params.clone()
                 }
             }
+            // This trial is discarded. Re-lowering a proven counter emits scalar arithmetic
+            // from its value; an unproven counter still calls the boxed runtime helper.
+            (Op::RuntimeCall, Some(Immediate::RuntimeCall(RuntimeCallTarget::NumericUnary { .. }))) => vec![false],
             _ => return None,
         };
         let positions = parameters.iter().enumerate()

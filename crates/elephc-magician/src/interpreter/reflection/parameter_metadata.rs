@@ -310,7 +310,12 @@ pub(super) fn eval_reflection_named_type_variant_metadata(
 ) -> Option<EvalReflectionNamedTypeMetadata> {
     match variant {
         EvalParameterTypeVariant::Generic(ty) => Some(EvalReflectionNamedTypeMetadata {
-            name: ty.to_string(), allows_null, is_builtin: matches!(ty, elephc_generics::Type::Apply(name, _) if name == "array"),
+            name: match ty {
+                elephc_generics::Type::Apply(name, _) if name == "array" => "array".to_string(),
+                elephc_generics::Type::Callable(_, _) => "callable".to_string(),
+                _ => ty.to_string(),
+            }, allows_null, is_builtin: matches!(ty, elephc_generics::Type::Apply(name, _) if name == "array")
+                || matches!(ty, elephc_generics::Type::Callable(_, _)),
         }),
         EvalParameterTypeVariant::Array => {
             Some(eval_reflection_builtin_named_type("array", allows_null))
@@ -344,6 +349,7 @@ pub(super) fn eval_reflection_named_type_variant_metadata(
             Some(eval_reflection_builtin_named_type("string", allows_null))
         }
         EvalParameterTypeVariant::Void => Some(eval_reflection_builtin_named_type("void", false)),
+        EvalParameterTypeVariant::Resource => Some(eval_reflection_builtin_named_type("resource", allows_null)),
     }
 }
 
@@ -356,5 +362,20 @@ pub(super) fn eval_reflection_builtin_named_type(
         name: name.to_string(),
         allows_null,
         is_builtin: true,
+    }
+}
+
+#[cfg(test)]
+mod logical_display_tests {
+    use super::*;
+
+    /// Reflection erases structural array/callable parameters while semantic metadata retains their terms.
+    #[test]
+    fn strict_native_registration_reflection_erases_only_display_shapes() {
+        let ty = elephc_generics::Type::Apply("array".into(),vec![elephc_generics::Type::atom("int")]);
+        let variant = EvalParameterTypeVariant::Generic(ty.clone());
+        let display = eval_reflection_named_type_variant_metadata(&variant,false).unwrap();
+        assert_eq!(display.name,"array");assert!(display.is_builtin);
+        assert_eq!(variant,EvalParameterTypeVariant::Generic(ty));
     }
 }

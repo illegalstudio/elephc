@@ -32,9 +32,7 @@ mod edge_cache;
 pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
-    super::gc_host_roots::entry(emitter);
-    emitter.label_global("__rt_gc_collect_cycles_explicit");
-    super::gc_host_roots::begin(emitter);
+    super::gc_collect_cycles::emit_collector_entries(emitter);
 
     // -- avoid recursive re-entry while the collector is already running --
     emitter.instruction("xor eax, eax");                                        // a nested collection reports zero collected nodes
@@ -57,9 +55,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 40] = scratch / saved next header
     //   [rbp - 48] = incoming heap-edge count for the current target
     //   [rbp - 56] = collected graph-node count
+    //   [rbp - 64] = run destructors on reachable objects before global cleanup
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving x86_64 collector locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the x86_64 collector locals
     emitter.instruction("sub rsp, 64");                                         // reserve aligned collector locals, including the result counter
+    emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // preserve the shutdown mode across all recounts
     emitter.instruction("call __rt_gc_collector_begin");                        // start timing this complete collector pass
 
     // -- refresh heap bounds after destructor callbacks have mutated the graph --
@@ -400,6 +400,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     // -- run protected destructors and recount, then sweep the final unreachable graph --
     emitter.label("__rt_gc_collect_cycles_free_init");
     super::gc_host_roots::publish(emitter);
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // include live objects only at executable shutdown
     emitter.instruction("call __rt_gc_destructors");                            // run destructors only after pinning all of their candidate data
     emitter.instruction("test rax, rax");                                       // did user code mutate the graph during a destructor pass?
     emitter.instruction("jnz __rt_gc_collect_cycles_recount");                  // re-evaluate real roots before sweeping any candidate

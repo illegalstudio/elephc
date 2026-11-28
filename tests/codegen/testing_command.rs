@@ -217,7 +217,7 @@ fn test_cli_test_diagnoses_empty_runs() {
 }
 
 /// Output-mode and target flags are refused with the usage text; `--help` prints it and
-/// exits 0; ordinary compile options such as `--strict-php` are forwarded.
+/// exits 0; ordinary compile options such as `--php-only` are forwarded.
 #[test]
 fn test_cli_test_refuses_output_modes_and_forwards_compile_options() {
     let dir = make_cli_test_dir("elephc_cli_test_flags");
@@ -231,9 +231,9 @@ fn test_cli_test_refuses_output_modes_and_forwards_compile_options() {
     assert!(stdout.starts_with("Usage: elephc test [PATH]"), "{stdout}");
     assert_eq!(code, 0);
 
-    // `--strict-php` reaches the compiler: the `.lfc` file keeps its extensions, the
+    // `--php-only` reaches the compiler: the `.lfc` file keeps its extensions, the
     // tagged `.php` files are audited, and the suite still runs.
-    let (stdout, stderr, code) = run_test_command(&dir, &["--strict-php", "--filter", "CounterTest"]);
+    let (stdout, stderr, code) = run_test_command(&dir, &["--php-only", "--filter", "CounterTest"]);
     assert!(stdout.ends_with("OK (3 tests, 4 assertions)\n"), "{stdout}\n{stderr}");
     assert_eq!(code, 0);
     let _ = fs::remove_dir_all(&dir);

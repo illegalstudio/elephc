@@ -406,7 +406,9 @@ pub(super) fn lower_user_sort_static_callback(
     let retain_owed = receiver.store_back_value_before_callback(ctx, array)?;
     let callback_ty = ctx.value_php_type(callback)?.codegen_repr();
     let callback_owner = format!("{} callback", name);
-    if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback) {
+    if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback)
+        && !direct_callback_requires_argument_boxing(ctx, callback, &callback_arg_types)?
+    {
         let callback_binding = static_sort_callback_binding(
             ctx,
             callback,
@@ -428,12 +430,13 @@ pub(super) fn lower_user_sort_static_callback(
                 ctx,
                 callback,
                 callback_arg_types.to_vec(),
-                PhpType::Int,
+                if inst.strict_comparisons() { PhpType::Mixed } else { PhpType::Int },
                 |ctx, wrapper_label, env_bytes| {
+                    let wrapper_label = super::comparator_results::descriptor_label(ctx, inst, wrapper_label);
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
                     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
                     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
+                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
                     abi::emit_call_label(ctx.emitter, sort_helper);
@@ -457,14 +460,15 @@ pub(super) fn lower_user_sort_static_callback(
                 callback,
                 Some(&PhpType::Array(Box::new(callback_arg_types[0].clone()))),
                 callback_arg_types.to_vec(),
-                PhpType::Int,
-                super::super::instruction_strict_php_profile(inst),
+                if inst.strict_comparisons() { PhpType::Mixed } else { PhpType::Int },
+                super::super::instruction_php_only_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
+                    let wrapper_label = super::comparator_results::descriptor_label(ctx, inst, wrapper_label);
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
                     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
                     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
+                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
                     abi::emit_call_label(ctx.emitter, sort_helper);
@@ -515,7 +519,7 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     sort_helper: &str,
     retain_owed: bool,
 ) -> Result<()> {
-    let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
+    let callback_label = sort_callback_label_returning_int(ctx, inst, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -541,8 +545,13 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
 /// Returns a callback label whose runtime ABI produces an integer comparison result.
 pub(super) fn sort_callback_label_returning_int(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     callback_binding: &StaticSortCallbackBinding,
 ) -> Result<String> {
+    if inst.strict_comparisons() {
+        return Ok(super::comparator_results::checked_return(ctx,
+            &callback_binding.label, &callback_binding.return_ty));
+    }
     match callback_binding.return_ty.codegen_repr() {
         PhpType::Int | PhpType::Bool => Ok(callback_binding.label.clone()),
         PhpType::Mixed | PhpType::Union(_) => {

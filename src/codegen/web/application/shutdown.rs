@@ -24,6 +24,13 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         let skip = format!("__rt_web_app_shutdown_static_{index}");
         abi::emit_load_symbol_to_reg(emitter, value, &record.init_symbol, 0);
         abi::emit_branch_if_int_result_zero(emitter, &skip);
+        if record.managed_reference {
+            crate::codegen_support::runtime::reference_cells::detach_function_static(
+                emitter, record, module.required_runtime_features.native_reference_validation);
+            scope.call(emitter, "__rt_reference_cell_release", false);
+            emitter.label(&skip);
+            continue;
+        }
         abi::emit_store_zero_to_symbol(emitter, &record.init_symbol, 0);
         release(emitter, scope, &record.symbol, &record.php_type.codegen_repr(), false);
         emitter.label(&skip);

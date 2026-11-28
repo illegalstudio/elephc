@@ -43,9 +43,15 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
         Arch::AArch64 => emit_aarch64_wrappers(emitter, features),
         Arch::X86_64 => emit_x86_64_wrappers(emitter, features),
     }
+    semantic_profile::emit(emitter);
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
     bit_not::emit(emitter);
+    checked_numeric::emit(emitter);
+    unserialize_boundary::emit(emitter);
+    numeric_unary::emit(emitter);
+    diagnostics::emit(emitter);
+    throwable_chain::emit(emitter);
     array_reference_query::emit_array_entry_reference_query(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
@@ -54,6 +60,9 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     debug::emit(emitter);
     array_next_index::emit(emitter);
     native_reference_cells::emit(emitter);
+    reference_write::emit(emitter, features.native_reference_validation);
+    static_write::emit(emitter, features.native_reference_validation);
+    static_rebind::emit(emitter, features.native_reference_validation);
     callable_adapter::emit(emitter);
     spl_storage_write::emit(emitter);
     if features.mbstring || features.eval_bridge { string_literal::emit(emitter); }
@@ -101,6 +110,9 @@ mod key_normalization_tests;
 mod array_iter_value;
 pub(crate) mod array_next_index;
 mod reference_values;
+mod reference_write;
+mod static_write;
+mod static_rebind;
 mod native_reference_cells;
 mod callable_adapter;
 mod spl_storage_write;
@@ -131,14 +143,20 @@ mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
 mod runtime_builtin_dispatch;
+mod unserialize_boundary;
 mod memory;
 mod resources;
 mod backtrace;
 mod gc_boundary;
 mod release_boundary;
 mod bit_not;
+mod checked_numeric;
+mod numeric_unary;
+mod diagnostics;
+mod throwable_chain;
 mod scope_release;
 mod owner_frames;
+mod semantic_profile;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;

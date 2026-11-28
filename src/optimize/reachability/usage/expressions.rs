@@ -176,7 +176,7 @@ impl Scanner<'_> {
                 self.scan_expr(property);
             }
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
-            ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
+            ExprKind::UnaryPlus(e) | ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
             | ExprKind::Spread(e) | ExprKind::YieldFrom(e) => self.scan_expr(e),
             // `ptr_cast<T>` may be the only mention of a packed or extern class `T`, and field
@@ -581,6 +581,7 @@ impl Scanner<'_> {
             call_span,
             false,
             false,
+            self.semantic_profile(),
         ) else {
             self.unresolved_callable_hazard();
             return;
@@ -636,6 +637,10 @@ impl Scanner<'_> {
                     self.usage.required_libraries.insert(library.to_string());
                 }
                 crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+                crate::builtins::semantics::BuiltinRequirement::PreludeHelper(helper) => {
+                    self.usage.required_prelude_helpers.insert(php_symbol_key(helper));
+                    self.record_callable(helper);
+                }
             }
         }
     }
@@ -660,7 +665,7 @@ impl Scanner<'_> {
     pub(super) fn literal_eval_or_hazard(&mut self, expr: Option<&Expr>) {
         if let Some(Expr { kind: ExprKind::StringLiteral(source), .. }) = expr {
             if let Some(fragment) =
-                crate::eval_aot::parse_literal_fragment(source, crate::strict_php::is_enabled())
+                crate::eval_aot::parse_literal_fragment(source, crate::source::EvalSourceProfile::permissive(crate::php_only::is_enabled()))
             {
                 let outer = std::mem::replace(&mut self.in_eval_fragment, true);
                 self.scan_nested(&fragment, true);
@@ -675,9 +680,7 @@ impl Scanner<'_> {
     /// Widens the function, method and class hazards together, as a runtime-named lookup of
     /// unknown shape requires.
     pub(super) fn widen_dynamic_hazards(&mut self) {
-        self.usage.hazards.dynamic_function = true;
-        self.usage.hazards.dynamic_method = true;
-        self.usage.hazards.dynamic_class = true;
+        self.usage.hazards.include_unknown_callable();
     }
 
     /// Widens the hazards of a callable whose shape is only known at runtime (`$f()`,
@@ -1162,7 +1165,7 @@ impl Scanner<'_> {
             .first()
             .map(|argument| argument.span)
             .unwrap_or_else(crate::span::Span::dummy);
-        crate::types::call_args::plan_call_args(signature, args, call_span, false, true)
+        crate::types::call_args::plan_call_args(signature, args, call_span, false, true, self.semantic_profile())
             .map(|plan| plan.normalized_args())
             .unwrap_or_default()
     }
@@ -1189,6 +1192,7 @@ impl Scanner<'_> {
             call_span,
             true,
             false,
+            self.semantic_profile(),
         )
         .ok()
         .map(|plan| plan.normalized_args())
@@ -1211,6 +1215,7 @@ impl Scanner<'_> {
                 call_span,
                 false,
                 true,
+                self.semantic_profile(),
             ) else {
                 self.usage.hazards.dynamic_method = true;
                 continue;
@@ -1243,7 +1248,18 @@ impl Scanner<'_> {
     /// Records a free-function/extern callable key.
     pub(super) fn record_callable(&mut self, name: &str) -> String {
         let key = php_symbol_key(name.trim_start_matches('\\'));
-        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone()); key
+        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone());
+        if let Some(def) = crate::builtins::registry::lookup(&key) {
+            if let crate::builtins::semantics::BuiltinRequirements::Static(requirements) = def.spec.semantics.requirements {
+                for requirement in requirements {
+                    if let crate::builtins::semantics::BuiltinRequirement::PreludeHelper(helper) = requirement {
+                        self.usage.functions.insert(php_symbol_key(helper));
+                        self.usage.required_prelude_helpers.insert(php_symbol_key(helper));
+                    }
+                }
+            }
+        }
+        key
     }
 
     /// Records a class key and applies conservative Reflection hazards.
@@ -1257,6 +1273,9 @@ impl Scanner<'_> {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
             for (_, method) in operators.native_casts {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+            if let Some(method) = operators.checked_numeric_source {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
             for (_, method) in operators.arithmetic {

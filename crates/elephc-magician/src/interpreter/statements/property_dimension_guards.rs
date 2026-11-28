@@ -11,6 +11,20 @@
 
 use super::*;
 
+/// Copies array-write obligations for the selected physical instance slot, without invoking accessors.
+pub(super) fn array_contracts(object: RuntimeCellHandle, name: &str,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalParameterType>, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(slot(object, name, context, values)?.and_then(|slot| slot.ty).into_iter().collect());
+    };
+    let Some((owner, property)) = eval_dynamic_property_for_access(class.name(), name, context) else { return Ok(Vec::new()); };
+    let storage = eval_instance_property_storage_name(&owner, &property);
+    Ok(property.property_type().into_iter().chain(context.dynamic_property_array_type(identity, &storage)).cloned().collect())
+}
+
+
 /// Selects PHP write-fetch initialization rules independently of key diagnostic suppression.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum DimensionFetchMode { Write, ReadWrite }
@@ -21,6 +35,14 @@ struct Slot {
     ty: Option<EvalParameterType>,
     readonly: bool,
     write_visibility: EvalVisibility,
+}
+
+/// Recognizes an authorized ordinary backing slot independently of its optional type hint.
+pub(super) fn has_ordinary_backing_slot(
+    object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(slot(object, property, context, values)?.is_some())
 }
 
 /// Returns a writable physical property's type without invoking hooks or changing access errors.
@@ -295,4 +317,20 @@ fn generic_admits_array(ty: &elephc_generics::Type) -> bool {
 /// Resolves lexical class names while preserving PHP's nullable shorthand in diagnostics.
 pub(super) fn type_label(ty: &EvalParameterType, owner: &str, context: &ElephcEvalContext) -> Result<String, EvalStatus> {
     eval_null_boundary_type_label(ty, Some(owner), Some(owner), context)
+}
+
+/// Recognizes an initialized physical property whose read cannot invoke a getter or magic handler.
+pub(in crate::interpreter) fn supports_source_guard(object: RuntimeCellHandle, property: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(slot) = slot(object, property, context, values)? else { return Ok(false); };
+    if let Ok(identity) = values.object_identity(object) {
+        if let Some((owner, declared)) = context.dynamic_object_class(identity)
+            .and_then(|class| eval_dynamic_property_for_access(class.name(), property, context)) {
+            let storage = eval_instance_property_storage_name(&owner, &declared);
+            return Ok(context.dynamic_property_is_initialized(identity, &storage));
+        }
+    }
+    eval_with_native_property_storage_scope(&slot.owner, property, context, values,
+        |values| values.property_is_initialized(object, property))
 }

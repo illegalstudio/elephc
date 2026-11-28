@@ -216,7 +216,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                         features.eval_bridge = true;
                     }
                 }
-                Op::EvalScopeGet | Op::EvalScopeSet => {
+                Op::EvalScopeGet | Op::EvalScopeContains | Op::EvalScopeBindingType | Op::EvalScopeSet | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding => {
                     features.eval_scope = true;
                 }
                 Op::EvalFunctionCall
@@ -270,9 +270,9 @@ pub(crate) fn eval_literal_call_requires_bridge(
     inst_index: usize,
     inst: &crate::ir::Instruction,
 ) -> bool {
-    let (data, strict_php) = match inst.immediate {
-        Some(Immediate::Data(data)) => (data, false),
-        Some(Immediate::ProfiledData { data, strict_php }) => (data, strict_php),
+    let (data, profile) = match inst.immediate {
+        Some(Immediate::Data(data)) => (data, crate::source::EvalSourceProfile::new(false, module.semantic_profile)),
+        Some(Immediate::ProfiledData { data, profile }) => (data, profile),
         _ => return true,
     };
     let Some(fragment) = module.data.strings.get(data.as_raw() as usize) else {
@@ -281,7 +281,7 @@ pub(crate) fn eval_literal_call_requires_bridge(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         module.source_path.as_deref(),
-        strict_php,
+        profile,
         |name, args| eval_literal_static_function_supported_by_module(module, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_module(module, receiver, method, args)
@@ -497,7 +497,7 @@ pub(super) fn eval_literal_static_function_supported_by_module(
     let Some(signature) = &function.signature else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, module.semantic_profile)
 }
 
 /// Returns true when a static method call matches the codegen-supported subset.
@@ -538,7 +538,7 @@ pub(super) fn eval_literal_static_method_supported_by_module(
     else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, module.semantic_profile)
 }
 
 /// Finds a semantic runtime family in callable instructions without enabling unrelated callbacks.

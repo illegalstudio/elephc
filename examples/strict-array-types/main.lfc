@@ -1,0 +1,7 @@
+$counts = [];
+$counts['ready'] = 1;
+$counts['pending'] = 2;
+
+array<mixed> $notes = [1];
+$notes[] = 'ready';
+echo count($counts), '|', count($notes);

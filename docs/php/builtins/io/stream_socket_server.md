@@ -6,7 +6,7 @@ description: "Create an Internet or Unix domain server socket."
 ## stream_socket_server()
 
 ```php
-function stream_socket_server(string $address): mixed
+function stream_socket_server(string $address): resource|false
 ```
 
 Create an Internet or Unix domain server socket.
@@ -14,7 +14,7 @@ Create an Internet or Unix domain server socket.
 **Parameters**:
 - `$address` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

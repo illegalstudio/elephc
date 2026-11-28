@@ -235,7 +235,7 @@ impl Detector {
         if !["call_user_func", "call_user_func_array"].iter().any(|candidate| name.as_str().eq_ignore_ascii_case(candidate)) { return false; }
         let Some(sig) = crate::builtins::registry::function_sig(name.as_str()) else { return false; };
         let Some(span) = args.first().map(|arg| arg.span) else { return false; };
-        let Ok(plan) = crate::types::call_args::plan_call_args(&sig, args, span, false, false) else { return false; };
+        let Ok(plan) = crate::types::call_args::plan_call_args(&sig, args, span, false, false, elephc_semantics::SemanticProfile::PERMISSIVE) else { return false; };
         let args = plan.normalized_args();
         let Some(callback) = args.first() else { return false; };
         let ExprKind::ArrayLiteral(items) = &callback.kind else { return false; };

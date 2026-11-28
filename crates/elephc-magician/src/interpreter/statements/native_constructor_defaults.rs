@@ -77,6 +77,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         values,
     )?;
     let result = with_runtime_owners(&bound_args, || {
+        context.invalidate_member_source_views();
         // The constructor runs as a native frame of this eval context, so a callback only eval
         // can resolve (a builtin or function named inside the evaluated code) still finds it.
         let native_context = push_native_frame_context(context);
@@ -279,7 +280,7 @@ pub(super) fn materialize_native_callable_object_default(
     let mut constructor_args = Vec::with_capacity(args.len());
     let constructed = (|| {
         for arg in args {
-            constructor_args.push(EvaluatedCallArg {
+            constructor_args.push(EvaluatedCallArg { source_type: None,
                 evaluation_owner: None,
                 name: arg.name.clone(),
                 value: materialize_native_callable_default(&arg.value, context, values)?,

@@ -200,7 +200,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             } else {
                 values.array_new(evaluated_args.len())?
             };
-            bound_args[index] = Some(BoundMethodArg {
+            bound_args[index] = Some(BoundMethodArg { source_type: None,
                 value: array,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -219,6 +219,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     &name,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     &mut variadic_named_args,
                     values,
@@ -234,6 +235,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     &mut next_variadic_index,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     values,
                 )?;
@@ -259,6 +261,8 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     return Err(EvalStatus::RuntimeFatal);
                 };
                 *value = Some(BoundMethodArg {
+                    source_type: parameter_types.get(position).and_then(Option::as_ref)
+                        .map(|ty| ArgumentSource::capture(ty.clone(), context)),
                     value: eval_method_parameter_default_at(
                         default,
                         &format!("{default_site}#{position}"),
@@ -272,6 +276,9 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
                 let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
                 let previous = bound.value;
+                mixed_source_proofs::require_argument(param_type, bound.source_type.as_ref(), previous,
+                    parameter_is_by_ref.get(position).copied().unwrap_or(false) && bound.ref_target.is_some(),
+                    context, values)?;
                 eval_reject_null_object_argument(callee, position + 1, Some(&params[position]),
                     param_type, previous, context, values)?;
                 bound.value = eval_method_parameter_value_or_throw(
@@ -362,6 +369,7 @@ fn bind_dynamic_positional_method_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -387,7 +395,7 @@ fn bind_dynamic_positional_method_arg(
             values,
         )?;
         *next_variadic_index = following_index;
-        staged.push((argument_number, EvaluatedCallArg { evaluation_owner: None, name: None, value, ref_target }));
+        staged.push((argument_number, EvaluatedCallArg { source_type, evaluation_owner: None, name: None, value, ref_target }));
         return Ok(());
     }
     let param_index = *next_positional;
@@ -409,7 +417,7 @@ fn bind_dynamic_positional_method_arg(
         by_ref_mode,
         values,
     )?;
-    bound_args[param_index] = Some(BoundMethodArg {
+    bound_args[param_index] = Some(BoundMethodArg { source_type,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
@@ -429,6 +437,7 @@ fn bind_dynamic_named_method_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     variadic_named_args: &mut std::collections::HashSet<String>,
     values: &mut impl RuntimeValueOps,
@@ -446,7 +455,7 @@ fn bind_dynamic_named_method_arg(
             by_ref_mode,
             values,
         )?;
-        bound_args[param_index] = Some(BoundMethodArg {
+        bound_args[param_index] = Some(BoundMethodArg { source_type,
             value,
             ref_target,
             variadic_ref_targets: Vec::new(),
@@ -468,7 +477,7 @@ fn bind_dynamic_named_method_arg(
         by_ref_mode,
         values,
     )?;
-    staged.push((argument_number, EvaluatedCallArg { evaluation_owner: None, name: Some(name.to_string()), value, ref_target }));
+    staged.push((argument_number, EvaluatedCallArg { source_type, evaluation_owner: None, name: Some(name.to_string()), value, ref_target }));
     Ok(())
 }
 
@@ -546,6 +555,8 @@ fn bind_dynamic_variadic_args(
         let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
         let original = arg.value;
         let value = if let Some(param_type) = parameter_types.get(index).and_then(Option::as_ref) {
+            mixed_source_proofs::require_argument(param_type, arg.source_type.as_ref(), original,
+                arg.ref_target.is_some(), context, values)?;
             eval_reject_null_object_argument(
                 callee, number, None, param_type, original, context, values,
             )?;
@@ -613,7 +624,7 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
     )
 }
 
-/// Applies one eval parameter type and reports a strict rejection as PHP's `TypeError`.
+/// Applies one eval parameter type and reports a rejected call as PHP's `TypeError`.
 ///
 /// `callee`, `number`, and `parameter` describe the source call so PHP code can catch the
 /// thrown `TypeError` with the same message php-src builds at a call boundary.
@@ -643,8 +654,12 @@ fn eval_method_parameter_value_with_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    super::super::checked_nullability::declared(value, param_type, context, values)?;
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
         return Ok(value);
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+        return eval_throw_type_error("--strict-coercions forbids implicit parameter conversion", context, values);
     }
     if param_type.is_intersection() {
         if context.current_function().is_some_and(|name| name.contains('<')) {
@@ -663,17 +678,6 @@ fn eval_method_parameter_value_with_error(
         {
             return values.cast_float(value);
         }
-        if let Some((callee, number, parameter)) = error {
-            return eval_throw_argument_type_error(
-                callee,
-                number,
-                parameter,
-                param_type,
-                value,
-                context,
-                values,
-            );
-        }
     } else {
         for variant in param_type.variants() {
             if let Some(coerced) =
@@ -683,11 +687,19 @@ fn eval_method_parameter_value_with_error(
             }
         }
     }
-    if param_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
-        || context.current_function().is_some_and(|name| name.contains('<')) {
-        return eval_throw_type_error(&format!("Value does not satisfy {}", crate::eval_ir::generic_type(param_type)), context, values);
+    if let Some((callee, number, parameter)) = error {
+        return eval_throw_argument_type_error(
+            callee,
+            number,
+            parameter,
+            param_type,
+            value,
+            context,
+            values,
+        );
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_type_error(&format!("Value does not satisfy {}",
+        crate::eval_ir::php_type_label(param_type)), context, values)
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.
@@ -729,10 +741,14 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Generic(ty) => generic_value_accepts(ty, value, context, values),
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
-        EvalParameterTypeVariant::Callable => Ok(matches!(
-            tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE
-        )),
+        EvalParameterTypeVariant::Callable => {
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+                || context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) {
+                eval_is_callable_value(value, None, context, values)
+            } else {
+                Ok(matches!(tag, EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE))
+            }
+        }
         EvalParameterTypeVariant::Class(class_name) => {
             eval_method_parameter_class_accepts(value, tag, class_name, context, values)
         }
@@ -751,6 +767,7 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
         EvalParameterTypeVariant::Object => Ok(matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE)),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
+        EvalParameterTypeVariant::Resource => Ok(tag == EVAL_TAG_RESOURCE),
     }
 }
 
@@ -1210,10 +1227,10 @@ fn eval_method_default_class_receiver_is_supported(class_name: &str) -> bool {
 }
 
 /// Binds one positional dynamic-call value to the next declared parameter slot.
-pub(in crate::interpreter) fn bind_dynamic_positional_arg(
-    bound_args: &mut [Option<RuntimeCellHandle>],
+pub(in crate::interpreter) fn bind_dynamic_positional_arg<T>(
+    bound_args: &mut [Option<T>],
     next_positional: &mut usize,
-    value: RuntimeCellHandle,
+    value: T,
 ) -> Result<(), EvalStatus> {
     if *next_positional >= bound_args.len() || bound_args[*next_positional].is_some() {
         return Err(EvalStatus::RuntimeFatal);
@@ -1224,11 +1241,11 @@ pub(in crate::interpreter) fn bind_dynamic_positional_arg(
 }
 
 /// Binds one named dynamic-call value to the matching declared parameter slot.
-pub(in crate::interpreter) fn bind_dynamic_named_arg(
+pub(in crate::interpreter) fn bind_dynamic_named_arg<T>(
     params: &[String],
-    bound_args: &mut [Option<RuntimeCellHandle>],
+    bound_args: &mut [Option<T>],
     name: &str,
-    value: RuntimeCellHandle,
+    value: T,
 ) -> Result<(), EvalStatus> {
     let Some(param_index) = params.iter().position(|param| param == name) else {
         return Err(EvalStatus::RuntimeFatal);

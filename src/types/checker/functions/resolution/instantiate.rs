@@ -43,7 +43,7 @@ impl Checker {
         // source order has to become the declaration's first: a named argument binds by name and
         // may be written anywhere. Positions no argument fills are dropped from all three vectors
         // together, which keeps that pairing intact while contributing nothing to inference.
-        let ordered_args = generics::arguments_in_declaration_order(&decl.params, args);
+        let ordered_args = generics::arguments_in_declaration_order(&decl.params, args, self.semantic_profile);
         let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
         let mut actual_types: Vec<PhpType> = Vec::new();
         let mut inference_args: Vec<Expr> = Vec::new();

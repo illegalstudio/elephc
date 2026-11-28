@@ -37,7 +37,7 @@ description: "Compiler internals for stream_socket_client(): lowering path, type
 ## Signature summary
 
 ```php
-function stream_socket_client(string $address): mixed
+function stream_socket_client(string $address): resource|false
 ```
 
 ## What the type checker enforces

@@ -7,7 +7,8 @@
 //! Key details:
 //! - Magician parses this data once during registration, never calls a throwing native helper.
 //! - Explicit parentheses preserve the compiler AST's grouping and source evaluation order.
-//! - Names are fully qualified and strings are quoted without interpolation.
+//! - Names are fully qualified and literal bytes are quoted without interpolation.
+//! - Formatting operands retain interpolation rather than becoming ordinary explicit casts.
 //! - The smallest signed integer uses exact arithmetic to avoid an overflowing positive token.
 
 use super::*;
@@ -53,9 +54,7 @@ fn quoted_literal(value: &str) -> String {
 /// Resolves a lexical class receiver before its default crosses into runtime eval metadata.
 fn receiver_name(receiver: &StaticReceiver, context: &EvalNativeDefaultContext<'_>) -> Option<String> {
     const_default_values::resolve_static_receiver_name(
-        &const_default_values::ConstDefaultContext {
-            module: context.module, current_class: context.current_class,
-        }, receiver,
+        &const_default_values::ConstDefaultContext::new(context.module, context.current_class), receiver,
     )
 }
 
@@ -121,6 +120,7 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
             receiver_name(receiver, context)?, arguments(args, context)?),
         ExprKind::NamedArg { name, value } => format!("{name}: {}", expression(value, context)?),
         ExprKind::Spread(value) => format!("...{}", expression(value, context)?),
+        ExprKind::UnaryPlus(value) => format!("(+{})", expression(value, context)?),
         ExprKind::Negate(value) => format!("(-{})", expression(value, context)?),
         ExprKind::Not(value) => format!("(!{})", expression(value, context)?),
         ExprKind::BitNot(value) => format!("(~{})", expression(value, context)?),
@@ -133,8 +133,12 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
         ExprKind::Ternary { condition, then_expr, else_expr } => format!("({} ? {} : {})",
             expression(condition, context)?, expression(then_expr, context)?, expression(else_expr, context)?),
         ExprKind::Cast { target, expr } => {
+            if *target == CastType::StringFormat {
+                return Some(crate::semantics::strings::formatting_source(&expression(expr, context)?));
+            }
             let target = match target {
                 CastType::Int => "int", CastType::Float => "float", CastType::String => "string",
+                CastType::StringFormat => unreachable!("formatting was serialized above"),
                 CastType::Bool => "bool", CastType::Array => "array", CastType::Object => "object",
             };
             format!("(({target}) {})", expression(expr, context)?)

@@ -26,7 +26,7 @@ pub(in crate::interpreter) fn eval_builtin_call(
     let result = if value_only || eval_builtin_uses_owned_arguments(name) {
         eval_owned_builtin_call(name, args, false, context, scope, values)
     } else {
-        with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+        with_eval_builtin_call_arguments(name, args, context, scope, values, |arguments, context, scope, values| {
             eval_bound_builtin_call_from_scope(name, arguments, Some(scope), context, values)
         })
     };
@@ -78,6 +78,7 @@ fn eval_bound_builtin_call_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    validate_builtin_call_arguments(name, &arguments, context, values)?;
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
     let bound = bind_evaluated_builtin_args(name, arguments, values)?;
     let result = eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values)

@@ -11,10 +11,108 @@ use std::path::Path;
 
 use crate::codegen::platform::Target;
 
+/// A ref-parameter boxed append retires its fresh object owner on every target.
+#[test]
+fn ref_parameter_object_append_retires_borrowed_operand_on_all_targets() {
+    use crate::ir::{Op, ValueDef};
+
+    let source = r#"<?php
+class RefAppendPayload {}
+function appendRefPayload(array &$items): void {
+    $items[] = new RefAppendPayload();
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "appendRefPayload")
+            .expect("reference append fixture function");
+        let append = function
+            .instructions
+            .iter()
+            .find(|instruction| instruction.op == Op::MixedArrayAppend)
+            .expect("boxed reference append");
+        let borrowed = append.operands[1];
+        let ValueDef::Instruction { inst, .. } = function.value(borrowed).unwrap().def else {
+            panic!("{name}: append value must have an instruction producer");
+        };
+        let borrow = function.instruction(inst).unwrap();
+        assert_eq!(
+            borrow.op,
+            Op::Borrow,
+            "{name}: the boxed append must retain an independent owner",
+        );
+        let source = borrow.operands[0];
+        let ValueDef::Instruction { inst, .. } = function.value(source).unwrap().def else {
+            panic!("{name}: borrowed append value must have an instruction producer");
+        };
+        assert_eq!(function.instruction(inst).unwrap().op, Op::ObjectNew, "{name}");
+        assert!(
+            function.instructions.iter().any(|instruction| {
+                instruction.op == Op::Release && instruction.operands == [source]
+            }),
+            "{name}: the caller's fresh object owner must retire after the boxed append",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Ref-bound indexed widening owns its borrowed source before consuming it on every target.
+#[test]
+fn ref_bound_heterogeneous_append_acquires_conversion_source_on_all_targets() {
+    use crate::ir::{Op, ValueDef};
+
+    let source = r#"<?php
+function buildHeterogeneousAppend(): void {
+    $items = [];
+    $alias =& $items;
+    $items[] = 1;
+    $items[] = "x";
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "buildHeterogeneousAppend")
+            .expect("heterogeneous append fixture function");
+        let conversions = function
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.op == Op::ArrayToMixed)
+            .collect::<Vec<_>>();
+        assert!(!conversions.is_empty(), "{name}: heterogeneous append must widen indexed storage");
+        assert!(
+            conversions.iter().any(|conversion| {
+                let Some(source) = function.value(conversion.operands[0]) else { return false; };
+                let ValueDef::Instruction { inst, .. } = source.def else { return false; };
+                function.instruction(inst).is_some_and(|acquire| {
+                    acquire.op == Op::Acquire && acquire.operands.len() == 1
+                })
+            }),
+            "{name}: the ref-bound conversion must acquire its borrowed source"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Final storage normalization selects boxed or native append coherently on every target.
 #[test]
 fn ref_local_append_uses_final_storage_on_all_targets() {
-    use crate::ir::{Immediate, Op};
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, ValueDef};
     use crate::types::PhpType;
     let source = r#"<?php
 function touchUnknown(&$items): void { $items[0] = 7; }
@@ -125,8 +223,47 @@ touchUnknown($items); echo count($items);
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
+        let nested = module.functions.iter()
+            .find(|function| function.name == "earlyNativeNested")
+            .expect("conditional native nested write fixture");
+        let fetch = nested.instructions.iter()
+            .find(|instruction| matches!(
+                instruction.immediate,
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::ArrayFetchForWrite
+                        | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+                ))
+            ))
+            .expect("nested write fetch-for-write");
+        let retained = nested.value(fetch.operands[0]).expect("retained mutation owner");
+        let ValueDef::Instruction { inst: retain, block: retain_block, index: retain_index } = retained.def else {
+            panic!("{target}: retained mutation owner must be an instruction result");
+        };
+        let retain = nested.instruction(retain).expect("mutation owner acquire");
+        assert_eq!(retain.op, Op::Acquire, "{target}: retain a borrowed native view before cleanup");
+        let borrowed = nested.value(retain.operands[0]).expect("borrowed native view");
+        assert_eq!(
+            borrowed.ownership,
+            crate::ir::Ownership::Borrowed,
+            "{target}: the conditional reference path must expose the borrowed view",
+        );
+        let ValueDef::Instruction { block: fetch_block, index: fetch_index, .. } =
+            nested.value(fetch.result.expect("fetch result")).expect("fetch result value").def
+        else {
+            panic!("{target}: fetch-for-write result must be an instruction result");
+        };
+        assert_eq!(retain_block, fetch_block, "{target}: retain and consume in one write block");
+        assert!(
+            nested.block(fetch_block).expect("nested write block").instructions
+                [retain_index as usize + 1..fetch_index as usize]
+                .iter()
+                .any(|id| nested.instruction(*id).is_some_and(|instruction|
+                    instruction.op == Op::ReleaseLocalSlot)),
+            "{target}: retire the old Mixed box only after taking the mutation owner",
+        );
         let mut boxed = 0;
         let mut native = 0;
+        let mut hash_writebacks = 0;
         for function in module.functions.iter()
             .chain(module.class_methods.iter())
             .chain(module.closures.iter())
@@ -172,14 +309,29 @@ touchUnknown($items); echo count($items);
                 assert!(pop < release, "{target}: detach the unwind pin before releasing its string");
             }
             for block in &function.blocks {
-                for id in &block.instructions {
+                for (index, id) in block.instructions.iter().enumerate() {
                     let append = function.instruction(*id).unwrap();
                     if !matches!(append.op, Op::ArrayPush | Op::HashAppend | Op::MixedArrayAppend) { continue; }
                     let value = function.value(append.operands[0]).unwrap();
                     let crate::ir::ValueDef::Instruction { inst, .. } = value.def else { continue; };
-                    let load = function.instruction(inst).unwrap();
-                    let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
+                    let producer = function.instruction(inst).unwrap();
+                    let Some(Immediate::LocalSlot(slot)) = producer.immediate else { continue; };
                     if function.locals[slot.as_raw() as usize].php_type.codegen_repr() != PhpType::Mixed { continue; }
+                    if producer.op == Op::HashToMixed {
+                        assert_eq!(append.op, Op::HashAppend, "{target}: widened hash uses native append");
+                        assert_eq!(value.ownership, crate::ir::Ownership::Owned,
+                            "{target}: widening must produce an independent hash");
+                        assert!(block.instructions[index + 1..].iter().any(|id| {
+                            let store = function.instruction(*id).unwrap();
+                            store.op == Op::StoreLocalRetiringBox
+                                && store.immediate == Some(Immediate::LocalSlot(slot))
+                                && store.operands == [append.operands[0]]
+                        }), "{target}: the mutated hash replaces and retires the old box");
+                        hash_writebacks += 1;
+                        continue;
+                    }
+                    assert!(matches!(producer.op, Op::LoadLocal | Op::LoadRefCell),
+                        "{target}: direct append must load its receiver");
                     if append.op == Op::ArrayPush {
                         assert!(matches!(value.php_type.codegen_repr(), PhpType::Array(_)),
                             "{target}: native consumers retain an indexed-array view");
@@ -195,11 +347,12 @@ touchUnknown($items); echo count($items);
         }
         assert!(boxed > 0 && native > 0 && boxed + native >= 6,
             "{target}: cover boxed and native views in methods, functions, closures and main: {boxed}/{native}");
+        assert!(hash_writebacks > 0, "{target}: cover a widened hash stored in a boxed local");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
 
-/// A reference-backed `iterable` source reaches dynamic indexed and hash conversion with a lease.
+/// A reference-promoted source reaches dynamic indexed and hash conversion with a lease.
 #[test]
 fn ref_local_dynamic_iterable_foreach_owns_writeback_on_all_targets() {
     use crate::ir::{Immediate, Op, ValueDef};
@@ -212,15 +365,15 @@ function mutateDynamicIterable(iterable $input, int $flag): void {
     $items = keepDynamicIterable($input);
     if ($flag < 0) {
         touchDynamicIterable($items);
-        return;
     }
     foreach ($items as &$value) { $value = 1; }
     unset($value);
 }
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
         let module = super::lower_source_at_for_target(
-            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+            source, Path::new("main.php"), Path::new("."), target,
         );
         let function = module.functions.iter()
             .find(|function| function.name == "mutateDynamicIterable")
@@ -229,7 +382,8 @@ function mutateDynamicIterable(iterable $input, int $flag): void {
             .find(|instruction| instruction.op == Op::IterStart)
             .expect("dynamic iterable fixture must reach IterStart");
         let source_value = function.value(iter_start.operands[0]).expect("iterator source value");
-        assert_eq!(source_value.php_type.codegen_repr(), PhpType::Iterable, "{name}");
+        assert_eq!(source_value.php_type.codegen_repr(), PhpType::Mixed,
+            "{name}: the reachable by-reference mutation must widen the foreach source");
         let ValueDef::Instruction { inst: source_load, .. } = source_value.def else {
             panic!("{name}: iterator source must be loaded from the local");
         };
@@ -253,40 +407,33 @@ function mutateDynamicIterable(iterable $input, int $flag): void {
             .split_once("@endfn name=mutateDynamicIterable").unwrap().0;
         let body = body.split_once("op=iter_start").expect("iterator assembly").1;
         let indexed_label = body.lines()
-            .find(|line| line.contains("iter_start_dyn_indexed") && line.trim_end().ends_with(':'))
-            .expect("dynamic indexed label");
+            .find(|line| line.contains("iter_start_mixed_indexed") && line.trim_end().ends_with(':'))
+            .expect("mixed indexed label");
         let hash_label = body.lines()
-            .find(|line| line.contains("iter_start_dyn_hash") && line.trim_end().ends_with(':'))
-            .expect("dynamic hash label");
+            .find(|line| line.contains("iter_start_mixed_hash") && line.trim_end().ends_with(':'))
+            .expect("mixed hash label");
         let object_label = body.lines()
-            .find(|line| line.contains("iter_start_dyn_object") && line.trim_end().ends_with(':'))
-            .expect("dynamic object label");
+            .find(|line| line.contains("iter_start_mixed_object") && line.trim_end().ends_with(':'))
+            .expect("mixed object label");
         let indexed_start = body.find(indexed_label).unwrap();
         let hash_start = body.find(hash_label).unwrap();
         let object_start = body.find(object_label).unwrap();
         let indexed = &body[indexed_start..hash_start];
         let hash = &body[hash_start..object_start];
 
-        for (branch, conversion) in [
-            (indexed, "__rt_array_to_hash"),
-            (hash, "__rt_hash_to_mixed"),
-        ] {
-            let retain = branch.find("__rt_incref")
-                .unwrap_or_else(|| panic!("{name}: missing borrowed-source retain in:\n{branch}"));
-            let cleanup = branch.find("__rt_decref_mixed")
-                .unwrap_or_else(|| panic!("{name}: missing old Mixed-box cleanup in:\n{branch}"));
-            let convert = branch.find(conversion)
-                .unwrap_or_else(|| panic!("{name}: missing {conversion} in:\n{branch}"));
-            assert!(retain < cleanup && cleanup < convert,
-                "{name}: retain and retire the raw Mixed owner before {conversion}:\n{branch}");
-            let writeback = &branch[convert..];
-            let boxed = writeback.find("__rt_mixed_from_value")
-                .unwrap_or_else(|| panic!("{name}: converted owner must be boxed for raw-local writeback:\n{branch}"));
-            let transferred = writeback.find("__rt_decref_any")
-                .unwrap_or_else(|| panic!("{name}: owned writeback must transfer its retained container lease:\n{branch}"));
-            assert!(boxed < transferred,
-                "{name}: box the converted owner before transferring its retained lease:\n{branch}");
-        }
+        assert!(indexed.contains("__rt_array_to_hash"),
+            "{name}: indexed Mixed payload must promote to hash storage:\n{indexed}");
+        assert!(hash.contains("__rt_hash_to_mixed"),
+            "{name}: hash Mixed payload must obtain unique mutable storage:\n{hash}");
+        let (tag_store, indexed_payload_store, hash_payload_store) = if target.arch == crate::codegen::platform::Arch::AArch64 {
+            ("str x10, [x9]", "str x0, [x9, #8]", "str x0, [x9, #8]")
+        } else {
+            ("mov QWORD PTR [r10], 5", "mov QWORD PTR [r10 + 8], rax", "mov QWORD PTR [r10 + 8], rax")
+        };
+        assert!(indexed.contains(tag_store) && indexed.contains(indexed_payload_store),
+            "{name}: indexed conversion must publish tag and payload in the existing Mixed cell:\n{indexed}");
+        assert!(hash.contains(hash_payload_store),
+            "{name}: hash conversion must publish its payload in the existing Mixed cell:\n{hash}");
     }
 }
 
@@ -396,23 +543,31 @@ function read_unpromoted_ref_string(int $flag): void {
             .find(|function| function.name == "read_unpromoted_ref_string")
             .expect("fixture function");
         let load = function.instructions.iter().find(|instruction| {
+            instruction.op == Op::LoadLocal
+                && instruction.result.is_some_and(|result| {
+                    function.value(result).is_some_and(|value| {
+                        value.php_type.codegen_repr() == PhpType::Str
+                    })
+                })
+        }).expect("surviving branch reads the unpromoted string local");
+        assert_eq!(
+            function.value(load.result.unwrap()).unwrap().ownership,
+            Ownership::Borrowed,
+            "{name}: the storage-backed string view stays borrowed",
+        );
+        assert!(!function.instructions.iter().any(|instruction| {
             instruction.op == Op::LoadRefCell
                 && instruction.result.is_some_and(|result| {
                     function.value(result).is_some_and(|value| {
                         value.php_type.codegen_repr() == PhpType::Str
                     })
                 })
-        }).expect("surviving branch reads the conditionally promoted string local");
-        assert_eq!(
-            function.value(load.result.unwrap()).unwrap().ownership,
-            Ownership::Borrowed,
-            "{name}: the storage-backed string view stays borrowed",
-        );
+        }), "{name}: an unexecuted promotion must not change the surviving string read");
 
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = assembly.split_once("@fn name=read_unpromoted_ref_string ").unwrap().1
             .split_once("@endfn name=read_unpromoted_ref_string").unwrap().0;
-        let read = body.split_once("op=load_ref_cell").unwrap().1
+        let read = body.rsplit_once("op=load_local").unwrap().1
             .split_once("op=echo_value").unwrap().0;
         assert!(read.contains("__rt_mixed_unbox"), "{name}: {read}");
         assert!(!read.contains("__rt_mixed_cast_string"), "{name}: {read}");
@@ -440,16 +595,21 @@ function read_unpromoted_ref_object(int $flag): void {
         );
         let function = module.functions.iter()
             .find(|function| function.name == "read_unpromoted_ref_object").unwrap();
-        let load = function.instructions.iter().find(|inst| inst.op == Op::LoadRefCell
+        let load = function.instructions.iter().find(|inst| inst.op == Op::LoadLocal
             && inst.result_php_type == PhpType::Object("ReferenceViewObject".into()))
-            .expect("flow-proven object read from conditionally promoted storage");
-        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("local cell read"); };
+            .expect("flow-proven object read from the unpromoted storage branch");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("local storage read"); };
         assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
         assert_eq!(function.value(load.result.unwrap()).unwrap().ownership, Ownership::Borrowed);
+        assert!(!function.instructions.iter().any(|instruction| {
+            instruction.op == Op::LoadRefCell
+                && instruction.result_php_type
+                    == PhpType::Object("ReferenceViewObject".into())
+        }), "{name}: an unexecuted promotion must not change the surviving object read");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = assembly.split_once("@fn name=read_unpromoted_ref_object ").unwrap().1
             .split_once("@endfn name=read_unpromoted_ref_object").unwrap().0;
-        let read = body.rsplit_once("op=load_ref_cell").unwrap().1
+        let read = body.rsplit_once("op=load_local").unwrap().1
             .lines().take_while(|line| !line.contains("@src ")).collect::<Vec<_>>().join("\n");
         assert_eq!(read.matches("__rt_mixed_unbox").count(), 1,
             "{name}: the surviving raw branch must expose the object payload: {read}");

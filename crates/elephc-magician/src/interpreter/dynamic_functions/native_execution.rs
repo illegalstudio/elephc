@@ -78,6 +78,7 @@ fn invoke_native_function_with_staged_args(
             let _ = cleanup_native_function_ref_args(bound_args, values);
             return Err(status);
         }
+        context.invalidate_member_source_views();
         let result = unsafe { function.call(arg_array.borrowed()) };
         // Transfer a native exception before any cleanup can run another destructor.
         let result = values.native_call_result(result);

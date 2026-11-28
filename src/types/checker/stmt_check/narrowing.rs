@@ -64,9 +64,10 @@ enum GuardTarget {
 
 impl GuardTarget {
     /// Returns the conservative type used when the current type has no matching union member.
-    fn fallback_type(&self) -> PhpType {
+    fn fallback_type(&self, preserve_array_view: bool) -> PhpType {
         match self {
             Self::Exact(ty) => ty.clone(),
+            Self::AnyArray if preserve_array_view => PhpType::php_array(),
             Self::AnyArray => PhpType::Mixed,
         }
     }
@@ -435,13 +436,15 @@ impl Checker {
                 let kept: Vec<PhpType> = members.iter()
                     .filter_map(|m| guard_true_part(self, m, target)).collect();
                 if kept.is_empty() {
-                    target.fallback_type()
+                    target.fallback_type(self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && self.semantic_profile.contains(elephc_semantics::StrictFeature::Mixed))
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
             _ if guard_matches(self, current, target) => current.clone(),
-            _ => target.fallback_type(),
+            _ => target.fallback_type(self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && self.semantic_profile.contains(elephc_semantics::StrictFeature::Mixed)),
         }
     }
 
@@ -553,7 +556,7 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
             let target = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
                 "is_int" | "is_integer" | "is_long" => GuardTarget::Exact(PhpType::Int),
                 "is_float" | "is_double" => GuardTarget::Exact(PhpType::Float),
-                "is_real" if !crate::strict_php::is_enabled() => GuardTarget::Exact(PhpType::Float),
+                "is_real" if !crate::php_only::is_enabled() => GuardTarget::Exact(PhpType::Float),
                 "is_string" => GuardTarget::Exact(PhpType::Str),
                 "is_bool" => GuardTarget::Exact(PhpType::Bool),
                 // `is_null($x)`: same narrowing as `$x === null` — elephc models a `?T` value's
@@ -561,6 +564,7 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
                 // ?int as int on the fall-through path).
                 "is_null" => GuardTarget::Exact(PhpType::Void),
                 "is_callable" => GuardTarget::Exact(PhpType::Callable),
+                "is_resource" => GuardTarget::Exact(PhpType::Resource(None)),
                 "is_array" => GuardTarget::AnyArray,
                 // `isset($x)` is the exact negation of `$x === null` for a keyable place: true
                 // exactly when the storage holds a non-null value. This is what makes

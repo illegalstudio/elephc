@@ -158,7 +158,7 @@ pub(super) fn pipe_runtime_result_type(
                 ctx.callable_param_signature(name)
                     .map(|sig| sig.return_type.erase_declared_callable())
             })
-            .unwrap_or_else(|| fallback_expr_type(expr)),
-        _ => fallback_expr_type(expr),
+            .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile)),
+        _ => fallback_expr_type(expr, ctx.semantic_profile),
     }
 }

@@ -37,6 +37,35 @@ pub(super) fn lower(
     })
 }
 
+/// Selects a declared writable property root before a deeper indexed mutation.
+///
+/// Special dynamic and overloaded names are removed by `magic_index` first. Each remaining
+/// exact-class arm reuses the shared property fetch selector, so declared PHP arrays obtain a
+/// borrowed `PropGetForWrite` while object containers retain identity-preserving reads.
+pub(super) fn lower_nested_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    object_expr: &Expr,
+    property: &str,
+    property_expr: &Expr,
+    mode: FetchMode,
+    apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
+) -> bool {
+    dispatch(ctx, object, property, property_expr.span, mode, false, false,
+        |ctx, receiver, _| {
+            let container =
+                crate::ir_lower::expr::lower_nested_assignment_property_source_from_value(
+                    ctx,
+                    object_expr,
+                    receiver,
+                    property,
+                    property_expr,
+                    mode,
+                );
+            apply(ctx, container);
+        })
+}
+
 /// Selects exact declared or ordinary dynamic storage before an erased receiver append.
 pub(super) fn lower_append(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,

@@ -9,13 +9,35 @@
 
 use super::*;
 
-/// Borrows a boxed global symbol slot without promoting an uninitialized function local.
-pub(super) fn lower_load_global_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let data = expect_global_name(inst)?;
-    let symbol = ir_global_symbol(ctx.global_name_data(data)?);
-    // The second word is reserved for the same persistent reference wrapper protocol as statics.
+/// Removes only the program name's owner before an old value can invoke PHP during retirement.
+pub(super) fn lower_unset_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = ctx.global_name_data(expect_global_name(inst)?)?;
+    let symbol = ir_global_symbol(name);
     ctx.data.add_comm(symbol.clone(), 16);
-    abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &PhpType::Int);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, true);
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    Ok(())
+}
+
+/// Reads the canonical symbol's cell pointer without interpreting initialized null as absence.
+pub(super) fn lower_global_binding_present(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = ctx.global_name_data(expect_global_name(inst)?)?;
+    let symbol = ir_global_symbol(name);
+    ctx.data.add_comm(symbol.clone(), 16);
+    abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &PhpType::Int);
+    let absent = ctx.next_label("global_binding_absent");
+    let done = ctx.next_label("global_binding_presence");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &absent);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&absent);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 
@@ -31,6 +53,19 @@ pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instructio
     ctx.data
         .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
     abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
+    if ty.codegen_repr() == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Acquires a managed cell sharing a program symbol's persistent PHP reference wrapper.
+pub(super) fn lower_load_global_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = ctx.global_name_data(expect_global_name(inst)?)?;
+    let symbol = ir_global_symbol(name);
+    ctx.data.add_comm(symbol.clone(), 16);
+    abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_retain_mixed");
     store_if_result(ctx, inst)
 }
 
@@ -58,17 +93,18 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         PhpType::Mixed
     };
-    let referenced = store_ty == PhpType::Mixed
-        && ctx.shared.global_has_reference(ctx.module, &name);
-    ctx.data.add_comm(symbol.clone(), if referenced { 16 } else { store_ty.codegen_repr().stack_size().max(8) });
-    if referenced {
-        let prefix = ctx.next_label("global_reference_publish");
-        crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
-            ctx.emitter, &symbol, true, None, &prefix,
-        );
-    } else {
-        abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
-    }
+    let min_slot_size = if store_ty == PhpType::Mixed
+        && ctx.shared.global_has_reference(ctx.module, &name) { 16 } else { 8 };
+    ctx.data
+        .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(min_slot_size));
+    if store_ty == PhpType::Mixed {
+        let prefix = ctx.next_label("global_value_publication");
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, result);
+        crate::codegen_support::runtime::reference_cells::swap_mixed_symbol(ctx.emitter, &symbol, &prefix);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+        abi::emit_pop_reg(ctx.emitter, result);
+    } else { abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true); }
     Ok(())
 }
 

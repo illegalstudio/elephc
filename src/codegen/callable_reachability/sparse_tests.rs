@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::codegen::platform::Target;
-use crate::ir::{Builder, IrType, LocalKind, Ownership};
+use crate::ir::{Builder, IrType, LocalKind, Ownership, Terminator};
 use crate::types::PhpType;
 
 /// Advances a deterministic stream without adding a random-number dependency.

@@ -35,7 +35,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
     save_eval_code_string(ctx);
     ensure_eval_context_handle(ctx)?;
-    mark_eval_strict_php(ctx, inst);
+    mark_eval_php_only(ctx, inst);
     mark_eval_php_version(ctx);
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
@@ -44,10 +44,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     let sync_globals = eval_sync_globals(ctx);
     prepare_dynamic_eval_scope_access_mask(ctx, &sync_locals, &sync_globals)?;
     let catalog = prepare_eval_scope_flush(ctx)?;
-    let global_aliases = eval_global_aliases(ctx);
+    let global_aliases = eval_global_aliases(ctx)?;
     flush_dynamic_eval_scope_locals(ctx, &sync_locals)?;
     flush_dynamic_eval_global_scope(ctx, &sync_globals)?;
-    mark_eval_scope_global_aliases(ctx, &global_aliases);
+    mark_eval_scope_global_aliases(ctx, &global_aliases)?;
     set_eval_context_global_scope(ctx);
     prepare_eval_native_catalog(ctx, catalog)?;
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
@@ -67,6 +67,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     ctx.emitter.comment("reload eval scope before propagating its pending exception");
     reload_dynamic_eval_scope_locals(ctx, &sync_locals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
     reload_dynamic_eval_global_scope(ctx, &sync_globals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    retire_native_scope_snapshots(ctx);
     finish_eval_scope_reload(ctx);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
@@ -79,8 +80,8 @@ pub(super) fn lower_eval_literal_eir_function(
     inst: &Instruction,
     fragment: &str,
 ) -> Result<bool> {
-    let strict_php = super::super::instruction_strict_php_profile(inst);
-    let function_name = crate::eval_aot::eir_function_name(fragment, strict_php);
+    let profile = super::super::instruction_eval_source_profile(inst, ctx.module.semantic_profile);
+    let function_name = crate::eval_aot::eir_function_name(fragment, profile);
     if let Some(callee) = ctx.callable_function_by_name(&function_name) {
         if callee.params.is_empty() && callee.return_php_type.codegen_repr() == PhpType::Mixed {
             ctx.emitter
@@ -102,8 +103,8 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     inst: &Instruction,
     fragment: &str,
 ) -> Result<bool> {
-    let strict_php = super::super::instruction_strict_php_profile(inst);
-    let function_name = crate::eval_aot::eir_scope_function_name(fragment, strict_php);
+    let profile = super::super::instruction_eval_source_profile(inst, ctx.module.semantic_profile);
+    let function_name = crate::eval_aot::eir_scope_function_name(fragment, profile);
     let Some(callee) = ctx.callable_function_by_name(&function_name) else {
         return Ok(false);
     };
@@ -116,7 +117,7 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.module.source_path.as_deref(),
-        strict_php,
+        profile,
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_codegen(ctx, receiver, method, args)
@@ -360,7 +361,7 @@ pub(super) fn eval_literal_static_function_supported_by_codegen(
         return false;
     };
     let signature = function_signature_from_eir(function);
-    crate::eval_aot::static_function_signature_supported(&signature, args)
+    crate::eval_aot::static_function_signature_supported(&signature, args, ctx.module.semantic_profile)
 }
 
 /// Returns true when a static method call matches the EIR eval AOT codegen subset.
@@ -402,5 +403,5 @@ pub(super) fn eval_literal_static_method_supported_by_codegen(
     else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, ctx.module.semantic_profile)
 }

@@ -154,6 +154,23 @@ const CURL_RELEASE_CHAIN: &[&str] = &[
     "__rt_curl_share_free",
 ];
 
+/// Throw entries reached by a jump while the stack is aligned at a call boundary.
+const JUMP_ONLY_ALIGNED_ENTRIES: &[&str] = &[
+    super::arrays::strict_numeric_operand::TYPE_FAIL,
+    super::strict_comparators::FAIL,
+];
+
+/// Gets the stack residue established by the entry's call, jump, or synthetic return.
+fn entry_stack_residue(name: &str) -> i64 {
+    if JUMP_ONLY_ALIGNED_ENTRIES.contains(&name)
+        || ENTERED_ON_ALIGNED_STACK.iter().any(|(entry, _)| *entry == name)
+    {
+        0
+    } else {
+        8
+    }
+}
+
 /// One emitted helper: its name and its (line number, text) instruction stream.
 struct Function {
     name: String,
@@ -243,7 +260,7 @@ fn resolve_local(body: &[(usize, String)], from: usize, target: &str) -> Option<
 /// entry point. Returns the construct that defeated it, if any.
 ///
 /// `entry_residue` is `rsp % 16` at `start`: 8 for an ordinary helper (the caller's `call`
-/// pushed a return address onto an aligned stack), 0 for one in [`ENTERED_ON_ALIGNED_STACK`].
+/// pushed a return address onto an aligned stack), 0 for a synthetic return or jump-only entry.
 /// A `call` is correct exactly when `entry_residue + offset` is `0 mod 16`. A path ends at
 /// `ret`, at a branch that leaves the helper (a tail call), or at an unmodellable construct.
 /// Reaching one instruction with two different offsets means the walk lost track, and the
@@ -431,26 +448,17 @@ fn analyze(function: &Function) -> Analysis {
     let mut visited: HashMap<usize, i64> = HashMap::new();
     let mut misaligned: Vec<(usize, String, i64)> = Vec::new();
     let mut entry = labels.get(function.name.as_str()).copied();
-    // Only the exported entry can be a synthetic `ret` target; secondary entries are `call`ed.
-    let mut entry_residue = if ENTERED_ON_ALIGNED_STACK
-        .iter()
-        .any(|(name, _)| *name == function.name)
-    {
-        0
-    } else {
-        8
-    };
-
     loop {
         let Some(start) = entry else { break };
         let mut seen: HashMap<usize, i64> = HashMap::new();
+        let name = label_of(&function.body[start].1).expect("entry must be a label");
+        let entry_residue = entry_stack_residue(name);
         if let Some(reason) =
             walk(&function.body, &labels, start, entry_residue, &mut seen, &mut misaligned)
         {
             return Analysis { unanalyzable: Some(reason), misaligned: Vec::new() };
         }
         visited.extend(seen);
-        entry_residue = 8;
         entry = function
             .body
             .iter()
@@ -481,6 +489,23 @@ fn explicit_stack_alignment_preserves_subsequent_call_checks() {
         assert!(analysis.unanalyzable.is_none(), "{padding}: {:?}", analysis.unanalyzable);
         assert_eq!(analysis.misaligned.len(), 1, "{padding}: {:?}", analysis.misaligned);
         assert_eq!(analysis.misaligned[0].1, "misaligned");
+    }
+}
+
+/// Jump-only throw entries begin without a call return slot before adding their alignment pad.
+#[test]
+fn jump_only_throw_entries_use_branch_entry_alignment() {
+    for name in JUMP_ONLY_ALIGNED_ENTRIES {
+        let function = Function {
+            name: (*name).into(),
+            body: [
+                format!("{name}:"), "sub rsp, 8".into(), "push rbp".into(),
+                "sub rsp, 16".into(), "call aligned".into(), "ud2".into(),
+            ].into_iter().enumerate().collect(),
+        };
+        let analysis = analyze(&function);
+        assert!(analysis.unanalyzable.is_none(), "{name}: {:?}", analysis.unanalyzable);
+        assert!(analysis.misaligned.is_empty(), "{name}: {:?}", analysis.misaligned);
     }
 }
 
@@ -693,11 +718,7 @@ fn every_x86_64_runtime_call_site_is_sysv_aligned() {
         .filter(|(name, _)| !allowed.contains(&name.as_str()))
         .map(|(name, calls)| {
             let (line, target, offset) = &calls[0];
-            let needed = if ENTERED_ON_ALIGNED_STACK.iter().any(|(listed, _)| listed == name) {
-                0
-            } else {
-                8
-            };
+            let needed = entry_stack_residue(name);
             format!(
                 "{name} calls {target} at line {line} with rsp {offset} bytes past its entry \
                  ({} mod 16, needs {needed})",

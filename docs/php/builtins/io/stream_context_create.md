@@ -6,7 +6,7 @@ description: "Creates a stream context."
 ## stream_context_create()
 
 ```php
-function stream_context_create(array $options = null, array $params = null): mixed
+function stream_context_create(array $options = null, array $params = null): resource
 ```
 
 Creates a stream context.
@@ -15,7 +15,7 @@ Creates a stream context.
 - `$options` (`array`), default `null`, optional
 - `$params` (`array`), default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `resource`
 
 ## Availability
 

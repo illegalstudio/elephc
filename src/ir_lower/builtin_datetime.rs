@@ -22,9 +22,8 @@
 use super::program::instruction_uses_eval;
 use std::collections::HashSet;
 
-use crate::ir::{Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
+use crate::ir::{Function, Immediate, Module, Op, RuntimeFnId};
 use crate::ir_lower::function;
-use crate::parser::ast::ExprKind;
 use crate::types::{CheckResult, PhpType};
 
 /// The synthetic builtin date/time classes injected by the checker.
@@ -113,7 +112,7 @@ fn class_info_by_php_name<'a>(
 pub(crate) fn lower_referenced_builtin_datetime_methods(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     lower_eval_date_alias_methods_if_needed(module, check_result, constants, fiber_return_sigs);
@@ -150,7 +149,7 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
 fn lower_eval_date_alias_methods_if_needed(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     if !module_uses_eval(module) {
@@ -183,7 +182,7 @@ fn lower_eval_date_alias_methods_if_needed(
 fn lower_unserialize_date_methods_if_needed(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     if !module_uses_unserialize(module) {
@@ -235,16 +234,8 @@ fn module_uses_unserialize(module: &Module) -> bool {
         .chain(module.callback_wrappers.iter())
         .chain(module.extern_callback_trampolines.iter())
         .chain(module.runtime_callable_invokers.iter())
-        .any(|function| {
-            function.instructions.iter().any(|inst| {
-                matches!(
-                    inst.immediate,
-                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                        RuntimeFnId::Unserialize
-                    )))
-                )
-            })
-        })
+        .any(|function| function.instructions.iter()
+            .any(|inst| inst.runtime_function() == Some(RuntimeFnId::Unserialize)))
 }
 
 /// Returns the builtin DateTime-family methods reachable from eval alias dispatch.
@@ -575,7 +566,7 @@ fn lower_builtin_datetime_method(
     method_key: &str,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     let Some(class_info) = check_result.classes.get(class_name) else {

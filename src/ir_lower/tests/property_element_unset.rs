@@ -124,7 +124,7 @@ fn ops(function: &Function) -> Vec<Op> {
 }
 
 /// An associative property and a declared-`array` property both fetch the container for write
-/// and remove in place; neither acquires a copy nor stores one back.
+/// and remove through borrowed views; neither acquires a copy nor stores one back.
 #[test]
 fn property_element_unset_removes_in_place_on_every_target() {
     let source = r#"<?php
@@ -163,11 +163,19 @@ echo count($s->items), count($s->typed);
                 .iter()
                 .position(|op| *op == remove)
                 .unwrap_or_else(|| panic!("{name}: {method} must remove through {remove:?}"));
-            assert_eq!(
-                fetch + 1,
-                removal,
-                "{name}: {method} removes straight from the fetched container: {ops:?}"
+            assert!(
+                ops[fetch + 1..removal].iter().all(|op| *op == Op::Borrow),
+                "{name}: {method} may only borrow between fetch and removal: {ops:?}"
             );
+            let fetched = function.instructions[fetch].result.unwrap();
+            let mut container = function.instructions[removal].operands[0];
+            while let Some(borrow) = function.instructions.iter().find(|instruction| {
+                instruction.op == Op::Borrow && instruction.result == Some(container)
+            }) {
+                container = borrow.operands[0];
+            }
+            assert_eq!(container, fetched,
+                "{name}: {method} must remove from the fetched property container: {ops:?}");
             assert!(
                 !ops.iter().any(|op| matches!(op, Op::PropSet | Op::PropGet)),
                 "{name}: {method} must not hold or store back a copy of the property: {ops:?}"

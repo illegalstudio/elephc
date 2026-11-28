@@ -1311,11 +1311,11 @@ fn emit_static_property_default(
         super::const_default_values::resolve_enum_read_scalar_default(&default, &context)
     {
         enum_reads = reads;
-        literal_default_value(&description, php_type, &literal, "static property initializer")?
+        literal_default_value(&description, php_type, &literal, "static property initializer", ctx.module.semantic_profile)?
     } else {
         let resolved = super::const_default_values::resolve_const_default(&default, &context)
             .and_then(super::const_default_values::resolved_literal_default);
-        literal_default_value(&description, php_type, resolved.as_ref().unwrap_or(expr), "static property initializer")?
+        literal_default_value(&description, php_type, resolved.as_ref().unwrap_or(expr), "static property initializer", ctx.module.semantic_profile)?
     };
     ctx.emitter.comment(&format!(
         "initialize static property {}::${}",
@@ -1491,9 +1491,15 @@ fn emit_static_property_default_value(
         }
     }
     let symbol = static_property_symbol(class_name, property);
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);
+    let storage_type = ctx.module.class_infos.get(class_name).and_then(|class|
+        crate::types::static_property_storage_type(class, property, ctx.module.semantic_profile))
+        .unwrap_or_else(|| php_type.clone());
+    if storage_type.codegen_repr() == PhpType::Mixed && php_type.codegen_repr() != PhpType::Mixed {
+        crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &php_type.codegen_repr());
+    }
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &storage_type, false);
     if !matches!(
-        php_type.codegen_repr(),
+        storage_type.codegen_repr(),
         PhpType::Str | PhpType::TaggedScalar
     ) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);

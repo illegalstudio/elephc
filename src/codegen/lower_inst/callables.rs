@@ -180,7 +180,7 @@ pub(super) fn lower_callable_descriptor_invoke(
             if value_holds_only_closures(ctx, callable)? && eval_callback_context(ctx).is_none() {
                 lower_closure_union_descriptor_invoke(ctx, inst, callable, arg_mixed)
             } else if ctx.runtime_callable_candidates(callable).is_none()
-                && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
+                && super::instruction_php_only_profile(inst) == crate::php_only::is_enabled()
             {
                 lower_shared_mixed_descriptor_invoke(ctx, inst, callable, arg_mixed)
             } else {
@@ -403,7 +403,7 @@ fn lower_mixed_callable_descriptor_invoke(
         ctx,
         None,
         candidate_names.as_deref(),
-        super::instruction_strict_php_profile(inst),
+        super::instruction_php_only_profile(inst),
     )?;
     if cases.is_empty() {
         emit_undefined_runtime_string_call_fatal(ctx);
@@ -1041,7 +1041,7 @@ fn lower_runtime_string_descriptor_invoke(
         ctx,
         None,
         candidate_names.as_deref(),
-        super::instruction_strict_php_profile(inst),
+        super::instruction_php_only_profile(inst),
     )?;
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(
@@ -1107,9 +1107,9 @@ pub(super) fn runtime_string_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
     candidate_names: Option<&[String]>,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
-    runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, candidate_names, strict_php, None, false)
+    runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, candidate_names, php_only, None, false)
 }
 
 /// Builds descriptor cases for a host with an optional known callback arity.
@@ -1117,7 +1117,7 @@ fn runtime_string_descriptor_cases_at_arity(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
     candidate_names: Option<&[String]>,
-    strict_php: bool,
+    php_only: bool,
     arity: Option<usize>,
     scoped: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
@@ -1125,7 +1125,7 @@ fn runtime_string_descriptor_cases_at_arity(
     if arity.is_none() && !scoped {
         if let Some(cases) = ctx
             .shared
-            .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, strict_php)
+            .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, php_only)
         {
             return Ok(cases);
         }
@@ -1135,19 +1135,19 @@ fn runtime_string_descriptor_cases_at_arity(
         ctx,
         source_arg_ty,
         candidate_names,
-        strict_php,
+        php_only,
         arity,
     )?);
     cases.extend(runtime_user_function_descriptor_cases(
         ctx,
         source_arg_ty,
         candidate_names,
-        strict_php,
+        php_only,
     ));
     let covered: std::collections::HashSet<String> =
         cases.iter().filter_map(|case| case.php_name.as_deref().map(php_symbol_key)).collect();
     cases.extend(
-        super::callable_descriptors::declared_callable_name_cases(ctx, candidate_names, strict_php)?
+        super::callable_descriptors::declared_callable_name_cases(ctx, candidate_names, php_only)?
             .into_iter()
             .filter(|case| case.php_name.as_deref().is_some_and(|name| !covered.contains(name))),
     );
@@ -1161,17 +1161,17 @@ fn runtime_string_descriptor_cases_at_arity(
     // A declared `callable` never widens: its set is the program's functions, static methods and
     // literal builtin names, and a name outside it takes the runtime miss (the named Error).
     if cases.is_empty() && candidate_names.is_some() && ctx.declared_callable_candidates.is_none() {
-        let fallback = runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, None, strict_php, arity, scoped)?;
+        let fallback = runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, None, php_only, arity, scoped)?;
         if arity.is_none() && !scoped {
             ctx.shared.cache_runtime_string_descriptor_cases(
-                cache_ty.as_ref(), candidate_names, strict_php, &fallback,
+                cache_ty.as_ref(), candidate_names, php_only, &fallback,
             );
         }
         return Ok(fallback);
     }
     if arity.is_none() && !scoped {
         ctx.shared.cache_runtime_string_descriptor_cases(
-            cache_ty.as_ref(), candidate_names, strict_php, &cases,
+            cache_ty.as_ref(), candidate_names, php_only, &cases,
         );
     }
     Ok(cases)
@@ -1254,11 +1254,11 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
 /// Builds descriptor cases with an optional host-proven callback arity.
 fn runtime_builtin_descriptor_cases_at_arity(
     ctx: &mut FunctionContext<'_>, source_arg_ty: Option<&PhpType>, candidate_names: Option<&[String]>,
-    strict_php: bool, arity: Option<usize>,
+    php_only: bool, arity: Option<usize>,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
     for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
-        strict_php,
+        php_only,
     ) {
         if !runtime_callable_name_is_reachable(name, candidate_names)
             || !if arity.is_some() {
@@ -1271,7 +1271,7 @@ fn runtime_builtin_descriptor_cases_at_arity(
                 .extern_decls
                 .iter()
                 .any(|decl| php_symbol_key(&decl.name) == php_symbol_key(name))
-            || !crate::builtins::registry::dynamic_wrapper_prelude_callees(name)
+            || !crate::builtins::registry::callable_wrapper_prelude_helpers(name)
                 .iter()
                 .all(|callee| {
                     ctx.module
@@ -1295,14 +1295,14 @@ fn runtime_builtin_descriptor_cases_at_arity(
         {
             continue;
         }
-        let Some(sig) = crate::types::first_class_callable_builtin_sig(name) else {
+        let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(name, ctx.module.semantic_profile) else {
             continue;
         };
         let wrapper_sig =
             runtime_builtin_wrapper_sig(name, &crate::types::callable_wrapper_sig(&sig));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
         let entry_label =
-            emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig, strict_php)?;
+            emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig, php_only)?;
         let invoker_label = emit_runtime_builtin_invoker_inline(ctx, name, &case_sig);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
@@ -1332,7 +1332,7 @@ fn runtime_user_function_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
     candidate_names: Option<&[String]>,
-    strict_php: bool,
+    php_only: bool,
 ) -> Vec<callable_dispatch::RuntimeCallableCase> {
     let concrete_functions = ctx.module.functions.iter()
         .filter(|function| {
@@ -1357,8 +1357,8 @@ fn runtime_user_function_descriptor_cases(
 
     let mut cases = Vec::new();
     for (name, function) in functions {
-        if !strict_php
-            && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+        if !php_only
+            && crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
                 &php_symbol_key(&name),
                 true,
             )
@@ -1402,10 +1402,10 @@ pub(super) fn emit_runtime_string_descriptor_value(
     callable: ValueId,
     dest_reg: &str,
     op_name: &str,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<()> {
     emit_runtime_string_descriptor_value_impl(
-        ctx, callable, dest_reg, op_name, strict_php, None,
+        ctx, callable, dest_reg, op_name, php_only, None,
     )
 }
 
@@ -1415,7 +1415,7 @@ pub(super) fn emit_runtime_string_descriptor_value_with_type_error(
     callable: ValueId,
     dest_reg: &str,
     op_name: &str,
-    strict_php: bool,
+    php_only: bool,
     message: &'static str,
 ) -> Result<()> {
     emit_runtime_string_descriptor_value_impl(
@@ -1423,7 +1423,7 @@ pub(super) fn emit_runtime_string_descriptor_value_with_type_error(
         callable,
         dest_reg,
         op_name,
-        strict_php,
+        php_only,
         Some(CallableConversionError::Type(message)),
     )
 }
@@ -1434,12 +1434,12 @@ fn emit_runtime_string_descriptor_value_impl(
     callable: ValueId,
     dest_reg: &str,
     op_name: &str,
-    strict_php: bool,
+    php_only: bool,
     type_error: Option<CallableConversionError>,
 ) -> Result<()> {
     let candidate_names = ctx.runtime_callable_candidates(callable);
     let cases =
-        runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
+        runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), php_only)?;
 
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;
@@ -1498,7 +1498,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         ctx,
         None,
         candidate_names,
-        crate::strict_php::is_enabled(),
+        crate::php_only::is_enabled(),
         arity,
         scoped,
     )?;

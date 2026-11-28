@@ -13,7 +13,7 @@ use super::*;
 pub(super) fn lower_referenced_builtin_spl_methods(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     loop {
@@ -196,11 +196,126 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
                         _ => {}
                     }
                 }
+                Op::RuntimeCall => {
+                    let Some(method_key) = runtime_array_access_method_key(inst) else {
+                        continue;
+                    };
+                    let Some(receiver) = inst.operands.first().copied() else {
+                        continue;
+                    };
+                    let Some(receiver_ty) = function
+                        .value(receiver)
+                        .map(|value| value.php_type.codegen_repr())
+                    else {
+                        continue;
+                    };
+                    match receiver_ty {
+                        PhpType::Object(class_name) => {
+                            push_runtime_array_access_method_for_receiver(
+                                &mut methods,
+                                module,
+                                class_name.trim_start_matches('\\'),
+                                &method_key,
+                            );
+                        }
+                        PhpType::Union(members) => {
+                            for member in members {
+                                if let PhpType::Object(class_name) = member.codegen_repr() {
+                                    push_runtime_array_access_method_for_receiver(
+                                        &mut methods,
+                                        module,
+                                        class_name.trim_start_matches('\\'),
+                                        &method_key,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
     }
     methods
+}
+
+/// Returns the PHP method selected by an ArrayAccess-shaped runtime fallback.
+fn runtime_array_access_method_key(inst: &crate::ir::Instruction) -> Option<String> {
+    if matches!(inst.immediate, Some(Immediate::RuntimeCall(_) | Immediate::Data(_))) {
+        return None;
+    }
+    let method = match (inst.result.is_some(), inst.operands.len()) {
+        (true, 2 | 3) => "offsetGet",
+        (false, 2) => "append",
+        (false, 3) => "offsetSet",
+        _ => return None,
+    };
+    Some(php_method_key(method))
+}
+
+/// Registers the builtin body selected by a concrete class or ArrayAccess interface receiver.
+fn push_runtime_array_access_method_for_receiver(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    receiver: &str,
+    method_key: &str,
+) {
+    if !module_type_supports_array_access(module, receiver) {
+        return;
+    }
+    if module.interface_infos.contains_key(receiver) {
+        for class_name in module.class_infos.keys() {
+            if module_type_satisfies_interface(module, class_name, receiver) {
+                push_supported_builtin_spl_method_for_receiver(
+                    methods,
+                    module,
+                    class_name,
+                    method_key,
+                );
+            }
+        }
+        return;
+    }
+    push_supported_builtin_spl_method_for_receiver(methods, module, receiver, method_key);
+}
+
+/// Mirrors the backend's concrete ArrayAccess and native-dimension classification.
+fn module_type_supports_array_access(module: &Module, type_name: &str) -> bool {
+    crate::types::builtin_classes::has_native_dimensions(type_name, &module.class_infos)
+        || module_type_satisfies_interface(module, type_name, "ArrayAccess")
+}
+
+/// Returns whether a lowered class or interface satisfies one interface contract.
+fn module_type_satisfies_interface(
+    module: &Module,
+    type_name: &str,
+    interface_name: &str,
+) -> bool {
+    let type_name = type_name.trim_start_matches('\\');
+    let interface_name = interface_name.trim_start_matches('\\');
+    let interface_key = php_symbol_key(interface_name);
+    if php_symbol_key(type_name) == interface_key {
+        return true;
+    }
+    if let Some(info) = module.interface_infos.get(type_name) {
+        return info.parents.iter().any(|parent| php_symbol_key(parent) == interface_key);
+    }
+    let mut current = Some(type_name);
+    while let Some(class_name) = current {
+        let Some(info) = module.class_infos.get(class_name) else {
+            return false;
+        };
+        if info
+            .interfaces
+            .iter()
+            .any(|implemented| php_symbol_key(implemented) == interface_key)
+        {
+            return true;
+        }
+        current = info.parent.as_deref().map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Returns true when generic `new $class` can emit static metadata for this class.
@@ -400,7 +515,7 @@ pub(in crate::ir_lower) fn php_method_key(method_name: &str) -> String {
 pub(super) fn lower_dynamic_constructor_thunks(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     let mut arg_counts = BTreeSet::new();

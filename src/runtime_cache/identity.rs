@@ -17,6 +17,14 @@ use std::path::Path;
 use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 
+/// Partitions runtime objects by the stable semantic ABI and resolved feature bits.
+pub(super) fn partition_semantic_profile(base: u64, profile: elephc_semantics::SemanticProfile) -> u64 {
+    let mut bytes = base.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&elephc_semantics::SEMANTICS_ABI_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&profile.bits().to_le_bytes());
+    runtime_bytes_hash(&bytes)
+}
+
 /// Builds the cache file name for a runtime object.
 pub(super) fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) -> String {
     format!(

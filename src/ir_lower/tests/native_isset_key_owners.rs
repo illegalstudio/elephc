@@ -70,7 +70,7 @@ fn verify_native_isset_key_owner(target: &str) {
         .expect("global-key hash probe");
     let key = global.instructions.iter().find(|inst| inst.op == Op::HashIsset)
         .expect("global-key probe").operands[1];
-    assert!(global.instructions.iter().any(|inst| inst.op == Op::LoadGlobal && inst.result == Some(key)),
+    assert!(global.instructions.iter().any(|inst| inst.op == Op::LoadRefCell && inst.result == Some(key)),
         "{target}: the key must borrow its live global box");
     assert!(!global.instructions.iter().any(|inst| inst.op == Op::Release && inst.operands == [key]),
         "{target}: a native probe must preserve its borrowed global key");

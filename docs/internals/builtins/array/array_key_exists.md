@@ -26,8 +26,9 @@ description: "Compiler internals for array_key_exists(): lowering path, type che
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+- **Original array key input**: argument #1; validated before key conversion.
 
 ## EIR and runtime boundary
 

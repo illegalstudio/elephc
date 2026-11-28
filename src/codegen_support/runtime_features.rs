@@ -542,7 +542,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
                     InstanceOfTarget::Expr(_) => true,
                 }
         }
-        ExprKind::Negate(expr)
+        ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -1046,7 +1046,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
             expr_needs_descriptor_invoker(left) || expr_needs_descriptor_invoker(right)
         }
         ExprKind::InstanceOf { value, .. } => expr_needs_descriptor_invoker(value),
-        ExprKind::Negate(expr)
+        ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)

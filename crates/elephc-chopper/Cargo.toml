@@ -11,6 +11,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
+elephc-semantics = { path = "../elephc-semantics" }
 stacker = "0.1"
 
 [dev-dependencies]

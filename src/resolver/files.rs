@@ -40,6 +40,7 @@ pub(super) fn parse_file(
     path: &Path,
     include_span: Span,
     defines: &std::collections::HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<Vec<Stmt>, CompileError> {
     let source = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
@@ -54,7 +55,7 @@ pub(super) fn parse_file(
     let source_id = Span::fresh_source_id();
     // Names this file in a later checker or lowering diagnostic, which carries only a span.
     Span::register_source_path(source_id, file.clone());
-    let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
+    let tokens = lexer::tokenize_with_semantics(&source, mode, source_id, semantic_profile)
         .map_err(|e| e.with_file(file.clone()))?;
 
     // Both resolver passes parse this file; naming its anonymous classes after the file keeps the
@@ -66,5 +67,5 @@ pub(super) fn parse_file(
         parser::parse_with_mode(&tokens, mode)
     })
     .map_err(|e| e.with_file(file))?;
-    crate::source::finalize_physical_program(parsed, &source, path, mode, defines)
+    crate::source::finalize_physical_program_with_semantics(parsed, &source, path, mode, defines, semantic_profile)
 }

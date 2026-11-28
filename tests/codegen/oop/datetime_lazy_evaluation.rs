@@ -289,6 +289,10 @@ $pm = new ReflectionParameter([P::class, "m"], 0);
 $pm->getDefaultValue();
 echo "pd2\n";
 $pm->getDefaultValue();
+function reflectiveFloatDefault(float $value = MT_RAND_PHP): float { return $value; }
+$pn = (new ReflectionFunction('reflectiveFloatDefault'))->getParameters()[0];
+echo gettype($pn->getDefaultValue()), "\n";
+echo gettype(reflectiveFloatDefault()), "\n";
 echo "end\n";
 "#,
     );
@@ -321,6 +325,10 @@ pd
   Constant DATE_RFC7231 @36
 pd2
   Constant DATE_RFC7231 @38
+  Constant MT_RAND_PHP @41
+integer
+  Constant MT_RAND_PHP @39
+double
 end
 "#
     );

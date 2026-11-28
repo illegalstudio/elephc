@@ -432,7 +432,8 @@ fn expr_refs_tidy(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_refs_tidy(value) || instanceof_target_refs_tidy(target)
         }
-        ExprKind::Reference(inner)
+        ExprKind::UnaryPlus(inner)
+        | ExprKind::Reference(inner)
         | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
@@ -956,6 +957,13 @@ mod tests {
     fn ignores_fully_qualified_user_symbols() {
         assert!(!program_uses_tidy(&parse(r#"<?php $value = \Some\tidy_parse_string($handle);"#)));
         assert!(!program_uses_tidy(&parse(r#"<?php function f(\Acme\tidyNode $w): bool { return true; }"#)));
+    }
+
+    /// Unary numeric projection still discovers the builtin beneath the operator.
+    #[test]
+    fn detects_tidy_calls_beneath_unary_plus() {
+        assert!(program_uses_tidy(&parse("<?php echo +tidy_error_count($document);")));
+        assert!(!program_uses_tidy(&parse("<?php echo +count([]);")));
     }
 
     /// A user helper with a `tidy_` prefix and a `TIDY_*` constant alone do not inject.

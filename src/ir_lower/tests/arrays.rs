@@ -444,7 +444,10 @@ echo popConcreteString($argc), shiftConcreteString($argc);
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         for empty_branch in ["array_pop_empty", "array_shift_empty"] {
             let removed_slot = asm.split(empty_branch).nth(1).unwrap_or_else(|| panic!("{target}: {asm}"));
-            assert!(removed_slot.contains("__rt_heap_alloc"), "{target}: {removed_slot}");
+            assert!(
+                removed_slot.contains("__rt_mixed_from_owned_string"),
+                "{target}: {removed_slot}",
+            );
             assert!(!removed_slot.contains("__rt_mixed_from_value"), "{target}: {removed_slot}");
         }
     }
@@ -454,10 +457,15 @@ echo popConcreteString($argc), shiftConcreteString($argc);
 #[test]
 fn nullable_integer_hash_keys_lower_on_every_target() {
     let source = r#"<?php
-function nullableKeyProbe(array $items, ?int $key): bool { return isset($items[$key]); }
-function nullableKeyRead(array $items, ?int $key): mixed { return $items[$key]; }
-$items = ['' => 9, 0 => 10];
-echo nullableKeyProbe($items, $argc > 1 ? null : 0), nullableKeyRead($items, null);
+function nullableKeyProbe(?int $key): bool {
+    $items = ['' => 9, 0 => 10];
+    return isset($items[$key]);
+}
+function nullableKeyRead(?int $key): mixed {
+    $items = ['' => 9, 0 => 10];
+    return $items[$key];
+}
+echo nullableKeyProbe($argc > 1 ? null : 0), nullableKeyRead(null);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(

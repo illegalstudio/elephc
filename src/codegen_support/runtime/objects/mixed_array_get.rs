@@ -6,8 +6,9 @@
 //! - `crate::codegen_support::runtime::objects::emit_mixed_array_get()`.
 //!
 //! Key details:
-//! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
-//! - Mode bit zero enables read warnings; bit one selects attached internal SPL storage.
+//! - Key pairs use high word -1 for integers, nonnegative lengths for strings, or -2 for an original cell.
+//! - Mode bits select warnings (1), attached internal SPL storage (2), checked failure (4),
+//!   a nonthrowing missing marker for Rust (8), or an already normalized key tuple (16).
 //! - Callers pass an explicit warning flag so normal reads diagnose missing/null
 //!   offsets while `isset()`/`??` keep the same helper quiet.
 //! - Boxed strings share PHP's negative-index, numeric-string, missing-offset, and TypeError rules.
@@ -26,6 +27,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
+mod raw_keys;
+
 const STRING_OFFSET_TYPE_ERROR_MSG_LEN: usize =
     "Cannot access offset of type string on string".len();
 
@@ -35,12 +38,13 @@ const STRING_OFFSET_TYPE_ERROR_MSG_LEN: usize =
 /// (SysV ABI) or `emit_mixed_array_get_aarch64` (AAPCS64). The helper is emitted
 /// once into the runtime object and is called by generated code for `$mixed[$key]`
 /// access on a boxed `Mixed` value.
+/// Emits both the receiver-dispatched getter and its boxed-key normalization entry.
 pub fn emit_mixed_array_get(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_mixed_array_get_x86_64(emitter);
-        return;
+    match emitter.target.arch {
+        Arch::X86_64 => emit_mixed_array_get_x86_64(emitter),
+        Arch::AArch64 => emit_mixed_array_get_aarch64(emitter),
     }
-    emit_mixed_array_get_aarch64(emitter);
+    raw_keys::emit_normalizer(emitter);
 }
 
 /// Selects a trusted attached getter for write context, retaining the ordinary getter fallback.
@@ -106,7 +110,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     //   [sp, #16] = key_hi
     //   [sp, #24] = saved x29
     //   [sp, #32] = saved x30
-    //   [sp, #40] = warn_on_missing
+    //   [sp, #40] = read mode flags
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame: 3 inputs + saved fp/lr (16-byte aligned)
     emitter.instruction("stp x29, x30, [sp, #24]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #24");                                    // set new frame pointer
@@ -116,6 +120,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #40]");                                   // save whether this read should emit PHP offset warnings
     emitter.instruction("bl __rt_mixed_deref");                                 // read the current array held by any reference wrapper
     emitter.instruction("str x0, [sp, #0]");                                    // save the concrete receiver for later dispatch
+    raw_keys::prepare_receiver_key(emitter);
 
     emitter.instruction("cbz x0, __rt_mixed_array_get_null_container");         // null Mixed pointers behave as PHP null receivers
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
@@ -163,6 +168,12 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return the owned Mixed string in x0
     emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_string_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_string_offset");                 // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_string_missing_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // quiet reads report an absent offset as null
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the original offset for PHP's warning
@@ -176,7 +187,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned Mixed empty string in x0
     emitter.label("__rt_mixed_array_get_string_key_error");
     emitter.instruction("ldr x9, [sp, #40]");                                   // recover the read or write-fetch mode before diagnosing the key
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // existence and coalescing probes treat nonnumeric string keys as absent
+    emitter.instruction("tst x9, #3");                                          // report-only callbacks retain quiet string-key conversion
+    emitter.instruction("b.eq __rt_mixed_array_get_null");                      // probes and report-only callbacks keep their null result
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address before throwing
     emitter.instruction("add sp, sp, #48");                                     // release the local frame before the non-returning throw
     crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_aarch64(
@@ -247,12 +259,24 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_indexed_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_indexed_missing_string_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_string_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
@@ -289,6 +313,12 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_assoc_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_assoc_missing_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the normalized key high word
@@ -341,6 +371,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_get_php_offset_get");               // every other class goes through PHP ArrayAccess or raises
     emitter.label("__rt_mixed_array_get_spl_fixed");
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed SplFixedArray receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_fixed_raw");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_spl_fixed_int_key");         // integer keys box as Mixed int
@@ -362,6 +393,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_spl_dll");
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed SPL list receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_dll_raw");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_spl_dll_int_key");           // integer keys box as Mixed int
@@ -398,6 +430,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emit_offset_get_table(emitter, 0);
     emitter.instruction("cbz x12, __rt_mixed_array_get_not_indexable");         // 0 means the class is not ArrayAccess at all
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed receiver while boxing the key
+    raw_keys::clone_original_key(emitter);
+    emitter.label("__rt_mixed_array_get_php_legacy_key");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_php_int_key");               // integer keys box as Mixed int
@@ -411,6 +445,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // integer keys have no high payload
     emitter.label("__rt_mixed_array_get_php_box_key");
     emitter.instruction("bl __rt_mixed_from_value");                            // allocate the boxed ArrayAccess offset
+    emitter.label("__rt_mixed_array_get_php_key_ready");
     emitter.instruction("str x0, [sp, #8]");                                    // stash the box; key_lo has served its purpose
     // -- retain the boxed key across normal and exceptional getter exits --
     emitter.instruction("add x11, sp, #8");                                     // address the owning key slot before reserving its cleanup record
@@ -438,6 +473,12 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame before the tail-call
     emitter.instruction("b __rt_throw_object_not_array");                       // never returns
 
+    emitter.label("__rt_mixed_array_get_absent");
+    emitter.instruction("mov x0, xzr");                                         // return no cell for a genuinely absent element
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore the lookup caller frame
+    emitter.instruction("add sp, sp, #48");                                     // release the lookup frame
+    emitter.instruction("ret");                                                 // return the absence marker to the caller
+
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // quiet read contexts suppress the null-offset warning
@@ -455,7 +496,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 /// Emits `__rt_mixed_array_get` for x86_64 (SysV ABI).
 ///
 /// Inputs arrive in `rdi` = mixed_ptr, `rsi` = key_lo, `rdx` = key_hi,
-/// `rcx` = nonzero when missing/null-offset warnings are enabled.
+/// `rcx` carries independent warning, write-fetch, checked-read and presence-report flags.
 /// Returns an owned pointer to a boxed `Mixed` cell in `rax`.
 ///
 /// Same dispatch and return semantics as `emit_mixed_array_get_aarch64`:
@@ -483,6 +524,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_deref");                               // read the current array held by any reference wrapper
     emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the concrete receiver for later dispatch
+    raw_keys::prepare_receiver_key(emitter);
 
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null Mixed pointers behave as PHP null receivers
@@ -532,6 +574,12 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the owned Mixed string in rax
     emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_string_missing_unchecked");    // preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_string_offset");               // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_string_missing_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet reads report an absent offset as null
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the original offset for PHP's warning
@@ -544,7 +592,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the owned Mixed empty string in rax
     emitter.label("__rt_mixed_array_get_string_key_error");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // distinguish a quiet probe from ordinary reads and write fetches
+    emitter.instruction("test QWORD PTR [rbp - 32], 3");                        // report-only callbacks retain quiet string-key conversion
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet string-key probes return an absent value
     emitter.instruction("mov rsp, rbp");                                        // release the local frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
@@ -618,12 +666,24 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_indexed_missing_unchecked");   // preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_indexed_missing_string_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_string_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
@@ -660,6 +720,12 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_assoc_missing_unchecked");     // preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_assoc_missing_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does the missing key use the integer-key sentinel?
@@ -705,6 +771,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_get_php_offset_get");             // every other class goes through PHP ArrayAccess or raises
     emitter.label("__rt_mixed_array_get_spl_fixed");
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed SplFixedArray receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_fixed_raw");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_spl_fixed_int_key");           // integer keys box as Mixed int
@@ -726,6 +793,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_spl_dll");
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed SPL list receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_dll_raw");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_spl_dll_int_key");             // integer keys box as Mixed int
@@ -758,6 +826,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r12, r12");                                       // 0 means the class is not ArrayAccess
     emitter.instruction("jz __rt_mixed_array_get_not_indexable");               // 0 means the class is not ArrayAccess at all
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed receiver while boxing the key
+    raw_keys::clone_original_key(emitter);
+    emitter.label("__rt_mixed_array_get_php_legacy_key");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_php_int_key");                 // integer keys box as Mixed int
@@ -771,6 +841,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // integer keys have no high payload
     emitter.label("__rt_mixed_array_get_php_box_key");
     emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed ArrayAccess offset
+    emitter.label("__rt_mixed_array_get_php_key_ready");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // stash the box; key_lo has served its purpose
     // -- retain the boxed key across normal and exceptional getter exits --
     emitter.instruction("lea r11, [rbp - 16]");                                 // address the owning key slot before reserving its cleanup record
@@ -796,6 +867,12 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
     emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
+
+    emitter.label("__rt_mixed_array_get_absent");
+    emitter.instruction("xor eax, eax");                                        // return no cell for a genuinely absent element
+    emitter.instruction("mov rsp, rbp");                                        // restore the lookup caller frame
+    emitter.instruction("pop rbp");                                             // release the lookup frame
+    emitter.instruction("ret");                                                 // return the absence marker to the caller
 
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
@@ -826,8 +903,8 @@ mod tests {
             let invalid = assembly.split_once("__rt_mixed_array_get_string_key_error:\n").unwrap().1;
             let invalid = invalid.split_once("__rt_mixed_array_get_indexed:\n").unwrap().0;
             let (mode, absent) = if target == "linux-x86_64" {
-                ("cmp QWORD PTR [rbp - 32], 0", "je __rt_mixed_array_get_null")
-            } else { ("ldr x9, [sp, #40]", "cbz x9, __rt_mixed_array_get_null") };
+                ("test QWORD PTR [rbp - 32], 3", "je __rt_mixed_array_get_null")
+            } else { ("tst x9, #3", "b.eq __rt_mixed_array_get_null") };
             assert!(invalid.find(mode).unwrap() < invalid.find(absent).unwrap(), "{target}: {invalid}");
             assert!(invalid.contains("_string_offset_type_error_msg"), "{target}: {invalid}");
         }
@@ -849,7 +926,8 @@ mod tests {
             assert!(dispatch.contains(mode), "{target}: {dispatch}");
             let warn = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 1" }
                 else { "tbz x9, #0, __rt_mixed_array_get_null" };
-            assert_eq!(assembly.matches(warn).count(), 5, "{target}: write mode must stay quiet");
+            let warning_checks = assembly.lines().filter(|line| line.trim() == warn).count();
+            assert_eq!(warning_checks, 5, "{target}: write mode must stay quiet");
         }
     }
 
@@ -869,4 +947,25 @@ mod tests {
             assert!(getter[..call].contains("__rt_cleanup_call_operand_owner"), "{target}");
         }
     }
+    /// All concrete miss paths can report absence while leaving exception creation to Rust.
+    #[test]
+    fn mixed_array_presence_reports_are_nonthrowing_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let assembly = emitter.output();
+            let report = if target == "linux-x86_64" { "jnz __rt_mixed_array_get_absent" }
+                else { "tbnz x9, #3, __rt_mixed_array_get_absent" };
+            assert_eq!(assembly.matches(report).count(), 4, "{target}");
+            let prepared = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 16" }
+                else { "tbnz x9, #4, __rt_mixed_array_get_prepared_key" };
+            assert!(assembly.contains(prepared), "{target}: completed tuple bypass");
+            let absent = assembly.split_once("__rt_mixed_array_get_absent:\n").unwrap().1
+                .split_once("__rt_mixed_array_get_null_container:\n").unwrap().0;
+            assert!(absent.contains("ret"), "{target}: {absent}");
+            assert!(!absent.contains("__rt_throw"), "{target}: {absent}");
+            assert!(!absent.contains("__rt_mixed_from_value"), "{target}: absence owns no cell");
+        }
+    }
+
 }

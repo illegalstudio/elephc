@@ -166,8 +166,9 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
 ) -> Result<()> {
     let class_name_value = expect_operand(inst, 0)?;
     let reflection_construction =
-        matches!(inst.immediate, Some(Immediate::ReflectionConstruction));
-    let uses_runtime_arg_container = matches!(inst.immediate, Some(Immediate::Bool(true)));
+        matches!(inst.immediate, Some(Immediate::ReflectionConstruction { .. }));
+    let uses_runtime_arg_container = matches!(inst.immediate, Some(Immediate::Bool(true)
+        | Immediate::ReflectionConstruction { uses_runtime_arg_container: true }));
     let constructor_arg_container = if uses_runtime_arg_container {
         Some(*inst.operands.get(1).ok_or_else(|| {
             CodegenIrError::invalid_module(
@@ -217,17 +218,20 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     //
     // NOT UNDER EVAL. The eval bridge resolves the class itself and raises its own diagnostic, and
     // these arms sit before the fallback that reaches it, so they would preempt a path measured
-    // to work. NOT UNDER A RUNTIME ARG CONTAINER either, where the site's arity is not a constant.
+    // to work. A runtime argument container has no static arity, but Reflection visibility is
+    // independent of arity and must still be refused before constructor dispatch.
     let matched = candidates
         .iter()
         .map(|candidate| candidate.class_name.clone())
         .collect::<Vec<_>>();
-    let refusals = if uses_runtime_arg_container || builtins::has_eval_context(ctx) {
+    let refusals = if builtins::has_eval_context(ctx)
+        || (uses_runtime_arg_container && !reflection_construction)
+    {
         Vec::new()
     } else {
         dynamic_new_mixed_refusals(
             ctx,
-            constructor_args.len(),
+            (!uses_runtime_arg_container).then_some(constructor_args.len()),
             inst.span.map_or(0, |span| span.line),
             &matched,
             reflection_construction,

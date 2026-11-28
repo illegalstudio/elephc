@@ -240,6 +240,14 @@ class PrivReflOwner {
             return $error->getMessage();
         }
     }
+    public static function reflectArgsFromInside(): string {
+        try {
+            (new ReflectionClass('PrivReflChild'))->newInstanceArgs([]);
+            return 'bad';
+        } catch (ReflectionException $error) {
+            return $error->getMessage();
+        }
+    }
 }
 class PrivReflChild extends PrivReflOwner {}
 class ProtReflOwner {
@@ -265,12 +273,14 @@ try {
     echo $error->getMessage(), "\n";
 }
 echo PrivReflOwner::reflectFromInside(), "\n";
+echo PrivReflOwner::reflectArgsFromInside(), "\n";
 "#,
     );
     assert_eq!(
         out,
         "Access to non-public constructor of class PrivReflChild\n\
 Access to non-public constructor of class ProtReflChild\n\
+Access to non-public constructor of class PrivReflChild\n\
 Access to non-public constructor of class PrivReflChild\n\
 Access to non-public constructor of class PrivReflChild\n"
     );

@@ -44,7 +44,7 @@ impl Checker {
         // inference pairs a declared parameter with the argument at the same index. Reading the
         // call's source order bound `T` from the wrong parameter, so `new Box(v: "abc", n: 1)`
         // asked for `Box<int>` and then refused its own argument.
-        let ordered_args = generics::arguments_in_declaration_order(&template.constructor_param_names, args);
+        let ordered_args = generics::arguments_in_declaration_order(&template.constructor_param_names, args, self.semantic_profile);
         let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
         let mut actual_types: Vec<PhpType> = Vec::new();
         for (index, arg) in ordered_args.into_iter().enumerate() {
@@ -149,7 +149,7 @@ impl Checker {
         // inference pairs a declared parameter with the argument at the same index. Reading the
         // call's source order bound `T` from the wrong parameter, so `new Box(v: "abc", n: 1)`
         // asked for `Box<int>` and then refused its own argument.
-        let ordered_args = generics::arguments_in_declaration_order(&signature.param_names, args);
+        let ordered_args = generics::arguments_in_declaration_order(&signature.param_names, args, self.semantic_profile);
         let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
         let mut actual_types: Vec<PhpType> = Vec::new();
         for (index, arg) in ordered_args.into_iter().enumerate() {

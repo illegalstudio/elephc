@@ -7,7 +7,7 @@ sidebar:
 
 A `packed class` is a flat record with compile-time field offsets. Designed for hot-path data that needs predictable layouts and zero hash overhead.
 
-> **Strict mode:** `packed class` is an elephc extension with no PHP equivalent. Compiling with [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects it.
+> **Strict mode:** `packed class` is an elephc extension with no PHP equivalent. Compiling with [`--php-only`](../compiling/cli-reference.md#php-only-mode) rejects it.
 
 ## Declaration
 ```php

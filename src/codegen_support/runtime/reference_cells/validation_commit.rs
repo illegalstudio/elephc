@@ -12,16 +12,23 @@
 
 use super::*;
 
-const FRAME: usize = 64;
+const FRAME: usize = 80;
+
+/// Selects the owner transfer that must happen at publication, before any PHP cleanup.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Retirement { Release, ReturnPrevious, InitializeStatic }
 
 /// Emits commit(context, wrapper, owned_candidate), returning success0, failure1 or Throwable2.
 pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
-    emit_entry(emitter, "__rt_reference_commit_native", false);
-    emit_entry(emitter, "__rt_reference_commit_native_rooted", true);
+    emit_entry(emitter, "__rt_reference_commit_native", false, Retirement::Release, false);
+    emit_entry(emitter, "__rt_reference_commit_native_rooted", true, Retirement::Release, false);
+    emit_entry(emitter, "__rt_reference_commit_native_deferred_rooted", true, Retirement::ReturnPrevious, false);
+    emit_entry(emitter, "__rt_reference_commit_native_static_rooted", true, Retirement::InitializeStatic, false);
+    emit_entry(emitter, "__rt_reference_commit_native_static_call_rooted", true, Retirement::InitializeStatic, true);
 }
 
-/// Optionally consumes the successful publisher's snapshot lease at the ownership transfer point.
-fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
+/// Consumes snapshot leases at transfer; a converted class argument may already own a cleanup error.
+fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retirement: Retirement, converted_argument: bool) {
     let result = abi::int_result_reg(emitter);
     let wrapper = abi::secondary_scratch_reg(emitter);
     let pending = format!("{entry}_pending");
@@ -35,9 +42,18 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
     if take_snapshot {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 3), 40);
     }
-    abi::load_at_offset(emitter, result, 8);
-    abi::emit_load_from_address(emitter, result, result, 8);
-    abi::emit_branch_if_int_result_nonzero(emitter, &pending);
+    if retirement != Retirement::Release {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), 48);
+    }
+    if converted_argument {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 5), 56);
+        abi::emit_store_zero_to_local_slot(emitter, 64);
+    }
+    if !converted_argument {
+        abi::load_at_offset(emitter, result, 8);
+        abi::emit_load_from_address(emitter, result, result, 8);
+        abi::emit_branch_if_int_result_nonzero(emitter, &pending);
+    }
     abi::load_at_offset(emitter, result, 24);
     abi::emit_branch_if_int_result_zero(emitter, &invalid);
     abi::load_at_offset(emitter, result, 16);
@@ -48,6 +64,29 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
     abi::store_at_offset(emitter, result, 32);
     abi::load_at_offset(emitter, result, 24);
     abi::emit_store_to_address(emitter, result, wrapper, 8);
+    if retirement == Retirement::ReturnPrevious {
+        abi::load_at_offset(emitter, wrapper, 48);
+        abi::load_at_offset(emitter, result, 32);
+        abi::emit_store_to_address(emitter, result, wrapper, 0);
+    } else if retirement == Retirement::InitializeStatic {
+        abi::load_at_offset(emitter, wrapper, 48);
+        abi::emit_store_zero_to_address(emitter, wrapper, 0);
+    }
+    if converted_argument {
+        let captured = format!("{entry}_captured");
+        abi::load_at_offset(emitter, result, 56);
+        abi::emit_branch_if_int_result_nonzero(emitter, &captured);
+        abi::load_at_offset(emitter, result, 48);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("sub x0, x0, #8"),             // unaliased destinations follow the property rather than a later reference
+            Arch::X86_64 => emitter.instruction("sub rax, 8"),                  // unaliased destinations follow the property rather than a later reference
+        }
+        abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+        abi::emit_call_label(emitter, "__rt_reference_static_destination_restore");
+        abi::store_at_offset(emitter, result, 64);
+        emitter.label(&captured);
+    }
     // The wrapper now owns the candidate. Never release that transferred owner again.
     if take_snapshot {
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 40);
@@ -55,7 +94,19 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
         abi::store_at_offset(emitter, result, 24);
         emit_release_slot(emitter, 24);
     }
-    emit_release_slot(emitter, 32);
+    if retirement != Retirement::ReturnPrevious { emit_release_slot(emitter, 32); }
+    if converted_argument {
+        abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "__rt_reference_cell_release");
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 64);
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), 8);
+        let pending = abi::int_arg_reg_name(emitter.target, 2);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction(&format!("add {pending}, {pending}, #8")),// cleanup accumulates in the publisher's Throwable slot
+            Arch::X86_64 => emitter.instruction(&format!("add {pending}, 8")),  // cleanup accumulates in the publisher's Throwable slot
+        }
+        abi::emit_call_label(emitter, "__rt_cleanup_invoke");
+    }
+
     if take_snapshot {
         // A snapshot destructor may throw even when the displaced child's release succeeds.
         abi::load_at_offset(emitter, result, 8);
@@ -68,10 +119,12 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
         abi::emit_load_int_immediate(emitter, result, 0);
     }
     abi::emit_jump(emitter, &done);
-    emitter.label(&pending);
-    emit_release_slot(emitter, 24);
-    abi::emit_load_int_immediate(emitter, result, 2);
-    abi::emit_jump(emitter, &done);
+    if !converted_argument {
+        emitter.label(&pending);
+        emit_release_slot(emitter, 24);
+        abi::emit_load_int_immediate(emitter, result, 2);
+        abi::emit_jump(emitter, &done);
+    }
     emitter.label(&invalid);
     emit_release_slot(emitter, 24);
     abi::emit_branch_if_int_result_nonzero(emitter, &done);
@@ -114,6 +167,21 @@ mod tests {
             assert!(publication < take && take < first_release && first_release < last_release,
                 "{name}: retire the snapshot after publication but before the displaced value");
             assert!(!assembly.contains("__rt_throw_current"), "{name}: the publisher retires roots before propagating a Throwable");
+            let deferred = assembly.split_once("__rt_reference_commit_native_deferred_rooted:").unwrap().1
+                .split_once("__rt_reference_commit_native_deferred_rooted_pending:").unwrap().0;
+            let previous = if name == "linux-x86_64" { "mov QWORD PTR [r10], rax" }
+                else { "str x0, [x10]" };
+            assert!(deferred.find(previous).unwrap() < deferred.find("__rt_reference_validation_pin_take").unwrap(),
+                "{name}: publish the displaced owner before snapshot cleanup can throw");
+            assert_eq!(deferred.matches("__rt_reference_validation_release").count(), 1,
+                "{name}: Rust, rather than the native commit, retires the previous value");
+            let initialized = assembly.split_once("__rt_reference_commit_native_static_rooted:").unwrap().1
+                .split_once("__rt_reference_commit_native_static_rooted_pending:").unwrap().0;
+            let clear = if name == "linux-x86_64" { "mov QWORD PTR [r10], 0" }
+                else { "str xzr, [x10]" };
+            assert!(initialized.find(store).unwrap() < initialized.find(clear).unwrap(), "{name}");
+            assert!(initialized.find(clear).unwrap() < initialized.find("__rt_reference_validation_pin_take").unwrap(),
+                "{name}: initialization is visible before a snapshot destructor can reenter PHP");
         }
     }
 }

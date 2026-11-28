@@ -42,7 +42,7 @@ impl Checker {
         let child = |expr: &Expr| self.stored_value_shape_is_non_null(expr, env, source_is_stable, depth + 1);
         match &value.kind {
             ExprKind::Cast { .. } | ExprKind::Not(_) | ExprKind::InstanceOf { .. }
-                | ExprKind::Print(_) | ExprKind::Negate(_) | ExprKind::BitNot(_)
+                | ExprKind::Print(_) | ExprKind::UnaryPlus(_) | ExprKind::Negate(_) | ExprKind::BitNot(_)
                 | ExprKind::PreIncrement(_) | ExprKind::Throw(_)
                 | ExprKind::ClassConstant { .. } | ExprKind::ObjectClassName { .. } => true,
             ExprKind::BinaryOp { left, op: BinOp::NullCoalesce, right } => child(left) || child(right),

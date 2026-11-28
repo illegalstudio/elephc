@@ -99,16 +99,16 @@ fn execute_program_rejects_eval_method_scalar_type_mismatch() {
     }
 }
 $box = new EvalTypedScalarFailBox();
-return $box->read("not numeric");"#,
+try { $box->read("not numeric"); } catch (TypeError $error) { return get_class($error); } return "missed";"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("non-numeric string should fail int parameter type");
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("non-numeric string raises a catchable parameter TypeError");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(values.get(result), FakeValue::String("TypeError".to_string()));
 }
 
 /// Verifies eval-declared method class/interface type hints accept matching eval objects.

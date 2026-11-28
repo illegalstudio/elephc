@@ -112,6 +112,8 @@ pub enum RuntimeCallTarget {
     AutoVivifyArray,
     /// Returns an existing hash or allocates an empty one for an undefined local.
     AutoVivifyHash,
+    /// Returns the next integer append key or raises an error for an occupied maximum key.
+    HashNextIndex,
     /// Rebinds an existing hash entry to an already-live managed reference cell.
     ///
     /// The entry must already exist (the caller inserts the source value first); the
@@ -167,6 +169,17 @@ pub enum RuntimeCallTarget {
     MixedCellClone,
     /// Complements a borrowed PHP value, preserving string bytes and implicit float diagnostics.
     MixedBitNot,
+    /// Borrows one original PHP value and performs a checked explicit scalar conversion.
+    CheckedNumericCast(elephc_semantics::numeric_cast::NumericCastTarget),
+    /// Parses one complete PHP string with an explicitly requested integer radix.
+    CheckedRadixInt,
+    /// Normalizes one borrowed scalar and computes an exact, independently owned unary number.
+    NumericUnary {
+        /// Source operator retained without synthetic binary arithmetic.
+        operator: elephc_semantics::numeric_unary::NumericUnaryOp,
+        /// Explicit operation contract, checked against the enclosing module's capabilities.
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy,
+    },
     /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
     ExceptionGuardOwned,
     /// Removes an owned-value guard without releasing the value on the normal path.
@@ -193,6 +206,13 @@ pub enum RuntimeCallTarget {
     PositionalImplode,
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
+    /// A numeric operation whose explicit guarantees survive lowering and optimization.
+    NumericFunction {
+        /// Authoritative builtin runtime identity, shared with its ordinary PHP entry.
+        target: crate::ir::RuntimeFnId,
+        /// Projected operation policy, never inferred from the emitter's module profile.
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy,
+    },
     /// A source-sensitive runtime function with visibility and parameter-coercion profiles.
     ProfiledFunction {
         /// Stable runtime function dispatched by the backend.
@@ -200,14 +220,26 @@ pub enum RuntimeCallTarget {
         /// Physical operand layout, without changing the PHP-visible function signature.
         arguments: RuntimeArgumentLayout,
         /// Whether strict PHP is effective at the physical call site.
-        strict_php: bool,
+        php_only: bool,
         /// PHP parameter strictness at a direct call site; None inherits the invoking caller.
         /// Generated callable wrappers defer this choice instead of capturing their creation site.
         strict_types: Option<bool>,
+        /// Original source comparison guarantees, retained across synthetic callback adapters.
+        strict_comparisons: bool,
     },
 }
 
 impl RuntimeCallTarget {
+    /// Reads builtin identity for dependency and contract analysis without discarding invocation policy.
+    /// Consumers rewriting a call must retain the original target rather than reconstruct Function.
+    pub fn function_id(self) -> Option<crate::ir::RuntimeFnId> {
+        match self {
+            Self::Function(target) | Self::ProfiledFunction { target, .. }
+            | Self::NumericFunction { target, .. } => Some(target),
+            _ => None,
+        }
+    }
+
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
@@ -279,6 +311,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Hash)],
                 result: IrType::Heap(IrHeapKind::Hash),
             }),
+            RuntimeCallTarget::HashNextIndex => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Hash)],
+                result: IrType::I64,
+            }),
             RuntimeCallTarget::HashEntryBindReference
             | RuntimeCallTarget::HashEntrySetReference => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 3,
@@ -315,9 +351,20 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::MixedCellClone
             | RuntimeCallTarget::MixedCellResolveForWrite
             | RuntimeCallTarget::MixedCellCopyForWrite
-            | RuntimeCallTarget::MixedBitNot => Some(RuntimeCallSignature::Fixed {
+            | RuntimeCallTarget::MixedBitNot
+            | RuntimeCallTarget::NumericUnary { .. } => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
+            }),
+            RuntimeCallTarget::CheckedNumericCast(target) => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)],
+                result: match target {
+                    elephc_semantics::numeric_cast::NumericCastTarget::Int => IrType::I64,
+                    elephc_semantics::numeric_cast::NumericCastTarget::Float => IrType::F64,
+                },
+            }),
+            RuntimeCallTarget::CheckedRadixInt => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Str, IrType::I64], result: IrType::I64,
             }),
             RuntimeCallTarget::ExceptionGuardOwned => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
@@ -358,7 +405,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::PositionalImplode => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 1, max_operands: Some(1),
             }),
-            RuntimeCallTarget::Function(target) => {
+            RuntimeCallTarget::Function(target) | RuntimeCallTarget::NumericFunction { target, .. } => {
                 target.descriptor().logical_signature
             }
             RuntimeCallTarget::ProfiledFunction { target, arguments, .. } => {
@@ -404,6 +451,7 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::AutoVivifyArray => "array.auto_vivify",
             RuntimeCallTarget::AutoVivifyHash => "hash.auto_vivify",
+            RuntimeCallTarget::HashNextIndex => "hash.next_index",
             RuntimeCallTarget::HashEntryBindReference => "array.hash_entry_bind_reference",
             RuntimeCallTarget::HashEntrySetReference => "array.hash_entry_set_reference",
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
@@ -428,6 +476,15 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
             RuntimeCallTarget::MixedBitNot => "mixed.bit_not",
+            RuntimeCallTarget::CheckedNumericCast(target) => match target {
+                elephc_semantics::numeric_cast::NumericCastTarget::Int => "cast.checked_int",
+                elephc_semantics::numeric_cast::NumericCastTarget::Float => "cast.checked_float",
+            },
+            RuntimeCallTarget::CheckedRadixInt => "cast.checked_radix_int",
+            RuntimeCallTarget::NumericUnary { operator, .. } => match operator {
+                elephc_semantics::numeric_unary::NumericUnaryOp::Plus => "numeric.unary_plus",
+                elephc_semantics::numeric_unary::NumericUnaryOp::Negate => "numeric.unary_negate",
+            },
             RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
             RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
             RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",
@@ -441,7 +498,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::StringOffsetSet => "string.offset_set",
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::PositionalImplode => "implode.positional",
-            RuntimeCallTarget::Function(target) => target.as_eir(),
+            RuntimeCallTarget::Function(target) | RuntimeCallTarget::NumericFunction { target, .. } => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),
         }
     }

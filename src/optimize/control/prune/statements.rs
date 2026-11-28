@@ -36,6 +36,7 @@ pub(crate) fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
 /// expression statements. Returns a vec to allow statement expansion (e.g., a
 /// do-while with false condition becoming just its body).
 pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
+    let _semantics = crate::optimize::semantic_context::scoped_source_mode(stmt.source_mode);
     let profile = stmt.profile();
     crate::source::with_parse_mode(profile, || prune_stmt_in_source_mode(stmt))
 }
@@ -101,7 +102,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::While { condition, body } => {
             let condition = prune_expr(condition);
-            match scalar_value(&condition) {
+            match condition_scalar_value(&condition) {
                 Some(value) if !value.truthy() => Vec::new(),
                 _ => normalize_while_stmt(
                     condition,
@@ -117,7 +118,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             // A trailing `continue` reaches the test exactly as falling off the body does, so it
             // is dropped before deciding whether a false test lets the body run inline.
             let body = strip_trailing_terminator(prune_block(body), TailTerminator::LoopContinue);
-            match scalar_value(&condition) {
+            match condition_scalar_value(&condition) {
                 Some(value) if !value.truthy() && !block_contains_loop_exit(&body) => body,
                 _ => normalize_do_while_stmt(body, condition, span, source_mode, strict_types),
             }
@@ -131,7 +132,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             let init = prune_for_clause(init);
             let condition = condition.map(prune_expr);
             let update = prune_for_clause(update);
-            match condition.as_ref().and_then(scalar_value) {
+            match condition.as_ref().and_then(condition_scalar_value) {
                 Some(value) if !value.truthy() => init.map(|stmt| vec![*stmt]).unwrap_or_default(),
                 _ => normalize_for_stmt(
                     init,

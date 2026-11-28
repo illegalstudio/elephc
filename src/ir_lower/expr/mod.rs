@@ -33,11 +33,17 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod initialization_probes;
+mod initialization_properties;
+mod initialization_dynamic_properties;
+mod producer_values;
+mod checked_cast;
 mod dynamic_callable_factory;
 mod array_merge_values;
 use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
+mod prepared_builtin_refs;
 mod boxed_user_sort;
 pub(crate) mod declared_callables;
 mod scalar_literals;
@@ -46,6 +52,10 @@ pub(crate) use element_values::{container_element_type, project_element_value};
 mod local_values;
 use local_values::lower_local_value;
 mod numeric_binary;
+mod strict_ordering;
+pub(super) mod builtin_numeric;
+pub(in crate::ir_lower) mod builtin_casts;
+pub(in crate::ir_lower) mod builtin_settype;
 mod prepared_binary;
 mod integer_destinations;
 pub(crate) use integer_destinations::{
@@ -54,6 +64,7 @@ pub(crate) use integer_destinations::{
 use integer_destinations::lower_expr_for_parameter;
 pub(crate) mod object_operators;
 mod string_concat;
+pub(super) mod string_contracts;
 mod comparisons;
 mod unary_logic;
 mod branch_conditions;
@@ -91,6 +102,8 @@ mod callable_resolution;
 mod unset;
 mod unset_collection;
 mod array_builtin_args;
+mod builtin_input_contracts;
+mod builtin_comparisons;
 mod array_push_spread;
 mod borrowed_string_args;
 mod boxed_iterable_source;
@@ -120,17 +133,19 @@ mod match_expr;
 mod append_updates;
 pub(crate) use append_updates::store_alias as store_append_update_cell;
 mod array_access;
+mod array_access_writes;
+mod array_element_references;
 mod string_offset_owners;
 mod array_access_types;
 mod ternary_cast;
 mod missing_string;
 pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
-
 pub(crate) use self::closures::expr_writes_local;
+
 mod closure_calls;
 mod descriptor_calls;
-mod descriptor_native_selections;
+mod descriptor_argument_contexts;
 mod object_construction;
 mod property_access;
 mod property_probes;
@@ -150,6 +165,7 @@ pub(crate) mod enum_argument_guards;
 mod enum_method_args;
 mod enum_static_args;
 mod enum_ref_args;
+mod reflection_array_calls;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;
@@ -240,8 +256,9 @@ pub(crate) use property_access::lower_native_dimension_incdec_select_from_values
 use property_probes::*;
 use method_calls::*;
 use closure_binding::*;
-use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
+use member_receivers::{checked_member_receiver_type, lower_member_receiver, lower_member_probe_receiver, refine_member_receiver};
 pub(crate) use member_receivers::refine_member_receiver_at_span;
+use reflection_array_calls::*;
 use reflection_class_calls::*;
 use reflection_method_calls::*;
 use reflection_property_calls::*;
@@ -263,12 +280,12 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
-pub(crate) use pending_owners::lower_with_pending_owners;
+pub(crate) use pending_owners::{lower_with_pending_owners, protect_additional_pending_operands};
 pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, pinned_transfer_owner, register_owned_call_operand, retire_owned_call_operand,
-    root_owned_call_operand, root_value_for_later_use, unpin_in_flight_owners, unregister_owned_call_operand,
-    PinnedInFlightOwner,
+    root_owned_call_operand, root_value_for_later_use, transfer_owned_call_operand,
+    unpin_in_flight_owners, unregister_owned_call_operand, PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
 pub(crate) use enum_argument_guards::{
@@ -281,14 +298,17 @@ pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{
-    lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
+    lower_callable_array_for_assignment,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,
     reflection_method_binding_for_expr, reflection_property_binding_for_expr,
     static_callable_binding_for_expr,
 };
 #[allow(unused_imports)]
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
-pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
+pub(crate) use closures::{
+    body_contains_eval_call, body_writes_local, call_mutated_local_arguments,
+    lower_closure_for_assignment, stmt_writes_local,
+};
 pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, is_pointer_array_destination, lower_array_literal_with_expected_type,
     lower_expr_for_destination,
@@ -312,12 +332,14 @@ pub(crate) use merge_temps::emit_bool_literal;
 pub(in crate::ir_lower) use merge_temps::{store_value_into_temp, take_owned_temp};
 pub(crate) use prepared_binary::lower_prepared_binary;
 pub(crate) use array_access::lower_array_access_from_values;
+pub(crate) use array_access_writes::lower_array_access_set_or;
+pub(crate) use array_element_references::{lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem};
 pub(crate) use property_access::{
     borrow_native_xml_property_receiver,
     coerce_runtime_property_name,
     lower_property_get_from_value, lower_dynamic_property_fetch_from_operands,
     lower_native_xml_property_write_fetch,
-    lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
+    lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
     prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
 };
@@ -325,7 +347,9 @@ pub(crate) use property_fetch_for_write::{
     is_static_property_write_chain, lower_static_property_write_chain,
     lower_static_property_write_chain_with_operands,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
-    lower_nested_assignment_property_source, nested_property_has_boxed_root,
+    lower_nested_assignment_property_source, lower_nested_assignment_property_source_from_value,
+    nested_property_has_boxed_root, nested_property_has_static_boxed_root,
+    nested_property_requires_runtime_dispatch,
 };
 pub(crate) use string_concat::string_value_needs_persistence;
 pub(crate) use string_concat::persist_pending_string;
@@ -346,7 +370,9 @@ pub(crate) use static_method_calls::static_receiver_class_name;
 /// Lowers an expression and returns its EIR value.
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     ctx.expression_depth += 1;
-    let value = lower_expr_inner(ctx, expr);
+    let value = if let Some(binding) = expr.producer_binding {
+        producer_values::lower(ctx, expr, binding)
+    } else { lower_expr_inner(ctx, expr) };
     ctx.expression_depth -= 1;
     value
 }
@@ -439,7 +465,8 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
             }),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
-        ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),
+        ExprKind::UnaryPlus(inner) => lower_numeric_unary(ctx, inner, elephc_semantics::numeric_unary::NumericUnaryOp::Plus, expr),
+        ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, elephc_semantics::numeric_unary::NumericUnaryOp::Negate, expr),
         ExprKind::Not(inner) => lower_not(ctx, inner, expr),
         ExprKind::BitNot(inner) => lower_int_unary(ctx, inner, Op::IBitNot, expr),
         ExprKind::Throw(inner) => lower_throw_expr(ctx, inner, expr),
@@ -610,6 +637,11 @@ fn lower_str_inc_dec(
     increment: bool,
     expr: &Expr,
 ) -> LoweredValue {
+    crate::ir_lower::numeric_domains::unary(ctx, value, elephc_semantics::numeric_domains::NumericOperator::Update, expr.span);
+    let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    if policy.checked_overflow() {
+        return crate::ir_lower::checked_arithmetic::update(ctx, value, increment, policy, expr.span);
+    }
     ctx.emit_value(
         Op::StrIncDec,
         vec![value.value],
@@ -699,7 +731,7 @@ fn static_callable_builtin_result_type(
     } else {
         None
     };
-    resolve_registry_builtin_result_type(ctx, name, &[], operands, span, checked)
+    resolve_registry_builtin_result_type_with_source_mode(ctx, name, &[], operands, span, checked, crate::source::SourceMode::Php)
         .unwrap_or_else(|| call_return_type(ctx, name, operands))
 }
 
@@ -716,6 +748,9 @@ fn lower_initialized_property_isset(
     property: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Isset, arg) {
+        return probe_value_is_set(ctx, value, arg);
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -865,6 +900,9 @@ fn lower_initialized_property_empty(
     construct: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Empty, arg) {
+        return lazy_isset::lower_empty_of_probed_value(ctx, value, construct, arg);
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -1081,7 +1119,7 @@ fn lower_array_internal_pointer(
         _ => return None,
     };
     if args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;

@@ -100,8 +100,8 @@ fn lowers_examples_corpus_part_3() { verify_examples_corpus(3); }
 
 /// Verifies one disjoint part of the example corpus without changing its fixture coverage.
 ///
-/// The `strict-php` example is lowered with strict-PHP mode enabled, matching
-/// its documented `elephc build --strict-php` invocation: it deliberately declares a
+/// The `php-only` example is lowered with strict-PHP mode enabled, matching
+/// its documented `elephc build --php-only` invocation: it deliberately declares a
 /// user function named after an extension builtin, which only PHP-compatible
 /// (strict) resolution accepts.
 fn verify_examples_corpus(part: usize) {
@@ -116,11 +116,11 @@ fn verify_examples_corpus(part: usize) {
         let strict = fixture
             .parent()
             .and_then(|dir| dir.file_name())
-            .is_some_and(|name| name == "strict-php");
+            .is_some_and(|name| name == "php-only");
         // RAII guard: if lowering a strict fixture panics, the guard still
         // restores the state during unwinding, so no later fixture can
         // accidentally run with strict mode inherited.
-        let _guard = strict.then(crate::strict_php::scoped_enable);
+        let _guard = strict.then(crate::php_only::scoped_enable);
         let module = super::lower_file(&fixture);
         assert!(
             !module.functions.is_empty(),
@@ -131,7 +131,7 @@ fn verify_examples_corpus(part: usize) {
 }
 
 /// Returns all example `main.php` and `main.lfc` fixtures in deterministic order, excluding
-/// examples that require a feature prelude or optional-driver build profile.
+/// examples that require a non-default semantic, feature or optional-driver profile.
 ///
 /// The corpus lowers each fixture in plain (CLI) mode, which does not inject the
 /// feature preludes and optional PDO driver surfaces that the pipeline adds during a
@@ -152,7 +152,7 @@ fn example_main_files(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Returns true when an example needs a feature prelude or optional PDO driver profile.
+/// Returns true when an example needs a non-default semantic, feature or driver profile.
 fn example_requires_non_default_profile(main_php: &Path) -> bool {
     const NON_DEFAULT_PROFILE_EXAMPLES: &[&str] = &[
         "pdo-cubrid",
@@ -163,6 +163,9 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "pdo-oci",
         "pdo-odbc",
         "pdo-sqlsrv",
+        // The example intentionally contains assignments accepted only by --strict-locals.
+        // Dedicated strict-profile tests compile it through that documented CLI mode.
+        "strict-locals",
         "web-session",
         "web-session-trans-sid",
         "web-session-upload",

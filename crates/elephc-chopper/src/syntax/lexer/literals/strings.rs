@@ -85,7 +85,17 @@ pub(crate) fn decode_double_quoted_body(
     cursor: &mut Cursor,
     span: Span,
 ) -> Result<Vec<SpannedToken>, CompileError> {
-    interpolate(cursor, span, Some('"'), MissingEscape::Error)
+    decode_quoted_interpolation(cursor, span, '"')
+}
+
+/// Shares the semantic profile of the enclosing lexer with quoted interpolation.
+fn decode_quoted_interpolation(
+    cursor: &mut Cursor,
+    span: Span,
+    delimiter: char,
+) -> Result<Vec<SpannedToken>, CompileError> {
+    let profile = cursor.semantic_profile;
+    interpolate(cursor, span, Some(delimiter), MissingEscape::Error, profile)
 }
 
 /// Appends one interpolated expression part (already a token list) to the running stream,
@@ -113,9 +123,12 @@ fn push_interp_part(
         ));
     }
     tokens.push(spanned(Token::Dot, span));
+    tokens.push(spanned(Token::StringFormat, span));
+    tokens.push(spanned(Token::LParen, span));
     for token in part {
         tokens.push(token);
     }
+    tokens.push(spanned(Token::RParen, span));
 }
 
 /// Shared interpolation routine for double-quoted strings and heredoc bodies.
@@ -130,6 +143,7 @@ fn interpolate(
     span: Span,
     terminator: Option<char>,
     missing_escape: MissingEscape,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<Vec<SpannedToken>, CompileError> {
     let mut tokens: Vec<SpannedToken> = Vec::new();
     let mut current = String::new();
@@ -164,7 +178,7 @@ fn interpolate(
             Some('{') if braced_interpolation(input.remaining().as_bytes()) == Some(BracedInterpolation::CurlyDollar) => {
                 input.advance_escape(); // consume '{'
                 let inner = capture_braced_expr(input, span)?;
-                let fragment = tokenize_fragment(&inner, span)?;
+                let fragment = tokenize_fragment(&inner, span, profile)?;
                 has_interpolation = true;
                 let mut part = vec![spanned(Token::LParen, span)];
                 part.extend(fragment);
@@ -181,7 +195,7 @@ fn interpolate(
                     let inner_raw = capture_braced_expr(input, span)?;
                     // Re-prepend the $ so the expression is valid PHP ($a['x'] not a['x'])
                     let inner = format!("${}", inner_raw);
-                    let fragment = tokenize_fragment(&inner, span)?;
+                    let fragment = tokenize_fragment(&inner, span, profile)?;
                     has_interpolation = true;
                     let mut part = vec![spanned(Token::LParen, span)];
                     part.extend(fragment);
@@ -241,7 +255,7 @@ fn append_simple_access(
 ) -> Result<(), CompileError> {
     if input.peek_escape() == Some('[') {
         input.advance_escape(); // consume '['
-        append_simple_offset_key(input, part, span);
+        append_simple_offset_key(input, part, span)?;
         if input.peek_escape() == Some(']') {
             input.advance_escape();
         } else {
@@ -278,7 +292,7 @@ fn append_simple_offset_key(
     input: &mut impl EscapeInput,
     part: &mut Vec<SpannedToken>,
     span: Span,
-) {
+) -> Result<(), CompileError> {
     part.push(spanned(Token::LBracket, span));
     match input.peek_escape() {
         Some('$') => {
@@ -295,23 +309,27 @@ fn append_simple_offset_key(
             part.push(spanned(Token::Variable(name), span));
         }
         Some(c) if c == '-' || c.is_ascii_digit() => {
-            let mut digits = String::new();
-            if c == '-' {
-                digits.push('-');
-                input.advance_escape();
-            }
-            while let Some(ch) = input.peek_escape() {
-                if ch.is_ascii_digit() {
-                    digits.push(ch);
-                    input.advance_escape();
-                } else {
-                    break;
-                }
-            }
-            part.push(spanned(
-                Token::IntLiteral(digits.parse().unwrap_or(0)),
-                span,
-            ));
+            let Some((len, key)) = elephc_semantics::array_keys::scan_simple_interpolation_numeric_key(
+                input.remaining().as_bytes(),
+            ) else {
+                return Err(CompileError::new(
+                    span,
+                    "Expected digits after '-' in string interpolation offset",
+                ));
+            };
+            let token = match key {
+                elephc_semantics::array_keys::StringKey::Integer(value) => Token::IntLiteral(value),
+                elephc_semantics::array_keys::StringKey::String(value) => Token::StringLiteral(
+                    std::str::from_utf8(value)
+                        .expect("interpolation numeric spellings are ASCII")
+                        .to_owned(),
+                ),
+            };
+            input.skip_bytes(len);
+            // PHP's simple interpolation grammar canonicalizes integer-looking offsets
+            // before ordinary array-key policy applies. Exact-key mode therefore keeps
+            // noncanonical spellings but must still treat `1` as integer key 1.
+            part.push(spanned(token, span));
         }
         _ => {
             let mut key = String::new();
@@ -323,10 +341,17 @@ fn append_simple_offset_key(
                     break;
                 }
             }
+            if key.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "Expected an array offset in string interpolation",
+                ));
+            }
             part.push(spanned(Token::StringLiteral(key), span));
         }
     }
     part.push(spanned(Token::RBracket, span));
+    Ok(())
 }
 
 /// Captures a braced interpolation expression verbatim and consumes its closing brace.
@@ -373,7 +398,11 @@ impl Drop for FragmentDepthGuard {
 /// a synthetic `<?php` tag, then dropping the open tag and EOF and re-spanning the tokens
 /// to the enclosing string's span. Reuses the full lexer so nested strings, calls, and
 /// array/property access inside the braces are handled like any other expression.
-fn tokenize_fragment(inner: &str, span: Span) -> Result<Vec<SpannedToken>, CompileError> {
+fn tokenize_fragment(
+    inner: &str,
+    span: Span,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<SpannedToken>, CompileError> {
     let depth = FRAGMENT_DEPTH.with(|depth| {
         let current = depth.get();
         depth.set(current + 1);
@@ -387,7 +416,12 @@ fn tokenize_fragment(inner: &str, span: Span) -> Result<Vec<SpannedToken>, Compi
         ));
     }
     let source = format!("<?php {}", inner);
-    let tokens = crate::syntax::lexer::tokenize(&source)?;
+    let tokens = crate::syntax::lexer::tokenize_with_semantics(
+        &source,
+        crate::syntax::source::SourceMode::Php,
+        span.source_id(),
+        profile,
+    )?;
     Ok(tokens
         .into_iter()
         .filter(|(token, _)| !matches!(token, Token::OpenTag | Token::Eof))
@@ -400,7 +434,7 @@ pub(crate) fn decode_backtick_body(
     cursor: &mut Cursor,
     span: Span,
 ) -> Result<Vec<SpannedToken>, CompileError> {
-    interpolate(cursor, span, Some('`'), MissingEscape::Error)
+    decode_quoted_interpolation(cursor, span, '`')
 }
 
 /// Decodes one single-quoted lexeme or diagnoses a missing closing quote.
@@ -471,7 +505,13 @@ pub(crate) fn scan_heredoc(
                 if opening.nowdoc {
                     return Ok(vec![spanned(Token::StringLiteral(content), span)]);
                 }
-                return interpolate(&mut StringInput(&content), span, None, MissingEscape::Literal);
+                return interpolate(
+                    &mut StringInput(&content),
+                    span,
+                    None,
+                    MissingEscape::Literal,
+                    cursor.semantic_profile,
+                );
             }
         }
 
@@ -588,6 +628,53 @@ fn interpolation_ranges(content: &str) -> Vec<(usize, usize)> {
         ranges.push((start, index));
     }
     ranges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Token;
+
+    /// A lone minus is not an integer offset and must not become the string key `"-"`.
+    #[test]
+    fn simple_interpolation_rejects_lone_minus_offset() {
+        assert!(crate::syntax::lexer::tokenize("<?php echo \"$items[-]\";").is_err());
+    }
+
+    /// An empty offset is invalid PHP syntax and must not become the empty-string key.
+    #[test]
+    fn simple_interpolation_rejects_empty_offset() {
+        assert!(crate::syntax::lexer::tokenize("<?php echo \"$items[]\";").is_err());
+    }
+
+    /// Numeric-looking offset text keeps PHP's integer-versus-string distinction.
+    #[test]
+    fn simple_interpolation_preserves_numeric_key_spellings() {
+        for spelling in ["-9223372036854775808", "0x10", "-0x10", "0b10", "0o10", "1_0"] {
+            let tokens = crate::syntax::lexer::tokenize(&format!(
+                "<?php echo \"$items[{spelling}]\";"
+            ))
+            .expect("numeric-looking interpolation offset should tokenize");
+            assert!(tokens.iter().any(|(token, _)| {
+                matches!(token, Token::StringLiteral(value) if value == spelling)
+            }));
+        }
+        let tokens = crate::syntax::lexer::tokenize(
+            "<?php echo \"$items[-9223372036854775807]\";",
+        )
+        .expect("in-range negative interpolation offset should tokenize");
+        assert!(tokens.iter().any(|(token, _)| {
+            *token == Token::IntLiteral(-9_223_372_036_854_775_807)
+        }));
+        for spelling in ["0x", "0b", "0o", "1_"] {
+            assert!(
+                crate::syntax::lexer::tokenize(&format!(
+                    "<?php echo \"$items[{spelling}]\";"
+                ))
+                .is_err(),
+                "{spelling}"
+            );
+        }
+    }
 }
 
 /// Controls how a bare backslash at end of input is treated inside double-quoted strings.

@@ -18228,9 +18228,8 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.abs` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -18239,18 +18238,16 @@
     "module": "standard",
     "name": "abs",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "numeric_parameters",
       "callable": {
-        "kind": "dynamic_target",
-        "target": "abs"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
-        "kind": "static",
-        "names": []
+        "kind": "shared"
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "abs"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
@@ -18264,7 +18261,7 @@
       "runtime_functions": [
         "abs"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -19197,7 +19194,13 @@
     "module": "standard",
     "name": "array_column",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_uncoerced",
+      "array_key_input": {
+        "argument": 1,
+        "kind": "value",
+        "nullable": true,
+        "receiver": 0
+      },
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -19341,6 +19344,10 @@
     "name": "array_combine",
     "semantics": {
       "argument_lowering": "standard",
+      "array_key_input": {
+        "argument": 0,
+        "kind": "values"
+      },
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -20135,6 +20142,10 @@
     "name": "array_fill_keys",
     "semantics": {
       "argument_lowering": "standard",
+      "array_key_input": {
+        "argument": 0,
+        "kind": "values"
+      },
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -21288,10 +21299,16 @@
     "module": "standard",
     "name": "array_key_exists",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_uncoerced",
+      "array_key_input": {
+        "argument": 0,
+        "kind": "value",
+        "nullable": false,
+        "receiver": 1
+      },
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "static",
@@ -22626,9 +22643,8 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.array_product` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -22666,8 +22682,7 @@
         ]
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "array_product"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
@@ -22677,11 +22692,11 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_product"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -23665,7 +23680,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -24299,9 +24314,8 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.array_sum` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -24339,8 +24353,7 @@
         ]
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "array_sum"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
@@ -24350,11 +24363,11 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_sum"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -29166,7 +29179,7 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
@@ -29178,10 +29191,30 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
-        "kind": "shared"
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
       },
       "lowering": {
         "kind": "eir"
@@ -29196,7 +29229,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -53118,7 +53151,7 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
@@ -53130,7 +53163,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "shared"
@@ -53148,7 +53182,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -53158,7 +53192,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "shared",
+        "numeric_cast": "float"
       }
     },
     "sig": {
@@ -53990,7 +54025,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -55301,7 +55336,7 @@
           "type": "float"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -59290,7 +59325,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -59411,7 +59446,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -65196,7 +65231,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "shared"
+        "kind": "shared",
+        "numeric_cast": "gmp_int"
       }
     },
     "sig": {
@@ -83547,7 +83583,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -84350,10 +84386,10 @@
     "module": "standard",
     "name": "intdiv",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "numeric_parameters",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "static",
@@ -84401,7 +84437,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "shared"
       }
     },
     "sig": {
@@ -84669,7 +84705,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "shared"
@@ -84699,7 +84736,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "shared",
+        "numeric_cast": "int"
       }
     },
     "sig": {
@@ -89929,7 +89967,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -116909,7 +116947,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -123351,7 +123389,7 @@
           "type": "float"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -123899,7 +123937,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -125047,7 +125085,8 @@
     "semantics": {
       "argument_lowering": "preserve_uncoerced",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "static",
@@ -135833,9 +135872,8 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.settype` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -135846,33 +135884,14 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
+        "kind": "shared"
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "settype"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
@@ -135880,13 +135899,22 @@
       },
       "requirements": {
         "kind": "static",
-        "values": []
+        "values": [
+          {
+            "kind": "prelude_helper",
+            "name": "__elephc_cast_object"
+          },
+          {
+            "kind": "prelude_helper",
+            "name": "__elephc_cast_object_dynamic"
+          }
+        ]
       },
       "result_type": "checked",
       "runtime_functions": [
         "settype"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -141743,7 +141771,7 @@
           "type": "array"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource",
       "variadic": null
     },
     "since": null,
@@ -141882,7 +141910,7 @@
           "type": "array"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource",
       "variadic": null
     },
     "since": null,
@@ -142301,7 +142329,7 @@
           "type": "array"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource",
       "variadic": null
     },
     "since": null,
@@ -143068,7 +143096,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -143269,7 +143297,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -146048,7 +146076,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -146187,7 +146215,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -147276,7 +147304,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -150478,7 +150506,7 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
@@ -150490,18 +150518,37 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "runtime-selected strval requires a statically represented source value"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
-        "kind": "shared"
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
       },
       "lowering": {
         "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -150509,7 +150556,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -154826,7 +154873,7 @@
     },
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -158035,7 +158082,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -158192,7 +158239,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {

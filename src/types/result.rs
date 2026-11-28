@@ -61,6 +61,115 @@ pub(crate) type LocalValueReadTypes = HashMap<(String, Span, String), PhpType>;
 /// visits hold `None`.
 pub(crate) type ElementValueViews = HashMap<(String, Span, Option<String>), Option<PhpType>>;
 
+/// A checked local write retains its value contract and the independently owning guarantee.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalStoreContract {
+    /// PHP-visible membership before storage adaptation.
+    pub ty: PhpType,
+    /// Restriction responsible for this store, independent of other selected guarantees.
+    pub feature: elephc_semantics::StrictFeature,
+}
+
+/// Original producer facts retained even when optimization replaces a variable read with a constant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalCopyContract {
+    pub source: String,
+    pub contract: PhpType,
+}
+
+/// Source-local contracts and copy producers transported together through the checked pipeline.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalStoreContracts {
+    stores: HashMap<(String, Span, String), LocalStoreContract>,
+    pub(crate) eval_sources: HashMap<(String, Span, String), (PhpType, bool)>,
+    pub(crate) copies: HashMap<(String, Span, String), LocalCopyContract>,
+    pub(crate) origins: HashMap<(String, Span, String), PhpType>,
+    entry_origins: HashMap<(String, String), LocalEntryOrigin>,
+    origin_bindings: HashSet<(String, String)>,
+    origin_scopes: HashSet<String>,
+}
+
+/// Incoming semantic evidence independent of whether its pointee belongs to this frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalEntryOrigin {
+    contract: PhpType,
+    by_ref: bool,
+    frozen_capture: bool,
+}
+
+impl LocalStoreContracts {
+    /// Replaces incoming contracts when a frame is checked again with its final signature.
+    pub(crate) fn clear_entry_origins(&mut self, scope: &str) {
+        self.entry_origins.retain(|(owner, _), _| owner != scope);
+    }
+
+    /// Gives a recreatable owned parameter its declared incoming source contract.
+    pub(crate) fn record_entry_origin(&mut self, scope: String, name: String, contract: PhpType) {
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: false, frozen_capture: false });
+    }
+
+    /// Keeps a foreign reference identity while giving its local name an incoming contract.
+    pub(crate) fn record_reference_entry_origin(&mut self, scope: String, name: String, contract: PhpType) {
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: true, frozen_capture: false });
+    }
+
+    /// Keeps a descriptor selected when the closure captured its enclosing producer.
+    pub(crate) fn record_captured_entry_origin(&mut self, scope: String, name: String, contract: PhpType, by_ref: bool) {
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref, frozen_capture: true });
+    }
+
+    /// Selects hidden immutable metadata rather than the capture's current PHP value kind.
+    pub(crate) fn entry_has_captured_contract(&self, scope: &str, name: &str) -> bool {
+        self.entry_origins.get(&(scope.to_string(), name.to_string())).is_some_and(|origin| origin.frozen_capture)
+    }
+
+    /// Reads an incoming contract without conflating it with an assignment source position.
+    pub(crate) fn entry_origin(&self, scope: &str, name: &str) -> Option<&PhpType> {
+        self.entry_origins.get(&(scope.to_string(), name.to_string())).map(|origin| &origin.contract)
+    }
+
+    /// Prevents reference inputs from entering the by-value shadow-copy path.
+    pub(crate) fn entry_is_reference(&self, scope: &str, name: &str) -> bool {
+        self.entry_origins.get(&(scope.to_string(), name.to_string())).is_some_and(|origin| origin.by_ref)
+    }
+
+    /// Records immutable source metadata and indexes its body/name without scanning other stores.
+    pub(crate) fn record_origin(&mut self, key: (String, Span, String), contract: PhpType) {
+        self.track_binding_origin(&key.0, &key.2);
+        self.origins.insert(key, contract);
+    }
+
+    /// Tracks logical binding ends even when reference formation supplies the only producer.
+    pub(crate) fn track_binding_origin(&mut self, scope: &str, name: &str) {
+        self.origin_bindings.insert((scope.into(), name.into()));
+        self.origin_scopes.insert(scope.into());
+    }
+
+    /// Tests a binding's runtime-origin transport independently from its current source span.
+    pub(crate) fn has_runtime_origin(&self, scope: &str, name: &str) -> bool {
+        self.origin_bindings.contains(&(scope.to_string(), name.to_string()))
+            || self.entry_origin(scope, name).is_some()
+    }
+
+    /// Includes lexical loop scopes belonging to the same native frame.
+    pub(crate) fn has_runtime_origins_in_scope(&self, scope: &str) -> bool {
+        self.origin_scopes.iter().any(|candidate| crate::types::loop_storage_scope_is_within(candidate, scope))
+            || self.entry_origins.keys().any(|(candidate, _)| crate::types::loop_storage_scope_is_within(candidate, scope))
+    }
+}
+
+impl std::ops::Deref for LocalStoreContracts {
+    type Target = HashMap<(String, Span, String), LocalStoreContract>;
+
+    /// Keeps existing store consumers focused on their authoritative membership map.
+    fn deref(&self) -> &Self::Target { &self.stores }
+}
+
+impl std::ops::DerefMut for LocalStoreContracts {
+    /// Allows checker store updates without separating immutable producer transport.
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.stores }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
 /// exception at runtime instead of a compile-time rejection.
@@ -149,6 +258,8 @@ pub struct ArrayPushPropertyPlan {
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.
 pub struct CheckResult {
+    /// Effective semantic guarantees consumed by lowering and code generation.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
     /// Default expressions php-src evaluates when execution reaches a class or trait statement
     /// whose properties compatibly redeclare a used trait's, keyed by class or trait name. A
     /// trait has no `ClassInfo`, so lowering reads its entry here.
@@ -239,6 +350,9 @@ pub struct CheckResult {
     /// keyed by the closure expression's span. Lowering replays these hints so the compiled
     /// closure parameter matches the element/accumulator type the checker already proved.
     pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
+    /// Original scalar closure result contracts by enclosing body and source expression span.
+    /// Conflicting source visits retain canonical Mixed storage instead of choosing a narrower ABI.
+    pub closure_result_types: HashMap<(String, Span), PhpType>,
     /// Native array_push property decisions, scoped to the body and original place span.
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.
@@ -249,6 +363,8 @@ pub struct CheckResult {
     pub element_value_views: ElementValueViews,
     /// Source-point value read contracts; these never change a local's reference storage.
     pub local_value_read_types: LocalValueReadTypes,
+    /// Scalar contracts for writes and reference-promotion sites, independent of read narrowing.
+    pub local_store_contracts: LocalStoreContracts,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.
@@ -357,6 +473,8 @@ impl CheckResult {
             .chain(self.local_ref_detach_sites.keys())
             .chain(self.local_retype_sites.keys())
             .chain(self.mixed_storage_store_sites.keys())
+            .chain(self.local_store_contracts.origins.keys().map(|(_, span, _)| span))
+            .chain(self.local_store_contracts.eval_sources.keys().map(|(_, span, _)| span))
             .chain(
                 self.boxed_reference_promotion_sites
                     .keys()
@@ -380,6 +498,8 @@ impl CheckResult {
         self.mixed_storage_store_sites
             .values()
             .flatten()
+            .chain(self.local_store_contracts.origins.keys().map(|(_, _, name)| name))
+            .chain(self.local_store_contracts.eval_sources.keys().map(|(_, _, name)| name))
             .cloned()
             .collect()
     }

@@ -216,11 +216,12 @@ pub(super) fn lower_unset_builtin(
 
 /// Returns the concrete PHP type requested by a supported `settype()` type name.
 fn settype_target_type(name: &str) -> Option<PhpType> {
-    match php_symbol_key(name).as_str() {
-        "int" | "integer" => Some(PhpType::Int),
-        "float" | "double" => Some(PhpType::Float),
-        "string" => Some(PhpType::Str),
-        "bool" | "boolean" => Some(PhpType::Bool),
+    use elephc_semantics::settype_target::SettypeTarget;
+    match SettypeTarget::parse(name).ok()? {
+        SettypeTarget::Int => Some(PhpType::Int),
+        SettypeTarget::Float => Some(PhpType::Float),
+        SettypeTarget::String => Some(PhpType::Str),
+        SettypeTarget::Bool => Some(PhpType::Bool),
         _ => None,
     }
 }
@@ -412,9 +413,7 @@ fn store_settype_local_result(
     let target_ty = target_ty.codegen_repr();
     if storage_ty == PhpType::Mixed && target_ty != PhpType::Mixed {
         emit_box_current_value_as_mixed(ctx.emitter, &target_ty);
-        let offset = ctx.local_offset(slot)?;
-        abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
-        return Ok(());
+        return super::super::local_stores::publish_current_owned_output(ctx, slot, &PhpType::Mixed);
     }
     let offset = ctx.local_offset(slot)?;
     abi::emit_store(ctx.emitter, &target_ty, offset);

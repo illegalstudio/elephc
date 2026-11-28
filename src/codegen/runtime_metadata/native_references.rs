@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits immutable native property validators and physical binding rows from typed EIR callbacks.
+//! Emits native property/local validators and physical binding rows from typed EIR callbacks.
 //!
 //! Called from:
 //! - Final user assembly emission when native reference validation is selected.
@@ -15,15 +15,35 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, IrHeapKind, IrType, Module, RuntimeCallTarget};
 
 /// Names immutable metadata for one physical declaration independently of a live receiver.
-fn descriptor_symbol(class_id: u64, slot: u32, is_static: bool) -> String {
+pub(in crate::codegen) fn descriptor_symbol(class_id: u64, slot: u32, is_static: bool) -> String {
     let storage = if is_static { "static" } else { "instance" };
     format!("_native_reference_declaration_{class_id}_{slot}_{storage}")
+}
+
+/// Resolves a typed local declaration without deriving semantics from its callback name.
+pub(in crate::codegen) fn local_descriptor(module: &Module, contract: &crate::types::PhpType) -> Result<String> {
+    let function = module.functions.iter().find(|function|
+        function.native_local_reference_contract.as_ref() == Some(contract))
+        .ok_or_else(|| CodegenIrError::invalid_module("local reference contract has no native validator"))?;
+    Ok(format!("_native_reference_local_contract_{}", function.id.as_raw()))
+}
+
+/// Shares checked static-reference eligibility between source selection and eval exports.
+pub(in crate::codegen) fn checked_boxed_static_descriptor(
+    module: &Module, declaring_class: &str, property: &str,
+) -> Option<String> {
+    let class = module.class_infos.get(declaring_class)?;
+    if !crate::types::managed_static_property_binding(class, property, module.semantic_profile) { return None; }
+    let (index, _) = class.static_properties.iter().enumerate()
+        .find(|(_, (name, _))| name == property)?;
+    Some(descriptor_symbol(class.class_id, index as u32, true))
 }
 
 /// Emits only selected native callback metadata, rejecting entries with a PHP argument ABI.
 pub(in crate::codegen) fn emit_native_reference_metadata(module: &Module) -> Result<String> {
     if !module.required_runtime_features.native_reference_validation { return Ok(String::new()); }
     let mut descriptors = BTreeMap::new();
+    let mut local_descriptors = Vec::new();
     let mut rows: BTreeMap<u64, Vec<(usize, String)>> = BTreeMap::new();
     for function in module.functions.iter().filter(|function| function.flags.is_native_reference_validator) {
         let boxed = IrType::Heap(IrHeapKind::Mixed);
@@ -36,6 +56,13 @@ pub(in crate::codegen) fn emit_native_reference_metadata(module: &Module) -> Res
             || function.return_type != boxed
         {
             return Err(CodegenIrError::invalid_module("native reference callback has a PHP calling convention"));
+        }
+        if let Some(contract) = &function.native_local_reference_contract {
+            let ty = crate::types::native_type_spec::php_type_spec(contract, false)
+                .ok_or_else(|| CodegenIrError::invalid_module("local origin has no native type spelling"))?;
+            local_descriptors.push((local_descriptor(module, contract)?,
+                crate::names::function_symbol(&function.name), ty));
+            continue;
         }
         let declarations = function.instructions.iter().filter_map(|inst| match &inst.immediate {
             Some(Immediate::RuntimeCall(RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static })) =>
@@ -66,6 +93,13 @@ pub(in crate::codegen) fn emit_native_reference_metadata(module: &Module) -> Res
         .map_or(Some(0), |id| id.checked_add(1))
         .ok_or_else(|| CodegenIrError::invalid_module("native reference class table overflow"))?;
     let mut output = String::from(".data\n");
+    for (symbol, entry, ty) in local_descriptors {
+        let type_symbol = format!("{symbol}_type");
+        emit_words(&mut output, &symbol, &[entry, "0".into(), "0".into(), "0".into(),
+            elephc_semantics::native_local_contract::ABI_VERSION.to_string(), type_symbol.clone(), ty.len().to_string()]);
+        output.push_str(&format!("{type_symbol}:\n    .byte {}\n",
+            ty.bytes().map(|byte| byte.to_string()).collect::<Vec<_>>().join(", ")));
+    }
     emit_words(&mut output, "_native_reference_source_class_count", &[class_count.to_string()]);
     let pointers = (0..class_count).map(|id| if rows.contains_key(&id) {
         format!("_native_reference_source_rows_{id}")

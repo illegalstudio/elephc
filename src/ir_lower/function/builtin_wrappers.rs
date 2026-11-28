@@ -14,7 +14,7 @@ use super::*;
 
 /// Gives a registry argument strategy the same rooted EIR path as a direct builtin call.
 pub(crate) fn lower_prepared_builtin_callable(
-    module: &mut Module, label: &str, name: &str, signature: &FunctionSig, strict_php: bool,
+    module: &mut Module, label: &str, name: &str, signature: &FunctionSig, php_only: bool,
 ) -> Function {
     let span = Span::dummy();
     let call = Expr::new(ExprKind::FunctionCall {
@@ -29,6 +29,18 @@ pub(crate) fn lower_prepared_builtin_callable(
     internal_signature.declared_params.push(true);
     internal_signature.param_type_exprs.push(Some(TypeExpr::Int));
     internal_signature.param_attributes.push(Vec::new());
+    if module.semantic_profile.contains(elephc_semantics::StrictFeature::Comparisons) {
+        if let Some(policy @ elephc_builtin_contract::ComparisonPolicy::ComparatorRequired { .. }) =
+            crate::builtins::registry::lookup(name).and_then(|definition| definition.spec.comparison_policy())
+        {
+            // Rejection has no builtin call to lower, including unsupported variadic storage.
+            let failure = Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
+                class_name: Name::unqualified("TypeError"),
+                args: vec![Expr::new(ExprKind::StringLiteral(policy.message(name)), span)],
+            }, span)), span);
+            return lower_builtin_callable_body(module, label, &internal_signature, php_only, vec![failure]);
+        }
+    }
     let mut strict_return = Stmt::new(StmtKind::Return(Some(call.clone())), span);
     strict_return.strict_types = true;
     let mut weak_return = Stmt::new(StmtKind::Return(Some(call)), span);
@@ -42,7 +54,7 @@ pub(crate) fn lower_prepared_builtin_callable(
         then_body: vec![strict_return], elseif_clauses: Vec::new(),
         else_body: Some(vec![weak_return]),
     }, span);
-    lower_builtin_callable_body(module, label, &internal_signature, strict_php, vec![branch])
+    lower_builtin_callable_body(module, label, &internal_signature, php_only, vec![branch])
 }
 
 /// Lowers a boxed usort wrapper through the same checked body boundary as a direct PHP call.
@@ -50,7 +62,7 @@ pub(crate) fn lower_boxed_usort_callable(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
 ) -> Function {
     let span = Span::dummy();
     let call = Expr::new(ExprKind::FunctionCall {
@@ -60,7 +72,7 @@ pub(crate) fn lower_boxed_usort_callable(
         }).collect(),
     }, span);
     lower_builtin_callable_body(
-        module, label, signature, strict_php, vec![Stmt::new(StmtKind::ExprStmt(call), span)],
+        module, label, signature, php_only, vec![Stmt::new(StmtKind::ExprStmt(call), span)],
     )
 }
 
@@ -69,7 +81,7 @@ pub(crate) fn lower_array_merge_callable(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
 ) -> Function {
     let span = Span::dummy();
     let arguments = Expr::new(ExprKind::Variable(
@@ -100,7 +112,7 @@ pub(crate) fn lower_array_merge_callable(
         }, span)).collect(),
     }, span);
     lower_builtin_callable_body(
-        module, label, signature, strict_php,
+        module, label, signature, php_only,
         vec![guard, Stmt::new(StmtKind::Return(Some(merge)), span)],
     )
 }
@@ -110,14 +122,30 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
-    strict_php: bool,
-    mut statements: Vec<Stmt>,
+    php_only: bool,
+    statements: Vec<Stmt>,
 ) -> Function {
-    let source_mode = if strict_php {
+    let source_mode = if php_only {
         crate::source::SourceMode::Php
     } else {
         crate::source::SourceMode::Lfc
     };
+    lower_callable_body(module, label, signature, source_mode, true, statements)
+}
+
+/// Retains the caller's operator policy without creating a public builtin invocation boundary.
+pub(in crate::ir_lower) fn lower_operator_callable_body(
+    module: &mut Module, label: &str, signature: &FunctionSig,
+    source_mode: crate::source::SourceMode, statements: Vec<Stmt>,
+) -> Function {
+    lower_callable_body(module, label, signature, source_mode, false, statements)
+}
+
+/// Shares parameter ownership and exceptional cleanup while keeping invocation contracts explicit.
+fn lower_callable_body(
+    module: &mut Module, label: &str, signature: &FunctionSig,
+    source_mode: crate::source::SourceMode, builtin_contract: bool, mut statements: Vec<Stmt>,
+) -> Function {
     for statement in &mut statements {
         statement.source_mode = source_mode;
     }
@@ -127,6 +155,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
     );
     function.params = function_params(signature);
     function.signature = Some(signature.clone());
+    function.flags.is_builtin_contract_wrapper = builtin_contract;
     // Prefer the emitted signatures so a call into an injected prelude helper also sees the
     // hidden `func_args` ABI slots `capture_all_frames` appended to it. Without this map the
     // builtin lowering at the bottom of this wrapper cannot tell the helper needs a collector.
@@ -141,6 +170,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
         })
         .collect::<std::collections::HashMap<_, _>>();
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -170,6 +200,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
         &Default::default(), // checked declared-array append elements
         &Default::default(), // checked element value views
         &Default::default(), // synthesized bodies have no checked integer read sites
+        &Default::default(), // synthesized bodies have no declared local store contracts
         &Default::default(),
         &Default::default(),
         &Default::default(),

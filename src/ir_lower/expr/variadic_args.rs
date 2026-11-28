@@ -410,8 +410,8 @@ pub(super) fn has_static_assoc_spread_args(args: &[Expr]) -> bool {
 }
 
 /// Flattens every statically-known call spread before EIR operand materialization.
-pub(super) fn expand_static_call_spread_args(args: &[Expr]) -> Vec<Expr> {
-    let assoc_expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+pub(super) fn expand_static_call_spread_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<Expr> {
+    let assoc_expanded = crate::types::call_args::expand_static_assoc_spread_args(args, profile);
     expand_static_indexed_spread_args(&assoc_expanded)
 }
 

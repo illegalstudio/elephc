@@ -26,7 +26,9 @@ pub(crate) fn expr_to_effect_stmt(expr: Expr) -> Vec<Stmt> {
 /// Preserves the implicit boolean conversion when an if condition loses its branches.
 pub(crate) fn condition_to_effect_stmt(condition: Expr) -> Vec<Stmt> {
     let span = condition.span;
-    let condition = if effects::internal_conversion_may_throw(&condition) {
+    let condition = if super::super::semantic_context::boolean_guard_may_throw(&condition) {
+        Expr::new(ExprKind::Not(Box::new(condition)), span)
+    } else if effects::internal_conversion_may_throw(&condition) {
         Expr::new(ExprKind::Cast {
             target: CastType::Bool, expr: Box::new(condition),
         }, span)

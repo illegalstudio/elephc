@@ -28,9 +28,9 @@ pub(in crate::interpreter) fn eval_array_product_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_product` array builtin.
 pub(in crate::interpreter) fn eval_array_product_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    super::array_sum::eval_array_aggregate_result("array_product", *array, values)
+    super::array_sum::eval_array_aggregate_result("array_product", *array, context, values)
 }

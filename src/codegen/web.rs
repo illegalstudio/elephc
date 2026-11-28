@@ -98,7 +98,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         abi::emit_call_label(emitter, "__rt_pcntl_release_handlers");
     }
     for record in data.static_locals() {
-        emit_static_local_reset(emitter, record, &mut labels);
+        emit_static_local_reset(emitter, record, &mut labels,
+            module.required_runtime_features.native_reference_validation);
     }
     let (static_properties, hosting_tables) = static_properties_hosting_last(module);
     for (symbol, php_type) in static_properties {
@@ -646,7 +647,7 @@ mod handler_reset_tests {
 /// Resets one function static local: skips uninitialized slots, releases any
 /// owned refcounted value, then zeroes the 16-byte value and the init marker so
 /// the static's initializer re-runs on the next request.
-fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, labels: &mut LabelGen) {
+fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, labels: &mut LabelGen, native_validation: bool) {
     let ty = record.php_type.codegen_repr();
     let skip_label = labels.next("skip_static");
     emitter.comment(&format!("reset static local {}", record.symbol));
@@ -656,6 +657,12 @@ fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, la
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), &record.init_symbol, 0);
     abi::emit_branch_if_int_result_zero(emitter, &skip_label);
 
+    if record.managed_reference {
+        crate::codegen_support::runtime::reference_cells::detach_function_static(emitter, record, native_validation);
+        abi::emit_call_label(emitter, "__rt_reference_cell_release");
+        emitter.label(&skip_label);
+        return;
+    }
     emit_release_symbol_value(emitter, &record.symbol, &ty);
     // Zero the 16-byte value slot and the init marker so the initializer re-runs.
     abi::emit_store_zero_to_symbol(emitter, &record.symbol, 0);

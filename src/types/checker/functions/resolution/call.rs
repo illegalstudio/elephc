@@ -76,16 +76,16 @@ impl Checker {
             };
             return CompileError::new(span, &message);
         }
-        // Under `--strict-php`, a name that would resolve to an extension builtin
+        // Under `--php-only`, a name that would resolve to an extension builtin
         // lands here as undefined. Name the disabled extension so users understand
         // why a working non-strict program stopped compiling.
         let bare = name.rsplit('\\').next().unwrap_or(name);
         let key = crate::names::php_symbol_key(bare);
-        if crate::types::checker::builtins::strict_php_hidden_builtin(&key) {
+        if crate::types::checker::builtins::php_only_hidden_builtin(&key) {
             return CompileError::new(
                 span,
                 &format!(
-                    "Undefined function: {} ({}() exists as an elephc extension; it is disabled by --strict-php)",
+                    "Undefined function: {} ({}() exists as an elephc extension; it is disabled by --php-only)",
                     name, key
                 ),
             );
@@ -168,7 +168,13 @@ impl Checker {
 
         if let Some(decl) = self.fn_decls.get(name) {
             if decl.internal_prelude {
-                check_prelude_function_arity(name, args, decl.variadic.is_some(), span)?;
+                check_prelude_function_arity(
+                    name,
+                    args,
+                    decl.variadic.is_some(),
+                    span,
+                    self.semantic_profile,
+                )?;
             }
         }
 
@@ -448,7 +454,7 @@ impl Checker {
                             .defaults
                             .get(i)
                             .and_then(|default| default.as_ref())
-                            .map(|default| self.infer_type(default, caller_env))
+                            .map(|default| self.infer_bound_default(default, &PhpType::Mixed, caller_env))
                             .transpose()?
                             .unwrap_or(PhpType::Int);
                         param_types.push((decl.params[i].clone(), param_ty));
@@ -511,6 +517,7 @@ impl Checker {
                     })
                     .transpose()?;
                 if supplied_reference {
+                    self.record_reference_argument_contract(arg, &ty);
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -739,7 +746,7 @@ impl Checker {
                     let default_ty = if deferred_scope_error {
                         declared_ty.clone()
                     } else {
-                        self.infer_type(default_expr, caller_env)?
+                        self.infer_bound_default(default_expr, &declared_ty, caller_env)?
                     };
                     self.require_compatible_arg_type(
                         &declared_ty,
@@ -752,7 +759,7 @@ impl Checker {
                     let ty = if deferred_scope_error {
                         PhpType::Mixed
                     } else {
-                        self.infer_type(default_expr, caller_env)?
+                        self.infer_bound_default(default_expr, &PhpType::Mixed, caller_env)?
                     };
                     param_types.push((decl.params[i].clone(), ty));
                 }
@@ -1061,7 +1068,10 @@ fn is_callable_array_type(ty: &PhpType) -> bool {
 ///
 /// Returns `None` when a spread's length is not knowable at compile time. String-keyed
 /// arrays map to named arguments and are left to the call planner.
-fn static_positional_arg_count(args: &[crate::parser::ast::Expr]) -> Option<usize> {
+fn static_positional_arg_count(
+    args: &[crate::parser::ast::Expr],
+    profile: elephc_semantics::SemanticProfile,
+) -> Option<usize> {
     if args.iter().any(|arg| matches!(arg.kind, crate::parser::ast::ExprKind::NamedArg { .. })) {
         return None;
     }
@@ -1070,7 +1080,8 @@ fn static_positional_arg_count(args: &[crate::parser::ast::Expr]) -> Option<usiz
     }
     // Reuse the shared literal-array/nested-unpack rules instead of maintaining a second copy
     // in the checker. The helper declines dynamic spreads and nested unpacks.
-    crate::types::call_args::expand_planned_positional_spreads(args).map(|expanded| expanded.len())
+    crate::types::call_args::expand_planned_positional_spreads(args, profile)
+        .map(|expanded| expanded.len())
 }
 
 /// Enforces the PHP-internal maximum arity for a compiler-injected prelude function.
@@ -1083,6 +1094,7 @@ fn check_prelude_function_arity(
     args: &[crate::parser::ast::Expr],
     declared_variadic: bool,
     span: crate::span::Span,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<(), CompileError> {
     let Some(contract) = elephc_builtin_contract::lookup(name) else {
         return Ok(());
@@ -1099,7 +1111,7 @@ fn check_prelude_function_arity(
     )) {
         return Ok(());
     }
-    let Some(arg_count) = static_positional_arg_count(args) else {
+    let Some(arg_count) = static_positional_arg_count(args, profile) else {
         return Ok(());
     };
     let required = contract.min_args.unwrap_or_else(|| {

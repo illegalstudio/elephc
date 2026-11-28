@@ -22,10 +22,10 @@ use crate::errors::EvalStatus;
 use crate::eval_ir::{CompiledBody, CompiledModule, EvalCastType, EvalFunction, Op};
 use crate::interpreter::{
     copy_scope_value, eval_binary_result, eval_cast_value, eval_call, eval_expr_language_construct_name,
-    eval_inc_dec_value, eval_output_value, finish_eval_argument_values, release_function_args,
+    eval_inc_dec_value, eval_output_value, eval_boolean_condition, finish_eval_argument_values, release_function_args,
     eval_pcntl_maybe_dispatch, eval_release_value, eval_unary_value,
     finish_activation_scope, set_owned_scope_cell, visible_scope_cell, EvalControl, RuntimeValueOps,
-    warn_eval_discarded_function_call,
+    warn_eval_discarded_function_call, store_local_with_origin, retire_scope_replacements,
 };
 use crate::runtime_hooks::owner_frames::with_runtime_owners;
 use crate::scope::ElephcEvalScope;
@@ -68,6 +68,8 @@ struct Vm {
     stack: Vec<RuntimeCellHandle>,
     /// Callees selected before evaluating nested argument calls.
     prepared_calls: Vec<Arc<CompiledBody>>,
+    /// Copied source facts nested in assignment evaluation order, without value owners.
+    prepared_stores: Vec<super::super::local_binding_origins::LocalAssignmentProducer>,
     max_frames: usize,
     result: Option<EvalControl>,
 }
@@ -80,6 +82,7 @@ impl Vm {
             scopes: Vec::new(),
             stack: Vec::new(),
             prepared_calls: Vec::new(),
+            prepared_stores: Vec::new(),
             max_frames: 0,
             result: None,
         }
@@ -197,10 +200,22 @@ fn step(
             let value = load_local(vm, &name, context, scope, values)?;
             vm.stack.push(value);
         }
+        Op::PrepareStore(index) => {
+            let body = current_body(vm)?;
+            let source = body.store_sources.get(index as usize).ok_or(EvalStatus::RuntimeFatal)?;
+            let slot = vm.frames.last().ok_or(EvalStatus::RuntimeFatal)?.scope_slot;
+            let scope = frame_scope(slot, &mut vm.scopes, scope);
+            let producer = super::super::local_binding_origins::prepare_assignment(source, context, scope);
+            vm.prepared_stores.push(producer);
+        }
         Op::Store(slot) => {
             let name = local_name(vm, slot)?;
+            let producer = vm.prepared_stores.pop().ok_or(EvalStatus::RuntimeFatal)?;
             let value = pop(&mut vm.stack)?;
-            store_local(vm, &name, value, context, scope, values)?;
+            let slot = vm.frames.last().ok_or(EvalStatus::RuntimeFatal)?.scope_slot;
+            let scope = frame_scope(slot, &mut vm.scopes, scope);
+            let replaced = store_local_with_origin(context, scope, name, value, producer, values)?;
+            retire_scope_replacements(replaced, context, values)?;
         }
         Op::Pop => {
             let value = pop(&mut vm.stack)?;
@@ -230,15 +245,16 @@ fn step(
         }
         Op::Unary(op) => {
             let value = pop(&mut vm.stack)?;
-            let result = with_runtime_owners(&value, || eval_unary_value(op, value, values));
+            let result = with_runtime_owners(&value, || eval_unary_value(op, value, context, values));
             vm.stack.push(finish_eval_argument_values(result, [value], context, values)?);
         }
-        Op::CastInt | Op::CastFloat | Op::CastString | Op::CastBool => {
+        Op::CastInt | Op::CastFloat | Op::CastString | Op::CastBool | Op::FormatString => {
             let value = pop(&mut vm.stack)?;
             let target = match op {
                 Op::CastInt => EvalCastType::Int,
                 Op::CastFloat => EvalCastType::Float,
                 Op::CastString => EvalCastType::String,
+                Op::FormatString => EvalCastType::StringFormat,
                 Op::CastBool => EvalCastType::Bool,
                 _ => unreachable!("cast opcode"),
             };
@@ -248,7 +264,7 @@ fn step(
         Op::Jump(target) => set_ip(vm, target)?,
         Op::JumpIfFalse(target) => {
             let condition = pop(&mut vm.stack)?;
-            let truthy = match values.truthy(condition) {
+            let truthy = match eval_boolean_condition(condition, context, values) {
                 Ok(truthy) => truthy,
                 Err(status) => {
                     let _ = eval_release_value(context, values, condition);
@@ -278,7 +294,7 @@ fn step(
         Op::IncDec(slot, increment) => {
             let name = local_name(vm, slot)?;
             let current = load_local(vm, &name, context, scope, values)?;
-            let updated = with_runtime_owners(&current, || eval_inc_dec_value(current, increment, values));
+            let updated = with_runtime_owners(&current, || eval_inc_dec_value(current, increment, context, values));
             let updated = finish_eval_argument_values(updated, [current], context, values)?;
             store_local(vm, &name, updated, context, scope, values)?;
         }
@@ -344,7 +360,7 @@ fn set_ip(vm: &mut Vm, target: u32) -> Result<(), EvalStatus> {
     Ok(())
 }
 
-/// Copies a visible local, or warns and pushes null when the name is undefined.
+/// Copies a visible binding or applies the selected ordinary missing-read policy.
 fn load_local(
     vm: &mut Vm,
     name: &str,
@@ -357,8 +373,7 @@ fn load_local(
     if let Some(value) = visible_scope_cell(context, scope, name) {
         copy_scope_value(value, context, values)
     } else {
-        values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
-        values.null()
+        crate::interpreter::initialization::missing_variable(name, context, values)
     }
 }
 

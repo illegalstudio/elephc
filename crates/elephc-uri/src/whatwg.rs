@@ -2576,6 +2576,31 @@ mod tests {
         assert_eq!(resolved("/%5Cx", Some("foo://h/base")), "foo://h/%5Cx");
     }
 
+    /// Locks the `url` 2.5.9 parser changes behind php-src-compatible serialization.
+    #[test]
+    fn url_2_5_9_parser_changes_keep_php_whatwg_results() {
+        assert_eq!(
+            resolved("https://example.com/a^b", None),
+            "https://example.com/a%5Eb"
+        );
+        assert_eq!(
+            resolved(r"https://example.com:81\path", None),
+            "https://example.com:81/path"
+        );
+        assert_eq!(resolved("file:///w|/m", None), "file:///w:/m");
+
+        let parsed = parse("https://example.com/", None)
+            .expect("base parses")
+            .0;
+        let changed = parsed
+            .with_component(COMPONENT_PATH, Some("/a^b"))
+            .expect("path write succeeds");
+        assert_eq!(
+            changed.try_to_string(false, false).as_deref(),
+            Some("https://example.com/a%5Eb")
+        );
+    }
+
     /// Verifies a relative Windows-drive reference only freezes path writes on a `file:` base.
     #[test]
     fn https_relative_drive_keeps_with_path_writable() {

@@ -15,6 +15,22 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+mod reference_assignment;
+mod absent_store;
+mod end_binding;
+mod origin_bindings;
+mod owner_visitor;
+
+/// Shares checked origin publication and retirement with native and Magician scope implementations.
+pub(crate) fn emit_scope_origin_bindings(emitter: &mut Emitter, enabled: bool) {
+    origin_bindings::emit(emitter, enabled);
+}
+
+/// Retires source metadata through the scope representation selected for this runtime object.
+pub(crate) fn emit_scope_end_binding(emitter: &mut Emitter, interpreter_scope: bool) {
+    end_binding::emit(emitter, interpreter_scope);
+}
+
 const EVAL_STATUS_OK: i64 = 0;
 const EVAL_STATUS_RUNTIME_FATAL: i64 = 2;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
@@ -25,6 +41,8 @@ const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 pub(crate) fn emit_eval_scope_runtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: eval scope core helpers ---");
+    reference_assignment::emit(emitter);
+    owner_visitor::emit(emitter);
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64_eval_scope_runtime(emitter),
         Arch::X86_64 => emit_x86_64_eval_scope_runtime(emitter),
@@ -63,6 +81,9 @@ fn emit_aarch64_eval_scope_free(emitter: &mut Emitter) {
     emitter.instruction("str x21, [sp, #32]");                                  // preserve the next-entry register
     emitter.instruction("mov x29, sp");                                         // establish a stable frame for nested runtime calls
     emitter.instruction("mov x19, x0");                                         // keep the scope header pointer across entry releases
+    emitter.bl_c("__elephc_eval_scope_origins_release_v1");
+    emitter.instruction("str x0, [sp, #40]");                                   // retain a contained origin-retirement Throwable until scope teardown finishes
+    emitter.instruction("mov x0, x19");                                         // restore the scope after retiring its stable origin slots
     emitter.instruction("ldr x20, [x19]");                                      // load the first entry in the scope list
     emitter.label("__elephc_eval_scope_free_loop");
     emitter.instruction("cbz x20, __elephc_eval_scope_free_header");            // stop when every entry has been released
@@ -81,10 +102,13 @@ fn emit_aarch64_eval_scope_free(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_scope_free_header");
     emitter.instruction("mov x0, x19");                                         // pass the scope header allocation to the heap free helper
     emitter.instruction("bl __rt_heap_free");                                   // release the scope header after all entries
+    emitter.instruction("ldr x0, [sp, #40]");                                   // recover a contained origin-retirement Throwable after releasing the scope
     emitter.instruction("ldr x21, [sp, #32]");                                  // restore the saved next-entry register
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved scan registers
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the scope-free frame
+    emitter.instruction("cbz x0, __elephc_eval_scope_free_done");               // successful retirement returns through an assembler-local branch
+    emitter.instruction("b __rt_throw_boxed_destructor_exception");             // contained failures propagate only after every scope owner has retired
     emitter.label("__elephc_eval_scope_free_done");
     emitter.instruction("ret");                                                 // return after the scope is fully released
 }
@@ -131,12 +155,24 @@ fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x25, [x25]");                                      // advance to the next entry
     emitter.instruction("b __elephc_eval_scope_set_probe");                     // continue scanning the entry list
     emitter.label("__elephc_eval_scope_set_update");
+    absent_store::emit_clear_existing(emitter);
+    emitter.instruction("ldr x0, [x25, #24]");                                  // preserve the existing scope reference for checked assignment
+    emitter.instruction("mov x1, x22");                                         // pass the incoming value owner to the shared publisher
+    emitter.instruction("mov x2, x23");                                         // retain snapshot versus assignment input flags
+    emitter.instruction("bl __rt_eval_scope_assign_reference");                 // validate before changing an existing reference child
+    emitter.instruction("cbz x0, __elephc_eval_scope_set_replace");             // ordinary scope replacement retains its existing path
+    emitter.instruction("cmp x0, #1");                                          // distinguish handled success from a fatal status
+    emitter.instruction("b.ne __elephc_eval_scope_set_done");                   // return a failed contained publication after restoring the frame
+    emitter.instruction("ldr x9, [x25, #32]");                                  // preserve the original scope lease and its flags
+    emitter.instruction("orr x9, x9, #4");                                      // mark the shared reference value dirty after publication
+    emitter.instruction("str x9, [x25, #32]");                                  // keep the original wrapper identity in the scope entry
+    emitter.instruction("mov x0, #0");                                          // report successful checked scope assignment
+    emitter.instruction("b __elephc_eval_scope_set_done");                      // restore all scope scan registers before returning
+    emitter.label("__elephc_eval_scope_set_replace");
     emitter.instruction("ldr x9, [x25, #32]");                                  // load old entry flags
     emitter.instruction(&format!("tst x9, #{}", EVAL_SCOPE_FLAG_OWNED));        // check whether the old cell is scope-owned
     emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // borrowed old cells do not need release
     emitter.instruction("ldr x0, [x25, #24]");                                  // load the old Mixed cell pointer
-    emitter.instruction("cmp x0, x22");                                         // compare old and replacement cells
-    emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // retaining the same cell must not decref it
     emitter.instruction("cbz x0, __elephc_eval_scope_set_store");               // tolerate null old cells defensively
     emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten owned Mixed cell
     emitter.label("__elephc_eval_scope_set_store");
@@ -147,6 +183,7 @@ fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // report successful scope write
     emitter.instruction("b __elephc_eval_scope_set_done");                      // restore the frame and return
     emitter.label("__elephc_eval_scope_set_insert");
+    absent_store::emit_skip_absent_insert(emitter);
     emitter.instruction("mov x0, #40");                                         // entry records store next, name, length, cell, and flags
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate a new entry record
     emitter.instruction("mov x26, x0");                                         // keep the new entry pointer while initializing fields
@@ -228,9 +265,12 @@ fn emit_aarch64_eval_scope_get(emitter: &mut Emitter) {
 /// local's declared object type. The shared barrier still calls the bridge ABI, and this stub
 /// keeps that surface link-complete while reporting success.
 fn emit_aarch64_eval_scope_native_type(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
-    emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
-    emitter.instruction("ret");                                                 // return the successful eval status
+    for name in ["__elephc_eval_scope_copy_binding_type_v1", "__elephc_eval_scope_binding_type_v1",
+        "__elephc_eval_scope_native_type_v1", "__elephc_eval_scope_source_type_v1"] {
+        label_c_global(emitter, name);
+        emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));           // each C entry owns its return across runtime function pruning
+        emitter.instruction("ret");                                             // return success without requiring an interpreter context
+    }
 }
 
 /// Emits x86_64 eval-scope helpers. `__elephc_eval_value_null` comes from the
@@ -264,6 +304,9 @@ fn emit_x86_64_eval_scope_free(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for local scan state
     emitter.instruction("sub rsp, 32");                                         // reserve scope, current-entry, and next-entry slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the scope header pointer
+    emitter.bl_c("__elephc_eval_scope_origins_release_v1");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // retain a contained origin failure until all scope owners retire
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the scope after retiring its stable origin slots
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the first entry in the scope list
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the current entry pointer
     emitter.label("__elephc_eval_scope_free_loop");
@@ -288,8 +331,11 @@ fn emit_x86_64_eval_scope_free(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_scope_free_header");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // pass the scope header allocation to the heap free helper
     emitter.instruction("call __rt_heap_free");                                 // release the scope header after all entries
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // recover any contained origin failure after scope teardown
     emitter.instruction("add rsp, 32");                                         // release local scan slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("test rax, rax");                                       // retirement errors escape only after the scope has been fully freed
+    emitter.instruction("jnz __rt_throw_boxed_destructor_exception");           // propagate the contained boxed Throwable without a Rust frame
     emitter.label("__elephc_eval_scope_free_done");
     emitter.instruction("ret");                                                 // return after the scope is fully released
 }
@@ -339,12 +385,25 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // save the next candidate as current
     emitter.instruction("jmp __elephc_eval_scope_set_probe");                   // continue scanning the entry list
     emitter.label("__elephc_eval_scope_set_update");
+    absent_store::emit_clear_existing(emitter);
+    emitter.instruction("mov rdi, QWORD PTR [r9 + 24]");                        // preserve the existing scope reference for checked assignment
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the incoming value owner to the shared publisher
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // retain snapshot versus assignment input flags
+    emitter.instruction("call __rt_eval_scope_assign_reference");               // validate before changing an existing reference child
+    emitter.instruction("test rax, rax");                                       // test whether the shared publisher handled this scope write
+    emitter.instruction("jz __elephc_eval_scope_set_replace");                  // ordinary scope replacement retains its existing path
+    emitter.instruction("cmp rax, 1");                                          // distinguish handled success from a fatal status
+    emitter.instruction("jne __elephc_eval_scope_set_done");                    // return failed publication after restoring the frame
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // restore the selected entry after native callback execution
+    emitter.instruction("or QWORD PTR [r9 + 32], 4");                           // mark the shared reference value dirty without changing its lease
+    emitter.instruction("xor eax, eax");                                        // report successful checked scope assignment
+    emitter.instruction("jmp __elephc_eval_scope_set_done");                    // restore the scope scan frame before returning
+    emitter.label("__elephc_eval_scope_set_replace");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // restore the selected entry after an unhandled reference probe
     emitter.instruction("mov r10, QWORD PTR [r9 + 32]");                        // load old entry flags
     emitter.instruction(&format!("test r10, {}", EVAL_SCOPE_FLAG_OWNED));       // check whether the old cell is scope-owned
     emitter.instruction("jz __elephc_eval_scope_set_store");                    // borrowed old cells do not need release
     emitter.instruction("mov rax, QWORD PTR [r9 + 24]");                        // load the old Mixed cell pointer
-    emitter.instruction("cmp rax, QWORD PTR [rbp - 32]");                       // compare old and replacement cells
-    emitter.instruction("je __elephc_eval_scope_set_store");                    // retaining the same cell must not decref it
     emitter.instruction("test rax, rax");                                       // tolerate null old cells defensively
     emitter.instruction("jz __elephc_eval_scope_set_store");                    // skip release when the old cell is null
     emitter.instruction("call __rt_decref_mixed");                              // release the overwritten owned Mixed cell
@@ -358,6 +417,7 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // report successful scope write
     emitter.instruction("jmp __elephc_eval_scope_set_done");                    // restore the frame and return
     emitter.label("__elephc_eval_scope_set_insert");
+    absent_store::emit_skip_absent_insert(emitter);
     emitter.instruction("mov rax, 40");                                         // entry records store next, name, length, cell, and flags
     emitter.instruction("call __rt_heap_alloc");                                // allocate a new entry record
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload old successor, normally null
@@ -442,9 +502,12 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
 
 /// Emits the x86_64 scope-only native-type validator stub.
 fn emit_x86_64_eval_scope_native_type(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
-    emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
-    emitter.instruction("ret");                                                 // return the successful eval status
+    for name in ["__elephc_eval_scope_copy_binding_type_v1", "__elephc_eval_scope_binding_type_v1",
+        "__elephc_eval_scope_native_type_v1", "__elephc_eval_scope_source_type_v1"] {
+        label_c_global(emitter, name);
+        emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));           // each C entry owns its return across runtime function pruning
+        emitter.instruction("ret");                                             // return success without requiring an interpreter context
+    }
 }
 
 /// Emits a global label with platform C-symbol mangling.

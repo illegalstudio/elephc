@@ -23,6 +23,8 @@ use super::{walk_static_receiver, Pass};
 /// child expressions recursively processed. Other leaf variants are returned unchanged.
 pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     let span = expr.span;
+    let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         kind @ ExprKind::Runtime(_) => kind,
         ExprKind::Reference(inner) => ExprKind::Reference(Box::new(walk_expr(*inner, pass))),
@@ -58,6 +60,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             value: Box::new(walk_expr(*value, pass)),
             target: walk_instanceof_target(target, pass, span),
         },
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(walk_expr(*inner, pass))),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(walk_expr(*inner, pass))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(walk_expr(*inner, pass))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(walk_expr(*inner, pass))),
@@ -334,7 +337,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
-    Expr { kind, span: pass.transform_expr_span(span) }
+    Expr { kind, span: pass.transform_expr_span(span), source_profile, producer_binding }
 }
 
 /// Transforms a `CallableTarget` by recursively walking any boxed expression inside it.

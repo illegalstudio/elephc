@@ -30,6 +30,11 @@ pub(super) fn lower_typed_assign(
         .as_ref()
         .map(|assignment| assignment.value)
         .unwrap_or_else(|| lower_expr(ctx, value));
+    crate::ir_lower::nullability::require_declared_value(ctx, lowered, &php_type, span);
+    let lowered = if crate::ir_lower::conversion_boundaries::active(ctx, &php_type) {
+        let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, lowered, &php_type, span);
+        crate::ir_lower::conversion_boundaries::value_storage(ctx, checked, &php_type, span)
+    } else { lowered };
     let lowered = crate::ir_lower::expr::coerce_integer_arithmetic(ctx, lowered, &php_type, span);
     // `?ptr<T> $x = null` (or a packed record address) stores the pointer word.
     let lowered = ctx.retype_packed_address_for_pointer_sink(lowered, &php_type, Some(span));

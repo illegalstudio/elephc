@@ -248,6 +248,7 @@ impl ElephcEvalContext {
         self.dynamic_destructed_objects.remove(&identity);
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
+        self.dynamic_property_array_types.retain(|(object, _), _| *object != identity);
     }
 
     /// Removes one dynamic object identity and all per-object eval metadata.
@@ -261,6 +262,7 @@ impl ElephcEvalContext {
             .retain(|(object, _), _| *object != identity);
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
+        self.dynamic_property_array_types.retain(|(object, _), _| *object != identity);
         crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
     }
 
@@ -425,7 +427,7 @@ impl ElephcEvalContext {
             let lifetime = crate::ffi::array_references::register_array_reference_cell(
                 address, &self.array_reference_retirements,
             );
-            EvalArrayReferenceAliases { targets: HashMap::new(), lifetime }
+            EvalArrayReferenceAliases { targets: HashMap::new(), contracts: Vec::new(), lifetime }
         });
         aliases.targets.insert(key, target)
     }
@@ -467,13 +469,15 @@ impl ElephcEvalContext {
                 .map(|(key, target)| (key.clone(), target.clone()))
                 .collect::<HashMap<_, _>>())
             .unwrap_or_default();
+        let contracts = self.array_element_aliases.get(&(source.as_ptr() as usize))
+            .filter(|aliases| aliases.lifetime.is_live()).map(|aliases| aliases.contracts.clone()).unwrap_or_default();
         let destination = destination.as_ptr() as usize;
         self.array_element_aliases.remove(&destination);
-        if !targets.is_empty() {
+        if !targets.is_empty() || !contracts.is_empty() {
             let lifetime = crate::ffi::array_references::register_array_reference_cell(
                 destination, &self.array_reference_retirements,
             );
-            self.array_element_aliases.insert(destination, EvalArrayReferenceAliases { targets, lifetime });
+            self.array_element_aliases.insert(destination, EvalArrayReferenceAliases { targets, contracts, lifetime });
         }
     }
 
@@ -498,7 +502,7 @@ impl ElephcEvalContext {
     }
 
     /// Drops only retired allocation records, preserving any newer allocation at the same address.
-    fn prune_retired_array_aliases(&mut self) {
+    pub(super) fn prune_retired_array_aliases(&mut self) {
         for address in self.array_reference_retirements.take() {
             if self.array_element_aliases.get(&address).is_some_and(|aliases| !aliases.lifetime.is_live()) {
                 self.array_element_aliases.remove(&address);
@@ -522,8 +526,10 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) {
+        self.invalidate_member_source_views();
         self.dynamic_initialized_properties
             .remove(&(identity, storage_property_name.to_string()));
+        self.dynamic_property_array_types.remove(&(identity, storage_property_name.to_string()));
     }
 
     /// Returns whether one eval object storage slot is known to be initialized.
@@ -558,5 +564,8 @@ impl ElephcEvalContext {
         for property in initialized {
             self.mark_dynamic_property_initialized(clone_identity, &property);
         }
+        let contents = self.dynamic_property_array_types.iter().filter_map(|((identity, property), ty)|
+            (*identity == source_identity).then(|| (property.clone(), ty.clone()))).collect::<Vec<_>>();
+        for (property, origin) in contents { self.dynamic_property_array_types.insert((clone_identity, property), origin); }
     }
 }

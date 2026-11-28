@@ -17,6 +17,20 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Borrows native inferred scope owners for a pure suspended-frame collector callback.
+    pub(super) fn __elephc_eval_scope_visit_origins_v1(scope: *const c_void,
+        visitor: Option<unsafe extern "C" fn(*const *mut RuntimeCell, u64, *mut c_void)>, context: *mut c_void);
+    /// Detaches all native inferred scope sources and returns an owned contained Throwable.
+    pub(super) fn __elephc_eval_scope_origins_release_v1(scope: *mut c_void) -> *mut RuntimeCell;
+    /// Detaches a single inferred scope source before unset and returns an owned contained Throwable.
+    pub(super) fn __elephc_eval_scope_origin_unset_v1(scope: *mut c_void,
+        name: *const u8, len: usize) -> *mut RuntimeCell;
+
+    /// Reports the semantic ABI implemented by the linked native value wrappers.
+    pub(super) fn __elephc_eval_runtime_semantics_version() -> u64;
+    /// Reports the immutable semantic profile compiled into the native runtime.
+    pub(super) fn __elephc_eval_runtime_semantics_profile() -> u64;
+
     /// Casts one borrowed Mixed value to a fresh boxed PHP array.
     pub(super) fn __elephc_eval_value_cast_array(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Shares find (0), push (1), and saved-depth restore (2) with the native debug walk.
@@ -37,8 +51,14 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_is_reference(value: *mut RuntimeCell) -> u64;
     /// Reports whether a persistent reference has another physical owner.
     pub(super) fn __elephc_eval_value_reference_is_shared(value: *mut RuntimeCell) -> u64;
-    /// Replaces a reference payload and transfers its previous value to the caller.
-    pub(super) fn __elephc_eval_value_reference_replace(reference: *mut RuntimeCell, value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Chains borrowed current and previous Throwable boxes and returns the protected runtime status.
+    pub(super) fn __elephc_eval_throwable_chain_v1(current: *mut RuntimeCell, previous: *mut RuntimeCell) -> u64;
+    /// Pins the current dereferenced cell without making a PHP value copy.
+    pub(super) fn __elephc_eval_value_retain_value_cell_v1(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Validates the original replacement and returns owned previous/Throwable cells through outputs.
+    pub(super) fn __elephc_eval_value_reference_replace_v2(reference: *mut RuntimeCell,
+        value: *mut RuntimeCell, caller_flags: u64, previous: *mut *mut RuntimeCell,
+        throwable: *mut *mut RuntimeCell) -> u64;
     /// Makes an ordinary value copy detached from a reference cell.
     pub(super) fn __elephc_eval_value_copy(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Updates the canonical resource subtype, or marks it closed when subtype is negative.
@@ -123,6 +143,10 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_array_get(
         array: *mut RuntimeCell,
         index: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
+    /// Returns no cell only for a proven missing element, without throwing across Rust.
+    pub(super) fn __elephc_eval_value_array_get_checked(
+        array: *mut RuntimeCell, index: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
     /// Boxes whether the supplied key exists in the array.
     pub(super) fn __elephc_eval_value_array_key_exists(
@@ -219,6 +243,21 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> *mut RuntimeCell;
+    /// Selects immutable native binding/declaration addresses using the ordinary access scope.
+    pub(super) fn __elephc_eval_value_static_property_binding(
+        class_ptr: *const u8, class_len: u64, name_ptr: *const u8, name_len: u64,
+        scope_ptr: *const u8, scope_len: u64,
+    ) -> *const usize;
+    /// Validates and physically replaces one static reference binding, containing PHP throws.
+    pub(super) fn __elephc_eval_value_static_rebind_v1(
+        binding: *const usize, reference: *mut RuntimeCell, flags: u64,
+        throwable: *mut *mut RuntimeCell,
+    ) -> i32;
+    /// Consumes a reflected class setter argument under the checked native publication policy.
+    pub(super) fn __elephc_eval_value_static_class_store_v1(
+        binding: *const usize, argument: *mut RuntimeCell, flags: u64,
+        throwable: *mut *mut RuntimeCell,
+    ) -> i32;
     /// Tests initialization of a scoped static property.
     pub(super) fn __elephc_eval_value_static_property_is_initialized(
         class_ptr: *const u8,
@@ -229,7 +268,7 @@ unsafe extern "C" {
         scope_len: u64,
     ) -> u64;
     /// Writes a static property using the named class and visibility scope.
-    pub(super) fn __elephc_eval_value_static_property_set(
+    pub(super) fn __elephc_eval_value_static_property_set_v2(
         class_ptr: *const u8,
         class_len: u64,
         name_ptr: *const u8,
@@ -237,6 +276,7 @@ unsafe extern "C" {
         value: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+        throwable: *mut *mut RuntimeCell,
     ) -> u64;
     /// Returns a class constant through the supplied visibility scope.
     pub(super) fn __elephc_eval_value_class_constant_get(
@@ -514,6 +554,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;
     /// Returns the PHP object handle (`spl_object_id`) for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_handle(value: *mut RuntimeCell) -> u64;
+    /// Borrows warning bytes and returns protected success or pending-Throwable status.
+    pub(super) fn __elephc_eval_warning_v2(message_ptr: *const u8, message_len: u64) -> u64;
     /// Emits the supplied warning bytes through the native diagnostic path.
     pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
     /// Emits warning bytes through the native diagnostic path at the supplied source line.
@@ -591,6 +633,14 @@ unsafe extern "C" {
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Contains checked numeric exceptions and publishes one owned result only on success.
+    pub(super) fn __elephc_eval_checked_numeric_v1(
+        op: u64, left: *mut RuntimeCell, right: *mut RuntimeCell, result: *mut *mut RuntimeCell,
+    ) -> u64;
+    /// Contains unary normalization failures and validates requested numeric profile capabilities.
+    pub(super) fn __elephc_eval_numeric_unary_v1(
+        op: u64, policy: u64, value: *mut RuntimeCell, result: *mut *mut RuntimeCell,
+    ) -> u64;
     /// Returns the boxed result of raising the left operand to the right operand.
     pub(super) fn __elephc_eval_value_pow(
         left: *mut RuntimeCell,

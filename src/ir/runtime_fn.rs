@@ -1479,11 +1479,7 @@ impl RuntimeFnId {
             ),
             // Unsupported entries can invoke arbitrary warning handlers, including
             // mutation of globals and destruction of the replaced source array.
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
-                crate::ir::Effects::all().bits()
-                    & !crate::ir::Effects::BLOCKING_IO.bits()
-                    & !crate::ir::Effects::NETWORK_IO.bits(),
-            ),
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::php_callback(),
             // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
             // callback-capable conservative set, then preserve their typed network and
             // blocking distinctions so optimizer and monitoring consumers agree.
@@ -2590,6 +2586,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::Intdiv
                 | RuntimeFnId::ArraySum
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
@@ -2658,7 +2655,7 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
+            RuntimeFnId::Intdiv | RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
             | RuntimeFnId::Gettype | RuntimeFnId::InArray
             | RuntimeFnId::MemoryGetAllocations
             | RuntimeFnId::MemoryGetFrees
@@ -2824,6 +2821,11 @@ impl RuntimeFnId {
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
         if matches!(self, RuntimeFnId::MbDetectOrderSingle) {
+            return BuiltinResultOwnership::Fresh;
+        }
+        // Search returns a fresh boxed key or false, never the haystack allocation.
+        // Treating that cell as a possible array alias strands temporary haystacks.
+        if matches!(self, RuntimeFnId::ArraySearch) {
             return BuiltinResultOwnership::Fresh;
         }
         // Decoding always constructs an independent Mixed graph. String payloads are

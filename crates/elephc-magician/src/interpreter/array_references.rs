@@ -34,12 +34,16 @@ pub(in crate::interpreter) fn eval_owned_reference_target_value(
                 None => values.null()?,
             };
             owners.push(array);
-            values.array_get(array, *index)
+            let key = super::reference_keys::materialize(index, values)?;
+            owners.push(key);
+            values.array_get(array, key)
         },
         EvalReferenceTarget::NestedArrayElement { array_target, index } => {
             let array = eval_owned_reference_target_value(array_target, context, values, owners)?;
             owners.push(array);
-            values.array_get(array, *index)
+            let key = super::reference_keys::materialize(index, values)?;
+            owners.push(key);
+            values.array_get(array, key)
         },
         EvalReferenceTarget::ObjectProperty { object, property, access_scope } => {
             let previous = context.replace_execution_scope(access_scope.clone());

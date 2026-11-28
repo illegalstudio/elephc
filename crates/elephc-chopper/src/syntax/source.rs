@@ -38,6 +38,36 @@ impl SourceProfile {
     }
 }
 
+/// Immutable visibility and semantic policy attached to literal eval source.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct EvalSourceProfile(u32);
+
+impl EvalSourceProfile {
+    const PHP_ONLY_BIT: u32 = 1 << 31;
+
+    /// Joins lexical builtin visibility and semantic guarantees without truncating either.
+    pub const fn new(php_only: bool, semantics: elephc_semantics::SemanticProfile) -> Self {
+        assert!(semantics.bits() < Self::PHP_ONLY_BIT as u64);
+        Self(semantics.bits() as u32 | if php_only { Self::PHP_ONLY_BIT } else { 0 })
+    }
+
+    /// Returns the lexical builtin visibility without changing semantic guarantees.
+    pub const fn php_only(self) -> bool {
+        self.0 & Self::PHP_ONLY_BIT != 0
+    }
+
+    /// Recovers the validated neutral profile stored by the constructor.
+    pub fn semantics(self) -> elephc_semantics::SemanticProfile {
+        elephc_semantics::SemanticProfile::from_bits(u64::from(self.0 & !Self::PHP_ONLY_BIT))
+            .expect("source profiles contain only validated semantic bits")
+    }
+
+    /// Makes conservative declaration scans explicit about their permissive parser policy.
+    pub const fn permissive(php_only: bool) -> Self {
+        Self::new(php_only, elephc_semantics::SemanticProfile::PERMISSIVE)
+    }
+}
+
 thread_local! {
     static CURRENT_PARSE_MODE: Cell<SourceMode> = const { Cell::new(SourceMode::Internal) };
     static CURRENT_STRICT_TYPES: Cell<bool> = const { Cell::new(false) };
@@ -60,8 +90,8 @@ impl SourceMode {
         matches!(self, Self::Php)
     }
 
-    /// Returns whether an invocation-level strict-PHP request applies to this source.
-    pub fn strict_php_is_effective(self, requested: bool) -> bool {
+    /// Returns whether an invocation-level PHP-only request applies to this source.
+    pub fn php_only_is_effective(self, requested: bool) -> bool {
         requested && matches!(self, Self::Php)
     }
 }

@@ -233,11 +233,164 @@ by this scan, so retraction preserves independently valid straight-line numeric
 splits. The original assignment spans enter `local_retype_sites`, so
 existing ambiguity and AST-duplication guards apply to these decisions too.
 
-`eval()`'d code — whether interpreted by the optional Magician bridge or AOT-lowered from a literal fragment into an EIR scope function — reads and writes its locals through a boxed `Mixed` scope cell rather than a compiled, typed frame slot (see [eval() scope behavior](../php/eval.md#scope-behavior)), so it was never subject to this rule to begin with: `--strict-locals` has no effect inside `eval()` fragments. The body that CALLS `eval()` is the reverse case: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there — body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
+`eval()` reads and writes locals through boxed `Mixed` scope cells rather than compiled typed frame slots (see [eval() scope behavior](../php/eval.md#scope-behavior)). With `--strict-locals`, source binding contracts remain independent from that physical representation: literal AOT fragments and the Magician walker/VM validate stores before publication, and a successful `unset` permits a fresh origin. Explicit `mixed` and imported values without source contracts remain open. The native body that calls `eval()` also keeps its slots addressable by name: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there; body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
+
+### Checked element reads
+
+`strict-indexing` marks ordinary dimensions with `Immediate::CheckedElementRead`.
+The shared effect contract includes catchable allocation and unwind effects, and
+the validator requires the matching module feature. Existing native lookups
+prove absence before raising `OutOfBoundsException`; a separate callback presence
+result lets eval schedule its exception without unwinding through Rust. Probes
+and slot creation remain explicit separate paths. A proven bounds optimization
+discharges both the check and its metadata. Throwable registration and runtime
+metadata retain the implicit exception and its ancestors even when source only
+catches `Throwable`. Internal source retains its previous read policy.
+
+### Initialized reads
+
+The semantic profile controls `strict-initialization` independently of binding
+type stability. Known missing ordinary bindings are checker diagnostics. Reads
+whose presence depends on runtime flow lower to the shared frame, global or
+eval-scope presence predicates. Initialized null and absent storage stay distinct;
+intentional probes keep their quiet root handling while keys and other operands
+are evaluated ordinarily. Trusted internal source retains its existing policy.
+
+Untyped removed properties share named, boxed and computed-name accessor
+selection. A selected getter uses `Immediate::InitializedGetter`, retaining the
+ordinary method signature, argument evaluation, reference and owner machinery.
+EIR validation checks its source guarantee, method/property data, operand shapes
+and guard effects. Runtime pair-specific guards prevent reentry on the same
+removed slot and retire before normal return or rethrow. Typed-property checks
+retain their existing physical-slot behavior.
 
 ### Per-file `strict_types`
 
-`declare(strict_types=1)` is scoped to one physical file, but the checker only ever sees the single flat program the resolver produces after include/autoload merging, and `Span` carries no file identity. The flag therefore rides on the AST: the parser records the directive on its per-file source profile (`crate::source`), `Stmt::strict_types` inherits it at construction alongside `Stmt::source_mode`, and every statement-rewriting pass re-installs the whole `SourceProfile` — which is why `with_parse_mode`/`scoped_parse_mode` take the profile rather than the mode alone.
+`declare(strict_types=1)` is scoped to one physical file, while the checker sees the flat program produced by include/autoload merging. The parser records the directive in its per-file `SourceProfile` (`crate::source`). Statements retain `source_mode` and `strict_types`, and expressions retain the whole profile in `Expr::source_profile`. Expression clones and rewrites preserve that producer profile, including default values imported from traits or copied into signature metadata. `Expr::with_kind` rebuilds a node while retaining its span and profile. Statement-rewriting passes re-install the whole profile through `with_parse_mode`/`scoped_parse_mode`. Spans also retain packed source identity for diagnostics; they do not replace the expression policy.
+
+Prepared default and constant copies also carry `Expr::producer_binding`.
+`types::constant_binding::bind_value` records identity or integer-to-float binding
+without replacing a nonliteral source expression. Checker inference, EIR lowering
+and compact default metadata select the expression's producer profile, evaluate
+it once, then apply that binding. Union alternatives retain null, object and other
+non-integer values. Raw signature defaults remain available for reflection names
+and source export. Native lazy-default helpers match syntax, span, profile and
+binding through `Expr::same_value_producer`.
+
+Property defaults are prepared after validating the original declarations.
+`ClassInfo::property_declared_slots` and `declared_static_properties` distinguish
+explicit destination contracts from inferred storage types. Inferred properties
+use identity binding; declared float alternatives may widen an integer. Missing
+typed defaults remain absent. Initialization and Reflection consume the same
+prepared copies, including inherited and trait defaults.
+
+`GlobalConstants` retains each complete producer expression beside its storage
+type. Prescanning, EIR reads, introspection, eval registration and extension exports
+therefore retain the original source profile through aliases and static `define`
+values. Scalar metadata resolution uses that profile before materialization.
+Resource constants keep their native representation, and compound values retain
+their consumer's existing normalization and ownership rules.
+
+Checked numeric casts have a separate shared contract in
+`elephc_semantics::numeric_cast`. Original-source validation runs before pruning
+and folding, including declaration defaults and constant aliases. Integer string
+conversion parses decimal digits and exponents exactly; it does not round through
+`f64`. Failed folds stay executable, and optimizer effects and exception flow keep
+their possible failure observable. EIR uses `RuntimeCallTarget::CheckedNumericCast`
+with an exact scalar result and a required Casts capability. Original operands stay
+rooted across catchable TypeError/ValueError paths. Reviewed native objects expose
+original numeric text through `ClassOperators::checked_numeric_source`, a final
+internal adapter independent of public `__toString` overrides. The same checked
+scalar helper validates that text before a legacy numeric adapter can narrow it.
+Explicit class float adapters retain their rounding contract after that proof.
+Broad `object`, interface and nullable/union input domains retain runtime native
+dispatch. A concrete class with no reviewed numeric contract stays a compile
+diagnostic; an unsupported value within a broad domain raises TypeError.
+The public `gmp_intval` contract selects a shared compiled checked helper in AOT
+and eval. It validates weak float range before adaptation, then canonical GMP
+magnitude before machine-word extraction, retaining GMP parsing and PHP
+`strict_types` diagnostics. Eval requires that reviewed helper from its host.
+Original-source GMP proof recognizes exact canonical decimal magnitudes and weak
+scalar conversion. Native radix and whitespace spellings defer to the compiled
+helper, keeping GMP grammar distinct from `intval`; strict PHP domain failures
+retain priority over floating range proof.
+The neutral `SettypeTarget` classifier owns complete names and aliases across
+checking, lowering and eval. Checked invalid targets (including resource requests)
+fail before writeback, and original-source validation retains those errors across
+folding. Checked scalar/null `settype` calls use a prepared EIR conversion graph,
+including runtime target names and callable wrappers. Ordinary stores publish the
+converted value only after success. Explicit `call_user_func*` value containers
+detach their cells, and prepared builtin reference signatures prevent static
+flattening from inventing a writable caller argument. Native descriptor calls
+preserve real references. Valid array/object targets still require their backend
+conversions; array-literal reference syntax retains its existing parser error.
+Prepared bodies retain ordinary cast policy when checked casts are off. An
+explicit prepared-invocation role keeps statically resolved native calls aligned
+with their wrapper body; ordinary legacy direct/value-call lowering keeps its
+existing route.
+A bounded decimal digit parser preserves exact
+integer strings at runtime, and native float-to-int checks precede truncation.
+The eval walker and VM use the same neutral cast kernel through their shared
+expression evaluator. Scalar failures become ordinary interpreted Throwables;
+reviewed native projections transfer pending native failures through
+`native_results::finish`. That helper also serves checked arithmetic and unary
+operations. Projection result kinds and ownership remain exact. Unreviewed host
+adapters cannot substitute an already narrowed result for original-value proof.
+Checked Casts admission stays gated while its remaining consumers are integrated.
+Coercions is admitted after native/eval reference, callable, Reflection and REPL
+checks. Concrete string storage retains a logical-kind guard when its declared
+contract excludes null, including missing typed-array reads.
+
+`CheckedRadixInt` carries an exact string/base runtime boundary. The neutral
+`integer_cast_base` kernel and native two-pass parser validate complete digits
+before range arithmetic. Base ten shares the exact decimal cast contract, while
+other radices keep their selected integer grammar and reviewed prefix rules.
+PHP string result registers are explicitly materialized into the C argument ABI;
+those register pairs differ on x86_64.
+
+`intval` and `floatval` declare `BuiltinValidation::ExplicitNumericCast` in their
+shared semantic descriptors. Original-source validation retains complete string
+bytes and consumes the normal call-argument planner, including named arguments
+and static spreads. The typed checker shares syntax-cast domain validation.
+Prepared callable bodies and direct calls lower through the same rooted cast
+graphs; only string values select the radix parser. The eval registry routes both
+builtins through their checked hooks before selecting native implementations.
+Source policy comes from the invocation, including calls through descriptors
+created by trusted code. Internal implementation conversions retain their policy.
+
+`strval` and `boolval` share a prepared scalar-conversion descriptor. The full
+lowering context borrows and roots each evaluated source before using the syntax
+cast adapter. String builtin results have a `Fresh` contract: persistence produces
+an independent result and retires any owned conversion intermediate. The complete
+`Effects::php_conversion` summary preserves object hooks, warning callbacks and
+exceptions, and has an explicit validator contract. Checked boolean conversion
+uses reviewed native handlers; the existing permissive truthiness path is retained.
+
+Prepared builtin wrappers publish PHP's return-status ABI. Wrapper construction
+and descriptor invocation share one predicate so invokers do not copy an owned
+string again. Prepared/Fresh descriptor metadata also informs callback consumers
+such as `array_map`. Eval `strval` shares the operand-lease and cast evaluators,
+and boolean casts adopt protected native failures before dispatching catches.
+
+Numeric `settype` targets share the same original-kind checker validation and EIR
+cast/store sequence. Prepared bodies convert runtime scalar, null, array and object
+targets before writeback. Array casts reuse the evaluated-value cast lowerer; object
+casts call the injected PHP graph. The home declares `PreludeHelper` requirements,
+which usage scans distinguish from explicit user calls to those names and retain
+through declaration pruning and runtime callable catalogs. Conversion succeeds before publishing a replacement value.
+Ordinary locals retain tagged storage and a conservative logical view so a catch
+can read the original kind after failure. Typed reference storage keeps its
+existing destination contract.
+The eval direct, dynamic and value-call hooks pass their context to the shared
+cast evaluator. `with_direct_ref_target` owns a nonescaping builtin target's
+temporary keys and receivers through success or failure; it leaves converted
+value ownership to the destination-specific writeback contract. An owned variable
+write uses `set_owned_scope_cell`, consuming an acquired owner even when object
+identity makes the new and previous cell equal. Eval collection conversion retains
+object identity and constructs new stdClass properties from byte-exact names and
+insertion-order values. String and boolean targets share the ordinary eval cast
+adapters, including eval-defined object hooks.
+
 
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
@@ -853,7 +1006,7 @@ where claiming independence would be a use-after-free rather than a leak.
 Inside an `if` (or ternary) guarded by a type predicate, the checker narrows the guarded binding's type for each branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class; `is_null($x)` and the strict comparisons `$x === null` and `$x === false` (in either operand order) narrow to `null` and to the literal `False` subtype respectively. `$x !== null` / `$x !== false` and single-operand `isset($x)` are the same guards with the branches swapped, so a leading `!` on them cancels out. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. The false-sentinel case preserves the literal `false`: after `if ($x === false) { throw ...; }`, an `int|false` value continues as plain `int`, while a full `bool` member is not stripped.
 
 `is_real` is an extension float guard only where extensions are enabled. A physical PHP
-statement under `--strict-php` does not narrow through a user function named `is_real`;
+statement under `--php-only` does not narrow through a user function named `is_real`;
 LFC statements retain the builtin guard even under that flag. Both statement checking
 and the mixed-storage pre-scan install each statement's `source_mode`, so a function's
 guards and boxing warnings do not depend on whether its caller was written in PHP or LFC.

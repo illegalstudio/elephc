@@ -9,6 +9,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod string_null_tests;
+
 /// Lowers `define("NAME", value)` with the duplicate-name runtime guard.
 pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;
@@ -74,6 +77,10 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         emit_nullable_pointer_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }
+    if ty.codegen_repr() == PhpType::Str {
+        emit_nullable_string_gettype(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         emit_mixed_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
@@ -110,6 +117,22 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     };
     emit_type_name_result(ctx, type_name);
     store_if_result(ctx, inst)
+}
+
+/// Classifies an unboxed string argument using its logical missing-value marker.
+fn emit_nullable_string_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let null_case = ctx.next_label("gettype_string_null");
+    let done = ctx.next_label("gettype_string_done");
+    let (pointer, length) = abi::string_result_regs(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    ctx.load_string_value_to_regs(value, pointer, length)?;
+    crate::codegen_support::sentinels::emit_branch_if_null_string(ctx.emitter, pointer, scratch, &null_case);
+    emit_type_name_result(ctx, b"string");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"NULL");
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits `gettype()` for a `?ptr<T>` word: `NULL` for 0, `integer` otherwise.

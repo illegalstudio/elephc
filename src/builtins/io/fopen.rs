@@ -5,14 +5,9 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` detects the URL scheme from a string-literal first argument and links
-//!   the appropriate runtime libraries (`elephc_tls`, `z`, `bz2`, `elephc_phar`,
-//!   `elephc_crypto`) at compile time. Non-literal paths conservatively link all
-//!   PHAR and decompression libraries.
-//! - Returns `Union(stream_resource, Bool)` via `returns: Mixed` because the union
-//!   involves a resource type that the scalar `returns:` field cannot express.
-//! - Arguments are pre-inferred by the registry before the hook runs; the hook does
-//!   NOT re-infer them.
+//! - The shared catalog declares `resource|false`; the checker refines the native stream kind.
+//! - The semantic requirements hook selects URL-scheme libraries before backend linking.
+//! - Arguments are inferred by the registry before the check hook runs.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -27,16 +22,10 @@ builtin! {
     requirements: crate::builtins::semantics::fopen_requirements,
 }
 
-/// Detects URL scheme from the filename literal and links the required runtime libraries.
-///
-/// A literal `https://` or `ftps://` URL links `elephc_tls`. A `compress.zlib://` scheme
-/// links `z`. A `compress.bzip2://` scheme links `bz2`. A `phar://` URL in write mode
-/// links `elephc_phar` and `elephc_crypto`. A non-literal path conservatively links
-/// `elephc_phar`, `z`, and `bz2` because the scheme is unknown until run time.
-/// Returns `Union(stream_resource, Bool)` for the success/false-on-failure PHP pattern.
+/// Refines the catalog's resource-or-false result with the native stream resource kind.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(cx.checker.normalize_union_type(vec![
         PhpType::stream_resource(),
-        PhpType::Bool,
+        PhpType::False,
     ]))
 }

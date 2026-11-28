@@ -270,6 +270,34 @@ fn check_assign_value_type(
         poison_unbound_local(env, name);
         return Err(error);
     }
+    let contract_key = (checker.current_loop_storage_scope.clone(), span, name.to_string());
+    checker.local_store_contracts.remove(&contract_key);
+    if let Some(declared) = checker.typed_local_names.get(name).cloned() {
+        checker.require_noncoercive_value_type(&declared, &ty, checker.semantic_source_mode,
+            value.span, &format!("Assignment to typed local ${name}"))?;
+        if checker.semantic_source_mode != crate::source::SourceMode::Internal
+            && checker.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+            && crate::semantics::conversions::implicit_contract(&declared).is_some() {
+            if matches!(crate::semantics::conversions::implicit(checker.semantic_profile,
+                checker.semantic_source_mode, &declared, &ty),
+                elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
+                ty = declared.clone();
+            }
+            checker.local_store_contracts.insert(contract_key, crate::types::LocalStoreContract {
+                ty: declared, feature: elephc_semantics::StrictFeature::Coercions,
+            });
+        } else if checker.semantic_source_mode != crate::source::SourceMode::Internal
+            && checker.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability)
+            && crate::semantics::nullability::non_null_contract(&declared) {
+            checker.local_store_contracts.insert(contract_key, crate::types::LocalStoreContract {
+                ty: declared, feature: elephc_semantics::StrictFeature::Nullability,
+            });
+        }
+    }
+    if let Some(previous) = checker.typed_local_names.get(name).or_else(|| env.get(name)) {
+        checker.require_array_replacement_contract(previous, &ty, span)?;
+    }
+    ty = checker.check_local_binding_store(name, &ty, span, env, Some(value))?;
     let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
     // An array element or other unproved read can carry null even when its checker
     // type omits it. A nullable destination must not turn that store into a proof.
@@ -407,6 +435,7 @@ pub(super) fn check_ref_assign(
     checker.invalidate_local_flow_narrowing(target, env);
     if let ExprKind::Variable(source_name) = &source.kind {
         checker.invalidate_local_flow_narrowing(source_name, env);
+        checker.initialize_missing_reference_local(source_name, env);
     }
     if crate::names::append_update_alias_kind(target).is_some() {
         if let ExprKind::ArrayAccess { array, .. } = &source.kind {
@@ -450,6 +479,8 @@ pub(super) fn check_ref_assign(
         ExprKind::PropertyAccess { object, property } => {
             let object_ty = checker.infer_type_with_assignment_effects(object, env)?;
             let target_ty = checker.infer_type(source, env)?;
+            target_has_boxed_ref_provenance = crate::types::checked_property_references(checker.semantic_profile)
+                && checker.promote_live_property_reference_argument(source, env)?;
             checker.record_operation_exception_flow(source, env);
             if let Some(class) =
                 crate::types::checker::single_object_class_name(&object_ty)
@@ -485,7 +516,9 @@ pub(super) fn check_ref_assign(
         }
         ExprKind::StaticPropertyAccess { .. } => {
             let target_ty = checker.infer_type(source, env)?;
-            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed;
+            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed
+                || (crate::types::checked_property_references(checker.semantic_profile)
+                    && checker.promote_live_property_reference_argument(source, env)?);
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
@@ -513,7 +546,8 @@ pub(super) fn check_ref_assign(
                 _ => false,
             };
             let index_ty = checker.infer_type_with_assignment_effects(index, env)?;
-            let normalized_index_ty = normalized_array_key_type(index, index_ty);
+            crate::semantics::array_keys::validate_receiver(checker.semantic_profile, &array_ty, &index_ty, index.span)?;
+            let normalized_index_ty = normalized_array_key_type(index, index_ty, checker.semantic_profile);
             let valid_php_key = matches!(
                 normalized_index_ty,
                 PhpType::Int | PhpType::Str | PhpType::Mixed
@@ -593,6 +627,10 @@ pub(super) fn check_ref_assign(
     if let Err(error) = result {
         poison_unbound_local(env, target);
         return Err(error);
+    }
+    // A new reference replaces this name's binding; a self-alias keeps its existing contract.
+    if !matches!(&source.kind, ExprKind::Variable(name) if name == target) {
+        checker.inferred_local_contracts.remove(target);
     }
     if crate::names::append_update_alias_kind(target).is_some() {
         // The parser's writable-cell lease is representation-neutral, not a value snapshot.
@@ -906,7 +944,7 @@ fn reflection_class_assignment_target(
         _ => match env
             .get(variable_name(class_arg).unwrap_or_default())
             .cloned()
-            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg, checker.semantic_profile))
             .codegen_repr()
         {
             PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
@@ -1032,7 +1070,7 @@ fn resolve_callable_array_target(
     let receiver_ty = env
         .get(variable_name(receiver).unwrap_or_default())
         .cloned()
-        .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(receiver));
+        .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(receiver, checker.semantic_profile));
     if checker.invokable_class_for_type(&receiver_ty).is_some() {
         return Ok(Some(CallableTarget::Method {
             object: Box::new(receiver.clone()),
@@ -1228,7 +1266,8 @@ fn merge_local_assignment_type(
         checker.numeric_region_sites.retain(|_, names| !names.is_empty());
     }
     if checker.mixed_storage_locals.contains(name)
-        || checker.boxed_ref_aliased_locals.contains(name)
+        || (checker.boxed_ref_aliased_locals.contains(name)
+            && !checker.local_has_canonical_static_binding(name))
     {
         // A marked name still needs its binding depth on its FIRST store, for the same reason the
         // fresh-insert branch below records one: it is the name's single authority on whether a
@@ -1240,8 +1279,28 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), PhpType::Mixed);
         return Ok(());
     }
+    if let Some(view) = checker.open_binding_store_view(name, ty) {
+        env.insert(name.to_string(), view);
+        return Ok(());
+    }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+            // Internal prelude bodies can be checked again after a guard left the shared
+            // environment at one member of the initializer's union. Re-reading the original
+            // assignment restores that complete union; it is not a source-level retype. This
+            // keeps generated `$stream = fopen(...); if ($stream === false) { ... }` bodies
+            // stable across checker passes while public strict-local contracts remain unchanged.
+            (checker.semantic_source_mode == crate::source::SourceMode::Internal
+                && checker.type_contains_values(ty, existing))
+                .then(|| ty.clone())
+        }).or_else(|| {
+            // Locals owns the PHP container kind. Element and packed/hash representation
+            // changes remain legal for inferred arrays until ArrayTypes supplies its contract.
+            (!checker.typed_local_names.contains_key(name)
+                && checker.inferred_local_contracts.get(name).is_some_and(PhpType::is_php_array)
+                && (ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })))
+                .then(PhpType::php_array)
+        }).or_else(|| {
             // An inferred boolean flag can widen into a scalar union that already contains
             // every bool value. Its ordinary local slot can become boxed; declared or
             // externally shared boolean storage must retain its existing contract.
@@ -1493,14 +1552,24 @@ pub(super) fn check_typed_assign(
             return Err(error);
         }
     };
+    if let Err(error) = checker.require_noncoercive_value_type(
+        &declared_ty, &value_ty, checker.semantic_source_mode, value.span, &format!("Typed local ${name}")) {
+        poison_unbound_local(env, name);
+        return Err(error);
+    }
     // A runtime-named constructor has no statically known class, so inference keeps its result
     // as Mixed. The expression still either produces an object or throws before assignment, which
-    // is sufficient for the non-nominal `object` contract. Do not extend this exception to an
-    // arbitrary Mixed value or to a named class, because neither has a runtime nominal guard here.
+    // is sufficient for the non-nominal `object` contract. Other unknown values need an
+    // explicitly selected runtime contract before the checker can accept the initializer.
     let dynamic_new_satisfies_object =
         matches!(&declared_ty, PhpType::Object(class) if class.is_empty())
             && matches!(value.kind, ExprKind::NewDynamic { .. });
-    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object {
+    let guarded_unknown = value_ty == PhpType::Mixed
+        && crate::semantics::conversions::permits_guarded_unknown(&declared_ty)
+        && matches!(crate::semantics::conversions::implicit(checker.semantic_profile,
+            checker.semantic_source_mode, &declared_ty, &value_ty),
+            elephc_semantics::conversions::ConversionPlan::Guard { .. });
+    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object && !guarded_unknown {
         // The initializer typed successfully but violates the declared type. Poison
         // `$name` as `Mixed` for recovery so later uses do not cascade, then report
         // the initialization mismatch as the one real diagnostic.
@@ -1671,38 +1740,6 @@ fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
     checker.first_class_callable_targets.remove(dest);
 }
 
-/// Type-checks a `global` declaration and registers the variables as globals.
-///
-/// For each variable name, marks it as a global in `checker.active_globals` and
-/// populates the local type environment with the variable's type from
-/// `checker.top_level_env` if available, otherwise uses `Mixed`.
-pub(super) fn check_global(
-    checker: &mut Checker,
-    vars: &[String],
-    env: &mut TypeEnv,
-) -> Result<(), CompileError> {
-    for var in vars {
-        let retired = checker.binding_retirement_type(var, env);
-        checker.record_loop_binding_end(var);
-        checker.invalidate_local_flow_narrowing(var, env);
-        checker.active_globals.insert(var.clone());
-        if !env.contains_key(var) {
-            if let Some(global_ty) = checker.top_level_env.get(var) {
-                env.insert(var.clone(), global_ty.clone());
-            } else {
-                // Function-like bodies are checked before the top-level statement walk has
-                // necessarily reached the global's first assignment. PHP globals have no
-                // implicit integer contract: a later callback, generator resume, or destructor
-                // may replace the cell with any value. Seeding an unseen alias as `Int` made a
-                // perfectly valid `$global = function () { ... };` fail before lowering.
-                env.insert(var.clone(), PhpType::Mixed);
-            }
-        }
-        checker.record_binding_retirement_exception_flow(&retired, env);
-    }
-    Ok(())
-}
-
 /// Type-checks a `static` variable declaration and registers it in the checker.
 ///
 /// Infers the type of the initializer expression, marks the variable as static in
@@ -1712,12 +1749,12 @@ pub(super) fn check_static_var(
     checker: &mut Checker,
     name: &str,
     init: &Expr,
+    span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    // A `static` local's storage outlives the call, so its binding is never killable — record
-    // it before inference so an erroring initializer still marks the name.
-    checker.record_loop_binding_end(name);
-    checker.invalidate_local_flow_narrowing(name, env);
+    let retired = checker.binding_retirement_type(name, env);
+    let origin = checker.copied_binding_origin(init, env);
+    // Persistent storage survives the activation, while the declaration replaces its local name.
     checker.static_local_names.insert(name.to_string());
     let ty = match checker.infer_type_with_assignment_effects(init, env) {
         Ok(ty) => ty,
@@ -1727,7 +1764,30 @@ pub(super) fn check_static_var(
             return Err(error);
         }
     };
+    checker.invalidate_local_flow_narrowing(name, env);
+    checker.clear_local_binding_metadata(name);
     checker.active_statics.insert(name.to_string());
+    if !checker.null_probe_scope_is_top_level {
+        // The name now owns an activation lease on boxed persistent storage, independently of
+        // its former parameter, reference or global binding. Conditional joins retire this proof.
+        checker.active_globals.remove(name);
+        checker.active_ref_params.remove(name);
+        checker.active_external_ref_bindings.remove(name);
+        checker.non_builtin_ref_aliased_locals.remove(name);
+        checker.ref_assign_aliased_locals.remove(name);
+        checker.ref_aliased_locals.insert(name.to_string());
+        checker.boxed_ref_aliased_locals.insert(name.to_string());
+        checker.local_binding_depth.insert(name.to_string(), checker.local_conditional_depth);
+    }
+    if checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+        && checker.semantic_source_mode != crate::source::SourceMode::Internal
+    {
+        let contract = origin.unwrap_or_else(|| ty.clone());
+        checker.inferred_local_contracts.insert(name.to_string(), contract.clone());
+        checker.record_declared_binding_contract(name, &contract, span);
+    }
     env.insert(name.to_string(), ty);
+    checker.definitely_bound_locals.insert(name.to_string());
+    checker.record_binding_retirement_exception_flow(&retired, env);
     Ok(())
 }

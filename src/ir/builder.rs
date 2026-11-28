@@ -372,8 +372,9 @@ impl<'f> Builder<'f> {
                 continue;
             };
             if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal)
-                || !local_load_release_is_deferred_candidate(&value.php_type)
-                || local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type)
+                || !(local_load_release_is_deferred_candidate(&value.php_type)
+                    || value.php_type.codegen_repr() == PhpType::Mixed)
+                || local_load_coercion_owns_result(&local.php_type, &value.php_type)
                 || !guard_token_has_only_chain_uses(self.func, token)
             {
                 continue;
@@ -861,12 +862,6 @@ pub(crate) fn local_load_coercion_owns_result(storage_type: &PhpType, result_typ
 /// Identifies local payloads whose release can be deferred to frame cleanup.
 fn local_load_release_is_deferred_candidate(result_type: &PhpType) -> bool {
     matches!(result_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable)
-}
-
-/// Mixed unboxing retains an independent owner that must be released at its use site.
-fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &PhpType) -> bool {
-    matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(result_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) | PhpType::Iterable)
 }
 
 /// Returns true when a guard token is used only by its unguard or as the next guard anchor.

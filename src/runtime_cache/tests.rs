@@ -10,6 +10,20 @@
 
 use super::*;
 
+/// Every strict guarantee partitions cached runtime objects and equivalent profiles reuse them.
+#[test]
+fn strict_profile_runtime_cache_identity_covers_all_features() {
+    use elephc_semantics::{SemanticProfile, FEATURES};
+    let base = identity::partition_semantic_profile(42, SemanticProfile::PERMISSIVE);
+    let mut keys = std::collections::HashSet::from([base]);
+    for feature in FEATURES {
+        let profile = SemanticProfile::PERMISSIVE.with(feature.feature, true);
+        let key = identity::partition_semantic_profile(42, profile);
+        assert!(keys.insert(key), "{} must partition runtime entries", feature.flag);
+        assert_eq!(key, identity::partition_semantic_profile(42, profile));
+    }
+}
+
     /// Verifies the cache key changes with runtime-emitter build identity even
     /// when compiler version, target, heap, features, and PIC mode are identical.
     #[test]
@@ -420,12 +434,33 @@ use super::*;
             .find("cache_path.exists()")
             .expect("runtime cache lookup remains explicit");
         let generation = source
-            .find("generate_runtime_with_features_mode")
+            .find("generate_runtime_with_semantics")
             .expect("runtime assembly generator remains explicit");
 
         assert!(
             lookup < generation,
             "a warm cache hit must not regenerate the complete runtime assembly"
+        );
+    }
+
+    /// Verifies a post-publish lease retry preserves the caller's semantic profile.
+    #[test]
+    fn post_publish_lease_retry_preserves_semantic_profile() {
+        let source = include_str!("../runtime_cache.rs");
+        let retry_start = source
+            .rfind("let Some(prepared) = lease_runtime_object")
+            .expect("post-publish lease retry remains explicit");
+        let retry_tail = &source[retry_start..];
+        let retry_end = retry_tail
+            .find("prune_runtime_cache_objects")
+            .expect("lease retry precedes cache pruning");
+        let retry = &retry_tail[..retry_end];
+
+        assert!(
+            retry.contains("prepare_runtime_object_with_identity(")
+                && retry.contains("build_identity")
+                && retry.contains("semantic_profile"),
+            "a lost runtime lease must retry with the same build identity and semantic profile"
         );
     }
 
@@ -746,6 +781,7 @@ use super::*;
                 false,
                 false,
                 identity,
+                SemanticProfile::PERMISSIVE,
             )
             .expect("prepare runtime object")
         };
@@ -779,6 +815,45 @@ use super::*;
         assert_eq!(objects, 1, "one assembly must give one object: {names:?}");
         assert_eq!(aliases, 2, "each build identity records its alias: {names:?}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Distinct semantic profiles keep separate aliases and reuse the correct object on warm hits.
+    #[test]
+    fn runtime_cache_aliases_preserve_semantic_profile() {
+        const TEST_NAME: &str = "runtime_cache_aliases_preserve_semantic_profile";
+        const PROBE: &str = "ELEPHC_RUNTIME_CACHE_PROFILE_PROBE";
+        if std::env::var(PROBE).as_deref() != Ok(TEST_NAME) {
+            run_isolated_cache_probe(TEST_NAME, PROBE);
+            return;
+        }
+
+        let root = isolated_cache_root("profile");
+        std::env::remove_var("ELEPHC_RUNTIME_CACHE_DIR");
+        let features = RuntimeFeatures { eval_bridge: true, ..RuntimeFeatures::none() };
+        let prepare = |profile| {
+            prepare_runtime_object_for_emit_with_semantics(
+                8 * 1024 * 1024,
+                Target::detect_host(),
+                features,
+                Emit::Executable,
+                profile,
+            )
+            .expect("prepare profiled runtime object")
+        };
+        let permissive = SemanticProfile::PERMISSIVE;
+        let strict = permissive.with(elephc_semantics::StrictFeature::Overflow, true);
+        let mut objects = Vec::new();
+        for profile in [permissive, strict] {
+            let cold = prepare(profile);
+            let warm = prepare(profile);
+            assert_eq!(cold.status, RuntimeCacheStatus::Miss);
+            assert_eq!(warm.status, RuntimeCacheStatus::Hit);
+            let bytes = fs::read(&cold.path).expect("read newly assembled runtime object");
+            assert!(fs::read(&warm.path).expect("read cached runtime object") == bytes);
+            objects.push(bytes);
+        }
+        assert!(objects[0] != objects[1], "overflow checks must change emitted runtime code");
+        fs::remove_dir_all(root).expect("remove isolated cache root");
     }
 
     /// Verifies an alias that names no live object, or tries to name a file outside the cache

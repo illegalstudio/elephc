@@ -12,7 +12,7 @@ use crate::parser::ast::{TypeExpr, TypeParam};
 use elephc_generics::{Parameter, Type};
 
 /// Converts compiler type syntax without losing nested generic arguments.
-pub(super) fn to_shared(ty: &TypeExpr) -> Type {
+pub(crate) fn to_shared(ty: &TypeExpr) -> Type {
     match ty {
         TypeExpr::Array(inner) => Type::Apply("array".into(), vec![to_shared(inner)]),
         TypeExpr::AssocArray { key, value } => Type::Apply("array".into(), vec![to_shared(key), to_shared(value)]),

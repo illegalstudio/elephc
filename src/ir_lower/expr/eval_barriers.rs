@@ -17,7 +17,7 @@ pub(super) fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
-        crate::strict_php::is_enabled(),
+        crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
@@ -62,7 +62,7 @@ pub(super) fn eval_literal_scope_barrier_writes(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
-        crate::strict_php::is_enabled(),
+        crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
@@ -269,7 +269,7 @@ pub(super) fn eval_literal_scope_read_float_predicate_param_type_supported(ty: &
 pub(super) fn eval_literal_fragment<'a>(name: &str, args: &'a [Expr]) -> Option<&'a str> {
     if php_symbol_key(name.trim_start_matches('\\')) != "eval"
         || args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -298,7 +298,7 @@ pub(super) fn eval_literal_static_function_supported_by_lowering(
     else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, ctx.semantic_profile)
 }
 
 /// Returns true when a literal-eval static method call can avoid the eval barrier.
@@ -329,12 +329,12 @@ pub(super) fn eval_literal_static_method_supported_by_lowering(
     let Some(signature) = static_method_implementation_signature(ctx, receiver, method) else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, ctx.semantic_profile)
 }
 
 /// Returns true when a dynamic eval fallback can preserve simple positional call semantics.
 pub(super) fn plain_positional_call_args(args: &[Expr]) -> bool {
-    !crate::types::call_args::has_named_args(args)
+    !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
         && !args.iter().any(is_spread_arg)
 }
 
@@ -351,7 +351,7 @@ pub(super) fn lower_eval_function_probe(
     }
     if !ctx.has_eval_barrier()
         || args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -390,7 +390,7 @@ pub(super) fn lower_eval_class_probe(
     if !ctx.has_eval_barrier()
         || args.is_empty()
         || args.len() > 2
-        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
         || args.iter().any(is_spread_arg)
     {
         return None;

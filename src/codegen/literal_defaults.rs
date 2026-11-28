@@ -159,12 +159,17 @@ pub(crate) fn literal_default_value(
     php_type: &PhpType,
     expr: &ExprKind,
     op_name: &str,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<LiteralDefaultValue> {
-    if let Some(folded) = fold_named_class_constant(expr) {
-        return literal_default_value(context, php_type, &folded, op_name);
+    if let ExprKind::UnaryPlus(inner) = expr {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| unsupported_literal_default(context, php_type, op_name))?;
+        return literal_default_value(context, php_type, &number.kind, op_name, profile);
     }
-    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(expr, crate::codegen_support::compile_php_version()) {
-        return literal_default_value(context, php_type, &folded, op_name);
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_default_value(context, php_type, &folded, op_name, profile);
+    }
+    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(expr, crate::codegen_support::compile_php_version(), profile) {
+        return literal_default_value(context, php_type, &folded, op_name, profile);
     }
     if php_type.coerces_integer_to_float() {
         let integer = match expr {
@@ -176,7 +181,7 @@ pub(crate) fn literal_default_value(
             _ => None,
         };
         if let Some(value) = integer {
-            return literal_default_value(context, php_type, &ExprKind::FloatLiteral(value as f64), op_name);
+            return literal_default_value(context, php_type, &ExprKind::FloatLiteral(value as f64), op_name, profile);
         }
     }
     match (php_type, expr) {
@@ -257,7 +262,7 @@ pub(crate) fn literal_default_value(
             let elem_type = PhpType::Mixed;
             let elements = items
                 .iter()
-                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name))
+                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name, profile))
                 .collect::<Result<Vec<_>>>()?;
             Ok(LiteralDefaultValue::BoxedArray {
                 elem_type,
@@ -271,7 +276,7 @@ pub(crate) fn literal_default_value(
         // a later write of any type into the hash must not find a narrower value type underneath.
         (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteralAssoc(items)) => {
             let value_type = PhpType::Mixed;
-            let entries = literal_assoc_entries(context, &value_type, items, op_name)?;
+            let entries = literal_assoc_entries(context, &value_type, items, op_name, profile)?;
             Ok(LiteralDefaultValue::BoxedAssocArray { value_type, entries })
         }
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),
@@ -292,7 +297,7 @@ pub(crate) fn literal_default_value(
                 .map(|(index, item)| {
                     Ok(LiteralAssocEntry {
                         key: LiteralArrayKey::Int(index as i64),
-                        value: literal_array_element(context, &value_type, &item.kind, op_name)?,
+                        value: literal_array_element(context, &value_type, &item.kind, op_name, profile)?,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -303,7 +308,7 @@ pub(crate) fn literal_default_value(
         }
         (PhpType::AssocArray { value, .. }, ExprKind::ArrayLiteralAssoc(items)) => {
             let value_type = value.as_ref().codegen_repr();
-            let entries = literal_assoc_entries(context, &value_type, items, op_name)?;
+            let entries = literal_assoc_entries(context, &value_type, items, op_name, profile)?;
             Ok(LiteralDefaultValue::AssocArray {
                 value_type,
                 entries,
@@ -313,7 +318,7 @@ pub(crate) fn literal_default_value(
             let elem_type = elem_type.codegen_repr();
             let elements = items
                 .iter()
-                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name))
+                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name, profile))
                 .collect::<Result<Vec<_>>>()?;
             Ok(LiteralDefaultValue::Array {
                 elem_type,
@@ -579,9 +584,14 @@ fn literal_array_element(
     elem_type: &PhpType,
     expr: &ExprKind,
     op_name: &str,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<LiteralArrayElement> {
+    if let ExprKind::UnaryPlus(inner) = expr {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| unsupported_literal_default(context, elem_type, op_name))?;
+        return literal_array_element(context, elem_type, &number.kind, op_name, profile);
+    }
     if let Some(folded) = fold_named_class_constant(expr) {
-        return literal_array_element(context, elem_type, &folded, op_name);
+        return literal_array_element(context, elem_type, &folded, op_name, profile);
     }
     // A nested literal recurses rather than being refused. Under a Mixed-capable element type
     // the nested elements are typed `Mixed` for the same reason the outer ones are -- the
@@ -591,8 +601,8 @@ fn literal_array_element(
     // will expect. A scalar element type cannot hold a container and is refused as before.
     // Delegating to `literal_default_value` shares the top-level arms, including PHP's implicit
     // `0,1,2,…` keys for a positional literal stored into hash storage (issue #1052).
-    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(expr, crate::codegen_support::compile_php_version()) {
-        return literal_array_element(context, elem_type, &folded, op_name);
+    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(expr, crate::codegen_support::compile_php_version(), profile) {
+        return literal_array_element(context, elem_type, &folded, op_name, profile);
     }
     if matches!(expr, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
         let nested_type = match elem_type.codegen_repr() {
@@ -605,7 +615,7 @@ fn literal_array_element(
             ty @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => ty,
             _ => return Err(unsupported_literal_default(context, elem_type, op_name)),
         };
-        return match literal_default_value(context, &nested_type, expr, op_name)? {
+        return match literal_default_value(context, &nested_type, expr, op_name, profile)? {
             LiteralDefaultValue::Array { elem_type, elements } => {
                 Ok(LiteralArrayElement::Array { elem_type, elements })
             }
@@ -679,38 +689,32 @@ fn literal_assoc_entries(
     value_type: &PhpType,
     items: &[(Expr, Expr)],
     op_name: &str,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<Vec<LiteralAssocEntry>> {
     items.iter().map(|(key, value)| {
         Ok(LiteralAssocEntry {
-            key: literal_array_key(context, &key.kind, op_name)?,
-            value: literal_array_element(context, value_type, &value.kind, op_name)?,
+            key: literal_array_key(context, &key.kind, op_name, profile)?,
+            value: literal_array_element(context, value_type, &value.kind, op_name, profile)?,
         })
     }).collect()
 }
 
 /// Converts a constant associative-array key expression into a materializable hash key, applying
-/// PHP's literal key coercions: booleans and floats become integer keys, `null` becomes the empty
-/// string key, and numeric strings are normalized to integer keys later at emit time. Unsupported
-/// key forms fall through to the shared unsupported-default error rather than miscompiling.
-fn literal_array_key(context: &str, expr: &ExprKind, op_name: &str) -> Result<LiteralArrayKey> {
-    if let Some(folded) = fold_named_class_constant(expr) {
-        return literal_array_key(context, &folded, op_name);
+/// the selected shared default-key policy. Runtime materialization keeps the same string-key
+/// policy as ordinary hashes. Unsupported key forms fall through to the shared unsupported-default error rather than miscompiling.
+fn literal_array_key(context: &str, expr: &ExprKind, op_name: &str, profile: elephc_semantics::SemanticProfile) -> Result<LiteralArrayKey> {
+    if let ExprKind::UnaryPlus(inner) = expr {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| unsupported_literal_default(context, &PhpType::Int, op_name))?;
+        return literal_array_key(context, &number.kind, op_name, profile);
     }
-    match expr {
-        ExprKind::StringLiteral(value) => Ok(LiteralArrayKey::Str(value.clone())),
-        ExprKind::IntLiteral(value) => Ok(LiteralArrayKey::Int(*value)),
-        ExprKind::BoolLiteral(value) => Ok(LiteralArrayKey::Int(i64::from(*value))),
-        ExprKind::Null => Ok(LiteralArrayKey::Str(String::new())),
-        ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int(crate::types::php_float_array_key(*value))),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => value
-                .checked_neg()
-                .map(LiteralArrayKey::Int)
-                .ok_or_else(|| unsupported_literal_default(context, &PhpType::Int, op_name)),
-            ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int(crate::types::php_float_array_key(-*value))),
-            _ => Err(unsupported_literal_default(context, &PhpType::Int, op_name)),
-        },
-        _ => Err(unsupported_literal_default(context, &PhpType::Int, op_name)),
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_array_key(context, &folded, op_name, profile);
+    }
+    let source = Expr::new(expr.clone(), crate::span::Span::synthetic());
+    match super::const_default_values::resolve_literal_array_const_default_key(&source, profile) {
+        Some(super::const_default_values::ConstDefaultArrayKey::Int(value)) => Ok(LiteralArrayKey::Int(value)),
+        Some(super::const_default_values::ConstDefaultArrayKey::String(value)) => Ok(LiteralArrayKey::Str(value)),
+        None => Err(unsupported_literal_default(context, &PhpType::Int, op_name)),
     }
 }
 

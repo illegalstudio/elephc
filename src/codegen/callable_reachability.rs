@@ -3,19 +3,18 @@
 //! Keeps descriptor emission demand-driven without narrowing genuinely open runtime strings.
 //!
 //! Called from:
-//! - `crate::codegen::context::FunctionContext::new()` before assembly lowering.
+//! - `crate::codegen::context::FunctionContext::runtime_callable_candidates()` during lowering.
 //!
 //! Key details:
-//! - Local string values are propagated through the EIR CFG to a fixed point.
+//! - Only finite local name sets are stored during CFG propagation.
 //! - Control-flow joins union finite name sets; unknown inputs keep the result open.
 //! - Ref-cell and eval writes invalidate affected local facts conservatively.
 //! - CFG states store finite facts sparsely; absent local slots remain unknown.
 
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::ir::{
-    BlockId, Function, Immediate, LocalSlotId, Module, Op, Terminator, ValueId,
-};
+use crate::ir::control_flow::explicit_successors;
+use crate::ir::{BlockId, Function, Immediate, LocalSlotId, Module, Op, ValueId};
 
 mod local_state;
 
@@ -41,22 +40,18 @@ impl CallableNameSet {
 
     /// Merges an incoming CFG fact and reports whether the receiver changed.
     fn merge_from(&mut self, incoming: &Self) -> bool {
-        let merged = match (&*self, incoming) {
-            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
-            (Self::Known(left), Self::Known(right)) => {
-                let mut names = left.clone();
-                names.extend(right.iter().cloned());
-                if names.len() > MAX_FINITE_CALLABLE_NAMES {
-                    Self::Unknown
-                } else {
-                    Self::Known(names)
-                }
-            }
+        let Self::Known(names) = self else { return false };
+        let Self::Known(other) = incoming else {
+            *self = Self::Unknown;
+            return true;
         };
-        if *self == merged {
+        if other.is_subset(names) {
             return false;
         }
-        *self = merged;
+        names.extend(other.iter().cloned());
+        if names.len() > MAX_FINITE_CALLABLE_NAMES {
+            *self = Self::Unknown;
+        }
         true
     }
 
@@ -96,12 +91,12 @@ fn analyze_value_names(module: &Module, function: &Function) -> Vec<CallableName
         return value_names;
     }
 
-    let unknown_locals = CallableLocalState::new(function.locals.len());
     let mut block_inputs = vec![None::<CallableLocalState>; function.blocks.len()];
     let entry_index = function.entry.as_raw() as usize;
     if entry_index >= block_inputs.len() {
         return value_names;
     }
+    let unknown_locals = CallableLocalState::new(function.locals.len());
     block_inputs[entry_index] = Some(unknown_locals.clone());
     let mut worklist = VecDeque::from([function.entry]);
 
@@ -131,7 +126,7 @@ fn analyze_value_names(module: &Module, function: &Function) -> Vec<CallableName
         let Some(terminator) = block.terminator.as_ref() else {
             continue;
         };
-        for successor in terminator_successors(terminator) {
+        for successor in explicit_successors(terminator) {
             let successor_index = successor.as_raw() as usize;
             if successor_index >= block_inputs.len() {
                 continue;
@@ -231,14 +226,12 @@ fn apply_local_transfer(
     value_names: &[CallableNameSet],
 ) {
     match (inst.op, inst.immediate.as_ref()) {
-        (Op::StoreLocal, Some(Immediate::LocalSlot(slot))) => {
+        (Op::StoreLocal | Op::StoreLocalRetiringBox, Some(Immediate::LocalSlot(slot))) => {
             let names = inst
                 .operands
                 .first()
-                .and_then(|value| value_names.get(value.as_raw() as usize))
-                .cloned()
-                .unwrap_or(CallableNameSet::Unknown);
-            set_local_state(state, *slot, names);
+                .and_then(|value| value_names.get(value.as_raw() as usize));
+            set_local_state(state, *slot, names.cloned().unwrap_or(CallableNameSet::Unknown));
         }
         (
             Op::UnsetLocal | Op::BindRefCellPtr | Op::IterCurrentValueRef,
@@ -290,28 +283,6 @@ fn exception_handler_blocks(function: &Function) -> BTreeSet<BlockId> {
         .collect()
 }
 
-/// Returns the explicit CFG successors for one EIR terminator.
-fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
-    match terminator {
-        Terminator::Br { target, .. } => vec![*target],
-        Terminator::CondBr {
-            then_target,
-            else_target,
-            ..
-        } => vec![*then_target, *else_target],
-        Terminator::Switch { cases, default, .. } => {
-            let mut successors = cases.iter().map(|case| case.target).collect::<Vec<_>>();
-            successors.push(*default);
-            successors
-        }
-        Terminator::GeneratorSuspend { resume, .. } => vec![*resume],
-        Terminator::Return { .. }
-        | Terminator::Throw { .. }
-        | Terminator::Fatal { .. }
-        | Terminator::Unreachable => Vec::new(),
-    }
-}
-
 /// Canonicalizes a PHP callable name for case-insensitive candidate matching.
 fn canonical_callable_name(name: &str) -> String {
     crate::names::php_symbol_key(name.trim_start_matches('\\'))
@@ -321,8 +292,55 @@ fn canonical_callable_name(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::codegen::platform::Target;
-    use crate::ir::{Builder, IrType, LocalKind, Ownership};
+    use crate::ir::{Builder, IrType, LocalKind, Ownership, Terminator};
     use crate::types::PhpType;
+
+    /// Unknown inputs erase finite proofs and overflowing unions become open.
+    #[test]
+    fn sparse_join_keeps_only_bounded_names_known_on_every_path() {
+        let missing = LocalSlotId::from_raw(7);
+        let overflow = LocalSlotId::from_raw(65);
+        let bounded = LocalSlotId::from_raw(70_000);
+        let names = (0..MAX_FINITE_CALLABLE_NAMES)
+            .map(|index| format!("callback{index}"))
+            .collect();
+        let mut target = CallableLocalState::new(70_001);
+        target.set(missing, CallableNameSet::singleton("missing"));
+        target.set(overflow, CallableNameSet::Known(names));
+        target.set(bounded, CallableNameSet::singleton("toupper"));
+        let mut incoming = CallableLocalState::new(70_001);
+        incoming.set(overflow, CallableNameSet::singleton("another"));
+        incoming.set(bounded, CallableNameSet::singleton("tolower"));
+        assert!(target.merge_from(&incoming));
+        assert!(target.get(missing).is_none());
+        assert!(target.get(overflow).is_none());
+        assert_eq!(
+            target.get(bounded),
+            Some(&CallableNameSet::Known(BTreeSet::from(["tolower".into(), "toupper".into()]))),
+        );
+        assert!(!target.merge_from(&incoming));
+    }
+
+    /// Publishing a mutated hash cannot leave the prior local's callable name attached.
+    #[test]
+    fn retiring_box_store_invalidates_an_older_callable_name() {
+        let slot = LocalSlotId::from_raw(0);
+        let mut state = CallableLocalState::new(1);
+        state.set(slot, CallableNameSet::singleton("callback"));
+        let store = crate::ir::Instruction::new(
+            Op::StoreLocalRetiringBox,
+            vec![ValueId::from_raw(0)],
+            Some(Immediate::LocalSlot(slot)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::StoreLocalRetiringBox.default_effects(),
+            None,
+        );
+        apply_local_transfer(&store, &mut state, &[CallableNameSet::Unknown]);
+        assert!(state.get(slot).is_none());
+    }
 
     /// Verifies branch-local string stores form a finite candidate union at the CFG join.
     #[test]

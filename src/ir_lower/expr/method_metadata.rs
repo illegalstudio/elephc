@@ -58,7 +58,7 @@ pub(super) fn promote_pdo_binding_ref_argument(
         "bindcolumn" => "var",
         _ => return,
     };
-    let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, ctx.semantic_profile);
     let argument = expanded_args
         .iter()
         .enumerate()
@@ -71,6 +71,7 @@ pub(super) fn promote_pdo_binding_ref_argument(
     let Some(Expr {
         kind: ExprKind::Variable(name),
         span,
+        ..
     }) = argument
     else {
         return;
@@ -243,7 +244,7 @@ pub(super) fn method_call_result_type_for_receiver_type(
         {
             return PhpType::Mixed;
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let return_ty = if let Some((receiver_name, _)) = singular_object_class(object_ty) {
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))

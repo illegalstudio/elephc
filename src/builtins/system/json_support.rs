@@ -59,6 +59,8 @@ pub(crate) fn json_static_int_value(expr: &Expr) -> Option<i64> {
         ExprKind::ConstRef(name) => {
             crate::types::predefined_constants::int_constant_value(name.as_str())
         }
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| json_static_int_value(&number)),
         ExprKind::Negate(inner) => json_static_int_value(inner).map(|value| -value),
         ExprKind::BinaryOp { left, op, right } => {
             let left = json_static_int_value(left)?;

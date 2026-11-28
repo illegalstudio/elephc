@@ -10,6 +10,7 @@
 //! - Prototype traversal preserves parent and interface declaration order.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Returns function or method metadata registered for a synthetic reflection owner object.
 pub(super) fn eval_reflection_function_method_target(
@@ -21,7 +22,9 @@ pub(super) fn eval_reflection_function_method_target(
         let closure_target = context
             .eval_reflection_function_closure_target(identity)
             .cloned();
-        if let Some(closure) = context.closure(name) {
+        let function_name = closure_target.as_ref().is_none_or(eval_reflection_target_uses_function_name)
+            .then_some(name);
+        if let Some(closure) = function_name.and_then(|name| context.closure(name)) {
             let function = closure.function();
             let is_variadic = function.parameter_is_variadic().iter().any(|flag| *flag);
             let parameters = eval_reflection_function_parameters(
@@ -58,8 +61,8 @@ pub(super) fn eval_reflection_function_method_target(
                 return_type_metadata,
             }));
         }
-        let lookup_name = name.to_ascii_lowercase();
-        if let Some(function) = context.function(&lookup_name) {
+        let lookup_name = function_name.map(str::to_ascii_lowercase);
+        if let Some(function) = lookup_name.as_deref().and_then(|name| context.function(name)) {
             let is_variadic = function
                 .parameter_is_variadic()
                 .iter()
@@ -98,7 +101,7 @@ pub(super) fn eval_reflection_function_method_target(
                 return_type_metadata,
             }));
         }
-        if let Some(function) = context.native_function(&lookup_name) {
+        if let Some(function) = lookup_name.as_deref().and_then(|name| context.native_function(name)) {
             let parameters = eval_reflection_native_function_parameters(name, &function);
             let is_variadic =
                 (0..function.param_count()).any(|index| function.param_variadic(index));
@@ -283,17 +286,22 @@ pub(super) fn eval_reflection_function_method_static_variables_result(
     else {
         return values.array_new(0);
     };
-    let mut result = values.assoc_new(static_variables.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, static_variables.len())?;
+    let mut references = Vec::new();
     for variable in static_variables {
-        let key = values.string(&variable.name)?;
-        let value = eval_reflection_static_local_value(
-            static_key,
-            variable,
-            declaring_class,
-            context,
-            values,
-        )?;
-        result = values.array_set(result, key, value)?;
+        result.string(&variable.name, |values| {
+            let value = eval_reflection_static_local_value(static_key, variable, declaring_class, context, values)?;
+            match values.is_reference(value) {
+                Ok(true) => references.push((variable.name.clone(), value.borrowed())),
+                Ok(false) => {},
+                Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
+            }
+            Ok(value)
+        })?;
+    }
+    let result = result.finish();
+    for (name, cell) in references {
+        context.bind_array_element_alias(result, EvalArrayReferenceKey::String(name.into_bytes()), EvalReferenceTarget::Cell { cell });
     }
     Ok(result)
 }
@@ -325,7 +333,7 @@ pub(super) fn eval_reflection_function_method_static_target(
     }
 }
 
-/// Returns the retained current static value or initializes it for reflection.
+/// Snapshots initialized constants and returns an uncached null for deferred initializers.
 pub(super) fn eval_reflection_static_local_value(
     static_key: &str,
     variable: &EvalStaticVarInitializer,
@@ -333,48 +341,42 @@ pub(super) fn eval_reflection_static_local_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(value) = context.static_local(static_key, &variable.name) {
-        return values.retain(value);
+    let value = if let Some(value) = context.static_local(static_key, &variable.name) { Some(value) }
+        else { eval_reflection_static_local_initializer_value(static_key, variable, declaring_class, context, values)? };
+    match value {
+        Some(value) => super::super::static_locals::snapshot(value, context, values),
+        None => values.null(),
     }
-    let value = eval_reflection_static_local_initializer_value(
-        static_key,
-        &variable.init,
-        declaring_class,
-        context,
-        values,
-    )?;
-    if let Some(replaced) =
-        context.set_static_local(static_key.to_string(), variable.name.clone(), value)
-    {
-        values.release(replaced)?;
-    }
-    values.retain(value)
 }
 
-/// Evaluates a static-local initializer with PHP magic class/function context.
+/// Prepares silent constant statics with their declaring PHP magic class/function context.
 pub(super) fn eval_reflection_static_local_initializer_value(
     static_key: &str,
-    init: &EvalExpr,
+    variable: &EvalStaticVarInitializer,
     declaring_class: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if let Some(declaring_class) = declaring_class {
         context.push_class_scope(declaring_class.to_string());
         context.push_called_class_scope(declaring_class.to_string());
     }
     context.push_function(static_key.to_string());
     let mut scope = ElephcEvalScope::new();
-    let result = eval_expr(init, context, &mut scope, values);
+    let result = super::super::static_locals::initialize_constant(static_key, &variable.name, &variable.init, context, &scope, values);
+    let mut cleanup = Ok(());
     for cell in scope.drain_owned_cells() {
-        values.release(cell)?;
+        if let Err(status) = eval_release_value(context, values, cell) { cleanup = Err(status); }
     }
     context.pop_function();
     if declaring_class.is_some() {
         context.pop_called_class_scope();
         context.pop_class_scope();
     }
-    result
+    match (result, cleanup) {
+        (Err(status), _) | (Ok(_), Err(status)) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 /// Validates that a synthetic reflection metadata call received no arguments.
@@ -517,13 +519,11 @@ pub(super) fn eval_reflection_function_closure_used_variables_result(
     else {
         return values.array_new(0);
     };
-    let mut result = values.assoc_new(closure_captures.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, closure_captures.len())?;
     for capture in closure_captures {
-        let key = values.string(capture.name())?;
-        let value = values.retain(capture.value())?;
-        result = values.array_set(result, key, value)?;
+        result.string(capture.name(), |values| values.retain(capture.value()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds `ReflectionFunction::getClosureThis()` from retained Closure target metadata.

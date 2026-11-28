@@ -117,7 +117,7 @@ if (!posix_kill(2147483647, 0)) {
 
 Elephc also provides `pcntl_daemon(bool $no_chdir = false, bool $no_close =
 false): bool` as a convenience wrapper over the host's `daemon(3)`. This is an
-Elephc extension rather than a PHP 8.4 PCNTL function, so `--strict-php` hides
+Elephc extension rather than a PHP 8.4 PCNTL function, so `--php-only` hides
 it. The surviving daemon process receives private pending-signal queues just as
 a child created by `pcntl_fork()` does.
 

@@ -17,7 +17,7 @@
 
 use super::*;
 use crate::parse_cache::parse_fragment_cached;
-use crate::script_cache::{load_script, ScriptSegment};
+use crate::script_cache::{load_script_with_semantics, ScriptSegment};
 
 /// Copies and releases the source operand before parsing nested eval in the current scope.
 pub(super) fn eval_nested_eval(
@@ -26,6 +26,9 @@ pub(super) fn eval_nested_eval(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::DynamicCode) {
+        return throwables::eval_throw_error("Runtime eval is disabled by --strict-dynamic-code", context, values);
+    }
     let [code] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -33,7 +36,7 @@ pub(super) fn eval_nested_eval(
     let code = values.string_bytes(source);
     let released = eval_release_value(context, values, source);
     let code = code.and_then(|code| released.map(|()| code))?;
-    let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
+    let program = parse_fragment_cached(&code, context.semantic_profile()).map_err(EvalParseError::status)?;
     context.push_eval_backtrace_boundary();
     let outcome = with_executable_cache_key(&code, || {
         execute_program_with_context(context, program.as_ref(), scope, values)
@@ -51,6 +54,9 @@ pub(super) fn eval_include_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::DynamicCode) {
+        return throwables::eval_throw_error("Runtime include is disabled by --strict-dynamic-code", context, values);
+    }
     let path = eval_expr(path, context, scope, values)?;
     let path = eval_path_string(path, values)?;
     let resolved_path = eval_resolve_include_path(&path, context);
@@ -58,7 +64,7 @@ pub(super) fn eval_include_expr(
     if once && context.has_included_file(&include_key) {
         return values.bool_value(true);
     }
-    let segments = match load_script(&resolved_path) {
+    let segments = match load_script_with_semantics(&resolved_path, context.semantic_profile()) {
         Ok(segments) => segments,
         Err(_) => return eval_include_missing_file(&path, required, values),
     };

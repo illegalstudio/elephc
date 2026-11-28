@@ -1,5 +1,5 @@
 //! Purpose:
-//! Exports native Mixed static properties as independently retained persistent PHP references.
+//! Exports eligible native static properties as independently retained persistent PHP references.
 //!
 //! Called from:
 //! - Eval static-property bridge generation and the optional runtime reference callback.
@@ -10,19 +10,27 @@
 
 use super::*;
 
-/// Emits the optional reference callback for initialized user-declared Mixed static slots.
+/// Emits the optional reference callback for initialized user-declared boxed static slots.
 pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSection, slots: &[EvalStaticPropertySlot]) {
     let slots = slots.iter().filter(|slot| {
         slot.is_declared && module.class_infos.get(&slot.declaring_class).is_some_and(|class|
             !class.is_internal && class.static_properties.iter()
                 .any(|(name, ty)| name == &slot.property && ty == &PhpType::Mixed))
+            || checked_descriptor(module, slot).is_some()
     }).cloned().collect::<Vec<_>>();
     emitter.blank();
     label_c_global(module, emitter, "__elephc_eval_value_static_property_reference");
     match emitter.target.arch {
-        Arch::AArch64 => emit_aarch64(module, emitter, data, &slots),
-        Arch::X86_64 => emit_x86_64(module, emitter, data, &slots),
+        Arch::AArch64 => emit_aarch64(module, emitter, data, &slots, false),
+        Arch::X86_64 => emit_x86_64(module, emitter, data, &slots, false),
     }
+    let slots = slots.into_iter().filter(|slot| checked_descriptor(module, slot).is_some()).collect::<Vec<_>>();
+    label_c_global(module, emitter, "__elephc_eval_value_static_property_binding");
+    match emitter.target.arch {
+        Arch::AArch64 => emit_aarch64(module, emitter, data, &slots, true),
+        Arch::X86_64 => emit_x86_64(module, emitter, data, &slots, true),
+    }
+
 }
 
 /// Emits the scoped static reference lookup with the ordinary getter ABI.
@@ -31,8 +39,10 @@ fn emit_aarch64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticPropertySlot],
+    binding: bool,
 ) {
-    let done_label = "__elephc_eval_value_static_property_reference_done";
+    let mode = if binding { "binding" } else { "reference" };
+    let done_label = format!("__elephc_eval_value_static_property_{mode}_done");
     emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class/property/scope slices and fp/lr
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
@@ -42,11 +52,12 @@ fn emit_aarch64(
     emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
     emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
-    emit_aarch64_static_property_dispatch(module, emitter, data, slots, "reference");
+    emit_aarch64_static_property_dispatch(module, emitter, data, slots, mode);
     emitter.instruction("mov x0, xzr");                                         // report bridge miss with a null pointer
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after a miss
-    emit_slot_bodies(module, emitter, slots, done_label);
-    emitter.label(done_label);
+    if binding { emit_binding_bodies(module, emitter, data, slots, &done_label); }
+    else { emit_slot_bodies(module, emitter, slots, &done_label); }
+    emitter.label(&done_label);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the boxed static property value to Rust
@@ -58,8 +69,10 @@ fn emit_x86_64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticPropertySlot],
+    binding: bool,
 ) {
-    let done_label = "__elephc_eval_value_static_property_reference_done_x";
+    let mode = if binding { "binding" } else { "reference" };
+    let done_label = format!("__elephc_eval_value_static_property_{mode}_done_x");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, property, and scope slices
@@ -69,11 +82,12 @@ fn emit_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the active eval class-scope length
-    emit_x86_64_static_property_dispatch(module, emitter, data, slots, "reference");
+    emit_x86_64_static_property_dispatch(module, emitter, data, slots, mode);
     emitter.instruction("xor eax, eax");                                        // report bridge miss with a null pointer
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after a miss
-    emit_slot_bodies(module, emitter, slots, done_label);
-    emitter.label(done_label);
+    if binding { emit_binding_bodies(module, emitter, data, slots, &done_label); }
+    else { emit_slot_bodies(module, emitter, slots, &done_label); }
+    emitter.label(&done_label);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed static property value to Rust
@@ -103,12 +117,38 @@ fn emit_slot_bodies(module: &Module, emitter: &mut Emitter, slots: &[EvalStaticP
         abi::emit_load_int_immediate(emitter, result, 0);
         abi::emit_jump(emitter, done);
         emitter.label(&initialized);
-        abi::emit_symbol_address(emitter, result, &slot.symbol);
-        abi::emit_call_label(emitter, "__rt_reference_cell_promote_mixed");
+        if let Some(descriptor) = checked_descriptor(module, slot) {
+            abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), &slot.symbol);
+            abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 1), &descriptor);
+            abi::emit_call_label(emitter, "__rt_reference_static_mixed_bind");
+        } else {
+            abi::emit_symbol_address(emitter, result, &slot.symbol);
+            abi::emit_call_label(emitter, "__rt_reference_cell_promote_mixed");
+        }
         abi::emit_load_from_address(emitter, result, result, 0);
         abi::emit_call_label(emitter, "__rt_incref");
         abi::emit_jump(emitter, done);
     }
+}
+
+/// Returns immutable binding and declaration addresses after the existing scoped dispatch succeeds.
+fn emit_binding_bodies(module: &Module, emitter: &mut Emitter, data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot], done: &str,
+) {
+    use crate::codegen_support::data_section::DataWord;
+    for slot in slots {
+        let descriptor = checked_descriptor(module, slot).expect("checked binding selector");
+        let record = data.add_words(vec![DataWord::Symbol(slot.symbol.clone()), DataWord::Symbol(descriptor)]);
+        emitter.label(&slot_body_label(module, slot, "binding"));
+        abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &record);
+        abi::emit_jump(emitter, done);
+    }
+}
+
+/// Resolves the same physical static declaration selected by ordinary native reference lowering.
+pub(super) fn checked_descriptor(module: &Module, slot: &EvalStaticPropertySlot) -> Option<String> {
+    crate::codegen::runtime_metadata::checked_boxed_static_descriptor(
+        module, &slot.declaring_class, &slot.property)
 }
 
 #[cfg(test)]
@@ -131,15 +171,22 @@ mod tests {
             for class_name in ["StaticReferenceBase", "StaticReferenceChild"] {
                 module.class_infos.insert(class_name.to_string(), checked.classes[class_name].clone());
             }
-            let slots = collect_eval_static_property_slots(&module);
-            let mut emitter = Emitter::new(target);
-            emit(&module, &mut emitter, &mut DataSection::new(), &slots);
-            let assembly = emitter.output();
-            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 4, "{name}");
-            assert!(assembly.contains("__rt_incref"), "{name}: an alias outlives the static symbol's owner");
-            assert!(!assembly.contains("__rt_mixed_clone"), "{name}: exporting aliases must preserve identity");
-            assert!(!assembly.contains(&static_property_symbol("StaticReferenceBase", "raw")), "{name}: raw typed storage stays distinct");
-            assert!(!assembly.contains(&static_property_symbol("StaticReferenceBase", "union")), "{name}: union activation requires its constraint ledger");
+            for selected in [false, true] {
+                module.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE
+                    .with(elephc_semantics::StrictFeature::Casts, selected);
+                module.required_runtime_features.native_reference_validation = selected;
+                let slots = collect_eval_static_property_slots(&module);
+                let mut emitter = Emitter::new(target);
+                emit(&module, &mut emitter, &mut DataSection::new(), &slots);
+                let assembly = emitter.output();
+                assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), if selected { 0 } else { 4 }, "{name}");
+                assert_eq!(assembly.matches("__rt_reference_static_mixed_bind").count(), if selected { 8 } else { 0 }, "{name}");
+                assert!(assembly.contains("__rt_incref"), "{name}: an alias outlives the static symbol's owner");
+                assert!(!assembly.contains("__rt_mixed_clone"), "{name}: exporting aliases must preserve identity");
+                assert_eq!(assembly.contains(&static_property_symbol("StaticReferenceBase", "raw")), selected,
+                    "{name}: concrete declarations use boxed storage only under checked casts");
+                assert_eq!(assembly.contains(&static_property_symbol("StaticReferenceBase", "union")), selected, "{name}");
+            }
         }
     }
 

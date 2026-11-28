@@ -50,6 +50,7 @@ builtin! {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::WriteOnlyMixedOutputs(&[2, 3]),
         callable: BuiltinCallablePolicy::StaticOnly(
             "xml_parse_into_struct() writes by-reference outputs into caller variables",

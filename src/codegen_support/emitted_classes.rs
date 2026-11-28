@@ -344,7 +344,7 @@ fn collect_dynamic_object_factory_classes_in_expr(
                 collect_dynamic_object_factory_classes_in_expr(expr, classes, names);
             }
         }
-        ExprKind::Negate(expr)
+        ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)

@@ -40,6 +40,7 @@ mod function_variants;
 mod literal_defaults;
 mod literal_method_index;
 mod local_analysis;
+mod local_binding_state;
 mod mbstring_configuration;
 mod null_local_proof;
 pub(crate) mod lower_inst;
@@ -367,6 +368,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
     // User bodies can contain host-boundary notifications in addition to the separately
     // generated runtime object, so they need the output profile before EIR lowering begins.
     emitter.phpext_output = emit == Emit::Phpext;
+    emitter.semantic_profile = module.semantic_profile;
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }
@@ -496,6 +498,7 @@ fn finalize_user_asm(
             break;
         }
     }
+    runtime_callable_invoker::emit_parameter_guards(module, &mut emitter, &mut data, &mut shared)?;
     // The eval status dispatch is the same at every call site, so it is one
     // module-level helper too. Emitted OUTSIDE the bridge gate: a literal-eval
     // program uses the eval SCOPE accessors without linking the bridge, and

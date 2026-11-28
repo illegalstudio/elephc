@@ -27,7 +27,7 @@ pub(super) fn normalize_operands(
     mut operands: Vec<crate::ir::ValueId>,
 ) -> Vec<crate::ir::ValueId> {
     if canonical == "preg_match_all" {
-        if !crate::builtins::preg_passes_parameter_from(args, &["offset"], 4) {
+        if !crate::builtins::preg_passes_parameter_from(args, &["offset"], 4, ctx.semantic_profile) {
             operands.truncate(4);
         }
         return operands;
@@ -35,7 +35,7 @@ pub(super) fn normalize_operands(
     if canonical != "preg_match" || operands.len() < 2 {
         return operands;
     }
-    if !crate::builtins::preg_match_uses_extended_capture(args) {
+    if !crate::builtins::preg_match_uses_extended_capture(args, ctx.semantic_profile) {
         operands.truncate(3);
         return operands;
     }

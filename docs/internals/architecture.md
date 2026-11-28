@@ -421,8 +421,8 @@ src/
 ├── conditional/               Build-time `ifdef` pass
 ├── goto_lowering.rs           Per-file `goto`/label validation and rewrite into structured loops and `continue N`
 ├── goto_lowering/             Jump analysis, dispatch-loop planning, rewriting, and unit tests
-├── strict_php.rs              `--strict-php` mode state and audit entry point
-├── strict_php/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
+├── php_only.rs              `--php-only` mode state and audit entry point
+├── php_only/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification
@@ -794,7 +794,7 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 | Buffer registry | `_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next` | Static generation-safe descriptors, recycled-slot free-list head, and next never-issued descriptor index |
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_*`, `_php_diagnostic_*`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible and deferred warning state/text plus source locations, runtime error messages, and heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_enabled`, `_gc_collecting`, `_gc_freeing_unreachable`, `_gc_pin_head`, `_gc_pending_throw`, `_gc_release_suppressed`, `_gc_runs`, `_gc_collected`, `_gc_application_started`, `_gc_*_started`, `_gc_*_time`, `_gc_destructor_depth` | Allocation/free/live-byte counters, collector lifecycle and timing state, pinned roots, and deferred throws |
-| Exception and handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, `_php_error_handler_*`, `_php_exception_handler_*`, `_class_parent_ids` | Active exception and cleanup stacks, current user handlers with heap-backed restore stacks, magic-set recursion guard, and parent links used for catch matching |
+| Exception and handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, `_php_error_handler_*`, `_php_exception_handler_*`, `_class_parent_ids` | Active exception and cleanup stacks, current user handlers with heap-backed restore stacks, magic-accessor recursion guard, and parent links used for catch matching |
 | Reference and resource tracking | `_rt_unmanaged_ref_borrow_top`, `_resource_inventory_head`, `_resource_inventory_tail` | Active unmanaged array-element borrow plus the heap-backed resource-incarnation inventory used by `get_resources()` |
 | Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |
 | Include-loaded function variants | `_fn_variant_active_<function>` | Active hidden implementation pointer for a function loaded through an include point |

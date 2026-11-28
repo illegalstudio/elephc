@@ -10,29 +10,49 @@
 use super::*;
 
 /// Detaches a boxed local before a write can replace its array payload or modify shared cells.
-/// Reference locals publish through the existing reference; value aliases keep the original box.
+/// Reference locals publish a detached child through the shared binding when another owner
+/// holds the current value, such as a suspended write in an error handler.
 pub(in crate::ir_lower) fn load_array_local_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     span: Span,
 ) -> LoweredValue {
-    let value = ctx.load_local_for_mutation(name, Some(span));
-    let ty = ctx.builder.value_php_type(value.value);
-    if ty.codegen_repr() != PhpType::Mixed
-        || ctx.append_update_cell_aliases.contains(name)
-    {
-        return value;
-    }
+    ctx.with_independent_write_receiver(|ctx| {
+        let value = ctx.load_local_for_mutation(name, Some(span));
+        let ty = ctx.builder.value_php_type(value.value);
+        if ty.codegen_repr() != PhpType::Mixed || ctx.append_update_cell_aliases.contains(name) {
+            return value;
+        }
+        if ctx.is_ref_bound_local(name) {
+            let shared = ctx.emit_value(Op::RuntimeCall, vec![value.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellHasOtherOwner)),
+                PhpType::Bool, crate::ir::Effects::READS_HEAP, Some(span));
+            let separate = ctx.builder.create_named_block("offset.reference.separate", Vec::new());
+            let done = ctx.builder.create_named_block("offset.reference.separated", Vec::new());
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: shared.value, then_target: separate, then_args: Vec::new(),
+                else_target: done, else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(separate);
+            publish_detached_array_cell(ctx, name, value, ty, span);
+            branch_to(ctx, done);
+            ctx.builder.position_at_end(done);
+        } else {
+            publish_detached_array_cell(ctx, name, value, ty, span);
+        }
+        ctx.load_local_for_mutation(name, Some(span))
+    })
+}
+
+/// Replaces the value at the same addressable place without resetting its array cursor.
+fn publish_detached_array_cell(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue, ty: PhpType, span: Span,
+) {
     let detached = ctx.emit_owned_value(
-        Op::MixedClone,
-        vec![value.value],
-        None,
-        ty.clone(),
-        Op::MixedClone.default_effects(),
-        Some(span),
+        Op::MixedClone, vec![value.value], None, ty.clone(),
+        Op::MixedClone.default_effects(), Some(span),
     );
-    ctx.store_call_argument_local(name, detached, ty, Some(span));
-    ctx.load_local_for_mutation(name, Some(span))
+    ctx.store_local_representation(name, detached, ty, Some(span));
 }
 
 /// Returns the container type an undefined local must be auto-vivified as, if this write is its
@@ -228,7 +248,7 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
             if ref_bound_mixed_indexed_array_write(ctx, array, value) {
                 (array_value, Some(ctx.local_type(array)), true)
             } else {
-                prepare_indexed_array_local_write(ctx, array_value, value, span)
+                prepare_indexed_array_local_write(ctx, array, array_value, value, span)
             };
         // A promotable `array<int>` local may already be hash storage: its append keeps the raw
         // integer under its own tag, as the typed reads of the promoted hash expect.
@@ -267,7 +287,14 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     }
     emit_array_append_operation(ctx, op, array_value, value, span);
     finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
-    release_persisted_string_operand(ctx, value, span);
+    if op == Op::MixedArrayAppend {
+        // The boxed writer lends the RHS and makes the container retain its own owner. Retire
+        // the caller's original temporary after the append, just like property and static
+        // property boxed writes do. This also covers objects and arrays, not only strings.
+        super::boxed_write_owners::release_value(ctx, value, span);
+    } else {
+        release_persisted_string_operand(ctx, value, span);
+    }
 }
 
 /// Passes a null offset to user ArrayAccess while preserving internal dimension handlers.
@@ -275,6 +302,10 @@ fn emit_array_append_operation(
     ctx: &mut LoweringContext<'_, '_>, op: Op, array: LoweredValue,
     value: LoweredValue, span: Span,
 ) {
+    if op == Op::MixedArrayAppend {
+        super::boxed_write_owners::lower_append(ctx, array, value, span);
+        return;
+    }
     let user_array_access = op == Op::RuntimeCall
         && matches!(ctx.builder.value_php_type(array.value).codegen_repr(), PhpType::Object(name)
             if ctx.interfaces.contains_key(&name)
@@ -325,6 +356,7 @@ fn coerce_declared_array_append(
 /// Prepares an indexed-array local for an offset assignment.
 pub(super) fn prepare_indexed_array_local_set(
     ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
     array_value: LoweredValue,
     value: LoweredValue,
     span: Span,
@@ -336,6 +368,7 @@ pub(super) fn prepare_indexed_array_local_set(
     }
     if indexed_array_refcounted_set_needs_mixed_conversion(&current_ty, &value_ty) {
         let updated_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let array_value = own_indexed_array_conversion_source(ctx, array, array_value, span);
         let converted = ctx.emit_value(
             Op::ArrayToMixed,
             vec![array_value.value],
@@ -346,7 +379,7 @@ pub(super) fn prepare_indexed_array_local_set(
         );
         return (converted, Some(updated_ty), true);
     }
-    prepare_indexed_array_local_write(ctx, array_value, value, span)
+    prepare_indexed_array_local_write(ctx, array, array_value, value, span)
 }
 
 /// Coerces miss-capable scalar reads before writing them into a concrete indexed-array slot.
@@ -389,6 +422,7 @@ pub(super) fn indexed_array_refcounted_set_needs_mixed_conversion(
 /// Converts typed indexed arrays to Mixed when a local write would make them heterogeneous.
 pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
     ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
     array_value: LoweredValue,
     value: LoweredValue,
     span: Span,
@@ -404,6 +438,7 @@ pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
     if !indexed_array_write_needs_mixed_conversion(&current_ty, &updated_ty) {
         return (array_value, Some(updated_ty), false);
     }
+    let array_value = own_indexed_array_conversion_source(ctx, array, array_value, span);
     let converted = ctx.emit_value(
         Op::ArrayToMixed,
         vec![array_value.value],
@@ -413,6 +448,20 @@ pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
         Some(span),
     );
     (converted, Some(updated_ty), true)
+}
+
+/// Gives a consuming indexed-to-Mixed conversion ownership for a borrowed ref-cell load.
+fn own_indexed_array_conversion_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.is_ref_bound_local(array) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, array_value, Some(span))
+    } else {
+        array_value
+    }
 }
 
 /// Returns whether an object write keeps an indexed array's declared object element type.
@@ -469,10 +518,15 @@ pub(in crate::ir_lower) fn prepare_hash_local_write(
     } else {
         array_value
     };
+    let storeback = ctx.builder.value_defining_instruction(array_value.value)
+        .and_then(|inst| match (inst.op, &inst.immediate) {
+            (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => Some(Immediate::LocalSlot(*slot)),
+            _ => None,
+        });
     let converted = ctx.emit_value(
         Op::HashToMixed,
         vec![array_value.value],
-        None,
+        storeback,
         updated_ty.clone(),
         Op::HashToMixed.default_effects(),
         Some(span),

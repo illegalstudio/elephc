@@ -41,7 +41,6 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     let reflected_function = reflection_function_binding_for_expr(ctx, value);
     let reflected_property = reflection_property_binding_for_expr(ctx, value);
     let reflected_method = reflection_method_binding_for_expr(ctx, value);
-    let reflected_args = reflection_arg_array_binding_for_expr(value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
@@ -126,7 +125,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     let int_seed = !mixed_storage_site
         && ctx.is_int_seed_binding(name)
         && crate::ir_lower::numeric_storage::is_checked_int_seed(ctx, lowered.value);
-    let (lowered, php_type) = if int_seed {
+    let (lowered, php_type) = if let Some(stored) =
+        crate::ir_lower::conversion_boundaries::local_store(ctx, name, lowered, span) {
+        (crate::ir_lower::ownership::copy_assignment_value(ctx, stored.0, Some(span)), stored.1)
+    } else if int_seed {
         (lowered, PhpType::Int)
     } else {
         contextualize_local_assignment(ctx, name, value, lowered, span)
@@ -136,6 +138,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     } else {
         php_type
     };
+    crate::ir_lower::local_binding_origins::prepare(ctx, name, span);
     ctx.store_local(name, lowered, php_type, Some(span));
     if carries_reference_markers {
         ctx.mark_reference_marker_array_local(name);
@@ -168,9 +171,6 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     }
     if let Some((reflected_class, reflected_method)) = reflected_method {
         ctx.bind_reflection_method_local(name, reflected_class, reflected_method);
-    }
-    if let Some(reflected_args) = reflected_args {
-        ctx.bind_reflection_arg_array_local(name, reflected_args);
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);

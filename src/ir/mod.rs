@@ -10,6 +10,7 @@
 //!   are immutable metadata assigned when instructions are built.
 
 mod block;
+pub(crate) mod control_flow;
 mod runtime_fn;
 mod builder;
 mod effects;
@@ -43,7 +44,7 @@ pub use function::{
     LocalSlotId,
 };
 pub use instr::{
-    BuiltinId, CheckedNumericChainImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
+    BuiltinId, CheckedNumericChainImmediate, EvalBindingRole, EvalScopeStoreImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
     InstId, Instruction, IterStartMetadata, MinMaxRule, MixedNumericOp, Op, PassOrigin, PhpTypePredicate,
     PropertyFetchMode, RuntimeId,
 };

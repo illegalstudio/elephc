@@ -24,7 +24,7 @@ pub(super) fn lower_array_splice_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    let mut operands = if crate::types::call_args::has_named_args(args) {
+    let mut operands = if crate::types::call_args::has_named_args(args, ctx.semantic_profile) {
         lower_args_with_signature(ctx, sig, args)
     } else {
         lower_positional_builtin_args_with_signature(ctx, sig, args)

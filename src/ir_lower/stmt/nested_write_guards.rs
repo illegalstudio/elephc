@@ -44,10 +44,7 @@ fn guard_nested_write_parent_with_string_cleanup(
     error_string_pins: &[crate::ir_lower::expr::PinnedInFlightOwner],
     span: Span,
 ) -> bool {
-    let invalid_string_offset = index.is_none() || index.is_some_and(|index| {
-        matches!(&index.kind, ExprKind::StringLiteral(key)
-            if crate::numeric_string::scan_numeric_prefix(key).is_none())
-    });
+    let invalid_string_offset = index.is_none() || index.is_some_and(literal_rejects_string_offset);
     let parent_ty = ctx.builder.value_php_type(parent.value).codegen_repr();
     if parent_ty == PhpType::Str && invalid_string_offset {
         release_error_string(ctx, error_string, error_string_pins, span);
@@ -74,6 +71,36 @@ fn guard_nested_write_parent_with_string_cleanup(
         ctx.builder.position_at_end(scalar_check);
         ctx.restore_initialized_slots(initialized);
     }
+    guard_scalar_write_parent_with_cleanup(ctx, parent, error_string, error_string_pins, span)
+}
+
+/// Identifies offsets whose guard already excludes string parents from the write continuation.
+pub(super) fn literal_rejects_string_offset(index: &Expr) -> bool {
+    matches!(&index.kind, ExprKind::StringLiteral(key)
+        if crate::numeric_string::scan_numeric_prefix(key).is_none())
+}
+
+/// Rejects scalar offset parents while permitting false autovivification and string offsets.
+/// The caller publishes every live operand before this guard can throw.
+pub(super) fn guard_scalar_write_parent(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
+) -> bool {
+    guard_scalar_write_parent_with_cleanup(ctx, parent, None, &[], span)
+}
+
+/// Shares scalar rejection while preserving a legacy append's unpublished string cleanup.
+fn guard_scalar_write_parent_with_cleanup(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    error_string: Option<LoweredValue>,
+    error_string_pins: &[crate::ir_lower::expr::PinnedInFlightOwner], span: Span,
+) -> bool {
+    let ty = ctx.builder.value_php_type(parent.value).codegen_repr();
+    if matches!(ty, PhpType::Int | PhpType::Float | PhpType::Resource(_)) {
+        release_error_string(ctx, error_string, error_string_pins, span);
+        lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
+        return false;
+    }
+    if !matches!(ty, PhpType::Mixed | PhpType::Bool | PhpType::False) { return true; }
     let mut invalid = parent_type_predicate(ctx, parent, crate::ir::PhpTypePredicate::Int, span);
     for predicate in [crate::ir::PhpTypePredicate::Float, crate::ir::PhpTypePredicate::Resource] {
         let other = parent_type_predicate(ctx, parent, predicate, span);

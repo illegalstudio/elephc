@@ -45,11 +45,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = if ty.is_php_array() { PhpType::Array(Box::new(PhpType::Mixed)) } else { ty };
     match ty {
         PhpType::Array(elem) => Ok(PhpType::AssocArray {
-            key: Box::new(array_key_type_from_value_type(*elem)),
+            key: Box::new(array_key_type_from_value_type(*elem, cx.checker.semantic_profile)),
             value: Box::new(PhpType::Int),
         }),
         PhpType::AssocArray { value, .. } => Ok(PhpType::AssocArray {
-            key: Box::new(array_key_type_from_value_type(*value)),
+            key: Box::new(array_key_type_from_value_type(*value, cx.checker.semantic_profile)),
             value: Box::new(PhpType::Int),
         }),
         _ => Err(CompileError::new(

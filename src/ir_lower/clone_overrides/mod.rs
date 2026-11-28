@@ -36,7 +36,6 @@ mod scoped_setters;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::ir::{CloneOverrideApplicator, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
-use crate::parser::ast::ExprKind;
 use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType};
 
 use arms::OverrideArm;
@@ -73,7 +72,7 @@ fn applicator_function_name(class_id: u64, index: usize) -> String {
 pub(crate) fn lower_clone_override_applicators(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
 ) -> Result<(), crate::ir_lower::LoweringError> {
     let Some(sites) = collect_sites(module) else {

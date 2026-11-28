@@ -18,6 +18,8 @@ use crate::span::Span;
 /// and any planner errors. Enough span and source-index data is kept to produce
 /// PHP-compatible diagnostics while preserving evaluation order.
 pub(crate) struct CallArgPlan {
+    /// Policy used for the original key expansion and every later projection.
+    pub(super) semantic_profile: elephc_semantics::SemanticProfile,
     pub(crate) source_args: Vec<Expr>,
     pub(super) source_origins: Vec<super::static_spread::ExpandedArgOrigin>,
     pub(crate) regular_args: Vec<PlannedRegularArg>,
@@ -118,6 +120,44 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Projects caller reference source indices, excluding defaults and unpacked values.
+    pub(crate) fn reference_source_indices(&self, sig: &crate::types::FunctionSig) -> Vec<usize> {
+        let variadic = sig.variadic.as_ref().and_then(|name|
+            sig.params.iter().position(|(parameter, _)| parameter == name));
+        let by_ref = |position: Option<usize>| position
+            .and_then(|index| sig.ref_params.get(index)).copied().unwrap_or(false);
+        let direct = |index: usize| self.source_origins.get(index).is_some_and(|origin|
+            *origin == super::static_spread::ExpandedArgOrigin::Source)
+            && self.source_args.get(index).is_some_and(|arg| !matches!(arg.kind, ExprKind::Spread(_)));
+        if let Some(args) = &self.passthrough_args {
+            return args.iter().enumerate().take_while(|(_, arg)| !matches!(arg.kind, ExprKind::Spread(_)))
+                .filter(|(index, _)| direct(*index) && by_ref(
+                    if *index < self.regular_param_count { Some(*index) } else { variadic }))
+                .map(|(index, _)| index).collect();
+        }
+        self.source_values.iter().filter(|value| direct(value.source_index())
+            && by_ref(value.param_idx().or(variadic))).map(PlannedSourceValue::source_index).collect()
+    }
+
+    /// Projects a fixed source/default expression only when no dynamic unpack can replace it.
+    pub(crate) fn known_regular_argument<'a>(&'a self, signature: &'a crate::types::FunctionSig,
+        parameter_index: usize) -> Option<&'a Expr> {
+        if parameter_index >= self.regular_param_count { return None; }
+        if let Some(arguments) = &self.passthrough_args {
+            if arguments.iter().take(parameter_index + 1).any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+                return None;
+            }
+            return arguments.get(parameter_index)
+                .or_else(|| signature.defaults.get(parameter_index)?.as_ref());
+        }
+        match self.regular_args.get(parameter_index) {
+            Some(PlannedRegularArg::Source { expr, .. } | PlannedRegularArg::Default(expr)) => Some(expr),
+            Some(PlannedRegularArg::SpreadElement { .. }) => None,
+            None if self.prefix_has_dynamic_named_spread => None,
+            None => signature.defaults.get(parameter_index)?.as_ref(),
+        }
+    }
+
     /// Retains unpack provenance when literal expansion makes a value look like caller storage.
     pub(crate) fn regular_argument_is_unpacked(&self, parameter_index: usize) -> bool {
         let from_unpack = |source_index: usize| {
@@ -142,7 +182,7 @@ impl CallArgPlan {
     ) -> Option<(usize, usize)> {
         let args = self.passthrough_args.as_ref()?;
         let provided = if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
-            super::static_spread::expand_planned_positional_spreads(args)?.len()
+            super::static_spread::expand_planned_positional_spreads(args, self.semantic_profile)?.len()
         } else { args.len() };
         let required = super::matching::required_param_count(sig);
         (provided < required).then_some((provided, required))
@@ -151,7 +191,7 @@ impl CallArgPlan {
     /// Marks defaults that may be evaluated, retaining uncertainty from dynamic unpack lengths.
     pub(crate) fn possible_default_argument_mask(&self, sig: &crate::types::FunctionSig) -> Vec<bool> {
         if let Some(args) = &self.passthrough_args {
-            let supplied = super::static_spread::expand_planned_positional_spreads(args)
+            let supplied = super::static_spread::expand_planned_positional_spreads(args, self.semantic_profile)
                 .map(|values| values.len())
                 .unwrap_or_else(|| args.iter()
                     .position(|arg| matches!(arg.kind, ExprKind::Spread(_)))
@@ -488,10 +528,12 @@ mod tests {
         );
         let plan = super::super::planner::plan_call_args(
             &sig, &[named("b", 2)], Span::dummy(), false, true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         ).expect("omitted defaults should be planned");
         assert_eq!(plan.default_argument_mask(), vec![true, false, true]);
         let explicit = super::super::planner::plan_call_args(
             &sig, &[named("b", 2), named("a", 1), named("c", 3)], Span::dummy(), false, true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         ).expect("explicit equal literals should remain source arguments");
         assert_eq!(explicit.default_argument_mask(), vec![false, false, false]);
     }
@@ -502,6 +544,7 @@ mod tests {
         let sig = sig_with_defaults(vec![None, None, Some(Expr::int_lit(3))]);
         let check = |args: &[Expr]| super::super::planner::plan_call_args(
             &sig, args, Span::dummy(), false, true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         ).unwrap().statically_missing_positionals(&sig);
         assert_eq!(check(&[]), Some((0, 2)));
         assert_eq!(check(&[Expr::int_lit(1)]), Some((1, 2)));
@@ -520,6 +563,7 @@ mod tests {
         let mut sig = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, Some(Expr::int_lit(3))]);
         let plan = super::super::planner::plan_call_args(
             &sig, &[Expr::int_lit(4)], Span::dummy(), false, true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         ).unwrap();
         assert_eq!(plan.statically_missing_positionals(&sig), Some((1, 2)));
         sig.params.push((crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
@@ -544,18 +588,20 @@ mod tests {
             (vec![named], vec![true, false, true]),
             (vec![Expr::int_lit(1), spread(Expr::var("args"))], vec![false, true, true]),
         ] {
-            let plan = super::super::planner::plan_call_args(&sig, &args, Span::dummy(), false, true)
+            let plan = super::super::planner::plan_call_args(&sig, &args, Span::dummy(), false, true, elephc_semantics::SemanticProfile::PERMISSIVE)
                 .expect("valid arguments");
             assert_eq!(plan.possible_default_argument_mask(&sig), expected);
         }
         let required_tail = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, None]);
         let guaranteed = super::super::planner::plan_call_args(
             &required_tail, &spread_then_named_c(), Span::dummy(), false, true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         ).unwrap();
         assert_eq!(guaranteed.possible_default_argument_mask(&required_tail), vec![false; 3]);
         let optional_middle = sig_with_defaults(vec![None, Some(Expr::int_lit(2)), None]);
         let uncertain = super::super::planner::plan_call_args(
             &optional_middle, &spread_then_named_c(), Span::dummy(), false, true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         ).unwrap();
         assert_eq!(uncertain.possible_default_argument_mask(&optional_middle), vec![false, true, false]);
     }
@@ -571,6 +617,7 @@ mod tests {
             Span::dummy(),
             false,
             true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         )
         .expect("planner should accept spread before named argument");
 
@@ -590,6 +637,7 @@ mod tests {
             Span::dummy(),
             false,
             true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         )
         .expect("planner should accept spread before named argument");
 
@@ -612,6 +660,7 @@ mod tests {
             Span::dummy(),
             false,
             true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         )
         .expect("positional spread should remain a passthrough source");
 
@@ -628,9 +677,32 @@ mod tests {
             Span::dummy(),
             false,
             true,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         )
         .expect("direct positional values should remain passthrough sources");
 
         assert_eq!(plan.descriptor_projection_mask(), vec![false, false, false]);
     }
+
+    /// An expanded associative unpack remains an unpack, not a written positional after one.
+    #[test]
+    fn static_assoc_positionals_after_indexed_unpack_keep_source_origin() {
+        use elephc_semantics::SemanticProfile;
+        let sig = sig_with_defaults(vec![None, None, Some(Expr::int_lit(3))]);
+        let span = Span::dummy();
+        let indexed = Expr::new(ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteral(vec![Expr::int_lit(20)]), span,
+        ))), span);
+        let assoc = Expr::new(ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("0"), Expr::int_lit(10))]), span,
+        ))), span);
+        let plan = super::super::planner::plan_call_args(&sig, &[indexed.clone(), assoc],
+            span, false, false, SemanticProfile::PERMISSIVE).unwrap();
+        assert!(plan.has_spread_args());
+        assert!(plan.source_origins == vec![super::super::static_spread::ExpandedArgOrigin::Source,
+            super::super::static_spread::ExpandedArgOrigin::StaticAssocPositional]);
+        assert!(super::super::planner::plan_call_args(&sig, &[indexed, Expr::int_lit(10)],
+            span, false, false, SemanticProfile::PERMISSIVE).is_err());
+    }
+
 }

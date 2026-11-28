@@ -520,7 +520,8 @@ fn build_listed_interface_info(
                 ));
             }
         }
-        iface_constants.insert(c.name.clone(), c.value.clone());
+        iface_constants.insert(c.name.clone(), crate::types::constant_binding::bind_declared_value(
+            c.value.clone(), c.type_expr.as_ref()));
         if let Some(type_expr) = &c.type_expr {
             constant_types.insert(c.name.clone(), type_expr.clone());
         } else {

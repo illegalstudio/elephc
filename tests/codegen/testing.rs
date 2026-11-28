@@ -325,9 +325,9 @@ exit($runner->finish());
 }
 
 /// A suite written against PHPUnit's namespace compiles unchanged, including under
-/// `--strict-php` for a tagged `.php` file, and passes.
+/// `--php-only` for a tagged `.php` file, and passes.
 #[test]
-fn test_phpunit_alias_compiles_under_strict_php() {
+fn test_phpunit_alias_compiles_under_php_only() {
     let out = compile_cli_file_and_run_with_flags(
         r#"<?php
 
@@ -361,7 +361,7 @@ $case = new StackTest();
 $runner->run($case, 'testPushAndPop', fn() => $case->testPushAndPop());
 $runner->finish();
 "#,
-        &["--strict-php"],
+        &["--php-only"],
     );
     assert_eq!(
         out,

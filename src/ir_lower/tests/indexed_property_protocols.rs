@@ -17,7 +17,7 @@ class IndexedProtocolDynamic {}
 class IndexedProtocolMagic {
     public function __get(string $name): mixed { return [1]; }
 }
-function indexedProtocolWrite(mixed $object): void { $object->items[0] += 2; }
+function indexedProtocolWrite(mixed $object): void { $object->items[0][1] += 2; }
 indexedProtocolWrite(new IndexedProtocolDynamic());
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());

@@ -93,10 +93,10 @@ impl DomReceiver {
         if self.global_scope { mutations.extend(self.declarations.globals.iter().cloned()); }
         for sig in signatures {
             let planned = sig.as_ref().and_then(|sig| {
-                crate::types::call_args::plan_call_args(sig, args, expr.span, false, true).ok()
+                crate::types::call_args::plan_call_args(sig, args, expr.span, false, true, elephc_semantics::SemanticProfile::PERMISSIVE).ok()
                     .map(|plan| {
                         let args = plan.normalized_args();
-                        crate::types::call_args::expand_planned_positional_spreads(&args).unwrap_or(args)
+                        crate::types::call_args::expand_planned_positional_spreads(&args, elephc_semantics::SemanticProfile::PERMISSIVE).unwrap_or(args)
                     })
             });
             let selected = planned.as_deref().unwrap_or(args);

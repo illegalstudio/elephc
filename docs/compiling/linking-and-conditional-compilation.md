@@ -508,7 +508,7 @@ generation, so unused branches are never compiled.
 ### `--define` / `--define=`
 
 Defines a compile-time symbol. Repeatable. It may be combined with
-[`--strict-php`](cli-reference.md#strict-php-mode), but strict auditing still
+[`--php-only`](cli-reference.md#php-only-mode), but strict auditing still
 rejects every `ifdef` in physical PHP source. The combination exists for mixed
 projects and LFC source: LFC `ifdef` consumes the symbol while PHP source
 remains audited.
@@ -516,7 +516,7 @@ remains audited.
 ```bash
 elephc build --define DEBUG app.php
 elephc build --define=DEBUG --define=METAL app.php
-elephc build --strict-php --define DEBUG app.lfc
+elephc build --php-only --define DEBUG app.lfc
 ```
 
 ```php

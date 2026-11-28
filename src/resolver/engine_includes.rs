@@ -91,7 +91,7 @@ pub(super) fn resolve_include_stmt(
     }
 
     let included_stmts =
-        parse_file(&resolved, stmt.span, &state.conditional_defines)?;
+        parse_file(&resolved, stmt.span, &state.conditional_defines, state.semantic_profile)?;
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
     include_chain.push(canonical.clone());

@@ -123,6 +123,7 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
         trait_collision_defaults: HashMap::new(),
         class_binding: Default::default(),
         requested_instantiations: Vec::new(),
@@ -144,6 +145,7 @@ fn dummy_check_result() -> CheckResult {
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
         closure_param_hints: HashMap::new(),
+        closure_result_types: HashMap::new(),
         interfaces: HashMap::new(),
         classes,
         enums,
@@ -163,6 +165,7 @@ fn dummy_check_result() -> CheckResult {
         array_append_element_types: HashMap::new(),
         element_value_views: HashMap::new(),
         local_value_read_types: HashMap::new(),
+        local_store_contracts: Default::default(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         scalar_guard_arg_sites: Default::default(),
@@ -316,6 +319,7 @@ fn lowers_every_expr_variant_smoke() {
         }),
         bool_lit(true),
         expr(ExprKind::Null),
+        expr(ExprKind::UnaryPlus(Box::new(int(1)))),
         expr(ExprKind::Negate(Box::new(int(1)))),
         expr(ExprKind::Not(Box::new(bool_lit(false)))),
         expr(ExprKind::BitNot(Box::new(int(1)))),
@@ -594,8 +598,8 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
 /// The smoke list above only proves the node lowers at all. `["k" => 1, ...[2], 3]` is the shape
 /// the ORDER matters for -- the spread's elements take the next free integer key where the
 /// spread sits -- so each form has to emit its own op, in source order, into the one hash the
-/// literal opens with. The bare value appends through a generic `runtime_call` rather than an
-/// op of its own, so this also pins that the call takes the literal's hash as its receiver.
+/// literal opens with. A protected owner slot may carry that hash across throwing writes. The
+/// bare value appends through a generic `runtime_call`, so this also pins the shared receiver.
 #[test]
 fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
     let text = lower_program(vec![stmt(StmtKind::Assign {
@@ -610,14 +614,14 @@ fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
     let ops: Vec<&str> = text
         .lines()
         .filter_map(|line| {
-            ["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"]
+            ["hash_new", "hash_set_value", "array_to_hash", "hash_spread", "runtime_call"]
                 .into_iter()
                 .find(|op| line.contains(op))
         })
         .collect();
     assert_eq!(
         ops,
-        vec!["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"],
+        vec!["hash_new", "hash_set_value", "array_to_hash", "hash_spread", "runtime_call"],
         "unexpected mixed-literal EIR: {text}"
     );
 
@@ -629,15 +633,25 @@ fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
         .find_map(|line| line.split_once(": Heap(Hash)"))
         .map(|(value, _)| value.trim())
         .unwrap_or_else(|| panic!("no hash in mixed-literal EIR: {text}"));
-    for op in ["hash_set", "hash_spread", "runtime_call"] {
+    let acquired = text.lines().find_map(|line| line.contains(&format!("= acquire {hash} "))
+        .then(|| line.split_once(':').map(|(value, _)| value.trim())).flatten());
+    let owner_slot = acquired.and_then(|acquired| text.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix(&format!("store_local {acquired} "))
+            .and_then(|rest| rest.split_whitespace().next())
+    }));
+    for op in ["hash_set_value", "hash_spread", "runtime_call"] {
+        let receiver = text.lines().find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix(&format!("{op} "))
+                .and_then(|rest| rest.split_whitespace().next())
+        }).unwrap_or_else(|| panic!("missing {op} in mixed-literal EIR: {text}"));
+        let shared = receiver == hash || owner_slot.is_some_and(|slot| text.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with(&format!("{receiver}: ")) && line.contains(&format!("load_local {slot}"))
+        }));
         assert!(
-            text.lines().any(|line| {
-                let line = line.trim();
-                line.starts_with(&format!("{op} {hash} "))
-                    // Associative literals use the reference-detaching value writer.
-                    || (op == "hash_set"
-                        && line.starts_with(&format!("hash_set_value {hash} ")))
-            }),
+            shared,
             "{op} does not write into the literal's own hash {hash}: {text}"
         );
     }

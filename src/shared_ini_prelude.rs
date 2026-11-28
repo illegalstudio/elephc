@@ -462,7 +462,8 @@ pub(crate) fn all_declaration(web: bool) -> Stmt {
         else { e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_str("Warning: "), BinOp::Concat, message),
             BinOp::Concat, e_str("\n"))]) };
     body.push(s_if(unsupported, vec![
-        s_if(e_call("__elephc_ini_module_known", vec![e_var("extension")]), vec![s_return(e_array(vec![]))], vec![], None),
+        s_if(e_call("__elephc_ini_module_known", vec![e_var("extension")]),
+            vec![s_return(e_array(vec![]))], vec![], None),
         s_expr(warning),
         s_return(e_bool(false)),
     ], vec![], None));

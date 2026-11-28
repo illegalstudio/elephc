@@ -76,7 +76,7 @@ pub(super) fn validate_constant_expression(expr: &Expr) -> Result<(), CompileErr
                 _ => validate_constant_expression(default),
             }
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::Spread(value) => validate_constant_expression(value),
         ExprKind::Cast { target: CastType::Object, .. } => {
             fail("Object casts are not supported in this context")
@@ -156,7 +156,7 @@ fn substitute_predefined_constants(expr: &mut Expr) {
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             visit(value); visit(default);
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => visit(value),
         ExprKind::ArrayAccess { array, index } => { visit(array); visit(index); }
         ExprKind::ArrayLiteral(items) => items.iter_mut().for_each(visit),

@@ -41,6 +41,7 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         // raw address their check hook returns. Rendering it as `mixed` would document a lie.
         TypeSpec::Ptr => "pointer".to_string(),
         TypeSpec::Callable => "callable".to_string(),
+        TypeSpec::Resource => "resource".to_string(),
         TypeSpec::Array => "array".to_string(),
         TypeSpec::Nullable(inner) => format!("?{}", type_spec_str(inner)),
     }
@@ -97,6 +98,7 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
 /// Renders one runtime or linker requirement for semantic inventory tooling.
 fn requirement_json(requirement: BuiltinRequirement) -> Value {
     match requirement {
+        BuiltinRequirement::PreludeHelper(name) => json!({"kind": "prelude_helper", "name": name}),
         BuiltinRequirement::Bridge(name) => json!({"kind": "bridge", "name": name}),
         BuiltinRequirement::BridgeIdentity(name) => {
             json!({"kind": "bridge_identity", "name": name})
@@ -121,6 +123,12 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         }
         BuiltinValidation::SignatureOnly => json!({"kind": "signature"}),
         BuiltinValidation::Shared(_) => json!({"kind": "shared"}),
+        BuiltinValidation::MixedInputs(_) => json!({"kind": "mixed_inputs"}),
+        BuiltinValidation::GmpIntegerCast => json!({"kind": "shared", "numeric_cast": "gmp_int"}),
+        BuiltinValidation::ExplicitNumericCast(target) => json!({"kind": "shared", "numeric_cast": match target {
+            elephc_semantics::numeric_cast::NumericCastTarget::Int => "int",
+            elephc_semantics::numeric_cast::NumericCastTarget::Float => "float",
+        }}),
     };
     let result_type = match semantics.result_type {
         BuiltinResultType::Checked => "checked",
@@ -195,6 +203,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::Standard => "standard",
         BuiltinArgumentLowering::PreserveValues => "preserve_values",
         BuiltinArgumentLowering::PreserveUncoerced => "preserve_uncoerced",
+        BuiltinArgumentLowering::NumericParameters(_) => "numeric_parameters",
         BuiltinArgumentLowering::MaterializeDefaults => "materialize_defaults",
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
@@ -215,6 +224,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     };
     let callable = match semantics.callable {
         BuiltinCallablePolicy::Dynamic(_) => json!({"kind": "dynamic"}),
+        BuiltinCallablePolicy::Prepared(_) => json!({"kind": "dynamic", "prepared": true}),
         BuiltinCallablePolicy::DirectOnly(reason) => {
             json!({"kind": "direct_only", "reason": reason})
         }
@@ -231,7 +241,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
             json!({"kind": "runtime_call", "target": target.as_eir()})
         }
     };
-    json!({
+    let mut record = json!({
         "validation": validation,
         "result_type": result_type,
         "effects": effects,
@@ -244,7 +254,17 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         "argument_lowering": argument_lowering,
         "callable": callable,
         "lowering": lowering,
-    })
+    });
+    if let Some(input) = semantics.array_key_input {
+        use crate::builtins::array_key_inputs::ArrayKeyInput;
+        record["array_key_input"] = match input {
+            ArrayKeyInput::Value { argument, receiver, nullable } => json!({
+                "kind": "value", "argument": argument, "receiver": receiver, "nullable": nullable,
+            }),
+            ArrayKeyInput::Values { argument } => json!({"kind": "values", "argument": argument}),
+        };
+    }
+    record
 }
 
 /// Builds the documentation JSON array for every PHP-visible registered builtin.

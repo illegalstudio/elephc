@@ -16,18 +16,18 @@ use crate::ir::{RuntimeArgumentLayout, RuntimeCallTarget};
 /// Preserves actual positional arity for a shared runtime builtin with indexed spread arguments.
 pub(super) fn lower_packed_builtin_call(
     ctx: &mut LoweringContext<'_, '_>, name: &str, sig: Option<&FunctionSig>,
-    args: &[Expr], expr: &Expr,
+    args: &[Expr], expr: &Expr, source_mode: crate::source::SourceMode,
 ) -> Option<LoweredValue> {
     let def = crate::builtins::registry::lookup(name)?;
     if def.spec.semantics.argument_lowering != BuiltinArgumentLowering::PreserveValues
-        || !args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args) {
+        || !args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args, ctx.semantic_profile) {
         return None;
     }
     let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) = def.spec.semantics.lowering else { return None; };
     if !target.uses_mbstring_runtime() { return None; }
     let sig = sig?;
     if sig.ref_params.iter().any(|by_ref| *by_ref) { return None; }
-    let plan = crate::types::call_args::plan_call_args(sig, args, expr.span, true, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(sig, args, expr.span, true, false, ctx.semantic_profile).ok()?;
     for arg in &plan.source_args {
         match &arg.kind {
             ExprKind::Spread(inner) => { indexed_spread_source_type(ctx, inner)?; }
@@ -35,10 +35,10 @@ pub(super) fn lower_packed_builtin_call(
             _ => {},
         }
     }
-    let result_type = registry_builtin_result_type(ctx, name, args, &[], expr.span)
+    let result_type = resolve_registry_builtin_result_type_with_source_mode(ctx, name, args, &[], expr.span, None, source_mode)
         .unwrap_or_else(|| def.return_type.clone());
     let effects = crate::builtins::semantics::resolve_builtin_effects(def,
-        &BuiltinSemanticInput { name: def.name, args, arg_types: &[], span: expr.span });
+        &BuiltinSemanticInput { semantic_profile: ctx.semantic_profile, source_mode, name: def.name, args, arg_types: &[], span: expr.span });
     ctx.begin_argument_guard_scope();
     let array = ctx.emit_owned_value(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(4)),
         PhpType::Array(Box::new(PhpType::Mixed)), Op::ArrayNew.default_effects(), Some(expr.span));
@@ -56,8 +56,10 @@ pub(super) fn lower_packed_builtin_call(
     let call = ctx.emit_value(Op::RuntimeCall, vec![array.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
             target, arguments: RuntimeArgumentLayout::IndexedArray,
-            strict_php: crate::strict_php::is_enabled(),
+            php_only: crate::php_only::is_enabled(),
             strict_types: Some(crate::source::current_strict_types()),
+            strict_comparisons: crate::semantics::comparisons::active(
+                ctx.semantic_profile, ctx.builtin_source_mode()),
         })), result_type, effects, Some(expr.span));
     ctx.unguard_call_argument(array.value, expr.span);
     crate::ir_lower::ownership::release_if_owned(ctx, array, Some(expr.span));

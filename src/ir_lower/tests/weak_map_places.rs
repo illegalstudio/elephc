@@ -9,6 +9,53 @@
 //! - The compiler-only helper returns a managed cell and survives reachability pruning.
 
 use crate::codegen::platform::Target;
+use crate::ir::{Immediate, Op, Ownership, ValueDef};
+use crate::types::PhpType;
+
+/// An object WeakMap key is boxed from the borrowed view of its published owner on every target.
+#[test]
+fn weak_map_compound_object_keys_box_borrowed_published_owners_on_all_targets() {
+    let source = r#"<?php
+        function incrementWeakMapEntry(WeakMap $map, object $key): void {
+            $map[$key] += 1;
+        }
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("main.php"), std::path::Path::new("."), Target::parse(target).unwrap());
+        let function = module.functions.iter()
+            .find(|function| function.name == "incrementWeakMapEntry")
+            .unwrap_or_else(|| panic!("{target}: compound helper is lowered"));
+        let (box_index, source, source_slot) = function.instructions.iter().enumerate()
+            .find_map(|(index, instruction)| {
+                if instruction.op != Op::MixedBox { return None; }
+                let &source = instruction.operands.first()?;
+                let source_value = function.value(source)?;
+                if !matches!(source_value.php_type.codegen_repr(), PhpType::Object(_)) {
+                    return None;
+                }
+                let ValueDef::Instruction { inst, .. } = source_value.def else { return None; };
+                let load = function.instruction(inst)?;
+                let Some(Immediate::LocalSlot(slot)) = load.immediate else { return None; };
+                (load.op == Op::LoadLocal && source_value.ownership == Ownership::Borrowed)
+                    .then_some((index, source, slot))
+            })
+            .unwrap_or_else(|| panic!("{target}: object key is boxed from a borrowed owner slot"));
+        assert!(function.instructions[..box_index].iter().any(|instruction|
+            instruction.op == Op::PushCallOperandOwner
+                && instruction.immediate == Some(Immediate::LocalSlot(source_slot))),
+            "{target}: key owner is published before boxing");
+        assert!(!function.instructions[box_index + 1..].iter().any(|instruction|
+            instruction.op == Op::Release && instruction.operands == [source]),
+            "{target}: boxing must not release the published slot's borrowed view");
+        assert!(function.instructions[box_index + 1..].iter().any(|instruction|
+            instruction.op == Op::ReleaseLocalSlot
+                && instruction.immediate == Some(Immediate::LocalSlot(source_slot))),
+            "{target}: key owner slot is retired after boxing");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
 
 /// Every target retains and calls the managed entry helper without changing public reflection.
 #[test]

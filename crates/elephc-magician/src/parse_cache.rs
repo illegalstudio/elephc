@@ -15,6 +15,7 @@
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
 use crate::parser;
+use elephc_semantics::SemanticProfile;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
@@ -26,15 +27,15 @@ type CachedParseResult = Result<Arc<EvalProgram>, EvalParseError>;
 static EVAL_PARSE_CACHE: OnceLock<Mutex<EvalParseCache>> = OnceLock::new();
 
 /// Parses an eval fragment, reusing a cached immutable EvalIR program when available.
-pub(crate) fn parse_fragment_cached(code: &[u8]) -> CachedParseResult {
+pub(crate) fn parse_fragment_cached(code: &[u8], profile: SemanticProfile) -> CachedParseResult {
     if !is_cacheable_fragment(code) {
-        return parser::parse_fragment(code).map(Arc::new);
+        return parser::parse_fragment_with_semantics(code, profile).map(Arc::new);
     }
-    if let Some(result) = lock_eval_parse_cache().lookup(code) {
+    if let Some(result) = lock_eval_parse_cache().lookup(code, profile) {
         return result;
     }
-    let result = parser::parse_fragment(code).map(Arc::new);
-    lock_eval_parse_cache().insert(code.to_vec(), result.clone());
+    let result = parser::parse_fragment_with_semantics(code, profile).map(Arc::new);
+    lock_eval_parse_cache().insert(code.to_vec(), profile, result.clone());
     result
 }
 
@@ -71,26 +72,26 @@ const SCRIPT_PARSE_CACHE_CAPACITY: usize = 64;
 /// Files are memoized under the same 64 KiB cap as fragments, so the costs
 /// `docs/php/opcache.md` measures for an include without the script cache still hold: a larger
 /// file is parsed again on every include, which is what the runtime script cache is for.
-pub(crate) fn parse_script_cached(bytes: &[u8]) -> CachedParseResult {
-    let parse = || crate::script_cache::segments::parse_script(bytes).map(Arc::new);
+pub(crate) fn parse_script_cached(bytes: &[u8], profile: SemanticProfile) -> CachedParseResult {
+    let parse = || crate::script_cache::segments::parse_script_with_semantics(bytes, profile).map(Arc::new);
     if !is_cacheable_fragment(bytes) {
         return parse();
     }
     let cache = SCRIPT_PARSE_CACHE
         .get_or_init(|| Mutex::new(EvalParseCache::new(SCRIPT_PARSE_CACHE_CAPACITY)));
-    if let Some(result) = lock_cache(cache).lookup(bytes) {
+    if let Some(result) = lock_cache(cache).lookup(bytes, profile) {
         return result;
     }
     let result = parse();
-    lock_cache(cache).insert(bytes.to_vec(), result.clone());
+    lock_cache(cache).insert(bytes.to_vec(), profile, result.clone());
     result
 }
 
 /// Bounded FIFO cache for immutable eval parse results.
 struct EvalParseCache {
     capacity: usize,
-    entries: HashMap<Vec<u8>, CachedParseResult>,
-    order: VecDeque<Vec<u8>>,
+    entries: HashMap<SemanticProfile, HashMap<Vec<u8>, CachedParseResult>>,
+    order: VecDeque<(SemanticProfile, Vec<u8>)>,
 }
 
 impl EvalParseCache {
@@ -104,27 +105,26 @@ impl EvalParseCache {
     }
 
     /// Returns a cloned cached parse result for the exact source bytes.
-    fn lookup(&self, code: &[u8]) -> Option<CachedParseResult> {
-        self.entries.get(code).cloned()
+    fn lookup(&self, code: &[u8], profile: SemanticProfile) -> Option<CachedParseResult> {
+        self.entries.get(&profile)?.get(code).cloned()
     }
 
     /// Inserts a parse result and evicts the oldest distinct source when full.
-    fn insert(&mut self, code: Vec<u8>, result: CachedParseResult) {
-        if self.capacity == 0 {
+    fn insert(&mut self, code: Vec<u8>, profile: SemanticProfile, result: CachedParseResult) {
+        if self.capacity == 0 { return; }
+        if let Some(existing) = self.entries.get_mut(&profile).and_then(|entries| entries.get_mut(&code)) {
+            *existing = result;
             return;
         }
-        if self.entries.contains_key(code.as_slice()) {
-            self.entries.insert(code, result);
-            return;
+        while self.order.len() >= self.capacity {
+            let Some((old_profile, oldest)) = self.order.pop_front() else { break; };
+            if let Some(entries) = self.entries.get_mut(&old_profile) {
+                entries.remove(&oldest);
+                if entries.is_empty() { self.entries.remove(&old_profile); }
+            }
         }
-        while self.entries.len() >= self.capacity {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            self.entries.remove(&oldest);
-        }
-        self.order.push_back(code.clone());
-        self.entries.insert(code, result);
+        self.order.push_back((profile, code.clone()));
+        self.entries.entry(profile).or_default().insert(code, result);
     }
 }
 
@@ -139,9 +139,9 @@ mod tests {
         let source = b"return 1;";
         let parsed = Arc::new(parser::parse_fragment(source).expect("fragment should parse"));
 
-        cache.insert(source.to_vec(), Ok(parsed.clone()));
+        cache.insert(source.to_vec(), SemanticProfile::PERMISSIVE, Ok(parsed.clone()));
         let hit = cache
-            .lookup(source)
+            .lookup(source, SemanticProfile::PERMISSIVE)
             .expect("source should be cached")
             .expect("cached source should be successful");
 
@@ -154,10 +154,10 @@ mod tests {
         let mut cache = EvalParseCache::new(4);
         let source = b"<?php echo 1;";
 
-        cache.insert(source.to_vec(), Err(EvalParseError::PhpOpenTag));
+        cache.insert(source.to_vec(), SemanticProfile::PERMISSIVE, Err(EvalParseError::PhpOpenTag));
 
         assert_eq!(
-            cache.lookup(source),
+            cache.lookup(source, SemanticProfile::PERMISSIVE),
             Some(Err(EvalParseError::PhpOpenTag))
         );
     }
@@ -167,13 +167,13 @@ mod tests {
     fn cache_evicts_oldest_fragment() {
         let mut cache = EvalParseCache::new(2);
 
-        cache.insert(b"return 1;".to_vec(), Err(EvalParseError::UnexpectedToken));
-        cache.insert(b"return 2;".to_vec(), Err(EvalParseError::UnexpectedEof));
-        cache.insert(b"return 3;".to_vec(), Err(EvalParseError::InvalidNumber));
+        cache.insert(b"return 1;".to_vec(), SemanticProfile::PERMISSIVE, Err(EvalParseError::UnexpectedToken));
+        cache.insert(b"return 2;".to_vec(), SemanticProfile::PERMISSIVE, Err(EvalParseError::UnexpectedEof));
+        cache.insert(b"return 3;".to_vec(), SemanticProfile::PERMISSIVE, Err(EvalParseError::InvalidNumber));
 
-        assert!(cache.lookup(b"return 1;").is_none());
-        assert!(cache.lookup(b"return 2;").is_some());
-        assert!(cache.lookup(b"return 3;").is_some());
+        assert!(cache.lookup(b"return 1;", SemanticProfile::PERMISSIVE).is_none());
+        assert!(cache.lookup(b"return 2;", SemanticProfile::PERMISSIVE).is_some());
+        assert!(cache.lookup(b"return 3;", SemanticProfile::PERMISSIVE).is_some());
     }
 
     /// Verifies a zero-capacity cache stores no entries.
@@ -181,9 +181,25 @@ mod tests {
     fn zero_capacity_cache_stores_nothing() {
         let mut cache = EvalParseCache::new(0);
 
-        cache.insert(b"return 1;".to_vec(), Err(EvalParseError::UnexpectedToken));
+        cache.insert(b"return 1;".to_vec(), SemanticProfile::PERMISSIVE, Err(EvalParseError::UnexpectedToken));
 
-        assert!(cache.lookup(b"return 1;").is_none());
+        assert!(cache.lookup(b"return 1;", SemanticProfile::PERMISSIVE).is_none());
+    }
+
+    /// Separates positive and negative parses while sharing one capacity across profiles.
+    #[test]
+    fn strict_profiles_partition_parse_results_and_share_capacity() {
+        let strict = SemanticProfile::PERMISSIVE.with(elephc_semantics::StrictFeature::Overflow, true);
+        let source = b"return 9223372036854775808;";
+        let permissive = parse_fragment_cached(source, SemanticProfile::PERMISSIVE).unwrap();
+        assert_eq!(parse_fragment_cached(source, strict), Err(EvalParseError::IntegerLiteralOverflow));
+        assert!(Arc::ptr_eq(&permissive, &parse_fragment_cached(source, SemanticProfile::PERMISSIVE).unwrap()));
+        let mut cache = EvalParseCache::new(1);
+        cache.insert(source.to_vec(), SemanticProfile::PERMISSIVE, Ok(permissive));
+        cache.insert(source.to_vec(), strict, Err(EvalParseError::IntegerLiteralOverflow));
+        assert!(cache.lookup(source, SemanticProfile::PERMISSIVE).is_none());
+        assert!(cache.lookup(source, strict).is_some());
+        assert_eq!(cache.entries.len(), 1);
     }
 
     /// Verifies very large one-off fragments are kept out of the global cache.

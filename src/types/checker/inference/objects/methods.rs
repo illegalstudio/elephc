@@ -37,6 +37,8 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), false, false, expr.span)?;
         let class = match &obj_ty {
             PhpType::Object(name) if !name.is_empty() => Some(name.clone()),
             PhpType::Union(_) => self.union_single_object_class(&obj_ty),
@@ -135,7 +137,7 @@ impl Checker {
                     // signature is not resolvable here, so the arguments are conservatively
                     // reference-aliased. (`bindTo` above only rebinds `$this`; it invokes
                     // nothing, so its arguments are ordinary by-value reads.)
-                    self.record_unresolved_callee_argument_aliases(args);
+                    self.record_unresolved_callee_argument_aliases(args, env);
                     for arg in args {
                         self.infer_type(arg, env)?;
                     }
@@ -172,12 +174,12 @@ impl Checker {
             // The callee is picked from the runtime class id over every candidate that declares
             // the method, so no single parameter list governs the arguments: any candidate's
             // by-reference parameter would alias the local behind them.
-            self.record_unresolved_callee_argument_aliases(args);
+            self.record_unresolved_callee_argument_aliases(args, env);
             return Ok(self
                 .mixed_receiver_method_return_type(method, args.len())
                 .unwrap_or(PhpType::Mixed));
         }
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         Ok(PhpType::Int)
     }
 
@@ -253,6 +255,8 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         self.require_valid_unresolved_call_argument_order(args, "Nullsafe method call")?;
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), false, true, expr.span)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         let Some((class_name, nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
@@ -287,6 +291,8 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         self.require_valid_unresolved_call_argument_order(args, "Dynamic method call")?;
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), false, true, expr.span)?;
         let Some((_class_name, _nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
         else {
@@ -294,8 +300,10 @@ impl Checker {
         };
         // A runtime method name resolves no signature, so the arguments are conservatively
         // reference-aliased — see `Checker::record_unresolved_callee_argument_aliases`.
-        self.record_unresolved_callee_argument_aliases(args);
-        self.infer_type(method, env)?;
+        self.record_unresolved_callee_argument_aliases(args, env);
+        let method_ty = self.infer_type(method, env)?;
+        crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+            &method_ty, method.span, "dynamic method names", |member| *member == PhpType::Str)?;
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -335,7 +343,7 @@ impl Checker {
             .collect();
         implementations.sort_by(|left, right| left.0.cmp(&right.0));
         if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
-            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+            && crate::types::call_args::expand_planned_positional_spreads(args, self.semantic_profile).is_none()
         {
             // Runtime enum unpacks can retain named tail keys, even when the
             // interface also has ordinary class implementations. Recheck enum
@@ -370,6 +378,7 @@ impl Checker {
                     let binding = crate::types::call_args::required_argument_binding_signature(&implementation);
                     let (shortage, satisfiable) = match crate::types::call_args::plan_call_args(
                         &binding, args, expr.span, false, true,
+                        self.semantic_profile,
                     ) {
                         Ok(plan) => {
                             let shortage = plan.statically_missing_positionals(&implementation).is_some();
@@ -485,7 +494,7 @@ impl Checker {
         let method_key = php_symbol_key(method);
         if self.enums.contains_key(class_name)
             && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
-            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+            && crate::types::call_args::expand_planned_positional_spreads(args, self.semantic_profile).is_none()
         {
             // Concrete and nullsafe enum calls share the selected runtime binder.
             // Its boxed collector must also be the layout the method body reads.
@@ -724,6 +733,7 @@ impl Checker {
                         && !Self::method_array_param_keeps_generic_shape(
                             &impl_class_name,
                             &method_key,
+                            false,
                         )
                         && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
@@ -760,7 +770,7 @@ impl Checker {
                         &normalized_args,
                         sig,
                         regular_param_count,
-                        env,
+                        env, self.semantic_profile,
                     )
                     && !method_variadic_param_is_by_ref(sig)
                 {
@@ -854,8 +864,15 @@ impl Checker {
             .cloned()
     }
 
-    /// Returns true for builtin method array params whose accepted shape must remain broad.
-    fn method_array_param_keeps_generic_shape(class_name: &str, method_key: &str) -> bool {
+    /// Returns true for builtin method array params whose physical shape must remain broad.
+    fn method_array_param_keeps_generic_shape(
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+    ) -> bool {
+        if is_static {
+            return class_name == "SplFixedArray" && method_key == php_symbol_key("fromArray");
+        }
         matches!(class_name, "ReflectionFunction" | "ReflectionMethod")
             && method_key == php_symbol_key("invokeArgs")
     }
@@ -1404,7 +1421,7 @@ impl Checker {
             // The class is not in the closed world (an `eval` fragment may declare it), so no
             // signature governs the arguments: alias them conservatively. Descriptor invocation
             // still owns its Traversable spread walk; ordinary static calls remain array-only.
-            self.record_unresolved_callee_argument_aliases(args);
+            self.record_unresolved_callee_argument_aliases(args, env);
             for arg in args {
                 if allow_by_ref_spread {
                     self.infer_descriptor_call_arg_type(arg, env)?;
@@ -1463,6 +1480,11 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && static_declared_flags.get(i).copied().unwrap_or(false)
+                        && !Self::method_array_param_keeps_generic_shape(
+                            class_name,
+                            &method_key,
+                            true,
+                        )
                         && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
@@ -1495,7 +1517,7 @@ impl Checker {
                         &normalized_args,
                         sig,
                         regular_param_count,
-                        env,
+                        env, self.semantic_profile,
                     )
                     && !method_variadic_param_is_by_ref(sig)
                 {
@@ -1546,6 +1568,11 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && instance_declared_flags.get(i).copied().unwrap_or(false)
+                        && !Self::method_array_param_keeps_generic_shape(
+                            class_name,
+                            &method_key,
+                            false,
+                        )
                         && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
@@ -1687,7 +1714,7 @@ fn method_variadic_tail_needs_iterable(
     args: &[Expr],
     sig: &FunctionSig,
     regular_param_count: usize,
-    env: &TypeEnv,
+    env: &TypeEnv, profile: elephc_semantics::SemanticProfile,
 ) -> bool {
     if sig.variadic.is_none() {
         return false;
@@ -1696,7 +1723,7 @@ fn method_variadic_tail_needs_iterable(
     if args.iter().any(|arg| {
         matches!(
             &arg.kind,
-            ExprKind::Spread(inner) if spread_source_keeps_runtime_keys(inner, env)
+            ExprKind::Spread(inner) if spread_source_keeps_runtime_keys(inner, env, profile)
         )
     }) {
         return true;
@@ -1747,7 +1774,7 @@ fn method_variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
 }
 
 /// Returns true when a spread source can carry string keys into a variadic method tail.
-fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(
             env.get(name),
@@ -1755,7 +1782,7 @@ fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
         ),
         ExprKind::ArrayLiteralAssoc(_) => true,
         _ => matches!(
-            crate::types::checker::infer_expr_type_syntactic(expr),
+            crate::types::checker::infer_expr_type_syntactic(expr, profile),
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
     }

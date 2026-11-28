@@ -29,8 +29,8 @@ pub(in crate::interpreter) fn eval_reflection_method_invoke_result(
         return Ok(None);
     };
     if is_invoke_args {
-        let (object, array) = eval_reflection_method_invoke_args_array(evaluated_args)?;
-        return with_eval_array_call_arguments(array, context, values, |arguments, context, values| {
+        let (object, array, source) = eval_reflection_method_invoke_args_array(evaluated_args)?;
+        return with_eval_array_call_arguments_with_sources(array, source.as_ref(), context, values, |arguments, context, values| {
             eval_reflection_method_invoke_dispatch(
                 &declaring_class, &reflected_method, object, arguments, context, values,
             )
@@ -68,8 +68,8 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
         return Ok(None);
     };
     if is_invoke_args {
-        let array = eval_reflection_function_invoke_args_array(evaluated_args)?;
-        return with_eval_array_call_arguments(array, context, values, |arguments, context, values| {
+        let (array, source) = eval_reflection_function_invoke_args_array(evaluated_args)?;
+        return with_eval_array_call_arguments_with_sources(array, source.as_ref(), context, values, |arguments, context, values| {
             eval_reflection_function_invoke_dispatch(&function_name, arguments, context, values)
         }).map(Some);
     }

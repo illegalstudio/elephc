@@ -29,7 +29,10 @@ pub(super) fn numeric_binary_result_type(
     rhs: IrType,
     fallback: &PhpType,
     identity: bool,
+    policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy,
 ) -> PhpType {
+    if policy.checked_overflow() && lhs == IrType::I64 && rhs == IrType::I64
+        && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) { return PhpType::Int; }
     if matches!(op, BinOp::Pow) {
         if lhs == IrType::I64 && rhs == IrType::I64 && fallback == &PhpType::Mixed {
             return PhpType::Mixed;
@@ -58,7 +61,7 @@ pub(super) fn numeric_binary_result_type(
         return PhpType::Float;
     }
     if lhs == IrType::I64 && rhs == IrType::I64 {
-        if fallback == &PhpType::Mixed
+        if matches!(fallback, PhpType::Mixed | PhpType::Float)
             && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
             && !identity
         {
@@ -170,12 +173,32 @@ fn lower_numeric_binary_values(
             return result;
         }
     }
+    crate::ir_lower::numeric_domains::binary(ctx, lhs, op, rhs, expr.span);
+    let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    if policy.checked_overflow() && lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
+        if let Some(operation @ (MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)) = mixed_numeric_op(op) {
+            return crate::ir_lower::checked_arithmetic::binary(ctx, lhs, operation, rhs, expr.span);
+        }
+    }
+    if policy.checked_overflow() && matches!(op, BinOp::Div | BinOp::Mod)
+        && (should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type)
+            || (matches!(op, BinOp::Mod) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64))) {
+        let operation = if matches!(op, BinOp::Div) { MixedNumericOp::Div } else { MixedNumericOp::Mod };
+        let expected = if operation == MixedNumericOp::Div { PhpType::Float } else { PhpType::Int };
+        let result = crate::ir_lower::checked_arithmetic::boxed(ctx, lhs, operation, rhs, policy, expr.span);
+        let result = crate::builtins::semantics::normalize_numeric_result(ctx,
+            crate::builtins::semantics::LoweredBuiltinValue { value: result.value }, &expected, expr.span);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value { release_binary_operand_temporary(ctx, rhs, expr.span); }
+        return LoweredValue { value: result.value, ir_type: ctx.builder.value_type(result.value) };
+    }
     let numeric_ty = numeric_binary_result_type(
         op,
         lhs.ir_type,
         rhs.ir_type,
-        &fallback_expr_type(expr),
+        &fallback_expr_type(expr, ctx.semantic_profile),
         numeric_binary_identity(op, left, right),
+        policy,
     );
     if matches!(op, BinOp::Pow) {
         // PHP's `**` is int-preserving (`2 ** 3` is `int(8)`), so an int/int power goes
@@ -186,14 +209,14 @@ fn lower_numeric_binary_values(
         // overflow-capable `+`/`-`/`*` operands `Mixed`.
         if lhs.ir_type == IrType::I64
             && rhs.ir_type == IrType::I64
-            && fallback_expr_type(expr) == PhpType::Mixed
+            && fallback_expr_type(expr, ctx.semantic_profile) == PhpType::Mixed
         {
             return ctx.emit_value(
                 Op::ICheckedPow,
                 vec![lhs.value, rhs.value],
-                None,
+                policy.checked_overflow().then_some(Immediate::NumericOperation { op: MixedNumericOp::Pow, policy }),
                 numeric_ty,
-                Op::ICheckedPow.default_effects(),
+                Op::ICheckedPow.arithmetic_effects(policy),
                 Some(expr.span),
             );
         }
@@ -291,7 +314,8 @@ fn lower_numeric_binary_values(
         );
     }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
-        // Two ints whose sum, difference, or product can overflow are boxed. The identity
+        // Two ints whose sum, difference, or product can overflow are boxed, including a
+        // literal expression already known to promote to float. The identity
         // cases stay plain ints. Both decisions come from `numeric_binary_result_type`.
         if numeric_ty == PhpType::Mixed {
             let checked_op = match op {
@@ -513,6 +537,10 @@ pub(super) fn lower_mixed_numeric_binary(
     op: MixedNumericOp,
     expr: &Expr,
 ) -> LoweredValue {
+    let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    if !policy.is_permissive() {
+        return crate::ir_lower::checked_arithmetic::boxed(ctx, lhs, op, rhs, policy, expr.span);
+    }
     ctx.emit_value(
         Op::MixedNumericBinop,
         vec![lhs.value, rhs.value],

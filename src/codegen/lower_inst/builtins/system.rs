@@ -995,7 +995,7 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         return Ok(());
     };
     let status_ty = ctx.value_php_type(status)?.codegen_repr();
-    let strict_php = super::super::instruction_helpers::instruction_strict_php_profile(inst);
+    let strict_php = matches!(inst.immediate, Some(crate::ir::Immediate::StrictExit(_)));
     match status_ty {
         PhpType::Str => {
             ctx.load_value_to_result(status)?;

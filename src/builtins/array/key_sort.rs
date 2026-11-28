@@ -55,7 +55,7 @@ fn is_mixed_array_element_lvalue(
     }
     let parent_ty = checker.infer_type(array, env)?;
     let index_ty = checker.infer_type(index, env)?;
-    let normalized_key = crate::types::normalized_array_key_type(index, index_ty);
+    let normalized_key = crate::types::normalized_array_key_type(index, index_ty, checker.semantic_profile);
     if parent_ty.is_php_array() {
         return Ok(matches!(normalized_key, PhpType::Int | PhpType::Str | PhpType::Mixed));
     }

@@ -94,6 +94,13 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::AutoVivifyArray => lower_auto_vivify_array(ctx, inst, false),
         RuntimeCallTarget::AutoVivifyHash => lower_auto_vivify_array(ctx, inst, true),
+        RuntimeCallTarget::HashNextIndex => {
+            let hash = expect_operand(inst, 0)?;
+            let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.load_value_to_reg(hash, arg)?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::HashEntryBindReference => lower_hash_entry_bind_reference(ctx, inst),
         RuntimeCallTarget::HashEntrySetReference => {
             super::hashes::lower_hash_reference_set(ctx, inst)
@@ -127,6 +134,27 @@ pub(super) fn lower(
         | RuntimeCallTarget::CallArgumentCollectPositionals
         | RuntimeCallTarget::CallArgumentCollectNamed => super::call_argument_unpack::lower(ctx, inst, target),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
+        RuntimeCallTarget::NumericUnary { operator, policy } => {
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            abi::emit_call_label(ctx.emitter, crate::codegen_support::runtime::numeric_unary_symbol(operator, policy.checked_overflow()));
+            store_if_result(ctx, inst)
+        }
+        RuntimeCallTarget::CheckedNumericCast(target) => {
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            abi::emit_call_label(ctx.emitter, crate::codegen_support::runtime::checked_numeric_cast::symbol(target));
+            store_if_result(ctx, inst)
+        }
+        RuntimeCallTarget::CheckedRadixInt => {
+            ctx.load_value_to_result(expect_operand(inst, 1)?)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            let (pointer, length) = abi::string_result_regs(ctx.emitter);
+            abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), pointer);
+            abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), length);
+            abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2));
+            abi::emit_call_label(ctx.emitter, "__rt_checked_radix_to_int");
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::StringOffsetSet => lower_string_offset_set(ctx, inst),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
@@ -134,7 +162,8 @@ pub(super) fn lower(
         RuntimeCallTarget::PositionalImplode => {
             super::builtins::strings::lower_implode(ctx, inst, "implode")
         }
-        RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
+        RuntimeCallTarget::Function(target) | RuntimeCallTarget::NumericFunction { target, .. } =>
+            super::runtime_functions::lower(ctx, inst, target),
         RuntimeCallTarget::ProfiledFunction { target, .. } => {
             super::runtime_functions::lower(ctx, inst, target)
         }

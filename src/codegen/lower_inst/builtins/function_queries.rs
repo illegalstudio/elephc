@@ -17,7 +17,7 @@ use super::*;
 /// `foreach ($names as $n) if (function_exists($n))` compile.
 pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "function_exists", 1)?;
-    let strict_php = super::instruction_strict_php_profile(inst);
+    let php_only = super::instruction_php_only_profile(inst);
     let value = expect_operand(inst, 0)?;
     if let Some(function_name) = maybe_const_string_operand(ctx, value)? {
         match function_exists_needle(&function_name) {
@@ -26,12 +26,12 @@ pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instru
                 if let Some(group_name) = ctx.function_variant_group_name(bare) {
                     emit_variant_function_exists(ctx, &group_name);
                 } else {
-                    emit_static_bool(ctx, literal_function_exists(ctx, bare, strict_php));
+                    emit_static_bool(ctx, literal_function_exists(ctx, bare, php_only));
                 }
             }
         }
     } else {
-        lower_dynamic_function_exists(ctx, value, strict_php)?;
+        lower_dynamic_function_exists(ctx, value, php_only)?;
     }
     store_if_result(ctx, inst)
 }
@@ -64,14 +64,14 @@ pub(in crate::codegen::lower_inst) fn function_exists_needle(name: &str) -> Opti
 pub(in crate::codegen::lower_inst) fn literal_function_exists(
     ctx: &FunctionContext<'_>,
     bare_name: &str,
-    strict_php: bool,
+    php_only: bool,
 ) -> bool {
     ctx.function_by_name(bare_name).is_some_and(|function|
         function.has_source_identity() && function.source_name.is_none())
         || ctx.has_extern_function(bare_name)
         || is_php_visible_builtin_function_for_target(
             bare_name,
-            strict_php,
+            php_only,
             ctx.emitter.target,
         )
         || (!bare_name.contains('\\')
@@ -105,14 +105,14 @@ struct FunctionExistsCandidate {
 pub(in crate::codegen::lower_inst) fn lower_dynamic_function_exists(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<()> {
     if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
         return Err(CodegenIrError::unsupported(
             "function_exists with non-string dynamic name",
         ));
     }
-    let candidates = dynamic_function_exists_candidates(ctx, strict_php);
+    let candidates = dynamic_function_exists_candidates(ctx, php_only);
     if candidates.is_empty() {
         emit_static_bool(ctx, false);
         return Ok(());
@@ -191,7 +191,7 @@ fn emit_function_exists_candidate_table(
 /// ordering (it tests `function_variant_group_name` before anything else).
 fn dynamic_function_exists_candidates(
     ctx: &FunctionContext<'_>,
-    strict_php: bool,
+    php_only: bool,
 ) -> Vec<FunctionExistsCandidate> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut candidates: Vec<FunctionExistsCandidate> = Vec::new();
@@ -221,7 +221,7 @@ fn dynamic_function_exists_candidates(
         push(&extern_decl.name, None);
     }
     for name in supported_builtin_function_names_for_target(
-        strict_php,
+        php_only,
         ctx.emitter.target,
     ) {
         push(name, None);

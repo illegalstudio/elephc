@@ -96,6 +96,7 @@ pub(super) const fn semantics(target: RuntimeFnId) -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(target),
+        array_key_input: None,
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
             arg: 0,
             sole: true,

@@ -9,7 +9,7 @@
 //! Key details:
 //! - Builtin signatures must match PHP so named arguments, first-class callables, and mutation semantics stay coherent.
 
-use crate::parser::ast::{AttributeGroup, Expr, ExprKind, TypeExpr};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, ProducerBinding, TypeExpr};
 use crate::span::Span;
 
 use super::PhpType;
@@ -78,6 +78,30 @@ pub struct FunctionSig {
 }
 
 impl FunctionSig {
+    /// Prepares an omitted value under its producer policy while retaining the original source default.
+    pub(crate) fn default_value(&self, index: usize) -> Option<Expr> {
+        let value = self.defaults.get(index)?.as_ref()?.clone();
+        if !self.declared_params.get(index).copied().unwrap_or(false) {
+            return Some(super::constant_binding::bind_value(value, &PhpType::Mixed));
+        }
+        let declared = self.param_type_exprs.get(index).and_then(Option::as_ref)
+            .and_then(crate::semantics::conversions::scalar_hint)
+            .or_else(|| self.params.get(index).map(|(_, ty)| ty.clone()));
+        Some(match declared {
+            Some(ty) => super::constant_binding::bind_value(value, &ty),
+            None => super::constant_binding::bind_value(value, &PhpType::Mixed),
+        })
+    }
+
+    /// Selects the producer used by Reflection after any declaration-time literal folding.
+    pub(crate) fn reflection_default_expr(&self, index: usize) -> Option<Expr> {
+        let prepared = self.default_value(index)?;
+        if prepared.producer_binding == Some(ProducerBinding::IntegerToFloat) {
+            return self.defaults[index].clone();
+        }
+        Some(prepared)
+    }
+
     /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.
     ///
     /// By-value arrays, hashes, and Mixed cells are rebound to owning shadow slots by
@@ -104,7 +128,7 @@ impl FunctionSig {
 
     /// Returns whether forwarding this parameter by value produces an independent result owner.
     /// Reference parameters keep caller storage, but value returns acquire or clone its payload.
-    /// A callable or object returned as Mixed is boxed with its own payload retain, not transferred raw.
+    /// A callable, object or iterable returned as Mixed is boxed with its own payload retain.
     /// A raw callable descriptor can flow through only a Callable, Mixed or Union result; every
     /// other return representation is independent from that argument owner.
     pub(crate) fn returned_parameter_has_independent_owner(&self, index: usize) -> bool {
@@ -122,7 +146,7 @@ impl FunctionSig {
                 && self.params.get(index).is_some_and(|(_, php_type)| {
                     matches!(
                         php_type.codegen_repr(),
-                        PhpType::Callable | PhpType::Object(_)
+                        PhpType::Callable | PhpType::Object(_) | PhpType::Iterable
                     )
                 }))
             || (!self.by_ref_return
@@ -335,7 +359,13 @@ pub(crate) fn promote_variadic_to_descriptor_container(sig: &mut FunctionSig) ->
 /// - first-class callable builtin sig construction
 /// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
-    crate::builtins::registry::function_sig(name)
+    builtin_call_sig_with_semantics(name, elephc_semantics::SemanticProfile::PERMISSIVE, crate::source::SourceMode::Php)
+}
+
+/// Resolves source builtin contracts under the same profile as their checker and EIR consumers.
+pub(crate) fn builtin_call_sig_with_semantics(name: &str, semantic_profile: elephc_semantics::SemanticProfile,
+    source_mode: crate::source::SourceMode) -> Option<FunctionSig> {
+    crate::builtins::registry::function_sig_with_semantics(name, semantic_profile, source_mode)
         .or_else(|| compiler_resident_builtin_call_sig(name))
 }
 
@@ -376,6 +406,12 @@ fn with_return_type(mut signature: FunctionSig, return_type: PhpType) -> Functio
 /// - first-class callable lowering for builtin references
 pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     crate::builtins::registry::first_class_callable_sig(name)
+}
+
+/// Preserves semantic identity while preparing user-visible builtin callable metadata.
+pub(crate) fn first_class_callable_builtin_sig_with_semantics(name: &str,
+    semantic_profile: elephc_semantics::SemanticProfile) -> Option<FunctionSig> {
+    crate::builtins::registry::first_class_callable_sig_with_semantics(name, semantic_profile)
 }
 
 /// Constructs a signature with all parameters required (no defaults).

@@ -14,7 +14,8 @@ mod array_pointer_scan;
 mod boxed_array_appends;
 mod builtin_datetime;
 mod clone_overrides;
-mod closure_param_hints;
+mod closure_hints;
+mod captured_binding_origins;
 mod closure_scopes;
 mod context;
 mod diagnostics;
@@ -29,10 +30,15 @@ mod initializer_evaluation;
 mod initializer_reads;
 pub(crate) use initializer_reads::visit_constant_reads;
 mod integer_local_contracts;
+mod initialization;
+mod local_binding_state;
+mod local_binding_origins;
+mod scope_introspection;
 mod loop_closures;
 mod numeric_storage;
 /// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
 pub(crate) use function::dynamic_constructor_thunk_name;
+pub(crate) use function::lower_callable_parameter_guard;
 pub(crate) use function::eval_native_default_helper_name;
 pub(crate) use function::is_reflection_default_helper;
 pub(crate) use function::{lower_array_merge_callable, lower_boxed_usort_callable, lower_prepared_builtin_callable};
@@ -43,6 +49,7 @@ mod program;
 mod program_eval;
 mod boxed_operators;
 mod reference_property_validators;
+mod reference_local_validators;
 pub use reference_property_validators::enable_native_reference_validation;
 mod property_initializers;
 mod property_default_errors;
@@ -50,6 +57,14 @@ mod reflection_deprecations;
 mod reflection;
 mod stmt;
 mod scoped_writes;
+mod semantic_guards;
+mod nullability;
+mod conversion_boundaries;
+mod array_key_guards;
+mod offset_key_operands;
+mod checked_arithmetic;
+mod numeric_domains;
+mod numeric_operands;
 mod throwable_constructors;
 mod validation_context;
 mod core_methods;
@@ -57,7 +72,10 @@ mod core_methods;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub(crate) use expr::body_contains_eval_call;
+pub(crate) use expr::{
+    body_contains_eval_call, body_writes_local, call_mutated_local_arguments, expr_writes_local,
+    stmt_writes_local,
+};
 #[allow(unused_imports)] // used by the binary's pipeline only
 pub(crate) use program::module_runs_interpreted_code;
 

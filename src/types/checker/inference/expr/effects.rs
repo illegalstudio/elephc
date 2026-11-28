@@ -47,7 +47,9 @@ fn incremented_local_type(checker: &Checker, current: Option<&PhpType>, fixed_ta
         }
     }
     match current {
-        Some(PhpType::Int) if fixed_tagged_reference => Some(PhpType::Int),
+        Some(PhpType::Int) if fixed_tagged_reference
+            && (checker.semantic_source_mode == crate::source::SourceMode::Internal
+                || !checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)) => Some(PhpType::Int),
         Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
         Some(PhpType::Str) => Some(PhpType::Mixed),
         _ => None,
@@ -96,9 +98,7 @@ impl Checker {
                 Ok(PhpType::Void)
             }
             ExprKind::Closure { capture_refs, .. } => {
-                for name in capture_refs {
-                    self.invalidate_local_flow_narrowing(name, env);
-                }
+                self.prepare_reference_captures(capture_refs, env);
                 let result = self.infer_type(expr, env);
                 if result.is_ok() { self.definitely_bound_locals.extend(capture_refs.iter().cloned()); }
                 result
@@ -140,8 +140,9 @@ impl Checker {
                 let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
                 let result_ty = self.infer_type(expr, env)?;
                 if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
-                    self.record_local_storage_effect(name, &updated);
-                    env.insert(name.clone(), updated);
+                    let stored = self.check_local_binding_store(name, &updated, expr.span, env, None)?;
+                    self.record_local_storage_effect(name, &stored);
+                    env.insert(name.clone(), stored);
                 }
                 Ok(result_ty)
             }
@@ -152,8 +153,9 @@ impl Checker {
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
                 if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
-                    self.record_local_storage_effect(name, &updated);
-                    env.insert(name.clone(), updated);
+                    let stored = self.check_local_binding_store(name, &updated, expr.span, env, None)?;
+                    self.record_local_storage_effect(name, &stored);
+                    env.insert(name.clone(), stored);
                 }
                 Ok(result_ty)
             }
@@ -175,6 +177,13 @@ impl Checker {
                 let value_is_never_null = operand_is_never_null(self, value, &value_ty, env);
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
+                } else if value_is_never_null || (matches!(value.kind, ExprKind::Variable(_))
+                    && self.stored_value_is_non_null(value, &value_ty, env)) {
+                    // Quiet property/offset probes can still be absent; only a proven bound
+                    // variable or an intrinsic non-null value makes this a diagnostic-only arm.
+                    let mut default_env = env.clone();
+                    self.with_preserved_binding_flow(|checker|
+                        checker.infer_type_with_assignment_effects(default, &mut default_env))?
                 } else {
                     let mut flow = self.snapshot_conditional_flow(env);
                     let mut default_env = env.clone();
@@ -205,6 +214,7 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                self.require_boolean_type(&value_ty, value.span)?;
                 let (default_ty, flow) = if matches!(value_ty, PhpType::Void | PhpType::False) {
                     (self.infer_type_with_assignment_effects(default, env)?, None)
                 } else {
@@ -226,7 +236,7 @@ impl Checker {
                 then_expr,
                 else_expr,
             } => {
-                self.infer_type_with_assignment_effects(condition, env)?;
+                self.infer_condition_type_with_effects(condition, env)?;
                 // Flow-narrowing across the branches (see guard_narrowing): `$x instanceof X`
                 // and simple `$x->prop instanceof X` guards narrow the branch envs. A ternary is a
                 // single expression, so branch narrowing is write-invalidation-safe.
@@ -283,7 +293,7 @@ impl Checker {
                 self.infer_type_with_assignment_effects(index, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::Negate(inner)
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::ErrorSuppress(inner)
@@ -297,10 +307,12 @@ impl Checker {
                 self.infer_type(expr, env)
             }
             ExprKind::FunctionCall { name, args } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                let prepared = self.declared_call_reference_arguments(name.as_str(), args, expr.span, env);
+                let reference_sources = prepared.reference_sources;
+                let expanded_args = prepared.args;
                 let builtin_name = name.trim_start_matches('\\');
                 let preg_extended = php_symbol_key(builtin_name) == "preg_match"
-                    && crate::builtins::preg_match_uses_extended_capture(args);
+                    && crate::builtins::preg_match_uses_extended_capture(args, self.semantic_profile);
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
@@ -339,12 +351,13 @@ impl Checker {
                     let contextual_sig = if contextual_callbacks.is_empty() {
                         None
                     } else {
-                        crate::types::signatures::builtin_call_sig(builtin_name)
+                        crate::types::builtin_call_sig_with_semantics(builtin_name, self.semantic_profile, self.semantic_source_mode)
                     };
                     let user_sig = self
                         .canonical_function_name_folded(builtin_name)
                         .and_then(|name| self.functions.get(&name).cloned());
                     for (idx, arg) in expanded_args.iter().enumerate() {
+                        self.prepare_reference_source_argument(arg, idx, &reference_sources, env);
                         let param_idx = match &arg.kind {
                             ExprKind::NamedArg { name, .. } => contextual_sig
                                 .as_ref()
@@ -465,7 +478,7 @@ impl Checker {
                 }
                 if crate::types::checker::is_unset_call(builtin_name) {
                     for arg in &expanded_args {
-                        promote_indexed_local_for_element_unset(arg, env);
+                        promote_indexed_local_for_element_unset(arg, env, self.semantic_profile);
                     }
                     // `unset($a)` on an eligible local KILLS the binding, which is what PHP
                     // does: a later read is "Undefined variable" and a later assignment binds
@@ -493,12 +506,17 @@ impl Checker {
                             // `unset($var)` ends this binding even when escaped-reference
                             // conservatism keeps the name in `ref_aliased_locals`. A later `=&`
                             // assignment must establish fresh cell provenance for the new binding.
+                            let static_binding = self.local_has_canonical_static_binding(var);
+                            let detaches_reference = self.local_reference_is_detachable(var);
+                            if self.runtime_local_binding_origin(var) {
+                                self.inferred_local_contracts.remove(var);
+                            }
                             self.definitely_bound_locals.remove(var);
                             self.invalidate_boxed_ref_alias_binding(var);
                             // Detaching a promoted reference is separate from killing its type
                             // binding: escaped aliases still prohibit incompatible reassignments.
                             if arg.span.identifies_a_node() {
-                                if env.contains_key(var) && self.local_reference_is_detachable(var) {
+                                if env.contains_key(var) && detaches_reference {
                                     self.local_ref_detach_sites.entry(arg.span).or_default()
                                         .insert(var.clone());
                                     self.active_ref_params.remove(var);
@@ -507,6 +525,10 @@ impl Checker {
                                     self.ref_aliased_locals.remove(var);
                                     self.non_builtin_ref_aliased_locals.remove(var);
                                     self.ref_assign_aliased_locals.remove(var);
+                                    if static_binding {
+                                        self.static_local_names.remove(var);
+                                        self.active_statics.remove(var);
+                                    }
                                 } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
                                     if names.remove(var.as_str()) {
                                         self.retired_ref_detach_sites.insert((arg.span, var.clone()));
@@ -580,9 +602,11 @@ impl Checker {
                 }
                 Ok(ty)
             }
-            ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                for arg in &expanded_args {
+            ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. }
+            | ExprKind::NewScopedObject { args, .. } => {
+                let prepared = self.member_call_reference_arguments(expr, None, args, env)?;
+                for (index, arg) in prepared.args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, index, &prepared.reference_sources, env);
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -590,12 +614,15 @@ impl Checker {
                 Ok(ty)
             }
             ExprKind::ClosureCall { var, args } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                let prepared = self.callable_reference_arguments(var, args, expr.span, env);
+                let reference_sources = prepared.reference_sources;
+                let expanded_args = prepared.args;
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
                 let descriptor_args = self.callable_param_names.contains(var)
                     || self.callable_array_targets.contains_key(var);
                 for (idx, arg) in expanded_args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, idx, &reference_sources, env);
                     if skip_contextual_callback && idx == 1 {
                         self.infer_contextual_callback_effects(arg, env)?;
                         continue;
@@ -619,10 +646,12 @@ impl Checker {
             }
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                let prepared = self.expression_call_reference_arguments(callee, args, expr.span, env)?;
+                let expanded_args = prepared.args;
                 let skip_contextual_callback = self
                     .expr_targets_preg_replace_callback(callee);
                 for (idx, arg) in expanded_args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, idx, &prepared.reference_sources, env);
                     if skip_contextual_callback && idx == 1 {
                         self.infer_contextual_callback_effects(arg, env)?;
                         continue;
@@ -658,10 +687,12 @@ impl Checker {
                 method,
                 args,
             } => {
-                self.infer_type_with_assignment_effects(object, env)?;
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                let object_ty = self.infer_type_with_assignment_effects(object, env)?;
+                let prepared = self.member_call_reference_arguments(expr, Some(&object_ty), args, env)?;
+                let expanded_args = prepared.args;
                 self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
-                for arg in &expanded_args {
+                for (index, arg) in expanded_args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, index, &prepared.reference_sources, env);
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -671,15 +702,6 @@ impl Checker {
             ExprKind::BufferNew { len, .. } => {
                 self.infer_type_with_assignment_effects(len, env)?;
                 self.infer_type(expr, env)
-            }
-            ExprKind::NewScopedObject { args, .. } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                for arg in &expanded_args {
-                    self.infer_type_with_assignment_effects(arg, env)?;
-                }
-                let ty = self.infer_type(expr, env)?;
-                self.purge_property_narrowings_after_call(env);
-                Ok(ty)
             }
             _ => {
                 self.infer_fallback_operand_effects(expr, env)?;
@@ -975,7 +997,7 @@ fn openssl_encrypt_tag_arg(args: &[Expr]) -> Option<&Expr> {
 /// the local as `AssocArray<Int, T>` makes its literal build as a hash, so the element removal
 /// lowers through `HashUnset`. Only plain `$var[$key]` targets on a currently-packed array are
 /// affected; associative arrays, objects, and non-variable receivers are left unchanged.
-fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
+fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv, profile: elephc_semantics::SemanticProfile) {
     let ExprKind::ArrayAccess { array, index, .. } = &arg.kind else {
         return;
     };
@@ -987,7 +1009,7 @@ fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
     };
     let idx_ty = crate::types::array_keys::normalized_array_key_type(
         index,
-        super::super::syntactic::infer_expr_type_syntactic(index),
+        super::super::syntactic::infer_expr_type_syntactic(index, profile), profile,
     );
     let key_ty = if idx_ty == PhpType::Int {
         PhpType::Int

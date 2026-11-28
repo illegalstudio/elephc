@@ -139,24 +139,31 @@ pub(super) fn expect_bool(inst: &Instruction) -> Result<bool> {
 }
 
 /// Returns the strict-PHP profile carried by a source-sensitive EIR instruction.
-pub(in crate::codegen) fn instruction_strict_php_profile(inst: &Instruction) -> bool {
+pub(in crate::codegen) fn instruction_php_only_profile(inst: &Instruction) -> bool {
     match inst.immediate {
-        Some(Immediate::Bool(strict_php)) => strict_php,
+        Some(Immediate::ProfiledData { profile, .. }) => profile.php_only(),
+        Some(Immediate::Bool(php_only)) | Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ProfiledFunction { php_only, .. },
+        )) => php_only,
         Some(Immediate::I64(profile)) if inst.op == crate::ir::Op::CallableDescriptorInvoke => {
             profile & 1 != 0
         }
-        Some(Immediate::ProfiledData { strict_php, .. })
-        | Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::ProfiledFunction { strict_php, .. },
-        )) => strict_php,
         _ => false,
+    }
+}
+
+/// Returns literal eval's explicit source policy, preserving legacy unprofiled EIR defaults.
+pub(in crate::codegen) fn instruction_eval_source_profile(inst: &Instruction, semantics: elephc_semantics::SemanticProfile) -> crate::source::EvalSourceProfile {
+    match inst.immediate {
+        Some(Immediate::ProfiledData { profile, .. }) => profile,
+        _ => crate::source::EvalSourceProfile::new(instruction_php_only_profile(inst), semantics),
     }
 }
 
 /// Returns the data-pool immediate attached to a data-backed instruction.
 pub(super) fn expect_data(inst: &Instruction) -> Result<crate::ir::DataId> {
     match inst.immediate {
-        Some(Immediate::Data(value)) => Ok(value),
+        Some(Immediate::Data(value) | Immediate::StrictExit(value)) => Ok(value),
         Some(Immediate::ProfiledData { data, .. }) => Ok(data),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing data immediate",

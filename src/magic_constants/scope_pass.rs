@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::magic_constants::substitute_scope_constants_in_file()`.
+//! - `crate::magic_constants::substitute_eval_constants()` for warning-free source audits.
 //!
 //! Key details:
 //! - Trait-origin `__CLASS__` uses a placeholder so concrete class binding can happen after trait flattening.
@@ -20,30 +21,42 @@ use crate::span::Span;
 use super::walker::{walk_program, Pass};
 use super::{namespace_string, qualify, TRAIT_CLASS_PLACEHOLDER};
 
-/// Rewrites scope-dependent magic constants (`__CLASS__`, `__TRAIT__`, `__FUNCTION__`,
-/// `__METHOD__`, `__NAMESPACE__`) for a single PHP file using its canonical file path.
-///
-/// Canonicalizes the file path and delegates to `substitute_scope_constants_with_file`.
-pub(super) fn substitute_scope_constants_in_file(program: Program, file_path: &Path) -> Program {
-    let canonical = file_path
-        .canonicalize()
-        .unwrap_or_else(|_| file_path.to_path_buf());
-    substitute_scope_constants_with_file(program, Some(canonical.display().to_string()))
+/// Rewrites scope-dependent magic constants with optional physical-file context.
+pub(super) fn substitute_scope_constants(
+    program: Program,
+    file_path: Option<&Path>,
+    publish_warnings: bool,
+) -> Program {
+    let file = file_path.map(|file_path| {
+        file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf())
+            .display()
+            .to_string()
+    });
+    substitute_scope_constants_with_file(program, file, publish_warnings)
 }
 
 /// Inner implementation that accepts an optional already-canonicalized file string.
-fn substitute_scope_constants_with_file(program: Program, file: Option<String>) -> Program {
+fn substitute_scope_constants_with_file(
+    program: Program,
+    file: Option<String>,
+    publish_warnings: bool,
+) -> Program {
     let mut pass = ScopePass {
         scope: Scope::default(),
         file,
         deprecations: Vec::new(),
+        publish_warnings,
     };
     let program = walk_program(program, &mut pass);
     // php-src raises these while compiling the file top to bottom. The walk visits hoisted
     // anonymous classes after everything else, so restore source order before queueing.
     pass.deprecations.sort_by_key(|warning| (warning.span.line, warning.span.col));
-    for warning in pass.deprecations {
-        crate::errors::defer_warning(warning);
+    if pass.publish_warnings {
+        for warning in pass.deprecations {
+            crate::errors::defer_warning(warning);
+        }
     }
     program
 }
@@ -79,6 +92,8 @@ struct ScopePass {
     file: Option<String>,
     /// Implicit nullable deprecations raised in this file, queued in source order at the end.
     deprecations: Vec<crate::errors::CompileWarning>,
+    /// Whether this authoritative source preparation publishes deferred diagnostics.
+    publish_warnings: bool,
 }
 
 impl ScopePass {
@@ -239,7 +254,7 @@ impl Pass for ScopePass {
     /// - `__TRAIT__`: FQN of current trait or empty string.
     /// - `__FUNCTION__`: closure name if inside a closure, otherwise FQN (unqualified inside class/trait).
     /// - `__METHOD__`: closure name if inside a closure, otherwise `ClassName::methodName`.
-    /// - `__FILE__` / `__DIR__`: empty string (handled by the file pass; reaching here means it was skipped).
+    /// - `__FILE__` / `__DIR__`: retained when an eval audit has no call-site file.
     fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind {
         let s = &self.scope;
         match mc {
@@ -266,9 +281,11 @@ impl Pass for ScopePass {
                 ExprKind::StringLiteral(name)
             }
             MagicConstant::Method => ExprKind::StringLiteral(self.method_name()),
-            // File/Dir are handled by the file pass; if they reach here it
-            // means the file pass was skipped — substitute to empty rather
-            // than panic, since this is best-effort.
+            MagicConstant::File | MagicConstant::Dir if self.file.is_none() => {
+                ExprKind::MagicConstant(mc)
+            }
+            // File/Dir normally disappear in the file pass. Retain the old best-effort
+            // fallback when a physical path existed but one of them still reaches here.
             MagicConstant::File | MagicConstant::Dir => ExprKind::StringLiteral(String::new()),
         }
     }
@@ -419,7 +436,8 @@ mod tests {
     fn widened_param_types(source: &str) -> Vec<Option<TypeExpr>> {
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         let program = crate::parser::parse(&tokens).expect("parse");
-        let program = substitute_scope_constants_with_file(program, Some("t.php".to_string()));
+        let program =
+            substitute_scope_constants_with_file(program, Some("t.php".to_string()), true);
         program
             .iter()
             .find_map(|stmt| match &stmt.kind {
@@ -429,6 +447,31 @@ mod tests {
                 _ => None,
             })
             .expect("a function declaration")
+    }
+
+    /// Eval audits lower scope constants without publishing warnings or inventing a file path.
+    #[test]
+    fn eval_audit_scope_substitution_is_warning_free_without_a_file() {
+        let _ = crate::errors::take_deferred_warnings();
+        let tokens = crate::lexer::tokenize(
+            "<?php function f(string $value = null) {} echo __FILE__;",
+        )
+        .expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = substitute_scope_constants_with_file(program, None, false);
+
+        assert!(crate::errors::take_deferred_warnings().is_empty());
+        let file = program
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                StmtKind::Echo(expr) => Some(expr),
+                _ => None,
+            })
+            .expect("echo expression");
+        assert!(matches!(
+            &file.kind,
+            ExprKind::MagicConstant(MagicConstant::File)
+        ));
     }
 
     /// Verifies only a literal-null default on a type that rejects null is widened, a
@@ -482,7 +525,7 @@ mod tests {
         )
         .expect("tokenize");
         let program = crate::parser::parse(&tokens).expect("parse");
-        let _ = substitute_scope_constants_with_file(program, Some("t.php".to_string()));
+        let _ = substitute_scope_constants_with_file(program, Some("t.php".to_string()), true);
         let owners: Vec<String> = crate::errors::take_deferred_warnings()
             .into_iter()
             .map(|warning| warning.message.split("(): ").next().unwrap_or_default().to_string())
@@ -535,7 +578,7 @@ mod tests {
             let program = crate::parser::parse(&tokens).expect("parse");
             let mut types = Vec::new();
             collect_function_param_types(
-                &substitute_scope_constants_with_file(program, Some("t.php".to_string())),
+                &substitute_scope_constants_with_file(program, Some("t.php".to_string()), true),
                 &mut types,
             );
             types

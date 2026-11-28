@@ -32,7 +32,7 @@ const REFERENCE_WITHOUT_CELL_MESSAGE: &str =
 /// Lowers a declared object property read for statically known object receivers.
 pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
-    if let Some(Immediate::ReflectionPropertyRef { class, property }) = inst.immediate {
+    if let Some(Immediate::ReflectionPropertyRef { class, property, .. }) = inst.immediate {
         let slot = resolve_physical_property_slot(ctx, object, class, property, inst)?;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, base_reg)?;
@@ -314,7 +314,7 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     if slot.is_declared {
         emit_uninitialized_owned_ref_property_guard(ctx, &slot, int_reg);
     }
-    promote_mixed_property_reference(ctx, &slot);
+    promote_managed_property_reference(ctx, &slot);
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -361,7 +361,7 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell_checked(
     ctx.load_value_to_reg(object, base_reg)?;
     let int_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
-    promote_mixed_property_reference(ctx, &slot);
+    promote_managed_property_reference(ctx, &slot);
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -430,7 +430,7 @@ fn lower_mixed_load_prop_ref_cell_checked(
         let slot = &candidate.candidate.slot;
         if slot.php_type.reference_payload_compatible(expected) {
             abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, slot.offset); // load the reference-cell pointer from the matched class's property slot
-            promote_mixed_property_reference(ctx, slot);
+            promote_managed_property_reference(ctx, slot);
         } else {
             any_mismatch = true;
             abi::emit_jump(ctx.emitter, &mismatch_label);
@@ -475,13 +475,14 @@ pub(super) fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst:
     Ok(())
 }
 
-/// Gives an owned Mixed property's native and eval aliases one persistent value identity.
-fn promote_mixed_property_reference(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
-    if slot.php_type == PhpType::Mixed
-        && ctx.module.class_infos.get(&slot.class_name)
-            .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16))
-    {
-        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_promote_mixed");
+/// Gives a supported owned property's native aliases one persistent, constraint-bearing value identity.
+fn promote_managed_property_reference(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
+    if !ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16)) { return; }
+    let Some(payload) = crate::types::canonical_property_reference_payload(&slot.php_type) else { return; };
+    if slot.php_type == PhpType::Mixed || ctx.module.required_runtime_features.native_reference_validation {
+        abi::emit_call_label(ctx.emitter,
+            crate::codegen_support::runtime::reference_cells::promotion_entry(payload));
     }
 }
 
@@ -544,7 +545,7 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
                 int_reg,
             );
         }
-        promote_mixed_property_reference(ctx, &candidate.candidate.slot);
+        promote_managed_property_reference(ctx, &candidate.candidate.slot);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -747,6 +748,9 @@ pub(super) fn emit_stdclass_get_call(
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         }
+    }
+    if ctx.property_read_requires_initialization() {
+        return super::property_hash_reads::emit_initialized_stdclass_get(ctx, Some(property));
     }
     abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
     Ok(())
@@ -1327,39 +1331,8 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     name_offset: usize,
     frame_bytes: usize,
 ) -> Result<()> {
-    let target = ctx.emitter.target;
-    let miss_label = ctx.next_label("runtime_dynamic_prop_hash_miss");
-    let done_label = ctx.next_label("runtime_dynamic_prop_hash_done");
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
-    abi::emit_load_from_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
-        object_reg,
-        hash_offset,
-    );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
-        name_offset + 8,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    // Released before the found test so the branch reads freshly computed flags on every target.
-    abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
-    match target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
-        }
-    }
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&miss_label);
-    emit_boxed_null(ctx);
-    ctx.emitter.label(&done_label);
+    super::property_hash_reads::emit_stacked_property_hash_get(
+        ctx, hash_offset, receiver_offset, name_offset, frame_bytes,
+        elephc_semantics::initialization::DYNAMIC_PROPERTY_MESSAGE)?;
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
 }

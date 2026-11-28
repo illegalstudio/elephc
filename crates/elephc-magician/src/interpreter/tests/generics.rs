@@ -396,7 +396,7 @@ fn generics_namespace_imports_survive_specialization() {
 /// Runtime strict PHP mode rejects native generic syntax before any source statements execute.
 #[test]
 fn generics_native_syntax_rejected_in_strict_mode() {
-    let _guard = crate::strict_php_mode::scoped_enable();
+    let _guard = crate::php_only_mode::scoped_enable();
     let mut values = FakeOps::default();
     let mut scope = ElephcEvalScope::new();
     let program = parse_fragment(b"echo 'before'; function id<T>(T $v): T { return $v; }").unwrap();
@@ -417,7 +417,7 @@ fn generics_methods_and_typed_callables() {
 #[test]
 fn generics_docblock_templates_in_strict_mode() {
     for strict in [false, true] {
-        let _guard = strict.then(crate::strict_php_mode::scoped_enable);
+        let _guard = strict.then(crate::php_only_mode::scoped_enable);
         let output = run(&[
             "/** @template T */\nclass Box { /** @var T */ private $value; /** @param T $value */ public function __construct($value) { $this->value = $value; } /** @return T */ public function get() { return $this->value; } }\n/**\n * @template U\n * @param U $value\n * @return U\n */\nfunction identity($value) { return $value; }",
             "$b = new Box(7); echo $b->get(), '|', identity('ok');",
@@ -531,7 +531,7 @@ fn generics_cached_templates_round_trip() {
     let result = execute_program(&loaded, &mut scope, &mut values).unwrap();
     values.release(result).unwrap();
     assert_eq!(values.output, "7");
-    let _guard = crate::strict_php_mode::scoped_enable();
+    let _guard = crate::php_only_mode::scoped_enable();
     assert_eq!(execute_program(&loaded, &mut scope, &mut values), Err(EvalStatus::ParseError));
 }
 
@@ -610,7 +610,7 @@ fn generics_docblocks_preserve_native_precedence() {
 /// Inline local annotations remain inert, matching AOT's property-only PHPDoc var handling.
 #[test]
 fn generics_docblocks_leave_inline_local_var_inert() {
-    let _guard = crate::strict_php_mode::scoped_enable();
+    let _guard = crate::php_only_mode::scoped_enable();
     assert_eq!(run(&[
         "/** @template T */ class Box { /** @param T $value */ public function __construct(public $value) {} public function inspect(): string { /** @var T $local */ $local = 'free'; return $local; } } echo (new Box(7))->inspect();",
     ]), "free");

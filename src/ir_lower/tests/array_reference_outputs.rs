@@ -105,8 +105,8 @@ echo implode(",", array_keys($stringKeys)), implode(",", array_keys($snapshot));
     }
 }
 
-/// A conditional write through a declared array reference republishes a detached Mixed cell for
-/// both packed and keyed payloads.
+/// A conditional write through a declared array reference pins the stable published Mixed cell
+/// before mutating either packed or keyed payloads.
 #[test]
 fn conditional_php_array_reference_writes_keep_the_attached_cell() {
     use crate::ir::Op;
@@ -128,23 +128,39 @@ checkConditionalArray($argc > 0);
         let callee = module.functions.iter()
             .find(|function| function.name.eq_ignore_ascii_case("conditionallyWriteArray"))
             .unwrap();
-        let clone = callee.instructions.iter().position(|inst| inst.op == Op::MixedClone)
-            .unwrap_or_else(|| panic!("{name}: the shared caller value must detach before mutation"));
-        // The parameter's entry type guard (php's RECV check) formats its TypeError through
-        // get_class() / gettype() on its failure path; those calls are not the write.
+        let pinned = callee.instructions.windows(2).position(|pair| {
+            pair[0].op == Op::LoadRefCell
+                && pair[1].op == Op::Acquire
+                && pair[1].immediate == Some(crate::ir::Immediate::Bool(true))
+                && pair[0].result.is_some_and(|result| pair[1].operands == [result])
+        })
+            .unwrap_or_else(|| panic!("{name}: the published caller cell must be pinned before mutation"));
+        let ref_slot = match callee.instructions[pinned].immediate {
+            Some(crate::ir::Immediate::LocalSlot(slot)) => slot,
+            _ => panic!("{name}: the pinned reference load must identify its local slot"),
+        };
+        // Entry guards and key checks may use runtime calls before the mutation. Identify the
+        // actual container store instead of treating the first unrelated runtime call as one.
         let setter = callee.instructions.iter().position(|inst| {
-            inst.op == Op::RuntimeCall
-                && !matches!(
-                    inst.immediate,
-                    Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                        crate::ir::RuntimeFnId::GetClass | crate::ir::RuntimeFnId::Gettype
-                    )))
-                )
+            matches!(inst.op, Op::ArraySet | Op::HashSet | Op::ArraySetMixedKey)
+                || (inst.op == Op::RuntimeCall
+                    && inst.operands.len() == 3
+                    && matches!(inst.immediate, None | Some(crate::ir::Immediate::Bool(_))))
         })
             .unwrap_or_else(|| panic!("{name}: missing boxed array setter"));
         assert!(
-            clone < setter,
-            "{name}: the detached cell must be published before the conditional write",
+            pinned < setter,
+            "{name}: the published cell must be pinned before the conditional write",
+        );
+        // A COW split may first publish its replacement payload through the same reference
+        // cell. That preserves cell identity. Once the published payload is pinned, however,
+        // the write must mutate it directly instead of replacing it again.
+        let ref_stores = callee.instructions.iter().enumerate()
+            .filter(|(_, inst)| inst.op == Op::StoreRefCell).collect::<Vec<_>>();
+        assert!(
+            ref_stores.iter().all(|(index, inst)| *index < pinned
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(ref_slot))),
+            "{name}: the stable published cell must not be replaced after pinning: {ref_stores:?}",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));

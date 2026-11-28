@@ -33,9 +33,11 @@ fn owning_static_properties(module: &Module, keep: impl Fn(&str) -> bool) -> Vec
             let declaring_class = class_info.static_property_declaring_classes.get(property)
                 .map(String::as_str).unwrap_or(class_name.as_str());
             if declaring_class != class_name { continue; }
-            let ty = php_type.codegen_repr();
+            let storage_type = crate::types::static_property_storage_type(
+                class_info, property, module.semantic_profile).unwrap_or_else(|| php_type.clone());
+            let ty = storage_type.codegen_repr();
             if matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted() {
-                props.push((crate::names::static_property_symbol(&class_name, property), php_type.clone()));
+                props.push((crate::names::static_property_symbol(&class_name, property), storage_type));
             }
         }
     }

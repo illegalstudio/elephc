@@ -44,8 +44,15 @@ mod loop_backedges;
 mod method_pass;
 mod member_receivers;
 mod local_values;
+mod local_binding_contracts;
+mod array_contracts;
 mod binding_flow;
+mod entry_bindings;
+pub(crate) use entry_bindings::{PreBoundLocal, PreBoundLocals};
+mod reference_creation;
 mod mixed_storage_scan;
+mod semantic_rules;
+mod mixed_views;
 mod numeric_regions;
 mod packed_counter;
 mod promotable_arrays;
@@ -53,6 +60,7 @@ pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
 mod type_compat;
+pub(crate) use type_compat::unions::normalize_union_members;
 /// yield_validation
 pub(crate) mod yield_validation;
 
@@ -128,6 +136,8 @@ pub(crate) struct Checker {
     pub closure_return_types: HashMap<String, PhpType>,
     /// Contextual parameter types inferred for inline array-callback closures, keyed by span.
     pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
+    /// Exact inferred scalar closure contracts by enclosing body and expression span.
+    pub closure_result_types: HashMap<(String, Span), PhpType>,
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
@@ -463,6 +473,8 @@ pub(crate) struct Checker {
     /// property access on `PhpType::Void` yield `Void` rather than a diagnostic. Outside a probe
     /// those accesses keep their errors.
     pub null_probe_depth: usize,
+    /// Exact quiet receiver operations; key and dynamic member-name expressions stay ordinary.
+    pub(super) null_probe_operations: Vec<Span>,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Control-flow exits owned by the current function-like frame's active loops.
@@ -561,6 +573,8 @@ pub(crate) struct Checker {
     pub element_value_views: crate::types::ElementValueViews,
     /// Integer reads agreed by every authoritative flow visit to one scoped local use.
     pub local_value_read_types: crate::types::LocalValueReadTypes,
+    /// Declared scalar contracts observed at original local write sites.
+    pub local_store_contracts: crate::types::LocalStoreContracts,
     /// Named-function contexts and body scopes queried without their local branch guards.
     pub member_receiver_analysis_scopes: Vec<(Option<String>, String)>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
@@ -602,6 +616,10 @@ pub(crate) struct Checker {
     /// and leave the existing hard "cannot reassign" error / no-marking behavior in place
     /// instead of rebinding-with-warning or marking-with-warning.
     pub strict_locals: bool,
+    /// Immutable guarantees selected for this type-checking invocation.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
+    /// Physical source of the expression currently checked.
+    pub(super) semantic_source_mode: crate::source::SourceMode,
     /// Nesting depth of conditional statements (`if`/`switch`/loops/`try`/…) in the body being
     /// checked. Only depth 0 is straight-line code that unconditionally dominates everything
     /// after it, which is what makes a binding kill or re-bind safe to lower.
@@ -693,6 +711,8 @@ pub(crate) struct Checker {
     /// typed parameters here made them permanently monomorphic and rejected that valid PHP
     /// with `cannot reassign $v from float to string`.
     pub typed_local_names: HashMap<String, PhpType>,
+    /// Inferred value contracts, independent of flow views, array elements and physical storage.
+    pub inferred_local_contracts: HashMap<String, PhpType>,
     /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed there. EIR lowering consults these to abandon the old frame slot instead of
     /// null-storing into it. The name is half the key: a `Span` has no file identity and include
@@ -886,6 +906,7 @@ pub(crate) struct SavedLocalBindingScope {
     parameters: HashSet<String>,
     boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
+    inferred_contracts: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, GuardedLocalStorage>,
     pending_ref_captures: HashSet<String>,
@@ -999,6 +1020,12 @@ impl Checker {
             && !self.typed_local_names.contains_key(name)
     }
 
+    /// Recognizes a reached function static whose current binding has proven canonical storage.
+    pub(crate) fn local_has_canonical_static_binding(&self, name: &str) -> bool {
+        !self.null_probe_scope_is_top_level && self.static_local_names.contains(name)
+            && self.boxed_ref_aliased_locals.contains(name) && !self.active_globals.contains(name)
+    }
+
     /// Authorizes reference-binding detachment outside conditional flow and name-addressed storage.
     /// The reference may be frame-owned or incoming from a caller/capture. `unset()` detaches the
     /// local name in both cases, while the external cell and its value remain owned by that scope.
@@ -1008,7 +1035,7 @@ impl Checker {
             && (self.ref_aliased_locals.contains(name)
                 || self.active_external_ref_bindings.contains(name))
             && !self.active_globals.contains(name)
-            && !self.static_local_names.contains(name)
+            && (!self.static_local_names.contains(name) || self.local_has_canonical_static_binding(name))
             && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
@@ -1110,6 +1137,7 @@ impl Checker {
             parameters: std::mem::take(&mut self.local_parameter_names),
             boxed_parameters: std::mem::take(&mut self.boxed_parameter_locals),
             typed: std::mem::take(&mut self.typed_local_names),
+            inferred_contracts: std::mem::take(&mut self.inferred_local_contracts),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
             // nothing about a same-named local in the callee, and leaking the set inward would
             // box a callee local the pre-scan never marked.
@@ -1154,6 +1182,7 @@ impl Checker {
         self.local_parameter_names = saved.parameters;
         self.boxed_parameter_locals = saved.boxed_parameters;
         self.typed_local_names = saved.typed;
+        self.inferred_local_contracts = saved.inferred_contracts;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
         self.pending_ref_capture_invalidations = saved.pending_ref_captures;
@@ -1303,6 +1332,7 @@ impl Checker {
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
         self.record_loop_binding_end(name);
+        self.inferred_local_contracts.remove(name);
         self.guarded_union_types.remove(name);
         self.pending_ref_capture_invalidations.remove(name);
         self.boxed_parameter_locals.remove(name);
@@ -1483,7 +1513,7 @@ impl Checker {
     /// [`Checker::record_reference_alias_root`] at the by-ref slots alone, and must keep doing so —
     /// blanket-disqualifying a resolved by-VALUE call would take the feature away from the
     /// ordinary case it exists for.
-    pub(crate) fn record_unresolved_callee_argument_aliases(&mut self, args: &[Expr]) {
+    pub(crate) fn record_unresolved_callee_argument_aliases(&mut self, args: &[Expr], env: &TypeEnv) {
         for arg in args {
             self.record_reference_alias_root(arg);
             let mut value = arg;
@@ -1501,6 +1531,9 @@ impl Checker {
             // from the pre-call concrete type. `unset()` clears this provenance normally.
             self.boxed_ref_aliased_locals.insert(name.clone());
             if value.span.identifies_a_node() {
+                if let Some(actual) = env.get(name) {
+                    self.record_local_reference_contract(name, actual, value.span);
+                }
                 self.boxed_reference_promotion_sites
                     .entry((self.current_loop_storage_scope.clone(), value.span))
                     .or_default()
@@ -1512,13 +1545,16 @@ impl Checker {
 
 /// Options controlling type-checker behavior beyond its default permissive rules.
 ///
-/// Threaded from `CliConfig::strict_locals` (the `--strict-locals` flag) down to the
-/// `Checker`. All fields default to today's behavior, so a caller that does not opt in
+/// Carries the CLI's resolved semantic profile down to the `Checker`.
+/// All fields default to today's behavior, so a caller that does not opt in
 /// (`CheckOptions::default()`) sees no change.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CheckOptions {
+    /// Independently selected semantic guarantees; empty preserves PHP behavior.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
     /// Make an incompatible local retype (e.g. a variable assigned `int` then later
-    /// `string`) a compile error instead of a warning.
+    /// `string`) a compile error instead of a warning. Retained for Rust API callers;
+    /// new callers should enable `StrictFeature::Locals` in `semantic_profile`.
     pub strict_locals: bool,
 }
 
@@ -1649,9 +1685,29 @@ pub fn check_types_with_options(
     options: CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
+    let pending = crate::semantics::pending_guarantees(options.semantic_profile);
+    if !pending.is_empty() {
+        return Err(CompileError::new(crate::span::Span::dummy(), &format!(
+            "strict guarantees are not yet available in this build: {}", pending.join(", "))));
+    }
+    check_profiled_program(program, target, options, generics)
+}
+
+/// Exercises the complete frontend for staged guarantees without weakening any public admission gate.
+pub(crate) fn check_staged_semantics(program: &Program, target: Target, profile: elephc_semantics::SemanticProfile)
+    -> Result<CheckResult, CompileError> {
+    check_profiled_program(program, target, CheckOptions { semantic_profile: profile, strict_locals: false },
+        &crate::generics::GenericContext::default())
+}
+
+/// Shares source auditing and complete type checking after the caller admitted the profile.
+fn check_profiled_program(program: &Program, target: Target, options: CheckOptions,
+    generics: &crate::generics::GenericContext) -> Result<CheckResult, CompileError> {
+    let _optimizer_semantics = crate::optimize::scoped_semantic_profile(options.semantic_profile);
     // Every `check*` spelling funnels through here, so this is the one place the checker needs
     // the stack its own recursion depth implies (issue #686).
     crate::compiler_stack::with_compiler_stack(|| {
+        crate::semantics::validate_source(program, options.semantic_profile)?;
         check_types_on_compiler_stack(program, target, options, generics)
     })
 }
@@ -1724,6 +1780,7 @@ fn check_types_on_compiler_stack(
     )?;
 
     Ok(CheckResult {
+        semantic_profile: checker.semantic_profile,
         trait_collision_defaults: std::mem::take(&mut checker.trait_property_origins.collision_defaults),
         class_binding: std::mem::take(&mut checker.trait_property_origins.binding),
         requested_instantiations: checker.requested_instantiations,
@@ -1759,11 +1816,13 @@ fn check_types_on_compiler_stack(
         builtin_call_types: checker.builtin_call_types,
         closure_generator_spans: checker.closure_generator_spans,
         closure_param_hints: checker.closure_param_hints,
+        closure_result_types: checker.closure_result_types,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
         array_append_element_types: checker.array_append_element_types,
         element_value_views: checker.element_value_views,
         local_value_read_types: checker.local_value_read_types,
+        local_store_contracts: checker.local_store_contracts,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
@@ -1831,17 +1890,22 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// inherits the property, keeping the runtime representation consistent across the
 /// hierarchy. Exact Mixed constructor-promoted references also acquire an object owner;
 /// other constructor-promoted payloads retain their existing representation. Owned cells are recorded
-/// in `owned_reference_properties` so the object allocates and frees them.
+/// in `owned_reference_properties` so the object allocates and frees them. Checked casts also
+/// need managed Mixed and scalar slots when a runtime name or callable first selects a reference.
 fn apply_reference_property_promotions(checker: &mut Checker) {
     {
-        let contains_eval = checker.program_contains_eval;
+        let canonical_mixed_references = checker.program_contains_eval
+            || crate::types::checked_property_references(checker.semantic_profile);
+        let checked_scalar_references = crate::types::checked_property_references(checker.semantic_profile);
         let classes = &checker.classes;
         let candidates = classes.iter().flat_map(|(name, info)| {
             info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {
                 let declaring = info.property_declaring_classes.get(property).unwrap_or(name);
-                (ty == &PhpType::Mixed && info.visible_property_index(property) == Some(index)
+                let checked_scalar = checked_scalar_references
+                    && crate::types::canonical_property_reference_payload(ty).is_some();
+                ((ty == &PhpType::Mixed || checked_scalar) && info.visible_property_index(property) == Some(index)
                     && info.property_slot_is_declared(index, property)
-                    && ((!info.reference_properties.contains(property) && contains_eval)
+                    && ((!info.reference_properties.contains(property) && canonical_mixed_references)
                         || (info.reference_properties.contains(property)
                             && info.promoted_properties.contains(property)))
                     && !info.readonly_properties.contains(property)

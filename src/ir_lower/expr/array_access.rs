@@ -57,7 +57,11 @@ pub(crate) fn lower_by_ref_foreach_element_source(
         }
         return lower_array_access_from_value(ctx, array_value, index, expr, true);
     };
-    let index_value = lower_expr(ctx, index);
+    let operands = super::array_element_references::ArrayReferenceOperands::prepare(
+        ctx, array_value, index, expr.span,
+    );
+    let array_value = operands.receiver;
+    let index_value = operands.key;
     // The hash lookup normalizes its own key, so only the indexed slot arithmetic needs an
     // int-coerced one.
     let index_value = if op == Op::ArrayGetForWrite {
@@ -71,12 +75,14 @@ pub(crate) fn lower_by_ref_foreach_element_source(
         Op::HashGet
     };
     let result_type = array_access_result_type(ctx, array_value.value, read_op, expr);
+    let checked = crate::ir_lower::semantic_guards::source_feature_enabled(ctx,
+        elephc_semantics::StrictFeature::Indexing);
     let result = ctx.emit_value(
         op,
         vec![array_value.value, index_value.value],
-        None,
+        checked.then_some(Immediate::CheckedElementRead),
         result_type,
-        op.default_effects(),
+        if checked { op.checked_element_read_effects() } else { op.default_effects() },
         Some(expr.span),
     );
     // The separated element belongs to the parent's slot, not to this read — pin that explicitly
@@ -85,7 +91,7 @@ pub(crate) fn lower_by_ref_foreach_element_source(
     // element on the way out.
     ctx.builder
         .set_value_ownership(result.value, Ownership::Borrowed);
-    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+    operands.finish(ctx, index.span);
     // An intermediate that fell back to a retaining read owns a reference to the container it
     // handed us, and holding it for the whole loop would be a leak. Dropping it here is safe
     // precisely because `element_fetch_for_write_op` demanded a local-rooted chain: the base
@@ -235,6 +241,20 @@ pub(super) fn lower_subscript_receiver_silently(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
 ) -> LoweredValue {
+    if crate::ir_lower::semantic_guards::source_feature_enabled(ctx, elephc_semantics::StrictFeature::Nullability) {
+        if let Some(value) = super::nullsafe_chain::lower_with_missing_warning(ctx, array, false) { return value; }
+        match &array.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                let receiver = lower_subscript_receiver_silently(ctx, object);
+                return lower_property_probe_from_value(ctx, receiver, property, array);
+            }
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                let receiver = lower_subscript_receiver_silently(ctx, object);
+                return lower_dynamic_property_fetch_from_value(ctx, receiver, property, PropertyFetchMode::Probe, array);
+            }
+            _ => {}
+        }
+    }
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
@@ -490,6 +510,10 @@ fn lower_array_access_from_values_with_receiver_pins(
     receiver_pins: Vec<super::PinnedInFlightOwner>,
     receiver_owner: Option<crate::ir::LocalSlotId>,
 ) -> LoweredValue {
+    if warn_on_missing {
+        crate::ir_lower::nullability::require_non_null(ctx, array_value, &[index_value], &receiver_pins, expr.span);
+    }
+    index_value = crate::ir_lower::array_key_guards::for_receiver(ctx, array_value, index_value, index.span);
     if !warn_on_missing && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
     {
@@ -567,8 +591,13 @@ fn lower_array_access_from_values_with_receiver_pins(
         }
         _ => Op::RuntimeCall,
     };
+    let checked = warn_on_missing && matches!(op, Op::ArrayGet | Op::ArrayGetMixedKey | Op::HashGet | Op::StrCharAt | Op::RuntimeCall)
+        && crate::ir_lower::semantic_guards::source_feature_enabled(ctx, elephc_semantics::StrictFeature::Indexing);
     let mut result_type = array_access_result_type(ctx, array_value.value, op, expr);
-    if preserve_null
+    // Exact-key consumers can receive this value through copies, defaults or calls. Preserve
+    // the missing null at its producer, before a scalar ABI erases its original PHP kind.
+    if (preserve_null || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability))
         && matches!(op, Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent)
         && matches!(result_type.codegen_repr(),
             PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str | PhpType::Callable)
@@ -577,8 +606,17 @@ fn lower_array_access_from_values_with_receiver_pins(
         // Object/container getters already preserve null and retain their typed fast paths.
         result_type = PhpType::Mixed;
     }
+    if op == Op::RuntimeCall
+        && !matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+        && (!matches!(ctx.builder.value_php_type(index_value.value), PhpType::Int | PhpType::Str)
+            || value_is_nullable(ctx, index_value.value))
+    {
+        let (source, source_owner) = root_borrowed_call_operand(ctx, index_value, index.span);
+        index_value = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(index.span));
+        if let Some(owner) = source_owner { retire_owned_call_operand(ctx, owner, index.span); }
+    }
     let index_owner = if op == Op::RuntimeCall
-        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Callable
+        && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(index_value.value))
     {
         let (rooted, owner) = root_owned_call_operand(ctx, index_value, index.span);
         index_value = rooted;
@@ -604,6 +642,26 @@ fn lower_array_access_from_values_with_receiver_pins(
         // A native getter can throw before the existing key cleanup, including on a null path.
         super::pin_in_flight_owners(ctx, &[index_value.value], index.span)
     } else { Vec::new() };
+    let checked_pins = if checked {
+        let mut operands = Vec::new();
+        if receiver_owner.is_none() { operands.push(array_value); }
+        if index_owner.is_none() { operands.push(index_value); }
+        super::pending_owners::protect_additional_pending_operands(ctx, &operands,
+            &receiver_pins.iter().chain(key_pins.iter()).cloned().collect::<Vec<_>>(), expr.span)
+    } else { Vec::new() };
+    let intrinsic_consumes_index = op == Op::RuntimeCall
+        && singular_object_class(&ctx.builder.value_php_type(array_value.value))
+            .and_then(|(class, nullable)| {
+                (!nullable)
+                    .then(|| crate::intrinsics::IntrinsicCall::instance_method(class, "offsetGet"))
+                    .flatten()
+            })
+            .is_some_and(|intrinsic| intrinsic.consumed_mixed_parameters().contains(&0));
+    if intrinsic_consumes_index {
+        if let Some(owner) = index_owner {
+            transfer_owned_call_operand(ctx, owner, index.span);
+        }
+    }
     let result = if let Some(method) = native_method {
         lower_native_dimension_read(ctx, array_value, index_value, method, warn_on_missing,
             result_type, expr)
@@ -613,15 +671,18 @@ fn lower_array_access_from_values_with_receiver_pins(
             let warning = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
             operands.push(warning.value);
         }
-        ctx.emit_value(op, operands,
-            (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
-            result_type, op.default_effects(), Some(expr.span))
+        let immediate = if checked { Some(Immediate::CheckedElementRead) }
+            else { (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)) };
+        let effects = if checked { op.checked_element_read_effects() }
+            else { op.default_effects() };
+        ctx.emit_value(op, operands, immediate, result_type, effects, Some(expr.span))
     };
     if op == Op::StrCharAt {
         // The backend returns a view into the receiver. The common stabilization below
         // must copy that byte before an owning receiver can be retired (issue #1908).
         ctx.builder.set_value_ownership(result.value, Ownership::Borrowed);
     }
+    super::unpin_in_flight_owners(ctx, checked_pins, expr.span);
     super::unpin_in_flight_owners(ctx, key_pins, index.span);
     super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
@@ -631,9 +692,11 @@ fn lower_array_access_from_values_with_receiver_pins(
     // index paths rebound `index_value` to a non-owning raw cast, so the
     // owning-temporary gate makes this a no-op for them.
     if let Some(owner) = index_owner {
-        guard_descriptor_container(ctx, result, expr.span);
-        retire_owned_call_operand(ctx, owner, expr.span);
-        ctx.unguard_call_argument(result.value, expr.span);
+        if !intrinsic_consumes_index {
+            guard_descriptor_container(ctx, result, expr.span);
+            retire_owned_call_operand(ctx, owner, expr.span);
+            ctx.unguard_call_argument(result.value, expr.span);
+        }
     } else {
         release_coerced_source_if_owned(ctx, index_value, Some(index.span));
         let normalized_copy = ctx.builder.value_defining_instruction(index_value.value)
@@ -837,9 +900,9 @@ pub(crate) fn lower_array_access_from_lowered_receiver(
 
 /// Returns the statically-known key type for an array index expression.
 /// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
-    let ty = infer_expr_type_syntactic(index);
-    normalized_array_key_type(index, ty)
+pub(crate) fn index_expr_key_type(ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+    let ty = infer_expr_type_syntactic(index, ctx.semantic_profile);
+    normalized_array_key_type(index, ty, ctx.semantic_profile)
 }
 
 /// Refines a read key's syntactic type from its lowered SSA value when it is definitely a string.
@@ -850,7 +913,7 @@ pub(super) fn lowered_index_expr_key_type(
 ) -> PhpType {
     let syntactic = index_expr_key_type(ctx, index);
     if syntactic == PhpType::Int && ctx.builder.value_php_type(index_value) == PhpType::Str {
-        return normalized_array_key_type(index, PhpType::Str);
+        return normalized_array_key_type(index, PhpType::Str, ctx.semantic_profile);
     }
     syntactic
 }
@@ -871,7 +934,7 @@ pub(super) fn isset_index_expr_key_type(
     }
     match lowered {
         ty @ (PhpType::Str | PhpType::Mixed | PhpType::Union(_)) => {
-            normalized_array_key_type(index, ty)
+            normalized_array_key_type(index, ty, ctx.semantic_profile)
         }
         _ => syntactic,
     }
@@ -890,23 +953,23 @@ pub(super) fn array_access_result_type(
             PhpType::Array(elem_ty) => {
                 array_access_element_result_type(normalize_value_php_type(*elem_ty))
             }
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
         Op::HashGet | Op::HashGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::AssocArray { value, .. } => {
                 array_access_element_result_type(normalize_value_php_type(*value))
             }
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Buffer(elem_ty) => normalize_value_php_type(elem_ty.storage_value_type()),
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
         Op::RuntimeCall => array_access_runtime_call_result_type(ctx, array, expr),
         Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => PhpType::Mixed,
         _ => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
     }
 }
@@ -932,11 +995,11 @@ pub(super) fn array_access_runtime_call_result_type(
     let array_ty = ctx.builder.value_php_type(array);
     if let Some((class_name, _)) = singular_object_class(&array_ty) {
         return array_access_offset_get_return_type(ctx, class_name)
-            .unwrap_or_else(|| fallback_expr_type(expr));
+            .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile));
     }
     match array_ty.codegen_repr() {
         PhpType::Mixed => PhpType::Mixed,
-        _ => fallback_expr_type(expr),
+        _ => fallback_expr_type(expr, ctx.semantic_profile),
     }
 }
 

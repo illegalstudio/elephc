@@ -24,7 +24,7 @@ use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key,
     static_method_symbol,
 };
-use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 use super::context::FunctionContext;
 use super::function_variants;
@@ -107,6 +107,7 @@ mod instruction_helpers;
 mod local_loads;
 pub(in crate::codegen) mod local_stores;
 mod method_call_types;
+mod magic_property_guards;
 mod method_dispatch;
 mod method_dispatch_errors;
 mod method_intrinsics;
@@ -181,8 +182,9 @@ pub(in crate::codegen) use arithmetic::{emit_fused_overflow, OverflowBranch};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
-pub(super) use instruction_helpers::instruction_strict_php_profile;
+pub(super) use instruction_helpers::instruction_php_only_profile;
 pub(super) use local_loads::coerce_loaded_local_to_result_type;
+pub(super) use local_loads::load_ref_cell_local_to_result_as;
 pub(super) use runtime_wrappers::{
     emit_runtime_builtin_wrapper_inline, emit_runtime_extern_wrapper_inline,
     runtime_builtin_wrapper_sig,
@@ -237,7 +239,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
-        Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::LocalPlace => local_loads::lower_local_place(ctx, &inst),
+        Op::StoreLocal | Op::StoreLocalRetiringBox => lower_store_local(ctx, &inst),
+        Op::SetLocalBindingState => super::local_binding_state::lower(ctx, &inst),
+        Op::GetNativeBindingState | Op::GetEvalBindingState => super::local_binding_state::lower_get(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
@@ -245,6 +250,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadRefCellValue => local_loads::lower_load_ref_cell_value(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
+        Op::BindLocalRefContract => lower_bind_local_ref_contract(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
@@ -253,7 +259,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
-        Op::LoadGlobalRefCell => lower_load_global_ref_cell(ctx, &inst),
+        Op::GlobalBindingPresent => globals_constants::lower_global_binding_present(ctx, &inst),
+        Op::UnsetGlobal => globals_constants::lower_unset_global(ctx, &inst),
+        Op::LoadGlobalRefCell => globals_constants::lower_load_global_ref_cell(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
         Op::ExternGlobalStore => lower_extern_global_store(ctx, &inst),
@@ -434,6 +442,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),
         Op::ScopedConstantGet => scoped_constants::lower_scoped_constant_get(ctx, &inst),
         Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, &inst),
+        Op::LoadStaticLocalRefCell => static_locals::lower_load_static_local_ref_cell(ctx, &inst),
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::StaticLocalUninitialized => {
@@ -491,7 +500,12 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
         Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
+        Op::EvalScopeContains => builtins::lower_eval_scope_contains(ctx, &inst),
+        Op::EvalScopeBindingType => builtins::lower_eval_scope_binding_type(ctx, &inst),
         Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
+        Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding => builtins::lower_eval_scope_bind_local_type(ctx, &inst),
+        Op::EvalScopeEndBinding => builtins::lower_eval_scope_end_binding(ctx, &inst),
+        Op::EvalScopeCopyBindingType => builtins::lower_eval_scope_copy_binding_type(ctx, &inst),
         Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
         Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, &inst),
         Op::EvalObjectNew => builtins::lower_eval_object_new(ctx, &inst),
@@ -514,7 +528,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
-        Op::ThrowError => lower_throw_error(ctx, &inst),
+        Op::ThrowError | Op::ThrowTypeError | Op::ThrowValueError
+        | Op::ThrowArithmeticError | Op::ThrowOutOfBounds => lower_throw_error(ctx, &inst),
         Op::ThrowErrorValue => lower_throw_error_value(ctx, &inst),
         Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
         Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),

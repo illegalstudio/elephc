@@ -30,9 +30,7 @@ pub(super) fn emit_eval_scope_set_name(ctx: &mut FunctionContext<'_>, name: &str
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    super::scope_access::emit_scope_set_call(ctx, None);
 }
 
 /// Calls `__elephc_eval_scope_set` for one boxed global value.
@@ -56,14 +54,19 @@ pub(super) fn emit_eval_global_scope_set(ctx: &mut FunctionContext<'_>, global: 
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    super::scope_access::emit_scope_set_call(ctx, None);
 }
 
 /// Marks caller-scope global aliases in the materialized eval scope.
-pub(super) fn mark_eval_scope_global_aliases(ctx: &mut FunctionContext<'_>, aliases: &[EvalGlobalAlias]) {
+pub(super) fn mark_eval_scope_global_aliases(
+    ctx: &mut FunctionContext<'_>,
+    aliases: &[EvalGlobalAlias],
+) -> Result<()> {
     for alias in aliases {
+        let detached = alias.local_slot.map(|_| ctx.next_label("eval_global_alias_detached"));
+        if let Some(detached) = detached.as_deref() {
+            branch_if_eval_global_alias_detached(ctx, alias, detached)?;
+        }
         let (name_label, name_len) = ctx.data.add_string(alias.name.as_bytes());
         let (global_name_label, global_name_len) =
             ctx.data.add_string(alias.global_name.as_bytes());
@@ -88,7 +91,46 @@ pub(super) fn mark_eval_scope_global_aliases(ctx: &mut FunctionContext<'_>, alia
             .extern_symbol("__elephc_eval_scope_mark_global_alias");
         abi::emit_call_label(ctx.emitter, &symbol);
         emit_eval_status_check(ctx);
+        if let Some(detached) = detached {
+            ctx.emitter.label(&detached);
+        }
     }
+    Ok(())
+}
+
+/// Skips global marking after `unset` or rebinding changed the activation's reference cell.
+fn branch_if_eval_global_alias_detached(
+    ctx: &mut FunctionContext<'_>,
+    alias: &EvalGlobalAlias,
+    detached: &str,
+) -> Result<()> {
+    let slot = alias
+        .local_slot
+        .expect("detachable eval global aliases carry their activation slot");
+    let result = abi::int_result_reg(ctx.emitter);
+    if let Some(state) = ctx.ref_cell_state_offset(slot) {
+        abi::load_at_offset(ctx.emitter, result, state);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, detached);
+    }
+    ctx.load_raw_local_to_result(slot)?;
+    abi::emit_push_reg(ctx.emitter, result);
+    let symbol = ir_global_symbol(&alias.global_name);
+    ctx.data.add_comm(symbol.clone(), 16);
+    abi::emit_symbol_address(ctx.emitter, result, &symbol);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+    let local_cell = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, local_cell);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result}, {local_cell}"));    // compare the activation cell with the current global reference owner
+            ctx.emitter.instruction(&format!("b.ne {detached}"));               // skip alias marking after the activation detached its reference cell
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result}, {local_cell}"));    // compare the activation cell with the current global reference owner
+            ctx.emitter.instruction(&format!("jne {detached}"));                // skip alias marking after the activation detached its reference cell
+        }
+    }
+    Ok(())
 }
 
 /// Calls `__elephc_eval_scope_set` for one boxed local value.
@@ -112,9 +154,7 @@ pub(super) fn emit_eval_scope_set(ctx: &mut FunctionContext<'_>, local: &EvalSyn
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    super::scope_access::emit_scope_set_call(ctx, None);
 }
 
 /// Reloads synchronized locals from the eval scope after the eval interpreter returns.
@@ -158,6 +198,7 @@ fn reload_eval_scope_locals_with_mask(
         emit_eval_scope_get(ctx, local);
         let missing = ctx.next_label("eval_scope_reload_missing");
         let done = ctx.next_label("eval_scope_reload_done");
+        emit_branch_if_scope_entry_global_alias(ctx, &done);
         if access_mask_offset.is_some() {
             emit_branch_if_scope_entry_clean(ctx, &done);
         }
@@ -325,6 +366,22 @@ pub(super) fn emit_branch_if_scope_entry_clean(ctx: &mut FunctionContext<'_>, la
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_DIRTY}")); // test whether eval actually changed this synchronized binding
             ctx.emitter.instruction(&format!("je {label}"));                    // preserve a native alias whose scope entry remains a snapshot
+        }
+    }
+}
+
+/// Leaves a native activation alias attached while the interpreter still resolves it globally.
+fn emit_branch_if_scope_entry_global_alias(ctx: &mut FunctionContext<'_>, label: &str) {
+    let flags = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flags, 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("tst {flags}, #{EVAL_SCOPE_FLAG_GLOBAL_ALIAS}")); // test whether the interpreter still resolves this entry through globals
+            ctx.emitter.instruction(&format!("b.ne {label}"));                  // retain the native activation alias while its global marker remains set
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_GLOBAL_ALIAS}")); // test whether the interpreter still resolves this entry through globals
+            ctx.emitter.instruction(&format!("jne {label}"));                   // retain the native activation alias while its global marker remains set
         }
     }
 }

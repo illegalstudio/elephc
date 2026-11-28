@@ -139,7 +139,7 @@ pub(super) fn reflection_function_parameter_metadata(
     let selector = const_parameter_selector_operand(ctx, parameter_operand)?;
     let Some(function) = ctx.function_by_name(&function_name) else {
         if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
+            reflection_builtin_function_signature(ctx, &function_name)
         {
             let metadata = reflection_builtin_function_metadata(ctx, &builtin_name, &signature)?;
             let Some(parameter) =

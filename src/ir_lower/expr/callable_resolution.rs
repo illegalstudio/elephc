@@ -143,13 +143,14 @@ pub(super) fn lower_static_callable_call(
             {
                 return Some(value);
             }
-            let sig = call_signature(
-                ctx,
-                &function_name,
-                source_prefers_extension_builtin(&function_name),
+            let sig = crate::types::builtin_call_sig_with_semantics(
+                &function_name, ctx.semantic_profile, crate::source::SourceMode::Php,
             );
+            if let Some(call) = super::prepared_builtin_refs::lower_dynamic_place_call(
+                ctx, &function_name, sig.as_ref(), callback_args, expr, crate::source::SourceMode::Php,
+            ) { return Some(call); }
             if let Some(call) = lower_packed_builtin_call(
-                ctx, &function_name, sig.as_ref(), callback_args, expr,
+                ctx, &function_name, sig.as_ref(), callback_args, expr, crate::source::SourceMode::Php,
             ) {
                 return Some(call);
             }
@@ -171,14 +172,22 @@ pub(super) fn lower_static_callable_call(
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             // Keep literal eval demand instead of requesting the full runtime catalog.
             let eval_literal = eval_literal_fragment(&function_name, callback_args);
-            let call = emit_builtin_call_value(
+            let previous = ctx.prepared_builtin_invocation;
+            let legacy_value_call = matches!(&expr.kind, ExprKind::FunctionCall { name, .. }
+                if matches!(php_symbol_key(name.as_str().trim_start_matches('\\')).as_str(), "call_user_func" | "call_user_func_array"));
+            ctx.prepared_builtin_invocation |= !legacy_value_call && crate::builtins::registry::lookup(&function_name)
+                .is_some_and(|def| matches!(def.spec.semantics.callable,
+                    crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_)));
+            let call = emit_builtin_call_value_with_source_mode(
                 ctx,
                 &function_name,
                 operands,
                 php_type,
                 expr.span,
                 eval_literal,
+                crate::source::SourceMode::Php,
             );
+            ctx.prepared_builtin_invocation = previous;
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)
         }
@@ -281,7 +290,7 @@ pub(super) fn lower_static_callable_call(
 pub(super) fn builtin_callable_needs_runtime_arity(name: &str, args: &[Expr]) -> bool {
     use crate::builtins::semantics::BuiltinLowering;
     use crate::ir::RuntimeCallTarget;
-    if args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args) { return false; }
+    if args.iter().any(is_spread_arg) || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. })) { return false; }
     let Some(definition) = crate::builtins::registry::lookup(name) else { return false; };
     let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) = definition.spec.semantics.lowering else { return false; };
     target.mbstring_operation().is_some_and(|operation| !operation.supports_arity(args.len()))
@@ -744,7 +753,7 @@ pub(super) fn instance_callable_object_class_and_nullability(
         ExprKind::Clone(inner) => {
             return instance_callable_object_class_and_nullability(ctx, inner);
         }
-        _ => infer_expr_type_syntactic(object),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     };
     let (class_name, nullable) = singular_object_class(&object_type)?;
     normalized_class_name(class_name).map(|class_name| (class_name, nullable))
@@ -779,7 +788,7 @@ pub(super) fn call_signature(
     prefer_extension_builtin: bool,
 ) -> Option<FunctionSig> {
     if prefer_extension_builtin {
-        return builtin_call_signature(name);
+        return builtin_call_signature(ctx, name);
     }
     if let Some(sig) = ctx.functions.get(name) {
         return Some(sig.clone());
@@ -787,26 +796,26 @@ pub(super) fn call_signature(
     if let Some(sig) = ctx.extern_functions.get(name) {
         return Some(function_sig_from_extern_for_descriptor(sig));
     }
-    builtin_call_signature(name)
+    builtin_call_signature(ctx, name)
 }
 
 /// Returns whether the active source profile must prefer an elephc extension over a shadow.
 pub(super) fn source_prefers_extension_builtin(name: &str) -> bool {
-    !crate::strict_php::is_enabled()
-        && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+    !crate::php_only::is_enabled()
+        && crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
             &php_symbol_key(name.trim_start_matches('\\')),
             true,
         )
 }
 
 /// Looks up a PHP builtin call signature using the normalized global builtin name.
-pub(super) fn builtin_call_signature(name: &str) -> Option<FunctionSig> {
-    crate::types::builtin_call_sig(&php_symbol_key(name.trim_start_matches('\\')))
+pub(super) fn builtin_call_signature(ctx: &LoweringContext<'_, '_>, name: &str) -> Option<FunctionSig> {
+    crate::types::builtin_call_sig_with_semantics(&php_symbol_key(name.trim_start_matches('\\')), ctx.semantic_profile, ctx.builtin_source_mode())
 }
 
 /// Looks up precise first-class builtin metadata using the normalized global builtin name.
-pub(super) fn first_class_builtin_signature(name: &str) -> Option<FunctionSig> {
-    crate::types::first_class_callable_builtin_sig(&php_symbol_key(name.trim_start_matches('\\')))
+pub(super) fn first_class_builtin_signature(ctx: &LoweringContext<'_, '_>, name: &str) -> Option<FunctionSig> {
+    crate::types::first_class_callable_builtin_sig_with_semantics(&php_symbol_key(name.trim_start_matches('\\')), ctx.semantic_profile)
 }
 
 /// Lowers the arguments of a call through a statically resolved callable value: the checker

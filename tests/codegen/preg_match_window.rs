@@ -46,6 +46,23 @@ echo \PrEg_MaTcH('/a/', 'xa', offset: 1), preg_match(subject: 'xa', pattern: '/a
     assert_eq!(out, "1[[\"a\",3]]\n1[[\"a\",3]]\n1[[\"a\",0]]\n01\n10\n10\n");
 }
 
+/// Exact key and binding policies preserve named regex options expanded from static spreads.
+#[test]
+fn test_preg_match_named_spread_options_with_strict_profiles() {
+    let source = r#"<?php
+$offset = 2;
+preg_match('/a/', 'baab', $matches, ...['flags' => PREG_OFFSET_CAPTURE, 'offset' => $offset]);
+echo $matches[0][0], ':', $matches[0][1], '|';
+echo preg_match_all('/a/', 'baab', ...['offset' => $offset]), '|';
+preg_match(subject: 'baab', pattern: '/a/', matches: $legacy);
+echo $legacy[0];
+"#;
+    let output = compile_cli_file_and_run_with_managed_pcre2_and_flags(
+        source, &["--strict-array-keys", "--strict-coercions"],
+    );
+    assert_eq!(output, "a:2|1|a");
+}
+
 /// An offset past the end returns false and still writes the empty `$matches` array.
 #[test]
 fn test_preg_match_offset_past_end() {

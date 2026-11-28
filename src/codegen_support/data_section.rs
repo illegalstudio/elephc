@@ -75,8 +75,8 @@ pub enum DataWord {
 
 /// Symbol-backed metadata for one function static local recorded during EIR
 /// lowering: the value symbol, the one-time init-marker symbol, and the codegen
-/// PHP type. Consumed only by the `--web` `__rt_web_reset` generator, which must
-/// release/zero every persistent static between requests.
+/// PHP type. Process epilogues, request resets and application shutdown use the
+/// storage shape to retire each persistent owner before its storage is reused.
 #[derive(Clone, Debug)]
 pub struct StaticLocalRecord {
     /// `.comm` value symbol (`_static_<fn>_<name>`, 16 bytes).
@@ -85,6 +85,8 @@ pub struct StaticLocalRecord {
     pub init_symbol: String,
     /// Codegen representation of the static's PHP type (drives release shape).
     pub php_type: PhpType,
+    /// A function static owns a managed canonical cell rather than a raw PHP payload.
+    pub managed_reference: bool,
 }
 
 /// Tracks constants and common symbols for the assembly `.data` section.
@@ -110,6 +112,7 @@ pub struct DataSection {
     static_local_dedup: HashMap<String, usize>,
     extern_callback_slots: Vec<String>,
     invoker_owner_visitors: HashMap<usize, String>,
+    parameter_guards: Vec<PhpType>,
 }
 
 impl DataSection {
@@ -131,7 +134,23 @@ impl DataSection {
             static_local_dedup: HashMap::new(),
             extern_callback_slots: Vec::new(),
             invoker_owner_visitors: HashMap::new(),
+            parameter_guards: Vec::new(),
         }
+    }
+
+    /// Shares one EIR parameter predicate per exact value contract in this emitted module.
+    pub(crate) fn parameter_guard(&mut self, expected: &PhpType) -> String {
+        let index = self.parameter_guards.iter().position(|ty| ty == expected).unwrap_or_else(|| {
+            self.parameter_guards.push(expected.clone());
+            self.parameter_guards.len() - 1
+        });
+        format!("__eir_parameter_guard_{index}")
+    }
+
+    /// Takes queued contracts after descriptor discovery, retaining stable registered labels.
+    pub(crate) fn requested_parameter_guards(&self) -> Vec<(String, PhpType)> {
+        self.parameter_guards.iter().enumerate()
+            .map(|(index, ty)| (format!("__eir_parameter_guard_{index}"), ty.clone())).collect()
     }
 
     /// Shares one physical-slot visitor among invokers with the same argument count.

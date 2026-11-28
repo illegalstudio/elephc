@@ -110,7 +110,11 @@ impl Checker {
                     }
                     return Ok(PhpType::Object(class.name.to_string()));
                 }
-                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
+                    elephc_semantics::numeric_domains::NumericOperator::BitNot) {
+                    crate::semantics::numeric::validate_unary_type(rule, &ty, expr.span)?;
+                }
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Str) {
                     return Ok(PhpType::Mixed);
                 }
                 if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {
@@ -289,7 +293,7 @@ impl Checker {
                 // No constructor signature means no parameter binding modes either, so every
                 // argument is conservatively reference-aliased — see
                 // `Checker::record_unresolved_callee_argument_aliases`.
-                self.record_unresolved_callee_argument_aliases(args);
+                self.record_unresolved_callee_argument_aliases(args, env);
                 self.infer_type(name_expr, env)?;
                 for arg in args {
                     self.infer_type(arg, env)?;

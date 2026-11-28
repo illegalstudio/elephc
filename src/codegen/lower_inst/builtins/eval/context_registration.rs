@@ -73,7 +73,7 @@ pub(super) fn register_eval_native_global_constants(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
-        register_eval_native_global_constant(ctx, context_source, &name, &value, &ty)?;
+        register_eval_native_global_constant(ctx, context_source, &name, &value.kind, &ty)?;
     }
     Ok(())
 }
@@ -147,20 +147,19 @@ pub(super) fn register_eval_native_user_constants(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
-        if crate::types::predefined_constants::is_executable_path_alias(&value, &ctx.module.global_constants) {
+        if crate::types::predefined_constants::is_executable_path_alias(&value.kind, &ctx.module.global_constants) {
             register_eval_executable_constant(ctx, context_source, &name, "__elephc_eval_register_native_user_constant");
             continue;
         }
-        let normalized = if matches!(value, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+        let normalized = if matches!(value.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::ArrayLiteralMixed(_)) {
-            let context = crate::codegen::const_default_values::ConstDefaultContext {
-                module: ctx.module, current_class: None,
-            };
-            crate::codegen::const_default_values::resolve_const_default(
-                &Expr::new(value.clone(), crate::span::Span::synthetic()), &context,
-            ).and_then(crate::codegen::const_default_values::resolved_literal_default)
+            let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, None);
+            crate::codegen::const_default_values::resolve_const_default(&value, &context)
+                .and_then(crate::codegen::const_default_values::resolved_literal_default)
         } else { None };
-        let Some(encoded) = eval_native_user_constant_value(normalized.as_ref().unwrap_or(&value), &ty) else {
+        let value = normalized.map(|kind| value.with_kind(kind)).unwrap_or_else(||
+            crate::codegen::const_default_values::materialized_global_constant(ctx.module, &value));
+        let Some(encoded) = eval_native_user_constant_value(&value.kind, &ty, ctx.module.semantic_profile) else {
             continue;
         };
         register_eval_native_user_constant(ctx, context_source, &name, &encoded);
@@ -290,6 +289,10 @@ pub(super) fn eval_native_global_constant_abi_value(
     value: &ExprKind,
     ty: &PhpType,
 ) -> Result<(i64, i64, Option<String>)> {
+    if let ExprKind::UnaryPlus(inner) = value {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| CodegenIrError::unsupported("nonliteral unary-plus eval global constant"))?;
+        return eval_native_global_constant_abi_value(&number.kind, ty);
+    }
     match value {
         ExprKind::Null => Ok((NATIVE_GLOBAL_CONSTANT_NULL, 0, None)),
         ExprKind::BoolLiteral(value) => Ok((
@@ -558,20 +561,14 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
 ///
 /// Writing both true and false prevents a strict eval from leaking its profile into
 /// a later LFC eval that reuses the same persistent bridge context.
-pub(super) fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
-    let strict_php = matches!(
-        inst.immediate,
-        Some(Immediate::ProfiledData {
-            strict_php: true,
-            ..
-        })
-    );
+pub(super) fn mark_eval_php_only(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    let php_only = super::super::instruction_php_only_profile(inst);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    abi::emit_load_int_immediate(ctx.emitter, arg_reg, i64::from(strict_php));
+    abi::emit_load_int_immediate(ctx.emitter, arg_reg, i64::from(php_only));
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol("__elephc_eval_set_strict_php");
+        .extern_symbol("__elephc_eval_set_php_only");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

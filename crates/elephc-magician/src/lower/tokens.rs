@@ -133,6 +133,7 @@ fn shared_token(kind: &TokenKind, previous: Option<&TokenKind>, next: Option<&To
             Token::Identifier(name.clone())
         }
         TokenKind::Int(value) => Token::IntLiteral(*value),
+        TokenKind::MinimumIntegerMagnitude => Token::MinimumIntegerMagnitude,
         TokenKind::Float(value) => Token::FloatLiteral(*value),
         TokenKind::Magic(magic) => match magic {
             EvalMagicConst::File => Token::DunderFile,
@@ -145,6 +146,7 @@ fn shared_token(kind: &TokenKind, previous: Option<&TokenKind>, next: Option<&To
             EvalMagicConst::Line(_) => Token::DunderLine,
         },
         TokenKind::String(value) => Token::StringLiteral(value.clone()),
+        TokenKind::StringFormat => Token::StringFormat,
         TokenKind::DollarIdent(name) => Token::Variable(name.clone()),
         TokenKind::DollarLBrace if matches!(previous, Some(TokenKind::DoubleColon)) => Token::DollarBrace,
         TokenKind::Plus => Token::Plus,

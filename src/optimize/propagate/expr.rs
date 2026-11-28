@@ -75,6 +75,8 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         }
     };
     let span = expr.span;
+    let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         kind @ ExprKind::Runtime(_) => kind,
         // A reference element names the STORAGE it aliases; substituting the variable's
@@ -106,6 +108,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(propagate_expr(*inner, env))),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(propagate_expr(*inner, env))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(propagate_expr(*inner, env))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(propagate_expr(*inner, env))),
@@ -195,7 +198,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             if let ExprKind::Variable(name) = &array.kind {
                 if let Some(PropagatedValue::ArrayLit(fact)) = env.get(name) {
                     if let Some(kind) = try_fold_array_access(fact, &index) {
-                        return fold_expr(Expr { kind, span });
+                        return fold_expr(Expr { kind, span, source_profile, producer_binding });
                     }
                 }
             }
@@ -421,7 +424,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         }
     };
 
-    fold_expr(Expr { kind, span })
+    fold_expr(Expr { kind, span, source_profile, producer_binding })
 }
 
 /// Proves a whole expression is a constant scalar without skipping any effectful operand.
@@ -447,12 +450,13 @@ fn try_fold_read_only_scalar(expr: &Expr, env: &ConstantEnv) -> Option<Expr> {
             op: op.clone(),
             right: Box::new(try_fold_read_only_scalar(right, env)?),
         },
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(try_fold_read_only_scalar(inner, env)?)),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(try_fold_read_only_scalar(inner, env)?)),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(try_fold_read_only_scalar(inner, env)?)),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(try_fold_read_only_scalar(inner, env)?)),
         _ => return None,
     };
-    let folded = fold_expr(Expr::new(kind, expr.span));
+    let folded = fold_expr(expr.with_kind(kind));
     scalar_value(&folded).is_some().then_some(folded)
 }
 

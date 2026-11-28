@@ -85,4 +85,6 @@ const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 pub(super) enum NativeCallableTypePosition {
     Parameter,
     Return,
+    /// Scope-local contracts may include internal value kinds absent from PHP parameter hints.
+    LocalBinding,
 }

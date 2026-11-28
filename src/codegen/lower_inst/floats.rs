@@ -240,16 +240,7 @@ pub(super) fn lower_float_pow(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 pub(super) fn lower_float_neg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     require_float(ctx.load_value_to_result(value)?, inst)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("fneg d0, d0");                             // negate the loaded floating-point operand
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for subtraction
-            ctx.emitter.instruction("subsd xmm1, xmm0");                        // compute 0.0 - operand as floating-point negation
-            ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the negated float back to the result register
-        }
-    }
+    abi::emit_negate_float_result(ctx.emitter);
     store_if_result(ctx, inst)
 }
 

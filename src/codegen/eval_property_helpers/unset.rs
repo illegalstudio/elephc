@@ -1,5 +1,5 @@
 //! Purpose:
-//! Removes native fixed instance properties from eval.
+//! Removes native fixed instance properties and authorized eval backing entries.
 //!
 //! Called from:
 //! - The eval property helper emitter and Magician's authorized property-unset path.
@@ -7,7 +7,7 @@
 //! Key details:
 //! - Uses the getter frame layout so visibility and private-shadow dispatch stay shared.
 //! - Clears storage before releasing its previous owner, including reentrant destructors.
-//! - Returns false for non-native slots so eval can update its separate property storage.
+//! - Eval backing hashes detach entries so captured references retain their former values.
 
 use super::*;
 
@@ -25,6 +25,7 @@ pub(super) fn emit_property_unset_helper(
         .cloned()
         .collect::<Vec<_>>();
     let fail = "__elephc_eval_value_typed_property_unset_miss";
+    let dynamic = "__rt_eval_typed_property_unset_dynamic";
     let done = "__elephc_eval_value_typed_property_unset_done";
     let reference_error = "__rt_eval_reference_property_unset_error";
     if slots.iter().any(|slot| slot.is_reference) {
@@ -50,7 +51,7 @@ pub(super) fn emit_property_unset_helper(
             emitter.instruction(&format!("b.ne {fail}"));                       // reject non-object receivers
             emitter.instruction("str x1, [sp, #16]");                           // root the raw receiver in the shared property-dispatch spill
             emitter.instruction("ldr x9, [x1]");                                // select slots using the physical native class id
-            emit_aarch64_property_dispatch(module, emitter, data, &slots, "unset", fail);
+            emit_aarch64_property_dispatch(module, emitter, data, &slots, "unset", dynamic);
         }
         Arch::X86_64 => {
             emitter.instruction("push rbp");                                    // preserve the Rust caller frame
@@ -68,10 +69,10 @@ pub(super) fn emit_property_unset_helper(
             emitter.instruction(&format!("jne {fail}"));                        // reject non-object receivers
             emitter.instruction("mov QWORD PTR [rbp - 24], rdi");               // preserve the receiver in the shared property-dispatch spill
             emitter.instruction("mov r11, QWORD PTR [rdi]");                    // select slots using the physical native class id
-            emit_x86_64_property_dispatch(module, emitter, data, &slots, "unset", fail);
+            emit_x86_64_property_dispatch(module, emitter, data, &slots, "unset", dynamic);
         }
     }
-    abi::emit_jump(emitter, fail);
+    abi::emit_jump(emitter, dynamic);
     for slot in &slots {
         emitter.label(&slot_body_label(module, slot, "unset"));
         if slot.is_reference {
@@ -102,6 +103,8 @@ pub(super) fn emit_property_unset_helper(
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
         abi::emit_jump(emitter, done);
     }
+    emitter.label(dynamic);
+    super::dynamic_unset::emit(module, emitter, fail, done);
     emitter.label(fail);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
     emitter.label(done);

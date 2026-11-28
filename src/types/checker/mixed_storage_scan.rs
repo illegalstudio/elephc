@@ -17,8 +17,8 @@
 //!   every one of the checker's repeated walks over the same body (top level twice, method bodies
 //!   to stability, function bodies once per call-site specialization).
 //! - Guard visibility follows each statement's physical source mode, not the caller's mode.
-//! - Disabled under `--strict-locals`: the scan returns without marking anything and a divergent
-//!   assignment errors exactly as it does today.
+//! - Strict locals use boxed storage for fresh conditional bindings and check their live origin.
+//!   A definitely incompatible write still fails during checking; uncertain origins use guards.
 //! - The same walk also answers a question that has nothing to do with marking: does this body
 //!   call `eval()` at all? It is recorded in `Checker::body_contains_eval` and consulted by
 //!   `Checker::local_binding_is_killable`. The walk is the natural place for it because it is
@@ -26,7 +26,7 @@
 //!   "have we crossed an eval yet" flag cannot see an eval BELOW the `unset` it has to veto),
 //!   and because it runs in BOTH modes — the collect above is not gated on `--strict-locals`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::errors::CompileWarning;
 use crate::names::Name;
@@ -83,6 +83,8 @@ struct GuardRegion {
     sites: Vec<usize>,
 }
 
+mod entry_origins;
+
 /// Everything the scan learned about one name in one body.
 #[derive(Default)]
 struct NameFacts {
@@ -91,15 +93,32 @@ struct NameFacts {
     /// Set by any write or aliasing shape that is not a plain statement-form assignment.
     disqualified: bool,
     /// Set when the bare local is an argument of a call that may bind it BY REFERENCE. Such a
-    /// name is never marked for branch divergence, but a local that only ever holds `null` gets
+    /// name is not marked for permissive branch divergence. Strict owned origins use canonical
+    /// reference cells and retain the executed producer. A null-only reference source also gets
     /// boxed storage so the callee can write any value through the reference (see
     /// [`Checker::mark_null_reference_outputs`]).
     passed_by_ref: bool,
+    /// Dynamic call metadata may require a raw nullable pointer, so null-only slots stay natural.
+    preserve_null_storage: bool,
+    /// A conditional binding end can recreate an owned incoming parameter in this frame.
+    conditional_unset: bool,
+    /// A plain unset ends this name, including names created solely by reference formation.
+    has_unset: bool,
+    /// An outgoing capture may use the owning eval frame's canonical cell, never a foreign slot.
+    captured_by_ref: bool,
+    /// A reached function static lends canonical persistent storage to this activation name.
+    static_binding: bool,
+    /// A reached function global lends canonical program storage to this activation name.
+    global_binding: bool,
 }
 
 /// Everything one scan of one body collects.
 #[derive(Default)]
 struct Facts {
+    /// Physical source of the current statement, restored after nested syntax.
+    trusted_source: bool,
+    /// Immutable semantics used by every syntactic assignment fact.
+    semantic_profile: elephc_semantics::SemanticProfile,
     /// Per-name evidence for the body being scanned, ordered so warnings are deterministic.
     names: BTreeMap<String, NameFacts>,
     /// Whether an `eval()` call appears ANYWHERE in this body, above or below any other
@@ -130,8 +149,8 @@ impl Checker {
     ///
     /// Fills `mixed_storage_locals` for this body (consumed by `merge_local_assignment_type`),
     /// records every marked name's assignment spans in `mixed_storage_store_sites` (consumed by
-    /// EIR lowering), and files ONE warning per marked name. Under `--strict-locals` nothing is
-    /// marked and nothing is recorded.
+    /// EIR lowering), and files one warning per permissive-mode conflict. Strict source locals
+    /// use the same physical scan with an independently enforced runtime producer contract.
     ///
     /// `pre_bound_own_storage` maps each name the body's OWN frame already holds on entry to the
     /// type it arrives with: a closure's by-VALUE captures, and this body's parameters. It is NOT
@@ -154,13 +173,14 @@ impl Checker {
     pub(crate) fn run_mixed_storage_scan(
         &mut self,
         body: &[Stmt],
-        pre_bound_own_storage: &HashMap<String, PhpType>,
+        pre_bound_own_storage: &super::PreBoundLocals,
     ) {
         // The marking describes ONE frame. The caller saves and restores the enclosing body's
         // set, but clear it here too so the scan owns the whole decision for this body.
         self.mixed_storage_locals.clear();
+        self.local_store_contracts.clear_entry_origins(&self.current_loop_storage_scope);
 
-        let mut facts = Facts::default();
+        let mut facts = Facts { semantic_profile: self.semantic_profile, ..Facts::default() };
         collect_block(self, body, 0, &mut facts);
 
         // Recorded for EVERY body and in BOTH modes, because it does not gate marking: it gates
@@ -215,9 +235,10 @@ impl Checker {
             }
         }
 
-        if self.strict_locals {
-            return;
-        }
+        self.mark_owned_eval_binding_origins(&facts, pre_bound_own_storage);
+        self.mark_entry_binding_origins(&facts, pre_bound_own_storage);
+        self.mark_persistent_binding_origins(&facts, pre_bound_own_storage);
+        if self.strict_locals && facts.contains_eval { return; }
 
         // Collected before pushing so the warnings come out in source order regardless of the
         // name ordering the evidence map imposes. The flag is "say it out loud".
@@ -228,7 +249,8 @@ impl Checker {
             if !self.name_is_markable(name, name_facts) {
                 continue;
             }
-            let incoming = pre_bound_own_storage.get(name);
+            let incoming = pre_bound_own_storage.get(name).map(|entry| &entry.storage);
+            if self.strict_locals && incoming.is_some() { continue; }
             // A guard region holding the name's FIRST in-body assignment is transparent for a
             // PRE-BOUND name and not for a fresh one, so the vector depends on which this is.
             let transparent_regions = self.transparent_guard_regions(
@@ -265,15 +287,27 @@ impl Checker {
                     true,
                 ),
             };
-            let Some((existing, site)) = rejection else {
-                continue;
-            };
+            // Unknown producers need a live runtime origin whenever the body also has a
+            // conditional store. Exact alternatives need one only when their governing guard
+            // is opaque: a transparent guard accepts every exact store against its own view and
+            // restores the outer binding afterwards, so marking that shape would make the mark
+            // override the very guard that proved the region safe.
+            let has_conditional_store = name_facts.assigns.iter().any(|site| site.depth > 0);
+            let has_unknown_producer = name_facts.assigns.iter().any(|site| site.ty == PhpType::Mixed);
+            let has_opaque_alternative = name_facts.assigns.iter().any(|site| {
+                site.depth > 0 && site.ty != name_facts.assigns[0].ty
+                    && site.guard_region.is_none_or(|region| !transparent_regions[region])
+            });
+            let rejection = rejection.or_else(|| (self.strict_locals && has_conditional_store
+                && (has_unknown_producer || has_opaque_alternative))
+                .then(|| (PhpType::Mixed, &name_facts.assigns[0])));
+            let Some((existing, site)) = rejection else { continue; };
             marks.push((
                 site.span,
                 name.clone(),
                 format!(
                     "${} is assigned incompatible types ({} and {}); it is compiled as boxed \
-                     mixed storage (compile with --strict-locals to make this an error)",
+                     mixed storage (compile with --strict-locals to enforce binding contracts)",
                     name, existing, site.ty
                 ),
                 warns,
@@ -294,7 +328,7 @@ impl Checker {
             // SILENTLY: the mark and the store sites are recorded exactly as for any other name,
             // but the warning — whose advice clause would claim a `--strict-locals` rejection that
             // will not happen — is withheld. See this method's own documentation.
-            if warns {
+            if warns && !self.strict_locals {
                 // Keyed by the DECISION, so a later walk that stops marking this name retracts the
                 // warning with the store sites. `span` is one of the name's own store-site spans
                 // (the first rejected assignment), which is what makes the retire loop above find
@@ -321,6 +355,8 @@ impl Checker {
         for (name, name_facts) in &facts.names {
             if !name_facts.passed_by_ref
                 || name_facts.disqualified
+                || name_facts.captured_by_ref
+                || name_facts.preserve_null_storage
                 || name_facts.assigns.is_empty()
                 || !name_facts.assigns.iter().all(|site| matches!(site.ty, PhpType::Void))
                 || !name_facts.assigns.iter().all(|site| site.span.identifies_a_node())
@@ -373,10 +409,13 @@ impl Checker {
     /// Separated from the replay so the caller can answer it BEFORE building the per-name
     /// transparency vector, which walks every guard region in the body.
     fn name_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
-        if facts.disqualified || facts.passed_by_ref || facts.assigns.len() < 2 {
+        if facts.disqualified || (facts.captured_by_ref && !self.strict_locals)
+            || (facts.passed_by_ref && !self.strict_locals) || facts.assigns.len() < 2 {
             return false;
         }
-        // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
+        // Strict owned origins use canonical cells before an outgoing capture is formed.
+        // Incoming foreign references still retain their ABI and stay excluded below.
+        // In permissive mode a reference-aliased name is not markable: boxed `Mixed`
         // slot, and for a `use (&$m)` capture that slot IS the caller's storage, so the boxed
         // pointer would be written straight through the alias into the enclosing frame. Measured
         // before this check: the caller's `var_dump($m)` printed a raw pointer (`int(4378264920)`)
@@ -632,15 +671,16 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
     // `infer_expr_type_syntactic` answers `Int` for everything it does not recognise — a plain
     // `$a = $b`, a user function call, a property read — so trusting it here would mark locals in
     // programs that type-check perfectly well today, and a marked local's storage is boxed. Any
-    // inexact value therefore disqualifies the name outright, which keeps the marking confined to
-    // programs the checker rejects without it.
-    if !has_exact_syntactic_type(value) {
+    // inexact value therefore disqualifies the name in permissive mode. Strict source origins
+    // retain Mixed as unknown evidence and validate the actual producer before publication.
+    let exact = has_exact_syntactic_type(value);
+    if !exact && !facts.semantic_profile.contains(crate::semantics::StrictFeature::Locals) {
         entry.disqualified = true;
         return;
     }
     let site = entry.assigns.len();
     entry.assigns.push(AssignSite {
-        ty: infer_expr_type_syntactic(value),
+        ty: if exact { infer_expr_type_syntactic(value, facts.semantic_profile) } else { PhpType::Mixed },
         depth,
         span,
         guard_region,
@@ -791,11 +831,12 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
             {
                 "is_int" | "is_integer" | "is_long" => PhpType::Int,
                 "is_float" | "is_double" => PhpType::Float,
-                "is_real" if !crate::strict_php::is_enabled() => PhpType::Float,
+                "is_real" if !crate::php_only::is_enabled() => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
                 "is_null" => PhpType::Void,
                 "is_callable" => PhpType::Callable,
+                "is_resource" => PhpType::Resource(None),
                 // `is_array` narrows to the element-agnostic array FAMILY, which has no single
                 // `PhpType`. `Mixed` is what `GuardTarget::AnyArray::fallback_type` yields, and
                 // `narrow_to` reaches for that fallback whenever the guarded name is not ALREADY
@@ -859,9 +900,12 @@ fn guarded_variable_name(expr: &Expr) -> Option<&str> {
 /// (conditions, `for` update and loop subjects included). The one exception is a `for`
 /// initializer, which runs unconditionally and is checked at the statement's own depth.
 fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
-    crate::strict_php::with_source_mode(stmt.source_mode, || {
+    let trusted = facts.trusted_source;
+    facts.trusted_source = stmt.source_mode == crate::source::SourceMode::Internal;
+    crate::php_only::with_source_mode(stmt.source_mode, || {
         collect_stmt_in_current_source_mode(checker, stmt, depth, facts);
     });
+    facts.trusted_source = trusted;
 }
 
 /// Collects one statement after installing the same physical source profile as the checker.
@@ -911,11 +955,13 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
         StmtKind::Global { vars } => {
             for var in vars {
                 disqualify(facts, var);
+                if !facts.trusted_source { facts.names.entry(var.clone()).or_default().global_binding = true; }
             }
         }
         StmtKind::StaticVar { name, init } => {
             // A `static` local's storage outlives the call, so the body does not own its layout.
             disqualify(facts, name);
+            if !facts.trusted_source { facts.names.entry(name.clone()).or_default().static_binding = true; }
             collect_expr(checker, init, depth, facts);
         }
         StmtKind::Foreach { array, key_var, value_var, value_by_ref, body } => {
@@ -1110,9 +1156,23 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 facts.contains_eval = true;
             }
             if is_unset_call(name.as_str()) {
-                // A name mentioned in ANY `unset` is left to the kill path (or to today's error).
+                // Native strict origins distinguish an ended local from its next binding.
+                // Other lvalue shapes keep their existing storage and ownership path.
                 for arg in args {
-                    disqualify_root(facts, arg);
+                    if !facts.trusted_source {
+                        if let ExprKind::Variable(name) = &arg.kind {
+                            facts.names.entry(name.clone()).or_default().has_unset = true;
+                        }
+                    }
+                    if depth > 0 && !facts.trusted_source {
+                        if let ExprKind::Variable(name) = &arg.kind {
+                            facts.names.entry(name.clone()).or_default().conditional_unset = true;
+                        }
+                    }
+                    if !facts.semantic_profile.contains(crate::semantics::StrictFeature::Locals)
+                        || !matches!(arg.kind, ExprKind::Variable(_)) {
+                        disqualify_root(facts, arg);
+                    }
                 }
             } else if callee_binds_pointer_by_ref(checker, name) {
                 // `?ptr<T> &$p` gives a null local POINTER storage instead (see
@@ -1224,7 +1284,11 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
             // statement. The closure's own body is a SEPARATE frame with its own scan, and its
             // parameter defaults are evaluated there, so neither is walked here.
             for capture in capture_refs {
-                disqualify(facts, capture);
+                if facts.semantic_profile.contains(crate::semantics::StrictFeature::Locals) {
+                    facts.names.entry(capture.clone()).or_default().captured_by_ref = true;
+                } else {
+                    disqualify(facts, capture);
+                }
             }
         }
         ExprKind::IncludeValue { path, once: _, required: _ } => collect_expr(checker, path, depth, facts),
@@ -1248,7 +1312,7 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         }
         ExprKind::YieldFrom(inner)
         | ExprKind::Clone(inner)
-        | ExprKind::Negate(inner)
+        | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -1384,10 +1448,19 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
     true
 }
 
-/// Disqualifies every argument root, with no null-only promotion: the arguments of a call
-/// whose callee, and so its parameter storage, the scan cannot resolve.
+/// Keeps unresolved call ABIs natural for null-only sources while retaining strict owned origins.
 fn disqualify_args(facts: &mut Facts, args: &[Expr]) {
     for arg in args {
+        let mut bare = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &bare.kind { bare = value; }
+        if facts.semantic_profile.contains(elephc_semantics::StrictFeature::Locals) {
+            if let ExprKind::Variable(name) = &bare.kind {
+                let source = facts.names.entry(name.clone()).or_default();
+                source.passed_by_ref = true;
+                source.preserve_null_storage = true;
+                continue;
+            }
+        }
         disqualify_root(facts, arg);
     }
 }
@@ -1592,7 +1665,7 @@ mod tests {
         }, crate::span::Span::dummy());
         assert!(matches!(type_guard_subject(&condition), Some(("value", PhpType::Float))));
         {
-            let _guard = crate::strict_php::scoped_enable();
+            let _guard = crate::php_only::scoped_enable();
             assert!(type_guard_subject(&condition).is_none());
         }
         assert!(type_guard_subject(&condition).is_some());

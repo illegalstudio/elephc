@@ -76,8 +76,9 @@ fn get_attributes_filter_arguments(
     sig: &FunctionSig,
     args: &[Expr],
     span: Span,
+    profile: elephc_semantics::SemanticProfile,
 ) -> (Option<Expr>, FilterFlags) {
-    let Ok(plan) = plan_call_args(sig, args, span, false, false) else {
+    let Ok(plan) = plan_call_args(sig, args, span, false, false, profile) else {
         // The ordinary call checker owns PHP's diagnostics. This guard only inspects a valid plan.
         return (None, FilterFlags::Invalid);
     };
@@ -171,7 +172,7 @@ impl Checker {
         };
         // Consume the shared plan so named arguments and static associative spreads use exactly
         // the same parameter mapping as ordinary calls.
-        let (name, flags) = get_attributes_filter_arguments(sig, args, span);
+        let (name, flags) = get_attributes_filter_arguments(sig, args, span, self.semantic_profile);
         // An absent flag is PHP's `0`, a runtime spread is checked by the body, and an invalid
         // plan is ordinary call validation's diagnostic.
         let FilterFlags::Given(flags) = flags else {

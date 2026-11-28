@@ -48,7 +48,7 @@ pub(crate) fn build_method_sig(
                 None if *is_ref => PhpType::Mixed,
                 None => default
                     .as_ref()
-                    .map(super::super::infer_expr_type_syntactic)
+                    .map(|expr| super::super::infer_expr_type_syntactic(expr, checker.semantic_profile))
                     .unwrap_or(PhpType::Int),
             };
             Ok((n.clone(), ty))
@@ -75,7 +75,7 @@ pub(crate) fn build_method_sig(
             method.span,
             &format!("Method '{}'", method.name),
         )?,
-        None => super::super::infer_return_type_syntactic(&method.body),
+        None => super::super::infer_return_type_syntactic(&method.body, checker.semantic_profile),
     };
     if method.variadic.is_some() {
         ref_params.push(method.variadic_by_ref);

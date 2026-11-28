@@ -775,11 +775,20 @@ Each instruction has:
 | `LoadGlobalRefCell(name)` | none | `Pointer` to the boxed global symbol | `reads_global` |
 | `StoreGlobal(name, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |
 | `LoadStaticLocal(slot)` | none | slot type | `reads_global` |
+| `LoadStaticLocalRefCell(slot)` | none | borrowed managed cell address (`I64`) | `reads_global` |
 | `StoreStaticLocal(slot, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |
-| `InitStaticLocal(slot, value)` | value | `Void` | `reads_global`, `writes_global`, maybe allocation/refcount effects |
+| `InitStaticLocal(slot, value)` | value | `Void` | PHP callback effects, including allocation and cleanup throws |
 | `LoadStaticProperty(class, property)` | none | property type | `reads_global`, maybe `may_deopt` for late static |
 | `StoreStaticProperty(class, property, value, mode?, owner?)` | original value, optional assignment-site Bool and borrowed unwind owner | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
 
+Function static metadata owns a managed reference cell with a canonical boxed
+payload. `LoadStaticLocalRefCell` borrows that cell; the reached activation binding
+retains its own lease through `BindRefCellPtr`. The PHP name and persistent metadata
+use distinct slots, so earlier aliases keep their original storage and failed
+initializers preserve the previous binding. `BindLocalRefContract` can attach an
+immutable strict contract to the persistent symbol independently of its boxed
+payload. Process and request cleanup detach that owner before releasing it.
+Top-level static storage keeps its raw symbol layout.
 A `PromoteLocalRefCell` for a typed property carries the
 `Immediate::PropertyRefCell { slot, owner, suffix_and_type }` shape instead of a
 plain `LocalSlotPair`. The packed word holds the static diagnostic-suffix data id
@@ -1232,6 +1241,7 @@ Builtin calls use the checker's result recorded for their call span.
 | `FunctionVariantCall(group, args)` (reserved) | normalized args | return type | retained in the IR vocabulary and analyses; current lowering uses `Call` to the public include-variant dispatcher, and codegen has no lowering arm for this op |
 | `LanguageConstructCall(name, args)` | normalized args | construct-specific return | compiler-resident construct effect summary |
 | `RuntimeCall(target, args)` | normalized typed operands | target-declared return | descriptor/typed-target effect summary |
+| `RuntimeCall(NumericUnary { operator, policy }, value)` | one `Heap(Mixed)` numeric operand | independently owned `Heap(Mixed)` | conservative conversion, warning and exception effects; explicit numeric policy is validated against module capabilities |
 | `ExternCall(name, args)` | C ABI args | extern return | conservative FFI effects |
 | `ClosureNew` | captures | `I64` callable descriptor | `alloc_heap`, `refcount_op` |
 | `ClosureCall` | descriptor/local callable, args | return type | target effect summary or conservative |

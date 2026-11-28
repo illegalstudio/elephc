@@ -49,6 +49,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Bcmath,
     /// Dispatches the `ext/gmp` procedural surface by forwarding to the compiled GMP prelude.
     Gmp,
+    /// Dispatches gmp_intval through its profile-selected original-value projection.
+    GmpIntval,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -397,6 +399,7 @@ impl EvalValuesHook {
             Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
             Self::Bcmath => eval_bcmath_values_result(name, evaluated_args, context, values),
             Self::Gmp => eval_gmp_values_result(name, evaluated_args, context, values),
+            Self::GmpIntval => eval_gmp_intval_values_result(evaluated_args, context, values),
             Self::Base64Decode => match evaluated_args {
                 [value] => eval_base64_decode_result(*value, false, values),
                 [value, strict] => {
@@ -443,8 +446,8 @@ impl EvalValuesHook {
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Intval => match evaluated_args {
-                [value] => eval_intval_result(*value, None, values),
-                [value, base] => eval_intval_result(*value, Some(*base), values),
+                [value] => eval_intval_result(*value, None, context, values),
+                [value, base] => eval_intval_result(*value, Some(*base), context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
@@ -524,7 +527,10 @@ impl EvalValuesHook {
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }
-            Self::Intdiv => two_args(evaluated_args, values, eval_intdiv_result),
+            Self::Intdiv => {
+                let [left, right] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
+                eval_intdiv_result(*left, *right, context, values)
+            }
             Self::JsonDecode => eval_json_decode_values_result(evaluated_args, context, values),
             Self::JsonEncode => eval_json_encode_values_result(evaluated_args, context, values),
             Self::JsonLastError => {
@@ -640,7 +646,7 @@ impl EvalValuesHook {
             Self::PtrWriteF32 => eval_ptr_write_f32_values_result(evaluated_args, values),
             Self::PtrWriteF64 => eval_ptr_write_f64_values_result(evaluated_args, values),
             Self::PtrWriteString => eval_ptr_write_string_values_result(evaluated_args, values),
-            Self::Settype => eval_settype_values_result(evaluated_args, values),
+            Self::Settype => eval_settype_values_result(evaluated_args, context, values),
             Self::Sin => one_arg(evaluated_args, values, eval_sin_result),
             Self::Sinh => one_arg(evaluated_args, values, eval_sinh_result),
             Self::Addcslashes => two_args(evaluated_args, values, eval_addcslashes_result),

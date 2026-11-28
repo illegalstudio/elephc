@@ -12,7 +12,7 @@
 //!   regions are omitted until EvalIR carries the spans those tables would index.
 //! - `CompiledBody` does not embed `EvalFunction`, so the `Arc` on a function cannot cycle.
 
-use super::{EvalBinOp, EvalCallArg, EvalSourceLocation, EvalStmt, EvalUnaryOp};
+use super::{EvalBinOp, EvalCallArg, EvalExpr, EvalSourceLocation, EvalStmt, EvalUnaryOp};
 use std::sync::Arc;
 
 /// One operation in a compiled eval body.
@@ -35,7 +35,9 @@ pub(crate) enum Op {
     String(u16),
     /// Pushes a retained copy of a local, or null after an undefined-variable warning.
     Load(u16),
-    /// Pops a value into a local.
+    /// Copies the source contract before evaluating a local assignment RHS.
+    PrepareStore(u16),
+    /// Pops a value and its prepared producer contract into a local.
     Store(u16),
     /// Pops and releases a discarded value.
     Pop,
@@ -75,6 +77,8 @@ pub(crate) enum Op {
     DefineFn(u16),
     /// Increments or decrements a local using PHP's null-decrement rule.
     IncDec(u16, bool),
+    /// Formats one interpolation operand while preserving strict array checks.
+    FormatString,
 }
 
 /// Source arguments retained for context-sensitive calls that cannot use the positional fast path.
@@ -99,6 +103,8 @@ pub(crate) struct CompiledBody {
     pub(crate) strings: Vec<String>,
     /// Source call sites addressed by `PrepareCall`.
     pub(crate) calls: Vec<CompiledCall>,
+    /// Assignment producers inspected before RHS evaluation, with no owned runtime values.
+    pub(crate) store_sources: Vec<EvalExpr>,
     /// Instructions, always ending in `Return` or `ReturnVoid`.
     pub(crate) ops: Vec<Op>,
     /// True when a positional call may bind arguments without the tree-walker binder.

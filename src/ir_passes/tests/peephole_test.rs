@@ -114,13 +114,15 @@ fn unbox_of_box_string_payload_is_not_folded() {
             )
             .expect("box result");
         let unboxed = builder
-            .emit(
+            .emit_with_effects(
                 Op::MixedUnbox,
                 vec![boxed],
                 None,
                 IrType::Str,
                 PhpType::Str,
                 Ownership::MaybeOwned,
+                Op::mixed_unbox_effects(&PhpType::Str),
+                None,
             )
             .expect("unbox result");
         builder.terminate(Terminator::Return { value: Some(unboxed) });

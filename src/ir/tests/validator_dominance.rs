@@ -1,5 +1,5 @@
 //! Purpose:
-//! Checks dominance validation across bitset word boundaries and dead continuations.
+//! Checks dominance validation with large graphs, dead continuations, and handler edges.
 //!
 //! Called from:
 //! - The EIR data model test module.
@@ -8,12 +8,15 @@
 //! - A reachable diamond must reject a value defined on only one branch.
 //! - Connected dead blocks retain their cross-block-use exception.
 
-use crate::ir::{validate_function, Builder, Function, IrType, Op, Ownership, Terminator, ValidationError};
+use crate::ir::{
+    validate_function, Builder, Function, Immediate, IrType, Op, Ownership, Terminator,
+    ValidationError,
+};
 use crate::types::PhpType;
 
-/// Dense dominator storage preserves reachable and unreachable rules beyond one machine word.
+/// A large graph preserves the distinction between branch-local and unreachable definitions.
 #[test]
-fn validator_dominance_preserves_diamonds_and_dead_blocks_across_word_boundaries() {
+fn validator_dominance_preserves_diamonds_and_dead_blocks_in_large_graphs() {
     let mut function = Function::new("wide_dominance".into(), IrType::I64, PhpType::Int);
     let (join, dominating, branch_only) = {
         let mut builder = Builder::new(&mut function);
@@ -64,4 +67,42 @@ fn validator_dominance_preserves_diamonds_and_dead_blocks_across_word_boundaries
     }));
     function.blocks[join.as_raw() as usize].terminator = Some(Terminator::Return { value: Some(dominating) });
     assert_eq!(validate_function(&function), Ok(()));
+}
+
+/// An implicit handler edge admits values from the push block, but excludes sibling values.
+#[test]
+fn validator_dominance_treats_the_handler_as_reachable() {
+    let mut function = Function::new("handler_dominance".into(), IrType::I64, PhpType::Int);
+    let (handler, protected_value) = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let body = builder.create_named_block("protected", vec![]);
+        let handler = builder.create_named_block("handler", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let common_value = builder.emit_const_i64(1);
+        builder.emit(
+            Op::TryPushHandler,
+            vec![],
+            Some(Immediate::I64(i64::from(handler.as_raw()))),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Br { target: body, args: vec![] });
+        builder.position_at_end(body);
+        let protected_value = builder.emit_const_i64(2);
+        builder.terminate(Terminator::Return { value: Some(protected_value) });
+        builder.position_at_end(handler);
+        builder.terminate(Terminator::Return { value: Some(common_value) });
+        (handler, protected_value)
+    };
+    assert_eq!(validate_function(&function), Ok(()));
+    function.blocks[handler.as_raw() as usize].terminator = Some(Terminator::Return {
+        value: Some(protected_value),
+    });
+    assert_eq!(validate_function(&function), Err(ValidationError::UseNotDominated {
+        value: protected_value,
+        used_in: handler,
+    }));
 }

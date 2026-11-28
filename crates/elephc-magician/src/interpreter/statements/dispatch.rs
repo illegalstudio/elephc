@@ -23,7 +23,8 @@ pub(in crate::interpreter) fn execute_program_statements(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    if program.native_generic_syntax() && crate::strict_php_mode::strict_php_mode() {
+    crate::interpreter::validate_program_semantics(context, program, values)?;
+    if program.native_generic_syntax() && crate::php_only_mode::php_only_mode() {
         return Err(EvalStatus::ParseError);
     }
     seed_named_cli_superglobals(program, context, scope, values)?;
@@ -314,7 +315,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Global { vars } => {
-            execute_global_stmt(vars, context, scope)?;
+            execute_global_stmt(vars, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::If {
@@ -328,9 +329,10 @@ pub(in crate::interpreter) fn execute_stmt(
                 execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_owned_expr(
-            expr, context, scope, values,
-        )?)),
+        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+                eval_source_return_expression(expr, context, scope, values)?
+            } else { eval_owned_expr(expr, context, scope, values)? })),
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
             for replaced in set_reference_alias(context, scope, target, source, values)? {
@@ -377,7 +379,13 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::TypedVar { name, declared, value } => {
-            let value = eval_owned_expr(value, context, scope, values)?;
+            let packet = local_binding_origins::argument_source(value, context, scope);
+            let (value, packet) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+                && matches!(value, EvalExpr::Array(_)) {
+                let EvalExpr::Array(elements) = value else { unreachable!() };
+                let (value, source) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
+                (value, Some(source))
+            } else { (eval_owned_expr(value, context, scope, values)?, packet) };
             let checked = validate_generic_local(declared, name, value, context, values);
             if let Err(error) = checked { let _ = eval_release_value(context, values, value); return Err(error); }
             let previous = scope.local_type(name).cloned();
@@ -396,19 +404,14 @@ pub(in crate::interpreter) fn execute_stmt(
             if let Some(cell) = visible_scope_cell(context, scope, name) {
                 if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[declared.clone()]); }
             }
+            if let Some(packet) = packet { scope.record_local_argument_source(name.clone(), packet); }
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
-            let value = eval_owned_expr(value, context, scope, values)?;
-            for replaced in set_owned_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                values,
-            )? {
-                eval_release_value(context, values, replaced)?;
-            }
+            let mut producer = local_binding_origins::prepare_assignment(value, context, scope);
+            let value = local_binding_origins::evaluate_assignment(value, name, &mut producer, context, scope, values)?;
+            let replaced = store_local_with_origin(context, scope, name.clone(), value, producer, values)?;
+            retire_scope_replacements(replaced, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::IncDecVar { name, increment } => {
@@ -418,7 +421,7 @@ pub(in crate::interpreter) fn execute_stmt(
                 scope,
                 values,
             )?;
-            let value = match eval_inc_dec_value(current, *increment, values) {
+            let value = match eval_inc_dec_value(current, *increment, context, values) {
                 Ok(value) => value,
                 Err(status) => {
                     let _ = eval_release_value(context, values, current);
@@ -458,7 +461,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::UnsetVar { name } => {
-            if let Some(replaced) = unset_scope_cell(context, scope, name.clone()) {
+            if let Some(replaced) = unset_scope_cell(context, scope, name.clone())? {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)

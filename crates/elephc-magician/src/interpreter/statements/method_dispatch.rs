@@ -638,7 +638,7 @@ pub(super) fn eval_closure_object_method_result(
             eval_closure_object_method_result(
                 *target,
                 "call",
-                std::iter::once(EvaluatedCallArg {
+                std::iter::once(EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value: bound_this,

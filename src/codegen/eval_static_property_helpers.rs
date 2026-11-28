@@ -14,6 +14,7 @@
 //!   a real Mixed cell pointer.
 
 mod reference_getter;
+mod write_boundary;
 
 use std::collections::BTreeMap;
 
@@ -40,6 +41,13 @@ struct EvalStaticPropertySlot {
     is_declared: bool,
 }
 
+/// Reads physical storage policy without erasing the PHP declaration used by bridge validation.
+fn static_property_storage_type(module: &Module, slot: &EvalStaticPropertySlot) -> PhpType {
+    module.class_infos.get(&slot.declaring_class).and_then(|class|
+        crate::types::static_property_storage_type(class, &slot.property, module.semantic_profile))
+        .unwrap_or_else(|| slot.ty.clone())
+}
+
 /// Emits eval static-property helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_static_property_helpers(
     module: &Module,
@@ -53,6 +61,7 @@ pub(super) fn emit_eval_static_property_helpers(
     emit_static_property_get_helper(module, emitter, data, &slots);
     emit_static_property_is_initialized_helper(module, emitter, data, &slots);
     emit_static_property_set_helper(module, emitter, data, &slots);
+    write_boundary::emit(module, emitter);
     reference_getter::emit(module, emitter, data, &slots);
 }
 
@@ -573,18 +582,18 @@ fn emit_x86_64_static_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "reference" | "is_initialized" => (32, 40),
+        "get" | "reference" | "binding" | "is_initialized" => (32, 40),
         "set" => (40, 48),
-        _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval static-property dispatcher ABI"),
     }
 }
 
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "reference" | "is_initialized" => (40, 48),
+        "get" | "reference" | "binding" | "is_initialized" => (40, 48),
         "set" => (48, 56),
-        _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval static-property dispatcher ABI"),
     }
 }
 
@@ -757,7 +766,7 @@ fn emit_x86_64_uninitialized_guard(
 
 /// Boxes an ARM64 static property symbol payload into a Mixed cell.
 fn emit_aarch64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
-    match slot.ty.codegen_repr() {
+    match static_property_storage_type(module, slot).codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
         | PhpType::Bool
@@ -815,7 +824,7 @@ fn emit_aarch64_box_static_property_slot(module: &Module, emitter: &mut Emitter,
 
 /// Boxes an x86_64 static property symbol payload into a Mixed cell.
 fn emit_x86_64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
-    match slot.ty.codegen_repr() {
+    match static_property_storage_type(module, slot).codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
         | PhpType::Bool
@@ -880,6 +889,7 @@ fn emit_aarch64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
+    if write_boundary::emit_checked_slot(module, emitter, slot, fail_label) { return; }
     if slot.ty.is_php_array() {
         emitter.instruction("ldr x0, [sp, #32]");                               // borrow the boxed static-property assignment before PHP type validation
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
@@ -933,6 +943,7 @@ fn emit_x86_64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
+    if write_boundary::emit_checked_slot(module, emitter, slot, fail_label) { return; }
     if slot.ty.is_php_array() {
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed static-property assignment before PHP type validation
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);

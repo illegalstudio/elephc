@@ -340,16 +340,24 @@ echo preg_match_all(subject: 'ab', pattern: '//');
     assert_eq!(out, "3|3");
 }
 
-/// Variable syntax backed by global or static storage cannot discard capture output.
+/// Native global and static aliases publish regex captures to their shared bindings.
 #[test]
-fn preg_match_all_review_rejects_global_and_static_destinations() {
-    for source in [
-        r#"<?php $matches = []; function collect(): void { global $matches; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
-        r#"<?php function collect(): void { static $matches = []; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
-    ] {
-        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
-        assert!(error.contains("preg_match_all(): non-local $matches destinations are not supported"), "{error}");
-    }
+fn preg_match_all_review_global_and_static_destinations_publish() {
+    let out = compile_and_run_with_regex(r#"<?php
+$matches = [];
+function collectGlobalMatches(): int {
+    global $matches;
+    return preg_match_all('/a/', 'aa', $matches);
+}
+function collectStaticMatches(bool $update): string {
+    static $matches = [];
+    if ($update) { preg_match_all('/b/', 'bb', $matches); }
+    return implode('', $matches[0]);
+}
+echo collectGlobalMatches(), ':', implode('', $matches[0]), '|';
+echo collectStaticMatches(true), ':', collectStaticMatches(false);
+"#);
+    assert_eq!(out, "2:aa|bb:bb");
 }
 
 /// Native-backed dynamic eval uses the same terminal-empty and UTF-8 progression rules.

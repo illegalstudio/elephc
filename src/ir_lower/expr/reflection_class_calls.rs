@@ -17,88 +17,49 @@ pub(super) fn lower_reflection_class_new_instance(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     let constructor_sig =
         reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).cloned();
     if args.iter().any(is_spread_arg)
-        || (crate::types::call_args::has_named_args(&args) && constructor_sig.is_none())
+        || (crate::types::call_args::has_named_args(&args, ctx.semantic_profile) && constructor_sig.is_none())
     {
         return lower_reflection_class_new_instance_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    let result_type = PhpType::Mixed;
-    let result_staging = prepublish_user_call_result(
-        ctx,
-        constructor_sig.as_ref(),
-        &ReturnArgAlias::None,
-        &result_type,
-        expr.span,
-    );
-    let class_name_pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
-    let reference_property_guard_mark = ctx.reference_property_guards.len();
-    begin_call_argument_evaluation(ctx);
-    let mut arg_values = lower_args_with_signature(ctx, constructor_sig.as_ref(), &args);
-    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
-    let roots = root_user_call_operands(
-        ctx,
-        &mut arg_values,
-        constructor_sig.as_ref(),
-        &ReturnArgAlias::None,
-        &result_type,
-        expr.span,
-    );
-    let mut operands = vec![class_name.value];
-    operands.extend(arg_values.iter().copied());
-    // Reflection invokes the constructor as an internal caller: php-src keeps coercive
-    // binding there even when the file calling `newInstance*` declared strict_types.
-    crate::ir_lower::expr::object_construction::publish_call_strictness_value(
-        ctx,
-        expr.span,
-        false,
-    );
-    let object = ctx.emit_value(
-        Op::DynamicObjectNewMixed,
-        operands,
-        Some(Immediate::ReflectionConstruction),
-        result_type,
-        Op::DynamicObjectNewMixed.default_effects(),
-        Some(expr.span),
-    );
-    stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
-    super::enum_argument_guards::drain_reference_property_guards(
-        ctx,
-        reference_property_guard_mark,
-        expr.span,
-    );
-    release_owned_call_arg_temporaries_with_roots(
-        ctx,
-        &arg_values,
-        None,
-        &ReturnArgAlias::None,
-        constructor_sig.as_ref(),
-        &roots,
-        expr.span,
-    );
-    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unpin_in_flight_owners(ctx, class_name_pins, expr.span);
+    let pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
+    // Dynamic construction owns signature binding, including one variadic collection.
+    let result = object_construction::lower_new_dynamic_generic_for_reflection(ctx, class_name, &args, expr);
+    unpin_in_flight_owners(ctx, pins, expr.span);
     if ctx.value_is_owning_temporary(class_name) {
         crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
     }
-    take_prepublished_call_result(ctx, result_staging, object, expr.span)
+    result
 }
 
-/// Lowers `ReflectionClass::newInstanceArgs()` by unpacking one static argument array.
+/// Evaluates the argument array before runtime constructor binding can observe its keys.
 pub(super) fn lower_reflection_class_new_instance_args(
     ctx: &mut LoweringContext<'_, '_>,
-    object_expr: Option<&Expr>,
+    _object_expr: Option<&Expr>,
     object: LoweredValue,
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let Some(forwarded_args) = reflection_class_new_instance_args_array(ctx, args) else {
-        return lower_reflection_class_new_instance_args_unsupported(ctx, expr);
-    };
-    lower_reflection_class_new_instance(ctx, object_expr, object, &forwarded_args, expr)
+    let Some(mut call) = begin_reflection_array_call(
+        ctx, object, "ReflectionClass", "newInstanceArgs", args, 0, expr,
+    )
+    else { return lower_reflection_class_new_instance_args_unsupported(ctx, expr); };
+    let reflector = call.reflector(ctx, expr.span);
+    let class_name = lower_property_get_from_value(ctx, reflector, "__name", Op::PropGet, expr);
+    let class_name = call.root_value(ctx, class_name, expr.span);
+    let class_name = lower_expr(ctx, &class_name);
+    let unpack = call.unpack(0, expr.span);
+    let result = object_construction::lower_new_dynamic_generic_for_reflection(
+        ctx,
+        class_name,
+        &[unpack],
+        expr,
+    );
+    finish_reflection_array_call(ctx, call, result, expr.span)
 }
 
 /// Lowers `ReflectionClass::newInstanceWithoutConstructor()` to constructorless allocation.
@@ -295,16 +256,25 @@ pub(super) fn reflection_member_constructor_expr(
 pub(super) fn lower_reflection_function_invoke_call(
     ctx: &mut LoweringContext<'_, '_>,
     object_expr: Option<&Expr>,
+    reflector: LoweredValue,
     method: &str,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let method_key = php_symbol_key(method);
-    let object_expr = object_expr?;
-    let function_name = reflection_function_reflected_target(ctx, object_expr)?;
+    let function_name = match object_expr.and_then(|object| reflection_function_reflected_target(ctx, object)) {
+        Some(name) => name,
+        None => return refuse_unresolved_reflection_call(ctx, reflector, "ReflectionFunction", &method_key, expr),
+    };
+    let mut array_call = None;
     let Some(forwarded_args) = (match method_key.as_str() {
-        "invoke" => Some(reflection_function_invoke_args(args)),
-        "invokeargs" => reflection_function_invoke_args_array(ctx, args),
+        "invoke" => Some(reflection_function_invoke_args(args, ctx.semantic_profile)),
+        "invokeargs" => begin_reflection_array_call(ctx, reflector, "ReflectionFunction", "invokeArgs", args, 0, expr)
+            .map(|call| {
+                let forwarded = vec![call.unpack(0, expr.span)];
+                array_call = Some(call);
+                forwarded
+            }),
         _ => return None,
     }) else {
         return Some(lower_reflection_function_invoke_unsupported(
@@ -313,17 +283,28 @@ pub(super) fn lower_reflection_function_invoke_call(
             expr,
         ));
     };
-    if let Some(signature) = first_class_builtin_signature(&function_name) {
-        return Some(lower_reflection_builtin_function_call(
+    let owner = if array_call.is_none() {
+        root_method_receiver(ctx, reflector, expr.span).1
+    } else { None };
+    let result = if let Some(signature) = first_class_builtin_signature(ctx, &function_name) {
+        lower_reflection_builtin_function_call(
             ctx,
             &function_name,
             &signature,
             &forwarded_args,
             expr,
-        ));
+        )
+    } else {
+        let name = Name::from(function_name);
+        lower_function_call(ctx, &name, &forwarded_args, expr)
+    };
+    if let Some(call) = array_call {
+        return Some(finish_reflection_array_call(ctx, call, result, expr.span));
     }
-    let name = Name::from(function_name);
-    Some(lower_function_call(ctx, &name, &forwarded_args, expr))
+    if let Some(owner) = owner {
+        super::call_operand_owners::retire_owned_call_operand_preserving_result(ctx, owner, result, expr.span);
+    }
+    Some(result)
 }
 
 /// Lowers reflected invocation of a supported callable builtin.
@@ -348,48 +329,8 @@ pub(super) fn lower_reflection_builtin_function_call(
 }
 
 /// Returns direct `ReflectionFunction::invoke(...$args)` arguments after static spread expansion.
-pub(super) fn reflection_function_invoke_args(args: &[Expr]) -> Vec<Expr> {
-    reflection_class_new_instance_args(args)
-}
-
-/// Extracts the argument list passed to `ReflectionFunction::invokeArgs($args)`.
-pub(super) fn reflection_function_invoke_args_array(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-) -> Option<Vec<Expr>> {
-    let args = reflection_class_new_instance_args(args);
-    if args.iter().any(is_spread_arg) {
-        return None;
-    }
-    if !crate::types::call_args::has_named_args(&args) {
-        return match args.as_slice() {
-            [forwarded] => reflection_class_new_instance_args_value(ctx, forwarded),
-            _ => None,
-        };
-    }
-    let sig = ctx
-        .classes
-        .get("ReflectionFunction")
-        .and_then(|class_info| class_info.methods.get(&php_symbol_key("invokeArgs")))?;
-    let call_span = args
-        .first()
-        .map(|arg| arg.span)
-        .unwrap_or_else(crate::span::Span::dummy);
-    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
-        sig,
-        &args,
-        call_span,
-        crate::types::call_args::regular_param_count(sig),
-        false,
-        true,
-        &assoc_spread_sources(ctx, &args),
-    )
-    .ok()?;
-    if plan.has_spread_args() {
-        return None;
-    }
-    let forwarded_arg = planned_regular_arg_expr(plan.regular_args.first()?)?;
-    reflection_class_new_instance_args_value(ctx, forwarded_arg)
+pub(super) fn reflection_function_invoke_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<Expr> {
+    reflection_class_new_instance_args(args, profile)
 }
 
 /// Emits a runtime fatal for ReflectionFunction invocation forms not yet lowered.

@@ -20,9 +20,10 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_heap_alloc(emitter);
     arrays::emit_heap_grow_tail(emitter);
     arrays::emit_heap_consolidate(emitter);
-    super::super::reference_cells::emit_reference_cells(emitter, features.native_reference_validation);
+    super::super::reference_cells::emit_reference_cells(emitter, features.native_reference_validation,
+        features.eval_scope || features.eval_bridge);
     if features.native_reference_validation {
-        super::super::reference_cells::emit_validation_coordinator(emitter);
+        super::super::reference_cells::emit_validation_coordinator(emitter, features.eval_bridge);
         super::super::reference_cells::emit_validation_commit(emitter);
         super::super::reference_cells::emit_validation_publish(emitter);
         super::super::reference_cells::emit_source_lifecycle(emitter);
@@ -223,6 +224,8 @@ arrays::emit_hash_sort_require_scalars(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_bit_not(emitter);
+    arrays::numeric_unary::emit(emitter);
+    super::super::checked_numeric_cast::emit(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);
     arrays::emit_foreach_non_iterable_warning(emitter);
@@ -251,6 +254,10 @@ arrays::emit_hash_sort_require_scalars(emitter);
     // surface is reachable so native-only literal eval keeps its runtime dependency-pure.
     if features.object_clone || features.eval_bridge {
         eval_bridge::emit_object_clone_shallow_runtime(emitter, features.native_reference_validation);
+    }
+    if features.eval_bridge || features.eval_scope {
+        eval_scope::emit_scope_origin_bindings(emitter, features.native_reference_validation);
+        eval_scope::emit_scope_end_binding(emitter, features.eval_bridge);
     }
     if features.eval_bridge {
         eval_bridge::emit_eval_bridge_runtime(emitter, features);

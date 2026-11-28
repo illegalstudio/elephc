@@ -21,6 +21,7 @@ pub(in crate::interpreter) mod builtin_arguments;
 use super::*;
 
 pub(in crate::interpreter) use argument_owners::eval_owned_call_arg_values;
+pub(in crate::interpreter) use argument_owners::capture_abandoned_reference_owners;
 use argument_owners::eval_call_argument_receiver;
 pub(in crate::interpreter) use argument_modes::*;
 pub(in crate::interpreter) use closure_execution::*;
@@ -96,11 +97,11 @@ fn evaluate_call_arguments(
 
         if let Some(name) = arg.name() {
             saw_named = true;
-            let (value, ref_target) =
+            let (value, ref_target, source_type) =
                 evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
                     builtin_arguments::by_reference(contract, Some(name), evaluated_args.len()))?;
             observe(arg.value(), value);
-            evaluated_args.push(EvaluatedCallArg {
+            evaluated_args.push(EvaluatedCallArg { source_type,
                 evaluation_owner: None,
                 name: Some(name.to_string()),
                 value,
@@ -112,10 +113,10 @@ fn evaluate_call_arguments(
         if saw_named {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let (value, ref_target) = evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
+        let (value, ref_target, source_type) = evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
             builtin_arguments::by_reference(contract, None, evaluated_args.len()))?;
         observe(arg.value(), value);
-        evaluated_args.push(EvaluatedCallArg {
+        evaluated_args.push(EvaluatedCallArg { source_type,
             evaluation_owner: None,
             name: None,
             value,
@@ -131,17 +132,27 @@ fn evaluate_call_argument_value(
     expr: &EvalExpr, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps, owners: Option<&mut Vec<RuntimeCellHandle>>,
     by_reference: bool,
-) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<ArgumentSource>), EvalStatus> {
+    let source = local_binding_origins::argument_source(expr, context, scope).or_else(||
+        local_binding_origins::source_view(expr, context, scope).map(|ty| ArgumentSource::capture(ty, context)));
     if let Some(owners) = owners {
         if by_reference {
             let reference = builtin_arguments::reference(expr, context, scope, values)?;
             owners.push(reference);
-            return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference })));
+            return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference }), source));
         }
-        let value = eval_owned_expr(expr, context, scope, values)?;
+        let (value, source) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            if let EvalExpr::Array(elements) = expr {
+                let (value, source) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
+                (value, Some(source))
+            } else {
+                let (value, logical) = mixed_eval::evaluate(expr, context, scope, values)?;
+                (value, source.or_else(|| logical.as_ref().map(|ty| ArgumentSource::capture(crate::eval_ir::parameter_type(ty), context))))
+            }
+        } else { (eval_owned_expr(expr, context, scope, values)?, source) };
         owners.push(value);
-        Ok((value, None))
-    } else { eval_call_arg_value(expr, context, scope, values) }
+        Ok((value, None, source))
+    } else { eval_call_arg_value(expr, context, scope, values).map(|(value, target)| (value, target, source)) }
 }
 
 /// Evaluates one call arg and captures caller-side storage for by-reference parameters.
@@ -265,7 +276,7 @@ fn eval_property_call_arg_value(
     selection: Option<elephc_builtin_contract::ObjectProperty>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    let mut persistent_native = false;
+    let mut persistent_reference = false;
     let selected = (|| {
         if let Some(operation) = selection {
             if let Some(value) = runtime_ops::simplexml_properties::invoke(values, object, &property,
@@ -276,7 +287,11 @@ fn eval_property_call_arg_value(
             if let Some(reference) = eval_native_property_reference_for_access(
                 object, &property, context, values,
             )? {
-                persistent_native = true;
+                persistent_reference = true;
+                return Ok(reference);
+            }
+            if let Some(reference) = eval_property_reference_for_access(object, &property, context, values)? {
+                persistent_reference = true;
                 return Ok(reference);
             }
         }
@@ -289,7 +304,7 @@ fn eval_property_call_arg_value(
             return Err(status);
         }
     };
-    if persistent_native {
+    if persistent_reference {
         return argument_owners::finish_argument_reference_owners(
             Ok((value, Some(EvalReferenceTarget::Cell { cell: value.borrowed() }))),
             vec![object], context, values,
@@ -327,12 +342,16 @@ fn eval_nested_array_element_call_arg_value(
     let result = (|| {
         let index = eval_expr(index, context, caller_scope, values)?;
         index_owner = Some(index);
+        let selected_key = if array_target.is_some() && values.is_array_like(array)? {
+            checked_array_keys::for_receiver(array, index, context, values)?;
+            Some(super::reference_keys::snapshot(index, context.semantic_profile(), values)?)
+        } else { None };
         let value = if by_reference {
             match runtime_ops::simplexml_properties::dimension(values, array.borrowed(),
                 elephc_builtin_contract::ObjectDimension::WriteSelect, vec![index.borrowed()])?
             {
                 Some(value) => value,
-                None => eval_array_get_result(array, index, context, values)?,
+                None => eval_array_get_reference_result(array, index, context, values)?,
             }
         } else { eval_array_get_result(array, index, context, values)? };
         let value = promote_borrowed_result(value, values)?;
@@ -351,13 +370,18 @@ fn eval_nested_array_element_call_arg_value(
             let target = native.then(|| EvalReferenceTarget::Cell { cell: value.borrowed() });
             return Ok((value, target));
         }
-        let Some(target) = array_target.take() else { return Ok((value, None)); };
-        index_owner = None;
-        let target = match target {
+        if array_target.is_none() { return Ok((value, None)); }
+        let key = match selected_key.map(Ok).unwrap_or_else(||
+            super::reference_keys::snapshot(index, context.semantic_profile(), values))
+        {
+            Ok(key) => key,
+            Err(status) => { let _ = release_expr_result(value, context, values); return Err(status); }
+        };
+        let target = match array_target.take().expect("reference target presence was checked") {
             EvalReferenceTarget::Variable { scope, name } => {
-                EvalReferenceTarget::ArrayElement { scope, array_name: name, index }
+                EvalReferenceTarget::ArrayElement { scope, array_name: name, index: key }
             }
-            target => EvalReferenceTarget::NestedArrayElement { array_target: Box::new(target), index },
+            target => EvalReferenceTarget::NestedArrayElement { array_target: Box::new(target), index: key },
         };
         Ok((value, Some(target)))
     })();
@@ -378,7 +402,11 @@ fn eval_static_property_call_arg_value(
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     let value = eval_static_property_get_result(&class_name, &property, context, values)?;
     if by_reference && values.supports_persistent_references() {
-        let reference = eval_native_static_property_reference_after_read(&class_name, &property, context, values);
+        let reference = eval_native_static_property_reference_after_read(&class_name, &property, context, values)
+            .and_then(|reference| match reference {
+                Some(reference) => Ok(Some(reference)),
+                None => eval_static_property_reference_after_read(&class_name, &property, context, values),
+            });
         match reference {
             Ok(Some(reference)) => {
                 let result = Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference.borrowed() })));
@@ -450,7 +478,7 @@ fn append_ordered_call_arg_values(
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
-        let ref_target = eval_array_reference_key(key, values)?
+        let ref_target = eval_array_reference_key(key, context.semantic_profile(), values)?
             .and_then(|key| context.array_element_alias(array, &key).cloned());
         let arg = match values.type_tag(key)? {
             EVAL_TAG_INT => {
@@ -467,7 +495,7 @@ fn append_ordered_call_arg_values(
                 };
                 let (value, ref_target) =
                     eval_invoker_ref_arg_value_and_target(value, ref_target, context, values)?;
-                EvaluatedCallArg {
+                EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value,
@@ -493,7 +521,7 @@ fn append_ordered_call_arg_values(
                 };
                 let (value, ref_target) =
                     eval_invoker_ref_arg_value_and_target(value, ref_target, context, values)?;
-                EvaluatedCallArg {
+                EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: Some(name),
                     value,

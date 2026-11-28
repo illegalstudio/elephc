@@ -113,6 +113,8 @@ mod tests {
                 args: &[],
                 arg_types: &arg_types,
                 span: crate::span::Span::dummy(),
+                semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
+                source_mode: crate::source::SourceMode::Php,
             };
             let effects = object_argument_effects(base, &input);
             assert_eq!(effects.contains(Effects::MAY_THROW), throws, "{ty:?}");

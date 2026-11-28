@@ -53,7 +53,7 @@ Options:
   --junit FILE            Write a JUnit XML report to FILE
   -h, --help              Show this help
 
-Compile options such as --strict-php, --with-<crate>, --heap-size, --php-version,
+Compile options such as --php-only, --with-<crate>, --heap-size, --php-version,
 --define and --ini are forwarded to the compiler. Output modes (--emit-ir, --emit-asm,
 --emit, --check), --target and --web are not accepted: the runner always builds and
 runs a host executable.
@@ -220,7 +220,7 @@ mod tests {
             "spec",
             "--filter",
             "Alpha::testOne",
-            "--strict-php",
+            "--php-only",
             "--define",
             "DEBUG",
             "--heap-size=1048576",
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(command.filter.as_deref(), Some("Alpha::testOne"));
         assert_eq!(
             command.compile_args,
-            args(&["--strict-php", "--define", "DEBUG", "--heap-size=1048576"])
+            args(&["--php-only", "--define", "DEBUG", "--heap-size=1048576"])
         );
         let command = parse_args(&args(&["--filter=Beta"])).expect("parses");
         assert_eq!(command.filter.as_deref(), Some("Beta"));

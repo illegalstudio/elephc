@@ -216,7 +216,7 @@ pub(super) fn lower_function_declarations(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     lower_function_declarations_inner(statements, module, check_result, constants,
@@ -228,7 +228,7 @@ fn lower_function_declarations_inner(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
     seen: &mut HashSet<DeclarationOrigin>,
 ) {

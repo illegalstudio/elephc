@@ -639,17 +639,26 @@ impl CounterProof {
                         && matches!(function.instructions[id.as_raw() as usize].op,
                             Op::RuntimeCall | Op::ArrayPush | Op::MethodCall))
                 {
-                    let operands = function.instructions[id.as_raw() as usize].operands.clone();
+                    let consumer = &function.instructions[id.as_raw() as usize];
+                    let boxed_unary = matches!(consumer.immediate,
+                        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::NumericUnary { .. })));
+                    let operands = consumer.operands.clone();
                     for (position, source) in operands.into_iter().enumerate() {
                         if !self.scalar_values.contains(&source) {
                             continue;
                         }
+                        // The unary runtime call takes a boxed value even in this discarded trial.
+                        let (op, ir_type, php_type, ownership) = if boxed_unary {
+                            (Op::MixedBox, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned)
+                        } else {
+                            (Op::Move, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                        };
                         let copy_id = InstId::from_raw(function.instructions.len() as u32);
                         let value = ValueId::from_raw(function.values.len() as u32);
                         function.values.push(Value {
-                            ir_type: IrType::I64,
-                            php_type: PhpType::Int,
-                            ownership: Ownership::NonHeap,
+                            ir_type,
+                            php_type: php_type.clone(),
+                            ownership,
                             def: ValueDef::Instruction {
                                 block: function.blocks[block_index].id,
                                 index: rewritten.len() as u32,
@@ -657,14 +666,14 @@ impl CounterProof {
                             },
                         });
                         function.instructions.push(Instruction::new(
-                            Op::Move,
+                            op,
                             vec![source],
                             None,
                             Some(value),
-                            IrType::I64,
-                            PhpType::Int,
-                            Ownership::NonHeap,
-                            Op::Move.default_effects(),
+                            ir_type,
+                            php_type,
+                            ownership,
+                            op.default_effects(),
                             None,
                         ));
                         rewritten.push(copy_id);

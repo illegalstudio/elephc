@@ -1,0 +1,74 @@
+//! Purpose:
+//! Builds reusable EIR guards for public callable scalar and nominal parameter contracts.
+//!
+//! Called from:
+//! - Final descriptor helper emission after all runtime signatures are known.
+//!
+//! Key details:
+//! - The input is borrowed by the invoker and receives ordinary Mixed parameter ownership.
+//! - Physical implementation syntax does not weaken the public callable boundary.
+
+use super::*;
+use elephc_semantics::conversions::ValueKind;
+
+/// Lowers exact membership or a null-only obligation using the same borrowed input ABI.
+pub(crate) fn lower_callable_parameter_guard(module: &mut Module, label: &str, expected: &PhpType) -> Function {
+    let span = Span::dummy();
+    let value = Expr::new(ExprKind::Variable("value".into()), span);
+    let allowed = crate::semantics::conversions::implicit_contract(expected).expect("checked value contract");
+    let false_only = crate::semantics::conversions::only_false(expected);
+    let mut alternatives = Vec::new();
+    for (kind, name) in [(ValueKind::Integer, "is_int"), (ValueKind::Float, "is_float"),
+        (ValueKind::Boolean, "is_bool"), (ValueKind::String, "is_string"), (ValueKind::Null, "is_null")] {
+        if !allowed.allows(kind) { continue; }
+        alternatives.push(if false_only && kind == ValueKind::Boolean {
+            Expr::new(ExprKind::BinaryOp { left: Box::new(value.clone()), op: BinOp::StrictEq,
+                right: Box::new(Expr::new(ExprKind::BoolLiteral(false), span)) }, span)
+        } else {
+            Expr::new(ExprKind::FunctionCall { name: Name::unqualified(name), args: vec![value.clone()] }, span)
+        });
+    }
+    for name in crate::semantics::conversions::nominal_members(expected) {
+        alternatives.push(if name.is_empty() || name.eq_ignore_ascii_case("object") {
+            Expr::new(ExprKind::FunctionCall { name: Name::unqualified("is_object"), args: vec![value.clone()] }, span)
+        } else {
+            Expr::new(ExprKind::InstanceOf { value: Box::new(value.clone()),
+                target: crate::parser::ast::InstanceOfTarget::Name(Name::from(name)) }, span)
+        });
+    }
+    for constraint in crate::semantics::conversions::runtime_constraints(expected) {
+        use crate::semantics::conversions::RuntimeConstraint;
+        let name = match constraint {
+            RuntimeConstraint::Array => "is_array", RuntimeConstraint::Iterable => "is_iterable",
+            RuntimeConstraint::Callable => "is_callable", RuntimeConstraint::Resource => "is_resource",
+        };
+        alternatives.push(Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified(name), args: vec![value.clone()],
+        }, span));
+    }
+    let null_only = !module.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+        && crate::semantics::nullability::contract_active(module.semantic_profile, expected);
+    let accepted = if null_only {
+        Expr::new(ExprKind::Not(Box::new(Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified("is_null"), args: vec![value.clone()],
+        }, span))), span)
+    } else { alternatives.into_iter().reduce(|left, right| Expr::new(ExprKind::BinaryOp {
+        left: Box::new(left), op: BinOp::Or, right: Box::new(right),
+    }, span)).expect("a checked contract accepts at least one alternative") };
+    let message = if null_only { crate::semantics::nullability::NON_NULL_MESSAGE.to_string() }
+        else { format!("--strict-coercions requires {expected} without implicit conversion") };
+    let guard = Stmt::new(StmtKind::If {
+        condition: accepted, then_body: Vec::new(), elseif_clauses: Vec::new(),
+        else_body: Some(vec![Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
+            class_name: Name::unqualified("TypeError"), args: vec![Expr::new(ExprKind::StringLiteral(
+                message), span)],
+        }, span)), span)]),
+    }, span);
+    let signature = FunctionSig {
+        params: vec![("value".into(), PhpType::Mixed)], param_type_exprs: vec![None],
+        param_attributes: vec![Vec::new()], defaults: vec![None], return_type: PhpType::Void,
+        declared_return: true, by_ref_return: false, ref_params: vec![false], declared_params: vec![false],
+        variadic: None, deprecation: None, is_generator: false,
+    };
+    lower_operator_callable_body(module, label, &signature, crate::source::SourceMode::Internal, vec![guard])
+}

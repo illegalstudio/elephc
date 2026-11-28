@@ -219,7 +219,8 @@ pub(super) fn lower_assoc_spread_only_args(
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
     let mut operands = Vec::with_capacity(sig.params.len());
     for (idx, (param_name, _)) in sig.params.iter().enumerate() {
-        let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
+        let bound_default = sig.default_value(idx);
+        let default = bound_default.as_ref();
         let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
         operands.push(lower_arg_with_signature(ctx, sig, idx, &param_expr));
     }
@@ -351,7 +352,7 @@ pub(super) fn spread_len_gt_expr_for_ir(
 
 /// Marks spread arguments whose source is known to be an associative array.
 pub(super) fn assoc_spread_sources(ctx: &LoweringContext<'_, '_>, args: &[Expr]) -> Vec<bool> {
-    crate::types::call_args::expand_static_assoc_spread_args(args)
+    crate::types::call_args::expand_static_assoc_spread_args(args, ctx.semantic_profile)
         .iter()
         .map(|arg| match &arg.kind {
             ExprKind::Spread(inner) => is_assoc_spread_source(ctx, inner),
@@ -365,6 +366,6 @@ pub(super) fn is_assoc_spread_source(ctx: &LoweringContext<'_, '_>, expr: &Expr)
     match &expr.kind {
         ExprKind::Variable(name) => matches!(ctx.local_types.get(name), Some(PhpType::AssocArray { .. })),
         ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
-        _ => matches!(infer_expr_type_syntactic(expr), PhpType::AssocArray { .. }),
+        _ => matches!(infer_expr_type_syntactic(expr, ctx.semantic_profile), PhpType::AssocArray { .. }),
     }
 }

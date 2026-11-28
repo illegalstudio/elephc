@@ -30,7 +30,7 @@ use crate::codegen::{
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
-    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op, RuntimeCallTarget,
+    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
     Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
@@ -85,6 +85,7 @@ pub(super) struct FrameLayout {
     pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) binding_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
@@ -168,6 +169,16 @@ pub(super) fn layout_for_function(
     let numeric_frame_only_slots = super::stack_numeric::frame_only_locals(
         function, &numeric.locals, &numeric_cell_offsets, &numeric_seed_offsets,
     );
+    let mut binding_state_offsets = HashMap::new();
+    if function.flags.tracks_local_binding_state {
+        for local in &function.locals {
+            if local.kind == LocalKind::PhpLocal && local.name.as_deref()
+                .is_some_and(|name| !crate::names::is_generated_local_name(name)) {
+                offset += 8;
+                binding_state_offsets.insert(local.id, offset);
+            }
+        }
+    }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -240,6 +251,7 @@ pub(super) fn layout_for_function(
         numeric_frame_only_slots,
         numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
+        binding_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
         return_owner_guard_offsets,
@@ -280,7 +292,8 @@ fn module_throws(module: &Module) -> bool {
                 || function.instructions.iter().any(|inst| {
                     matches!(
                         inst.op,
-                        Op::ThrowException | Op::ThrowError | Op::ThrowErrorValue
+                        Op::ThrowException | Op::ThrowError | Op::ThrowErrorValue | Op::ThrowTypeError
+                        | Op::ThrowValueError | Op::ThrowArithmeticError | Op::ThrowOutOfBounds
                     )
                 })
         })
@@ -342,14 +355,7 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
         .chain(module.runtime_callable_invokers.iter())
         .flat_map(|function| function.instructions.iter())
         .any(|inst| {
-            let id = match inst.immediate {
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(id)))
-                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
-                    target: id,
-                    ..
-                })) => id,
-                _ => return false,
-            };
+            let Some(id) = inst.runtime_function() else { return false; };
             id.produces_resource_inventory_entry()
                 || matches!(id, crate::ir::RuntimeFnId::StreamFilterRegister | crate::ir::RuntimeFnId::StreamWrapperRegister)
         })
@@ -499,6 +505,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     zero_initialize_main_cleanup_locals(ctx);
     initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
+    super::local_binding_state::initialize(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -587,6 +594,7 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_function_cleanup_locals(ctx);
     initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
+    super::local_binding_state::initialize(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -992,6 +1000,13 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
             0,
         );
         abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        if record.managed_reference {
+            crate::codegen_support::runtime::reference_cells::detach_function_static(
+                ctx.emitter, &record, ctx.module.required_runtime_features.native_reference_validation);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+            ctx.emitter.label(&done);
+            continue;
+        }
         emit_static_symbol_value_cleanup(ctx, &record.symbol, &ty);
         abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 0);
         abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 8);
@@ -1009,29 +1024,103 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             globals.push(name.to_string());
         }
     }
-    for name in globals {
-        if ctx.module.extern_globals.contains_key(&name) {
-            continue;
-        }
+    let globals: Vec<_> = globals.into_iter().filter_map(|name| {
+        if ctx.module.extern_globals.contains_key(&name) { return None; }
         let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed
         };
-        if !cleanup_tracked_codegen_type(&ty) {
-            continue;
-        }
         let symbol = ir_global_symbol(&name);
-        if !ctx.data.has_comm(&symbol) {
-            continue;
+        (cleanup_tracked_codegen_type(&ty) && ctx.data.has_comm(&symbol))
+            .then_some((name, symbol, ty))
+    }).collect();
+    if globals.is_empty() { return; }
+
+    // PHP first removes direct object globals with a single owner. Remaining objects run
+    // their callbacks while other global names and container aliases are still published.
+    if ctx.module.required_runtime_features.eval_bridge
+        || ctx.module.class_infos.values().any(|class| class.methods.contains_key("__destruct"))
+    {
+        for (_, symbol, ty) in globals.iter().rev() {
+            if *ty == PhpType::Mixed {
+                emit_main_single_owner_global_cleanup(ctx, symbol);
+            }
         }
+        abi::emit_call_label(ctx.emitter, "__rt_gc_finalize_before_global_cleanup");
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    let again = ctx.next_label("global_cleanup_again");
+    ctx.emitter.label(&again);
+    for (name, symbol, ty) in &globals {
         ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
-        emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
-        if ty == PhpType::Str {
-            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+        // A destructor may bind this name while the previous reference wrapper is retiring.
+        // Detach first so the new activation cannot acquire that zero-count wrapper.
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
+        abi::emit_store_zero_to_symbol(ctx.emitter, symbol, 0);
+        if *ty == PhpType::Str {
+            abi::emit_store_zero_to_symbol(ctx.emitter, symbol, 8);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(ctx.emitter, ty);
         }
     }
+    // Destructor activations can recreate a previously visited global, even with a null value.
+    for (_, symbol, _) in &globals {
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &again);
+    }
+}
+
+/// Retires an ordinary global object box when its last PHP owner is this binding.
+fn emit_main_single_owner_global_cleanup(ctx: &mut FunctionContext<'_>, symbol: &str) {
+    use crate::codegen_support::sentinels::{MIXED_HEAP_KIND, OBJECT_HEAP_KIND};
+
+    let done = ctx.next_label("global_cleanup_shared");
+    let emitter = &mut *ctx.emitter;
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+    // Native define() constants share the global inventory and can hold unboxed words.
+    emit_require_single_heap_owner(emitter, MIXED_HEAP_KIND, &done);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0]");                                // inspect the direct value without following PHP references
+            emitter.instruction("cmp x9, #6");                                  // only direct object slots participate in the first shutdown pass
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp QWORD PTR [rax], 6");                      // select direct objects without following PHP references
+        }
+    }
+    abi::emit_branch_if_not_equal_wide(emitter, &done);
+    abi::emit_load_from_address(emitter, result, result, 8);
+    emit_require_single_heap_owner(emitter, OBJECT_HEAP_KIND, &done);
+
+    // Validation runs without callbacks, so the original box is still published here.
+    abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+    emitter.label(&done);
+}
+
+/// Keeps the result only when it is a live allocation of the requested kind with one owner.
+fn emit_require_single_heap_owner(emitter: &mut Emitter, kind: u32, done: &str) {
+    abi::emit_call_label(emitter, "__rt_gc_candidate_live");
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldrb w9, [x0, #-8]");                          // read the authenticated allocation's kind byte
+            emitter.instruction(&format!("cmp w9, #{kind}"));                   // check the physical layout before inspecting the payload
+            emitter.instruction(&format!("b.ne {done}"));                       // skip live allocations with unrelated layouts
+            emitter.instruction("ldr w9, [x0, #-12]");                          // read the authenticated allocation's owner count
+            emitter.instruction("cmp w9, #1");                                  // shared allocations stay published during finalization
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {kind}"));    // check the authenticated allocation's kind byte
+            emitter.instruction(&format!("jne {done}"));                        // skip live allocations with unrelated layouts
+            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // shared allocations stay published during finalization
+        }
+    }
+    abi::emit_branch_if_not_equal_wide(emitter, done);
 }
 
 /// Releases the refcounted value stored in a static-local symbol.
@@ -1096,6 +1185,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     zero_initialize_main_cleanup_locals(ctx);
     initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
+    super::local_binding_state::initialize(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -1535,6 +1625,7 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
 
 /// Detaches a non-null ref-cell owner before releasing its cell, including throwing payloads.
 fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
+    super::lower_inst::local_stores::unbind_local_contract(ctx, offset);
     let done = ctx.next_label("ref_cell_owner_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

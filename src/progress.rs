@@ -12,7 +12,7 @@
 //! Key details:
 //! - State is process-global (`OnceLock`), set exactly once by `init()` at the
 //!   very start of `compile()`, mirroring the existing `codegen::set_null_repr`/
-//!   `strict_php::set_enabled` global-setup pattern in this codebase.
+//!   `php_only::set_enabled` global-setup pattern in this codebase.
 //! - A phase bar is finished and left in the terminal only after its matching
 //!   `CompileTimings::record_since()` call reports successful completion.
 

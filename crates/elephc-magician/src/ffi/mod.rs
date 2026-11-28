@@ -22,6 +22,9 @@ mod dynamic_properties;
 pub(crate) mod ob_handlers;
 pub mod execute;
 #[cfg(not(test))]
+mod property_references;
+mod property_reference_context;
+#[cfg(not(test))]
 pub mod function_calls;
 pub mod native_catalog;
 pub mod native_functions;
@@ -38,6 +41,7 @@ pub mod opcache_status;
 pub mod reflection_classes;
 pub mod scope;
 mod scope_owners;
+mod scope_snapshot_retirement;
 #[cfg(not(test))]
 pub mod static_members;
 pub mod symbols;

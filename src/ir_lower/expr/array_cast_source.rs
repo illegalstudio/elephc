@@ -61,6 +61,10 @@ pub(super) fn array_cast_source_type_for_ir(
         ExprKind::ErrorSuppress(inner) => array_cast_source_type_for_ir(ctx, inner),
         ExprKind::Clone(inner) => clone_source_type(ctx, inner),
         ExprKind::Assignment { value, .. } => array_cast_source_type_for_ir(ctx, value),
+        ExprKind::UnaryPlus(inner) => match array_cast_source_type_for_ir(ctx, inner) {
+            ty @ (PhpType::Int | PhpType::Float) => ty,
+            _ => PhpType::Mixed,
+        },
         ExprKind::Negate(inner) => negate_source_type(ctx, inner),
         ExprKind::Not(_) => PhpType::Bool,
         ExprKind::BitNot(inner) => bitnot_source_type(ctx, inner),
@@ -269,8 +273,9 @@ fn numeric_binary_php_type(
         op,
         lhs,
         rhs,
-        &fallback_expr_type(expr),
+        &fallback_expr_type(expr, ctx.semantic_profile),
         numeric_binary_identity(op, left, right),
+        crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode),
     )
 }
 

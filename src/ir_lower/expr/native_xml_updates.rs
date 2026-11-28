@@ -147,15 +147,38 @@ fn lower(
         ordinary(ctx, parent, property, &inputs.name, op, &inputs.rhs, post, reread, expr)
     } else { property_access::native_xml_reads::dispatch(
         ctx, parent, expr, PhpType::Mixed, false,
-        |ctx, receiver| lower_method_call_with_receiver(ctx, receiver, "__elephc_property_update", &[
-            name_expr.clone(), right_expr.clone(), Expr::new(ExprKind::IntLiteral(code), expr.span),
-            Expr::new(ExprKind::BoolLiteral(post), expr.span),
-        ], Op::MethodCall, expr),
+        |ctx, receiver| {
+            guard_native_concatenation(ctx, receiver, &name_expr, &inputs.rhs, op, expr);
+            lower_method_call_with_receiver(ctx, receiver, "__elephc_property_update", &[
+                name_expr.clone(), right_expr.clone(), Expr::new(ExprKind::IntLiteral(code), expr.span),
+                Expr::new(ExprKind::BoolLiteral(post), expr.span),
+            ], Op::MethodCall, expr)
+        },
         |ctx, receiver| ordinary(ctx, receiver, property, &inputs.name, op, &inputs.rhs, post, reread, expr),
     ) };
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     retire(ctx, inputs.owners, expr.span);
     take_prepublished_call_result(ctx, staging, result, expr.span)
+}
+
+/// Checks public operand kinds after a read-only selection and before any writable fetch.
+fn guard_native_concatenation(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, name: &Expr,
+    right: &str, op: &BinOp, expr: &Expr,
+) {
+    if *op != BinOp::Concat || !crate::semantics::strings::active(ctx.semantic_profile, ctx.source_mode) { return; }
+    let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
+        .and_then(|class| class.operators)
+        .and_then(|operators| operators.property_method(elephc_builtin_contract::ObjectProperty::UpdateRead))
+        .expect("XML read-only update adapter is catalogued");
+    let current = lower_method_call_with_receiver(ctx, receiver, method, &[name.clone()], Op::MethodCall, expr);
+    let mut owners = Vec::new();
+    let current = capture(ctx, current, &mut owners, expr.span);
+    let current = load(ctx, &current, expr.span);
+    string_contracts::concatenation(ctx, current, expr.span);
+    let right = load(ctx, right, expr.span);
+    string_contracts::concatenation(ctx, right, expr.span);
+    retire(ctx, owners, expr.span);
 }
 
 /// Evaluates computed operands early while loading variable names and coercing names after the RHS.

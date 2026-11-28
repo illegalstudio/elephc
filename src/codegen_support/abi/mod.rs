@@ -13,6 +13,11 @@ mod borrowed_numeric;
 mod calls;
 mod call_operand_scope;
 mod frame;
+mod floats;
+mod hash_keys;
+pub(crate) use hash_keys::{emit_boxed_hash_key, HashKeyNormalization, BOXED_ARRAY_KEY};
+pub(crate) use floats::emit_negate_float_result;
+pub(crate) use frame::emit_sp_address;
 pub(crate) mod immediate;
 mod registers;
 mod php_return;
@@ -76,7 +81,7 @@ pub use symbols::{
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};
 pub use values::{
     emit_branch_if_equal_wide, emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
-    emit_branch_if_not_equal_wide, emit_branch_if_zero_wide,
+    emit_branch_if_not_equal_wide, emit_branch_if_overflow_wide, emit_branch_if_zero_wide,
     emit_decref_if_refcounted,
     emit_decref_preserving_exception, emit_extend_int_result,
     emit_float_result_double_to_single, emit_float_result_single_to_double,

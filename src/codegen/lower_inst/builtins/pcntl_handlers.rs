@@ -354,7 +354,7 @@ fn emit_push_handler_kind_and_descriptor(
                 handler,
                 abi::int_result_reg(ctx.emitter),
                 "pcntl_signal",
-                super::super::instruction_strict_php_profile(inst),
+                super::super::instruction_php_only_profile(inst),
                 "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, string given",
             )?;
             emit_push_callable_handler_pair(ctx);

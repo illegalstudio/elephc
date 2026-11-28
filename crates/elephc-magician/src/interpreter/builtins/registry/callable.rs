@@ -27,6 +27,8 @@ pub(in crate::interpreter) use call_user_func::*;
 pub(in crate::interpreter) use execution::*;
 use object_dispatch::*;
 use native_descriptor::*;
+#[cfg(test)]
+pub(in crate::interpreter) use native_descriptor::stage_native_descriptor_args;
 use static_dispatch::*;
 
 /// Distinguishes PHP's invokable-object callback form from an explicit method callback.
@@ -74,6 +76,15 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_call_user_func_array_with_source(callback, arg_array, None, lexical_scope, context, values).map(|result| result.0)
+}
+
+/// Preserves source entry metadata while using the ordinary normalized callback-array dispatcher.
+pub(in crate::interpreter) fn eval_call_user_func_array_with_source(
+    callback: RuntimeCellHandle, arg_array: RuntimeCellHandle, source: Option<&ArgumentSource>,
+    lexical_scope: Option<&ElephcEvalScope>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
     let callback_is_object = values.type_tag(callback)? == EVAL_TAG_OBJECT;
     let callback = eval_call_user_func_callback(
         callback,
@@ -82,11 +93,12 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
         context,
         values,
     )?;
-    callback.with_values(context, values, |callback, context, values| {
+    callback.with_source_result(context, values, |callback, context, values| {
+        let mut result_source = crate::interpreter::mixed_callable_sources::resolved(callback, context, values)?;
         if !values.is_array_like(arg_array)? {
             return Err(EvalStatus::RuntimeFatal);
         }
-        with_eval_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
+        with_eval_array_call_arguments_with_sources(arg_array, source, context, values, |evaluated_args, context, values| {
             if let EvaluatedCallable::Named { name, .. } = &callback {
                 if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
                     if forbidden != "get_defined_vars" || callback_is_object {
@@ -108,8 +120,9 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
                     }
                 }
             }
-            eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
-        })
+            crate::interpreter::mixed_callable_sources::invoke(callback, evaluated_args, false, result_source.take(), context, values)
+                .map(|(value, evidence)| { result_source = evidence; value })
+        }).map(|value| (value, result_source))
     })
 }
 

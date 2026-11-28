@@ -75,10 +75,11 @@ fn load_value(
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, pointer);
     abi::emit_reg_move(ctx.emitter, result, pointer);
-    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_mixed_payload_address");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
-    // A parameter declaration validates entry, but callbacks can replace its canonical child.
-    // Read that child's actual tag rather than projecting bits through the declaration's ABI.
+    abi::emit_load_from_address(ctx.emitter, result, result, 0);
+    // A parameter declaration validates entry, but callbacks can replace a physically Mixed
+    // cell. Read its current tag rather than projecting bits through the declaration's ABI.
     abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
     super::local_loads::coerce_borrowed_ref_cell_local(ctx, &PhpType::Mixed, result_ty)?;
     if owned {
@@ -165,7 +166,7 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
         }
     }
 
-    /// Scalar readers preserve the raw ABI while probing current canonical shape on every target.
+    /// Scalar readers preserve the raw ABI while probing current managed shape on every target.
     #[test]
     fn scalar_reference_readers_probe_current_physical_layout_on_every_target() {
         let source = "<?php \
@@ -183,9 +184,9 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
             {
                 let body = assembly.split_once(&format!("@fn name={name} symbol=")).unwrap().1
                     .split_once(&format!("@endfn name={name}")).unwrap().0;
-                let probe = body.find("__rt_reference_cell_canonical").unwrap();
+                let probe = body.find("__rt_reference_cell_mixed_payload_address").unwrap();
                 assert!(body[probe..].contains("__rt_mixed_deref"),
-                    "{target} {name}: canonical payloads must expose the actual child");
+                    "{target} {name}: managed Mixed payloads must expose the actual child");
                 assert!(body[probe..].contains("reference_raw_payload"),
                     "{target} {name}: headerless arguments must retain their raw layout");
                 if target == "linux-x86_64" && name == "readNativeStringReference" {
@@ -202,9 +203,9 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
         }
     }
 
-    /// A Mixed read of a typed reference keeps the canonical child's tag without reboxing raw bits.
+    /// A Mixed read of a typed reference keeps the managed child's tag without reboxing raw bits.
     #[test]
-    fn canonical_reference_mixed_views_keep_actual_tags_on_every_target() {
+    fn managed_reference_mixed_views_keep_actual_tags_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let module = Module::new(target);
@@ -233,7 +234,7 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
                 line.trim_end().ends_with(':') && line.contains("reference_raw_payload"))
                 .unwrap_or_else(|| panic!("{name}: missing raw reference branch: {assembly}"));
             let (canonical, raw) = assembly.split_once(raw_label).unwrap();
-            assert!(canonical.contains("__rt_reference_cell_canonical"), "{name}");
+            assert!(canonical.contains("__rt_reference_cell_mixed_payload_address"), "{name}");
             assert!(canonical.contains("__rt_mixed_deref"), "{name}");
             assert!(!canonical.contains("__rt_mixed_from_value"),
                 "{name}: the real boxed child already carries its tag");
@@ -267,6 +268,31 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
             assert!(!canonical.contains("__rt_mixed_from_value"), "{name}: preserve its actual PHP tag");
             assert!(raw.contains("__rt_mixed_from_value"), "{name}: box the legacy integer exactly once");
             assert!(!raw.contains("__rt_mixed_clone"), "{name}: the new raw box already owns its value");
+        }
+    }
+
+    /// Mutating receiver reloads authenticate managed Mixed storage before using a narrowed view.
+    #[test]
+    fn generic_reference_receiver_reload_probes_managed_payload_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let mut function = helper_function("generic_reference_reload", PhpType::Void);
+            function.params[0].by_ref = true;
+            let slot = function.add_local(Some("value".into()), function.params[0].ir_type,
+                PhpType::Mixed, crate::ir::LocalKind::PhpLocal);
+            let layout = frame::layout_for_function(&function, target, false, false, false);
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            let mut shared = SharedCodegenState::default();
+            {
+                let mut context = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                    &mut shared, layout, false, false, false, None);
+                assert_eq!(context.load_local_to_result(slot).unwrap(), PhpType::Mixed);
+            }
+            let assembly = emitter.output();
+            assert!(assembly.contains("__rt_reference_cell_mixed_payload_address"), "{name}: probe before interpreting the payload");
+            assert!(assembly.contains("__rt_mixed_deref"), "{name}: expose the live child rather than the wrapper");
         }
     }
 }

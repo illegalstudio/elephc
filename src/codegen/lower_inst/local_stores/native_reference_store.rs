@@ -18,6 +18,55 @@ const PENDING: usize = CONTEXT + 8;
 const OUTCOME: usize = 32;
 const RHS: usize = 112;
 
+/// Registers a hidden owner after canonicalizing its current declared payload layout.
+pub(in crate::codegen::lower_inst) fn lower_bind_local_ref_contract(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    if ctx.local_kind(slot)? == LocalKind::StaticLocal {
+        let name = ctx.function.locals[slot.as_raw() as usize].name.as_deref()
+            .ok_or_else(|| CodegenIrError::invalid_module("static contract has no source name"))?;
+        let symbol = crate::names::static_local_symbol(&ctx.function.name, name);
+        let descriptor = crate::codegen::runtime_metadata::local_reference_descriptor(ctx.module, &inst.result_php_type)?;
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), &symbol);
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &descriptor);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_sources_bind_local");
+        return Ok(());
+    }
+    if ctx.local_kind(slot)? != LocalKind::RefCell {
+        return Err(CodegenIrError::invalid_module("local reference contract requires an owned binding"));
+    }
+    let incoming = ctx.function.params.iter().enumerate().find_map(|(index, parameter)| {
+        (parameter.by_ref && ctx.function.locals.get(index)
+            .is_some_and(|local| local.ref_cell_owner == Some(slot)))
+            .then_some(LocalSlotId::from_raw(index as u32))
+    });
+    let physical = incoming.and_then(|source| ctx.proven_ref_cell_payload_type(source))
+        .unwrap_or(ctx.local_php_type(slot)?);
+    let payload = crate::types::canonical_property_reference_payload(
+        &physical)
+        .ok_or_else(|| CodegenIrError::invalid_module("local reference contract requires a supported payload"))?;
+    let descriptor = crate::codegen::runtime_metadata::local_reference_descriptor(
+        ctx.module, &inst.result_php_type)?;
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    let unowned = ctx.next_label("local_contract_unowned_reference");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &unowned);
+    abi::emit_call_label(ctx.emitter,
+        crate::codegen_support::runtime::reference_cells::promotion_entry(payload));
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &descriptor);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_sources_bind_local");
+    ctx.emitter.label(&unowned);
+    Ok(())
+}
+
+/// Retires a weak source before its stack binding can be cleared, reused, or leave the frame.
+pub(in crate::codegen) fn unbind_local_contract(ctx: &mut FunctionContext<'_>, offset: usize) {
+    if !ctx.module.required_runtime_features.native_reference_validation
+        || !ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals) { return; }
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_sources_unbind_local");
+}
+
 /// Emits a canonical path and returns the join label to place after the unchanged raw fallback.
 pub(super) fn emit_if_canonical(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, slot: LocalSlotId, value: ValueId,
@@ -75,6 +124,7 @@ pub(super) fn emit_if_canonical(
 /// The static parking record borrows this same owner, so detaching it transfers rather than releases.
 pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, symbol: &str, transfer_owner: Option<usize>,
+    descriptor: Option<&str>, argument_owner: Option<usize>,
 ) -> Result<Option<String>> {
     if !ctx.module.required_runtime_features.native_reference_validation || inst.operands.len() < 2 {
         return Ok(None);
@@ -84,6 +134,11 @@ pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_reserve_temporary_stack(ctx.emitter, SCRATCH_BYTES);
     abi::emit_store_to_sp(ctx.emitter, result, RHS);
+    if let Some(descriptor) = descriptor {
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), symbol);
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), descriptor);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_static_mixed_prepare_store");
+    }
     abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 16);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
     abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
@@ -100,7 +155,18 @@ pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), WRAPPER);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), RHS);
     abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), OUTCOME);
-    abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native");
+    if descriptor.is_some() {
+        let initialized = abi::int_arg_reg_name(ctx.emitter.target, 4);
+        abi::emit_symbol_address(ctx.emitter, initialized, symbol);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("add {initialized}, {initialized}, #8")), // publish initialization beside the accepted canonical child
+            Arch::X86_64 => ctx.emitter.instruction(&format!("add {initialized}, 8")), // publish initialization beside the accepted canonical child
+        }
+        if let Some(offset) = argument_owner {
+            abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 5), offset);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native_static_call");
+        } else { abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native_static"); }
+    } else { abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native"); }
     emit_status(ctx, &done);
     ctx.emitter.label(&raw);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, RHS);

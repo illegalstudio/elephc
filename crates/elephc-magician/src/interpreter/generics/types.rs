@@ -67,27 +67,69 @@ fn merge_type(current: &mut Option<Type>, next: Type) {
 }
 
 /// Tests a structural generic type without coercing array elements or mutating their storage.
-pub(in crate::interpreter) fn generic_value_accepts(ty: &Type, value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+pub(in crate::interpreter) fn generic_value_accepts(ty: &Type, value: RuntimeCellHandle,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    accepts_value(ty, value, None, context, values)
+}
+
+/// Substitutes a proposed referent at every structural depth, reporting only associated roots.
+pub(in crate::interpreter) fn generic_value_accepts_with_reference(ty: &Type, value: RuntimeCellHandle,
+    reference: RuntimeCellHandle, proposed: RuntimeCellHandle, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<bool>, EvalStatus> {
+    let candidate = ReferenceCandidate { reference, proposed, matched: std::cell::Cell::new(false) };
+    let accepted = accepts_value(ty, value, Some(&candidate), context, values)?;
+    Ok(candidate.matched.get().then_some(accepted))
+}
+
+/// Borrowed substitution state belongs to this validation, never to a runtime handle registry.
+struct ReferenceCandidate {
+    reference: RuntimeCellHandle,
+    proposed: RuntimeCellHandle,
+    matched: std::cell::Cell<bool>,
+}
+
+/// Shares ordinary generic membership and prospective reference membership without publication.
+fn accepts_value(ty: &Type, value: RuntimeCellHandle, candidate: Option<&ReferenceCandidate>,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if let Some(candidate) = candidate {
+        if value.as_ptr() == candidate.reference.as_ptr() && values.is_reference(value)? {
+            candidate.matched.set(true);
+            let next = (candidate.proposed.as_ptr() != candidate.reference.as_ptr()).then_some(candidate);
+            return accepts_value(ty, candidate.proposed, next, context, values);
+        }
+    }
+    if crate::eval_ir::pending_array_contents(ty) {
+        return Ok(candidate.is_none_or(|candidate| !candidate.matched.get()));
+    }
+    if let Some(schema) = crate::eval_ir::array_contents_schema(ty) {
+        return if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            accepts_value(schema, value, candidate, context, values)
+        } else { Ok(true) };
+    }
     match ty {
-        Type::Atom(name) if name == "false" => Ok(values.type_tag(value)? == EVAL_TAG_BOOL && !values.truthy(value)?),
-        Type::Apply(name, args) if name == "array" => {
-            let tag = values.type_tag(value)?;
-            if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) || args.len() == 1 && tag != EVAL_TAG_ARRAY { return Ok(false); }
-            let Some(element_type) = args.last() else { return Ok(false); };
-            for index in 0..values.array_len(value)? {
-                if args.len() == 2 {
-                    let key = values.array_iter_key(value, index)?;
-                    let accepted = generic_value_accepts(&args[0], key, context, values);
-                    let released = values.release(key);
-                    if !accepted.and_then(|ok| released.map(|()| ok))? { return Ok(false); }
-                }
-                let element = values.array_iter_value(value, index)?;
-                let accepted = generic_value_accepts(element_type, element, context, values);
-                let released = values.release(element);
-                if !accepted.and_then(|ok| released.map(|()| ok))? { return Ok(false); }
-            }
+        Type::Intersection(members) => {
+            for member in members { if !accepts_value(member, value, candidate, context, values)? { return Ok(false); } }
             Ok(true)
         }
+        Type::Union(members) => {
+            for member in members {
+                if candidate.is_some() && !generic_value_accepts(member, value, context, values)? { continue; }
+                if accepts_value(member, value, candidate, context, values)? { return Ok(true); }
+            }
+            Ok(false)
+        }
+        Type::Nullable(inner) => if values.type_tag(value)? == EVAL_TAG_NULL { Ok(true) }
+            else { accepts_value(inner, value, candidate, context, values) },
+        Type::Atom(name) if name == "false" => Ok(values.type_tag(value)? == EVAL_TAG_BOOL && !values.truthy(value)?),
+        // The native bridge boxes a pointer word as an integer. Its nominal pointee
+        // is not present in the runtime tag, and null is handled by the enclosing type.
+        Type::Atom(name) | Type::Apply(name, _) if name == "ptr" => {
+            Ok(values.type_tag(value)? == EVAL_TAG_INT)
+        }
+        Type::Apply(name, args) if name == "array" => accepts_array(args, value, candidate, context, values),
         Type::Apply(_, _) => {
             let actual = runtime_generic_type(value, context, values, 0)?;
             generic_type_is_a(&actual, ty, context, values)
@@ -103,4 +145,36 @@ pub(in crate::interpreter) fn generic_value_accepts(ty: &Type, value: RuntimeCel
         }
         _ => eval_method_parameter_type_accepts_exact(&parameter_type(ty), value, context, values),
     }
+}
+
+/// Pins each key and element read while checking structural membership and reference substitutions.
+fn accepts_array(args: &[Type], value: RuntimeCellHandle, candidate: Option<&ReferenceCandidate>,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+    let tag = values.type_tag(value)?;
+    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) || args.len() == 1 && tag != EVAL_TAG_ARRAY { return Ok(false); }
+    let Some(element_type) = args.last() else { return Ok(false); };
+    for index in 0..values.array_len(value)? {
+        let key = RuntimeOwnerSlot::new(values.array_iter_key(value, index)?);
+        let checked = with_runtime_owners(&key, || {
+            let result = (|| {
+                if args.len() == 2 && !accepts_value(&args[0], key.borrowed(), None, context, values)? { return Ok(false); }
+                let element = RuntimeOwnerSlot::new(if candidate.is_some() {
+                    values.array_get_preserving_references(value, key.borrowed())?
+                } else { values.array_iter_value(value, index)? });
+                with_runtime_owners(&element, || {
+                    let accepted = accepts_value(element_type, element.borrowed(), candidate, context, values);
+                    let owned = element.take();
+                    let released = if owned.is_borrowed() { Ok(()) } else { values.release(owned) };
+                    accepted.and_then(|accepted| released.map(|()| accepted))
+                })
+            })();
+            let owned = key.take();
+            let released = if owned.is_borrowed() { Ok(()) } else { values.release(owned) };
+            result.and_then(|accepted| released.map(|()| accepted))
+        })?;
+        if !checked { return Ok(false); }
+    }
+    Ok(true)
 }

@@ -27,6 +27,7 @@ impl fmt::Display for TypeSpec {
             Self::Void => "void",
             Self::Ptr => "pointer",
             Self::Callable => "callable",
+            Self::Resource => "resource",
             Self::Nullable(inner) => return write!(formatter, "?{inner}"),
             Self::Union(members) => {
                 for (index, member) in members.iter().enumerate() {
@@ -81,6 +82,8 @@ mod tests {
             (TypeSpec::Union(&[TypeSpec::Array, TypeSpec::Str, TypeSpec::Null]), "array|string|null"),
             (TypeSpec::Union(&[TypeSpec::Str, TypeSpec::False, TypeSpec::Null]), "string|false|null"),
             (TypeSpec::Nullable(&TypeSpec::Int), "?int"),
+            (TypeSpec::Resource, "resource"),
+            (TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]), "resource|false"),
         ] {
             assert_eq!(ty.to_string(), expected);
             assert_eq!(ty.validate(), Ok(()));

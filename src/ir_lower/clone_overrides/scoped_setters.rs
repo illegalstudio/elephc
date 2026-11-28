@@ -44,7 +44,7 @@ pub(super) fn helper_name(class_id: u64, slot: usize) -> String {
 pub(super) fn lower(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
     scope_class: &str,
     property: &str,

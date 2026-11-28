@@ -73,6 +73,7 @@ pub(super) fn lower_assoc_array_literal_as(
         };
         let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
         let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
+        let key = crate::ir_lower::array_key_guards::for_receiver(ctx, hash, key, expr.span);
         ctx.emit_void(Op::HashSetValue, vec![hash.value, key.value, value.value], None, Op::HashSetValue.default_effects(), Some(expr.span));
         if let Some(source) = reference_source {
             let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
@@ -253,7 +254,7 @@ pub(super) fn assoc_array_literal_type_from_spreads(
         value_ty = merge_ir_assoc_value_type(value_ty, next);
     }
     if matches!(value_ty, PhpType::Never) {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     }
     PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
@@ -282,7 +283,7 @@ pub(super) fn assoc_array_literal_type_for_ir(
     expr: &Expr,
 ) -> PhpType {
     if pairs.is_empty() {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     }
     // Seeded from the FIRST entry rather than from a neutral element: `merge_array_key_types`
     // answers Mixed for any two different types, so folding a placeholder into it would widen
@@ -294,7 +295,7 @@ pub(super) fn assoc_array_literal_type_for_ir(
     // probe's own element typing, so its pointer verdict does not change.
     let mut probe_types: Vec<Option<PhpType>> = Vec::with_capacity(pairs.len());
     for (key, value) in pairs {
-        let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
+        let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key, ctx.semantic_profile), ctx.semantic_profile);
         let next_value = assoc_array_literal_value_type_for_ir(ctx, value);
         probe_types.push(
             matches!(
@@ -319,7 +320,7 @@ pub(super) fn assoc_array_literal_type_for_ir(
         });
     }
     let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let value_ty =
         pointer_literal_element_type(ctx, pairs.iter().map(|(_, value)| value), &probe_types)
@@ -371,7 +372,7 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile))),
         // A class constant or enum case must be typed the way `lower_scoped_constant`
         // resolves it, not by the syntactic `::class`-is-string default, or the hash
         // value-type stamp would diverge from the lowered value and corrupt reads.
@@ -396,7 +397,7 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
             local_values::projected_local_value_type(ctx, name, value.span).or_else(|| ctx.local_types
                 .get(name)
                 .cloned())
-                .unwrap_or_else(|| infer_expr_type_syntactic(value)),
+                .unwrap_or_else(|| infer_expr_type_syntactic(value, ctx.semantic_profile)),
         ),
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
@@ -413,38 +414,38 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
             if let Some(resolved) = builtin_call_result_type_for_ir(ctx, value.span) {
                 return resolved;
             }
-            ir_array_storage_type(infer_expr_type_syntactic(value))
+            ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile))
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
                 .map(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile)))
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
                 .map(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile)))
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
             ctx,
             object,
             property,
         )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile))),
         // A static buffer or pointer slot holds a raw word the syntactic `int` would cast.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, value)
                 .map(ir_array_storage_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile)))
         }
         // A call through a runtime callable (`$f()`, `($arr[0])()`) has no syntactic return
         // type: `infer_expr_type_syntactic` answers `Int` for it, which would stamp the
         // literal with an integer element and cast away (or release) the returned string or
         // array. Keep the boxed runtime result.
         ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } => PhpType::Mixed,
-        _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
+        _ => ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile)),
     }
 }
 
@@ -483,10 +484,10 @@ pub(super) fn scoped_constant_value_type_for_ir(
             ExprKind::ArrayLiteralMixed(entries) => {
                 assoc_array_literal_type_from_entries(ctx, entries, &const_expr)
             }
-            _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr)),
+            _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr, ctx.semantic_profile)),
         };
     }
-    ir_array_storage_type(infer_expr_type_syntactic(value))
+    ir_array_storage_type(infer_expr_type_syntactic(value, ctx.semantic_profile))
 }
 
 /// Returns the PHP value shape of an array access before merge or literal storage is selected.

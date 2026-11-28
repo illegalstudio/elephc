@@ -7,9 +7,8 @@
 //! Key details:
 //! - Only `int` and `string` elements are countable; PHP warns and skips anything
 //!   else, and eval skips silently because it emits no diagnostics.
-//! - Counting through `array_set` means the array layer applies PHP's key
-//!   normalization, so the integer `1` and the string `"1"` share one bucket
-//!   exactly as they do in the compiled runtime.
+//! - Counting through `array_set` shares the selected profile's key identity with
+//!   the compiled runtime. The result builder retires all temporary handles.
 
 use super::super::super::*;
 
@@ -62,22 +61,39 @@ pub(in crate::interpreter) fn eval_array_count_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
+    let mut result = super::super::collection_builder::EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        if !matches!(values.type_tag(value)?, EVAL_TAG_INT | EVAL_TAG_STRING) {
-            continue;
-        }
-        let one = values.int(1)?;
-        let present = values.array_key_exists(value, result)?;
-        let next = if values.truthy(present)? {
-            let existing = values.array_get(result, value)?;
-            values.add(existing, one)?
-        } else {
-            one
-        };
-        result = values.array_set(result, value, next)?;
+        let Some(key) = super::key_inputs::countable_key_at(array, position, result.values())? else { continue; };
+        let current = result.borrowed_cell();
+        result.entry_key_first(|_| Ok(key), |values, key| next_count(current, key, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
+}
+
+/// Materializes one updated count while retiring lookup and arithmetic operands.
+fn next_count(array: RuntimeCellHandle, key: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let exists = values.array_key_exists(key, array)?;
+    let present = values.truthy(exists);
+    let released = values.release(exists);
+    let present = present?; released?;
+    if !present { return values.int(1); }
+    let existing = values.array_get(array, key).and_then(|value| promote_borrowed_result(value, values))?;
+    let next = (|| {
+        let one = values.int(1)?;
+        let added = values.add(existing, one).and_then(|value| promote_borrowed_result(value, values));
+        let released = values.release(one);
+        match (added, released) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(status), _) => Err(status),
+            (Ok(value), Err(status)) => { let _ = values.release(value); Err(status) }
+        }
+    })();
+    let released = values.release(existing);
+    match (next, released) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => { let _ = values.release(value); Err(status) }
+    }
 }

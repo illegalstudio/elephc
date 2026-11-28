@@ -10,6 +10,13 @@
 
 use super::*;
 
+/// Materializes a binding address without interpreting or acquiring the value stored there.
+pub(super) fn lower_local_place(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let offset = ctx.local_offset(expect_local_slot(inst)?)?;
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a signed integer comparison into a boolean result value.
 pub(super) fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let predicate = immediate_operands::emit_int_compare(ctx, inst)?;
@@ -59,7 +66,11 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
         );
         return ctx.store_result_value(result);
     }
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    if inst.result_ownership == Ownership::Borrowed {
+        coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
+    } else {
+        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    }
     ctx.store_result_value(result)
 }
 
@@ -184,9 +195,7 @@ pub(super) fn coerce_borrowed_ref_cell_local(
     result_ty: &PhpType,
 ) -> Result<()> {
     if source_ty.codegen_repr() == PhpType::Mixed
-        && matches!(result_ty.codegen_repr(), PhpType::Str | PhpType::Array(_)
-            | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable
-            | PhpType::Iterable)
+        && result_ty.supports_borrowed_mixed_payload_view()
     {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
@@ -196,7 +205,7 @@ pub(super) fn coerce_borrowed_ref_cell_local(
 }
 
 /// Loads a ref-cell's physical payload before exposing the requested borrowed logical view.
-pub(super) fn load_ref_cell_local_to_result_as(
+pub(in crate::codegen) fn load_ref_cell_local_to_result_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     ty: &PhpType,

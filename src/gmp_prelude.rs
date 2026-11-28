@@ -16,6 +16,7 @@
 //!   no PHP source text is parsed at compile time.
 
 mod class;
+mod checked_casts;
 mod detect;
 mod dsl;
 mod functions;
@@ -53,6 +54,7 @@ fn declarations() -> Vec<Stmt> {
     program.push(class::gmp_class());
     program.extend(validators::declarations());
     program.extend(functions::declarations());
+    program.push(checked_casts::integer());
     program
 }
 

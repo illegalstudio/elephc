@@ -349,36 +349,9 @@ pub(crate) fn emit_box_current_owned_value_as_mixed(emitter: &mut Emitter, ty: &
     }
 }
 
-/// Transfers the owned string result into a freshly allocated Mixed string cell.
+/// Transfers an owned string result through the shared logical-kind-aware Mixed boxer.
 fn emit_box_current_owned_string_as_mixed(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the owned string payload while allocating the Mixed cell
-            emitter.instruction("mov x0, #24");                                 // mixed cells store tag plus two payload words
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate a fresh Mixed cell payload
-            emitter.instruction("mov x9, #5");                                  // heap kind 5 = boxed Mixed cell
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the Mixed heap header
-            emitter.instruction("mov x10, #1");                                 // runtime tag 1 = string
-            emitter.instruction("str x10, [x0]");                               // store the string runtime tag
-            emitter.instruction("ldp x11, x12, [sp], #16");                     // restore the transferred string pointer and length
-            emitter.instruction("stp x11, x12, [x0, #8]");                      // move the string payload into the Mixed cell
-        }
-        Arch::X86_64 => {
-            emitter.instruction("sub rsp, 16");                                 // reserve spill space for the owned string payload
-            emitter.instruction("mov QWORD PTR [rsp], rax");                    // preserve the owned string pointer while allocating the Mixed cell
-            emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                // preserve the owned string length while allocating the Mixed cell
-            emitter.instruction("mov rax, 24");                                 // mixed cells store tag plus two payload words
-            emitter.instruction("call __rt_heap_alloc");                        // allocate a fresh Mixed cell payload
-            emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the Mixed heap marker
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the Mixed heap header
-            emitter.instruction("mov QWORD PTR [rax], 1");                      // store runtime tag 1 = string
-            emitter.instruction("mov r10, QWORD PTR [rsp]");                    // reload the transferred string pointer
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // move the string pointer into the Mixed payload
-            emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                // reload the transferred string length
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // move the string length into the Mixed payload
-            emitter.instruction("add rsp, 16");                                 // discard the temporary string payload spill
-        }
-    }
+    abi::emit_call_label(emitter, "__rt_mixed_from_owned_string");
 }
 
 /// Boxes an owned refcounted value into a Mixed cell, then releases the original owner.

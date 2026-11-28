@@ -709,6 +709,18 @@ but it can only be called through a runtime-resolved callable — `$holder->$nam
 `CallableDescriptorInvoke` — so a module containing one treats every getter as named. That cost
 falls only on programs that build a holder and make such a call.
 
+The `ArrayKeys` semantic profile supports AOT `ReflectionFunction` and
+`ReflectionMethod` invocation when the target is known during lowering. Direct,
+named and argument-array forwarding preserve the original builtin key values.
+If the target is selected at run time or lost at a control flow join, the shared
+Reflection adapter records a source-located lowering refusal for a known Reflection
+receiver. A boxed receiver checks its actual class and throws `Error` for an
+unsupported Reflection invocation.
+It does not restore targets from local identity alone: a Reflection object's
+constructor can replace its target through an object alias. Ordinary user methods
+named `invoke` or `invokeArgs` keep their own dispatch. This profile is
+available through `--strict-array-keys`.
+
 ## Reflection `__toString()` Dumps
 
 `ReflectionMethod`, `ReflectionFunction` and `ReflectionParameter` answer `__toString()` from a

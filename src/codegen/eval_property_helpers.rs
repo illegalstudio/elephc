@@ -26,6 +26,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 mod dynamic_properties;
+mod dynamic_unset;
 mod private_shadow;
 mod replacement;
 mod unset;
@@ -604,7 +605,7 @@ fn emit_property_set_x86_64(
     let done_label = "__elephc_eval_value_property_set_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for name, length, object, value, and scope
+    emitter.instruction("sub rsp, 80");                                         // reserve aligned slots for inputs plus canonical-reference publication
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested property-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested property-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed value being assigned
@@ -1058,6 +1059,7 @@ fn emit_eval_untyped_removed_read(
 
 /// Boxes a property value loaded from an ARM64 object slot into a Mixed cell.
 fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    let canonical_done = reference_slots::begin_canonical_read(emitter, slot);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer
     let reference_payload = slot.is_reference;
     let payload = reference_slots::payload_slot(emitter, slot, "x9");
@@ -1122,10 +1124,14 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
             abi::emit_call_label(emitter, &null_symbol);
         }
     }
+    if let Some(done) = canonical_done {
+        emitter.label(&done);
+    }
 }
 
 /// Boxes a property value loaded from an x86_64 object slot into a Mixed cell.
 fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    let canonical_done = reference_slots::begin_canonical_read(emitter, slot);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
     let reference_payload = slot.is_reference;
     let payload = reference_slots::payload_slot(emitter, slot, "r11");
@@ -1197,6 +1203,9 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
             abi::emit_call_label(emitter, &null_symbol);
         }
     }
+    if let Some(done) = canonical_done {
+        emitter.label(&done);
+    }
 }
 
 /// Stores a boxed Mixed eval value into an ARM64 object property slot.
@@ -1221,6 +1230,9 @@ fn emit_aarch64_store_property_slot(
         PhpType::Float => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value for float coercion
             emitter.instruction("bl __rt_mixed_cast_float");                    // coerce the eval value to a PHP float
+            if reference_slots::emit_canonical_scalar_store(emitter, slot, "d0") {
+                return;
+            }
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
             let payload = reference_slots::payload_slot(emitter, slot, "x9");
             let slot = payload.as_ref();
@@ -1281,6 +1293,9 @@ fn emit_x86_64_store_property_slot(
         PhpType::Float => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for float coercion
             emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval value to a PHP float
+            if reference_slots::emit_canonical_scalar_store(emitter, slot, "xmm0") {
+                return;
+            }
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
             let payload = reference_slots::payload_slot(emitter, slot, "r11");
             let slot = payload.as_ref();
@@ -1330,6 +1345,9 @@ fn emit_aarch64_store_cast_scalar(
 ) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("bl {}", helper));                             // coerce the eval value to the declared property type
+    if reference_slots::emit_canonical_scalar_store(emitter, slot, result_reg) {
+        return;
+    }
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
     let payload = reference_slots::payload_slot(emitter, slot, "x9");
     let slot = payload.as_ref();
@@ -1381,6 +1399,9 @@ fn emit_x86_64_store_cast_scalar(
 ) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
+    if reference_slots::emit_canonical_scalar_store(emitter, slot, result_reg) {
+        return;
+    }
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
     let payload = reference_slots::payload_slot(emitter, slot, "r11");
     let slot = payload.as_ref();

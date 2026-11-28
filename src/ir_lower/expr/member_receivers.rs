@@ -19,6 +19,17 @@ pub(super) fn lower_member_receiver(
     lower_member_receiver_at_span(ctx, object, member.span)
 }
 
+/// Preserves quiet receiver spines while member names and selectors retain ordinary evaluation.
+pub(super) fn lower_member_probe_receiver(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, member: &Expr,
+) -> LoweredValue {
+    if !crate::ir_lower::semantic_guards::source_feature_enabled(ctx, elephc_semantics::StrictFeature::Nullability) {
+        return lower_member_receiver(ctx, object, member);
+    }
+    let receiver = lower_subscript_receiver_silently(ctx, object);
+    refine_member_receiver(ctx, receiver, member)
+}
+
 /// Applies a statement mutation's checked view before its RHS or runtime name is evaluated.
 pub(crate) fn lower_member_receiver_at_span(
     ctx: &mut LoweringContext<'_, '_>,

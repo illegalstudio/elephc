@@ -23,13 +23,32 @@ pub(super) fn scan_tokens_in_source(
     mode: SourceMode,
     source_id: u32,
 ) -> Result<Vec<SpannedToken>, CompileError> {
+    scan_tokens_with_semantics(
+        source,
+        mode,
+        source_id,
+        elephc_semantics::SemanticProfile::PERMISSIVE,
+    )
+}
+
+/// Tokenizes one source with an explicit semantic policy for literal preservation.
+pub(super) fn scan_tokens_with_semantics(
+    source: &str,
+    mode: SourceMode,
+    source_id: u32,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<SpannedToken>, CompileError> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let projection = scan_compiler(
         source.as_bytes(),
         mode.requires_open_tag(),
         mode == SourceMode::Lfc,
         crate::syntax::parser::validation_only(),
-        Projection { cursor: Cursor::new_in_source(source, source_id), tokens: Vec::new(), error: None },
+        Projection {
+            cursor: Cursor::new_in_source(source, source_id, profile),
+            tokens: Vec::new(),
+            error: None,
+        },
     );
     let Projection { mut cursor, mut tokens, error } = projection;
     if let Some(error) = error {

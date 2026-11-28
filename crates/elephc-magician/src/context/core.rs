@@ -26,12 +26,24 @@ pub enum EvalPcntlSignalHandler {
     Callable(RuntimeCellHandle),
 }
 
+/// A persistent static cell and its immutable successful initializer contract.
+pub(super) struct EvalStaticLocal {
+    pub(super) value: RuntimeCellHandle,
+    pub(super) origin: Option<EvalParameterType>,
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
 /// back to the eval bridge. Keeping a concrete Rust type here lets the bridge
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
+    /// Installed once by generated code; standalone embedders default to permissive.
+    pub(super) semantic_profile: Option<elephc_semantics::SemanticProfile>,
+    pub(super) source_view_epoch: u64,
+    pub(super) return_source_contracts: Vec<Option<ReturnSourceContract>>,
+    pub(super) source_view_writes: HashMap<usize, source_views::SourceWriteEpoch>,
+    pub(super) source_view_retirements: crate::ffi::array_references::ArrayReferenceRetirements,
     pub(super) abi_version: u32,
     pub(super) abi_owner_count: usize,
     pub(super) teardown_active: bool,
@@ -82,9 +94,12 @@ pub struct ElephcEvalContext {
     pub(super) native_property_default_errors: SharedNative<HashMap<(String, String), String>>,
     pub(super) native_class_default_errors: SharedNative<HashMap<String, String>>,
     pub(super) native_property_attributes: SharedNative<HashMap<(String, String), Vec<EvalAttribute>>>,
-    pub(super) static_locals: HashMap<(String, String), RuntimeCellHandle>,
+    pub(super) static_locals: HashMap<(String, String), EvalStaticLocal>,
     pub(super) static_properties: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
+    pub(super) static_property_array_types: HashMap<(String, String), EvalPropertyArrayOrigin>,
+    pub(super) dynamic_property_array_types: HashMap<(u64, String), EvalPropertyArrayOrigin>,
+    pub(super) property_reference_admissions: Vec<PropertyReferenceAdmission>,
     pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,
     /// Instance property defaults each eval class evaluated when it was initialized, by
     /// (class, property storage name); a new object copies them.
@@ -156,6 +171,11 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            semantic_profile: None,
+            source_view_epoch: 0,
+            return_source_contracts: Vec::new(),
+            source_view_writes: HashMap::new(),
+            source_view_retirements: Default::default(),
             abi_owner_count: 1,
             teardown_active: false,
             native_catalog_generation: 0,
@@ -205,6 +225,9 @@ impl ElephcEvalContext {
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
+            static_property_array_types: HashMap::new(),
+            dynamic_property_array_types: HashMap::new(),
+            property_reference_admissions: Vec::new(),
             class_constants: HashMap::new(),
             instance_defaults: HashMap::new(),
             included_files: HashSet::new(),
@@ -265,6 +288,11 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
+            semantic_profile: None,
+            source_view_epoch: 0,
+            return_source_contracts: Vec::new(),
+            source_view_writes: HashMap::new(),
+            source_view_retirements: Default::default(),
             abi_owner_count: 1,
             teardown_active: false,
             native_catalog_generation: 0,
@@ -314,6 +342,9 @@ impl ElephcEvalContext {
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
+            static_property_array_types: HashMap::new(),
+            dynamic_property_array_types: HashMap::new(),
+            property_reference_admissions: Vec::new(),
             class_constants: HashMap::new(),
             instance_defaults: HashMap::new(),
             included_files: HashSet::new(),
@@ -387,6 +418,9 @@ impl ElephcEvalContext {
     pub(crate) fn has_abi_owners(&self) -> bool {
         self.abi_owner_count != 0
     }
+
+    /// Reports whether releasing the current activation can enter final context teardown.
+    pub(crate) fn is_last_abi_owner(&self) -> bool { self.abi_owner_count == 1 }
 
     /// Drops one opaque ABI owner and reports whether the heap context can be destroyed.
     pub(crate) fn release_abi_owner(&mut self) -> bool {

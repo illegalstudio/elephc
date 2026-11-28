@@ -248,11 +248,10 @@ impl Checker {
             }
 
             for return_info in &all_return_infos {
-                self.require_compatible_return_hint(
+                self.require_return_info_hint(
                     type_ann,
                     &declared_ret,
-                    &return_info.ty,
-                    return_info.has_value,
+                    return_info,
                     span,
                     "Closure return type",
                 )?;
@@ -270,11 +269,25 @@ impl Checker {
         } else if all_return_infos.is_empty() {
             Ok((PhpType::Int, false))
         } else {
-            let mut inferred_return = all_return_infos[0].ty.clone();
-            for return_info in &all_return_infos[1..] {
-                inferred_return = wider_type_syntactic(&inferred_return, &return_info.ty);
+            let inferred_return = self.inferred_return_contract(&all_return_infos, wider_type_syntactic)
+                .expect("nonempty closure returns");
+            let inferred_return = self.caller_visible_direct_call_return(body, inferred_return);
+            if self.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+                && self.semantic_source_mode != crate::source::SourceMode::Internal
+                && all_return_infos.iter().any(|info| info.has_value
+                    && info.source_mode != crate::source::SourceMode::Internal)
+                && (inferred_return == PhpType::Mixed
+                    || crate::semantics::conversions::scalar_contract(&inferred_return).is_some())
+            {
+                // Scalar joins own this metadata. Container layout stays with the existing
+                // parameter/capture-aware materializer rather than a checker-only element type.
+                let result = if inferred_return == PhpType::Void { PhpType::Mixed }
+                    else { inferred_return.clone() };
+                self.closure_result_types.entry((self.current_loop_storage_scope.clone(), span))
+                    .and_modify(|previous| if *previous != result { *previous = PhpType::Mixed; })
+                    .or_insert(result);
             }
-            Ok((self.caller_visible_direct_call_return(body, inferred_return), false))
+            Ok((inferred_return, false))
         }
     }
 
@@ -611,7 +624,7 @@ impl Checker {
     }
 
     /// Resolves the concrete class whose method metadata should be inspected.
-    fn resolve_static_method_metadata_class(
+    pub(crate) fn resolve_static_method_metadata_class(
         &self,
         receiver: &StaticReceiver,
     ) -> Result<Option<String>, CompileError> {
@@ -641,7 +654,7 @@ impl Checker {
     }
 
     /// Resolves a class name case-insensitively for metadata lookups.
-    fn resolve_class_name_for_metadata(&self, class_name: &str) -> Option<String> {
+    pub(crate) fn resolve_class_name_for_metadata(&self, class_name: &str) -> Option<String> {
         let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
         self.classes
             .keys()

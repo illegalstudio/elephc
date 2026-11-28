@@ -76,6 +76,7 @@ macro_rules! impl_reflection_ops {
             }
             Some(index)
         };
+        let sources=unsafe{crate::runtime_hooks::descriptor_sources::decode(signature,param_count)}?;
         let mut parameters = Vec::with_capacity(param_count);
         for index in 0..param_count {
             let (name_ptr, name_len, type_tag, by_ref) = unsafe {
@@ -97,7 +98,8 @@ macro_rules! impl_reflection_ops {
                     .map_err(|_| EvalStatus::RuntimeFatal)?
                     .to_string()
             };
-            parameters.push(NativeCallableParameterMetadata { name, type_tag, by_ref });
+            parameters.push(NativeCallableParameterMetadata { name, type_tag, by_ref,
+                logical_type:sources.parameters[index].clone() });
         }
         if display_name_ptr.is_null() && display_name_len != 0 {
             return Err(EvalStatus::RuntimeFatal);
@@ -111,6 +113,9 @@ macro_rules! impl_reflection_ops {
                 .to_string()
         };
         Ok(Some(NativeCallableSignatureMetadata {
+            has_logical_sources:unsafe { *signature.add(elephc_semantics::native_callable_sources::FLAGS_WORD)
+                & elephc_semantics::native_callable_sources::SOURCE_FLAG != 0 },
+            return_type:sources.returned,
             display_name,
             parameters,
             regular_param_count,

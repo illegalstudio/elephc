@@ -34,6 +34,8 @@ pub enum CompileErrorKind {
     ExpectedVariable,
     /// The runtime profile refuses the construct or declaration form.
     UnsupportedRuntimeConstruct,
+    /// A selected semantic guarantee rejects this operation through every invocation spelling.
+    SemanticViolation(elephc_semantics::StrictFeature),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -70,6 +72,18 @@ impl CompileError {
     pub fn aot_literal_required(span: Span, message: &str) -> Self {
         Self {
             kind: CompileErrorKind::AotLiteralRequired,
+            ..Self::new(span, message)
+        }
+    }
+
+    /// Retains the owning guarantee so fallback dispatch cannot erase a semantic rejection.
+    pub fn semantic_violation(
+        span: Span,
+        feature: elephc_semantics::StrictFeature,
+        message: &str,
+    ) -> Self {
+        Self {
+            kind: CompileErrorKind::SemanticViolation(feature),
             ..Self::new(span, message)
         }
     }

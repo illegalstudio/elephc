@@ -292,14 +292,14 @@ fn test_the_guard_stops_governing_after_the_region_stores() {
 /// `NarrowedLocalOrigin::stored_in_region` travels outward at `exit_flow_narrowing` and the two
 /// spellings agree again.
 ///
-/// Written with `$a = 1.5` rather than `$a = "x"` on purpose: `"x"` does not fit the `int`
-/// binding either, so it is rejected at the inner store and never reaches the shape under test.
+/// Written with `$a = 1.5` rather than `$a = "x"` so both profiles reach the later union mismatch.
+/// Strict locals accepts the first store against the active exact `float` view, then proves that
+/// the nested store ended the enclosing guard's authority by rejecting the later integer store.
 #[test]
 fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
     let source =
         "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
-    // The nested branch can leave either its float store or the enclosing string view.
-    // Neither alternative permits the later integer store, in either locals mode.
+    // Both profiles reach the later union mismatch after the exact inner guard accepts the float.
     expect_error(source, "cannot reassign $a from string|float to int");
     expect_error_strict(source, "cannot reassign $a from string|float to int");
 }

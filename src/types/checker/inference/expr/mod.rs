@@ -40,6 +40,20 @@ impl Checker {
     /// references. The result feeds statement checking, function call
     /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
+        if let Some(binding) = expr.producer_binding {
+            let mut original = expr.clone();
+            original.producer_binding = None;
+            let previous_mode = self.semantic_source_mode;
+            let previous_strict = self.strict_types;
+            self.semantic_source_mode = expr.source_profile.mode;
+            self.strict_types = expr.source_profile.strict_types;
+            let result = crate::optimize::with_expression_semantics(self.semantic_profile, expr.source_profile, || {
+                crate::php_only::with_source_mode(expr.source_profile.mode, || self.infer_type(&original, env))
+            });
+            self.semantic_source_mode = previous_mode;
+            self.strict_types = previous_strict;
+            return result.map(|ty| crate::types::constant_binding::bound_result_type(ty, Some(binding)));
+        }
         match &expr.kind {
             ExprKind::Runtime(_) => Err(CompileError::new(expr.span, "Runtime fragment syntax must be lowered by Magician")),
             ExprKind::Reference(inner) => self.infer_type(inner, env),
@@ -50,7 +64,7 @@ impl Checker {
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::Variable(_)
-            | ExprKind::Negate(_)
+            | ExprKind::UnaryPlus(_) | ExprKind::Negate(_)
             | ExprKind::Not(_)
             | ExprKind::ErrorSuppress(_)
             | ExprKind::Print(_)
@@ -256,6 +270,8 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
     if next == PhpType::Never {
         return acc;
     }
+    if let Some(exact) = crate::semantics::conversions::inferred_scalar_join(
+        checker.semantic_profile, checker.semantic_source_mode, &acc, &next) { return exact; }
     if acc == PhpType::Void {
         return nullable_match_arm_type(next);
     }
@@ -283,12 +299,17 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
 ///
 /// The checker and lowering share `PhpType::widen_array_branch_element`, so
 /// empty-array placeholders defer to populated branches while real element-type
-/// disagreements widen to `Mixed`. This keeps the result valid for by-ref `array`
-/// parameters, array builtins, and spread. Returns `None` for pairs outside the
-/// indexed/indexed or associative/associative shapes, leaving the caller's existing
-/// object-union and `Mixed` handling untouched.
+/// disagreements widen to `Mixed`. A declared PHP array already covers both native layouts,
+/// so joining it with a concrete array keeps the declared contract. Other pairs fall back to
+/// the caller's object-union and `Mixed` handling.
 fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
     match (acc, next) {
+        (array, PhpType::Array(_) | PhpType::AssocArray { .. }) if array.is_php_array() => {
+            Some(array.clone())
+        }
+        (PhpType::Array(_) | PhpType::AssocArray { .. }, array) if array.is_php_array() => {
+            Some(array.clone())
+        }
         (PhpType::Array(acc_elem), PhpType::Array(next_elem)) => Some(PhpType::Array(Box::new(
             PhpType::widen_array_branch_element(
                 (**acc_elem).clone(),
@@ -529,8 +550,9 @@ impl Checker {
     /// The operator can retype its target (`"9"++` is `int(10)`), which elephc implements by
     /// giving the local boxed `Mixed` frame storage. Two storage shapes cannot take that
     /// contract: a by-reference parameter aliases a caller slot whose declared `string` type
-    /// the callee must not change, and a `static` local's initializer writes its symbol with
-    /// the declared `string` representation before any boxing store runs. Both are rejected
+    /// the callee must not change, and a legacy top-level static initializer writes its symbol
+    /// with the raw `string` representation. Proven canonical function statics already hold
+    /// boxed values and can use the ordinary checked update. Raw storage is rejected
     /// here so the program gets a source-level diagnostic instead of a backend error or a
     /// silently wrong value.
     fn reject_unboxable_string_incdec(
@@ -538,6 +560,7 @@ impl Checker {
         name: &str,
         span: Span,
     ) -> Result<(), CompileError> {
+        if self.local_has_canonical_static_binding(name) { return Ok(()); }
         let storage = if self.active_ref_params.contains(name) {
             "a by-reference parameter"
         } else if self.active_statics.contains(name) {

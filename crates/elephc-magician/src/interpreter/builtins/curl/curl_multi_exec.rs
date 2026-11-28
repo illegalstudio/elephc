@@ -41,7 +41,7 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_exec_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    with_eval_builtin_call_arguments("curl_multi_exec", args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) =
             bind_evaluated_ref_builtin_args(&["multi_handle", "still_running"], &evaluated_args, false)?;
         let multi_handle = required_evaluated_ref_arg(&bound, 0)?;

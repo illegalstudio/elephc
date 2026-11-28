@@ -37,7 +37,7 @@ description: "Compiler internals for opendir(): lowering path, type checks, and 
 ## Signature summary
 
 ```php
-function opendir(string $directory): mixed
+function opendir(string $directory): resource|false
 ```
 
 ## What the type checker enforces

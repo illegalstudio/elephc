@@ -313,6 +313,7 @@ fn rewrite_read(function: &mut Function, read: InstId, result: ValueId) -> bool 
         return false;
     };
     inst.op = Op::ArrayGetUnchecked;
+    inst.immediate = None;
     inst.result_type = IrType::I64;
     inst.result_php_type = PhpType::Int;
     inst.result_ownership = Ownership::NonHeap;

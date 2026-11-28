@@ -178,6 +178,8 @@ echo count($holder->map), count($holder->list);
 }
 
 /// The same order holds for containers reached through `global`, including boxed elements.
+/// During shutdown the remaining destructors bind those names again, including names whose
+/// values were already detached. The heap must also be clean after those activations retire.
 #[test]
 fn test_element_overwrite_publishes_before_the_destructor_for_global_containers() {
     let source = r#"<?php
@@ -201,6 +203,37 @@ $mixed[0] = "replaced";
 echo "end";
 "#;
     assert_both_modes(source, "hash:10 list:20 mixed:replaced end");
+}
+
+/// Shutdown distinguishes sole and shared objects without dereferencing native constant values.
+#[test]
+fn test_shutdown_destructor_reads_published_global_owners() {
+    let source = r#"<?php
+function installShutdownConstant() { define('SHUTDOWN_LIMIT', 7); }
+installShutdownConstant();
+final class ShutdownProbe
+{
+    public function __destruct()
+    {
+        global $owner, $bucket;
+        echo $owner === $this && is_array($bucket) && $bucket[0] === $this ? 'live' : 'missing';
+        $owner = null;
+    }
+}
+final class SoleShutdownProbe
+{
+    public function __destruct()
+    {
+        global $sole;
+        echo $sole === $this ? 'sole:live ' : 'sole:missing ';
+    }
+}
+$owner = new ShutdownProbe();
+$bucket = [$owner];
+$sole = new SoleShutdownProbe();
+echo 'end:', SHUTDOWN_LIMIT, ' ';
+"#;
+    assert_both_modes(source, "end:7 sole:missing live");
 }
 
 /// Reference-bound, uninitialized, unset and nested properties take the write the same way,

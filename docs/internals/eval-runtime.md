@@ -27,6 +27,37 @@ Native reads probe a managed reference's canonical wrapper before using its lega
 payload layout. The current boxed child supplies the PHP tag for the requested
 logical view, including a Mixed read after eval changes a typed parameter's value.
 Raw and headerless references continue to load through their original physical ABI.
+Checked-cast lowering also gives eligible scalar, object, array, iterable, nullable
+and union user properties owned managed cells. The shared `types/reference_layout` classifier
+distinguishes their logical contracts from boxed or inline nullable-int payloads.
+Selecting an integer, float, boolean, string, object or concrete array reference
+transfers its raw payload into a canonical child while preserving the cell address
+and collector flags. Generic PHP array declarations may instead use a boxed
+array/hash union; their canonical child preserves the actual container kind.
+Raw Iterable promotion classifies array/hash/Traversable heap kinds before boxing,
+so the shared descriptor number seven does not imply an existing Mixed box.
+Nullable-int promotion copies both the raw value and its runtime tag before boxing.
+The module explicitly selects native reference validation and declaration callbacks;
+conversion writeback validates the original candidate against the live property
+constraint before publication. Later direct property writes follow the same
+canonical child, keeping existing aliases current. Borrowed constructor cells keep
+their original ABI. Checker reference-place validation authorizes and schedules the
+same managed cells consumed by lowering, including nominal object properties passed
+to a Mixed reference parameter. Property projection and JSON metadata retain the
+logical PHP tag while `CANONICAL_PROPERTY_PAYLOAD_FLAG` authenticates a managed cell
+whose live payload may be boxed. The shared resolver exposes its current child
+before a renderer interprets the value. Object projection authenticates that the
+resolved child address differs from the native cell before sharing a constrained
+boxed union; raw unions keep the existing promotion gate. Generic mutation receiver
+reloads use the same canonical reader as explicit EIR reference reads. Ordinary
+value copies remain detached when a referenced array changes through copy-on-write.
+Raw Iterable property rows use `ITERABLE_PROPERTY_TAG` (13). The shared leaf
+reader maps their concrete heap kind to a value tag while preserving the property
+address and initialization marker; canonical children bypass this raw adapter.
+JSON uses the same reader, and unserialize transfers and releases the raw
+container owner through its ordinary typed-property paths.
+This machinery supports staged cast integration; it does not
+admit the unfinished cast profile at public entry points.
 An owning `LoadRefCellValue` copies a typed parameter's current value into Mixed:
 canonical children are cloned, and raw concrete payloads are boxed once. The copy
 has explicit allocation and reference-count effects, and its cleanup survives
@@ -146,6 +177,12 @@ including ordinary builtin calls, are `UnresolvedCall` gaps. The tree
 walker then runs the whole fragment. Effects, declarations, and scope writes
 still run on every execution; only the executable form is cached.
 
+The Mixed guarantee selects the walker before executable-cache lookup,
+including calls into functions whose bodies already have bytecode. Its scalar
+consumers carry logical source alternatives and predicate-derived views with
+owned operands. Bytecode values currently carry storage metadata without those
+proofs. The shared selector records the execution mode at both entry paths.
+
 A program defines its top-level functions before its first statement
 (`define_program_functions` emits their `DefineFn` instructions first), matching
 the early binding the tree walker performs at program entry. A function declared
@@ -163,6 +200,46 @@ no references, defaults, variadics, or types.
 Both consumers use the same object adapters for output and scalar casts, and
 the same cleanup helpers for operands and call arguments. The shared dispatcher
 owns fallback argument evaluation and cleanup, including binding failures.
+
+Interpolated operands retain `EvalCastType::StringFormat`, represented by a
+dedicated formatting opcode in the slice. The string guarantee checks
+original concatenation operands before conversion hooks, and refuses implicit
+array formatting in echo, print and interpolation. Explicit string casts retain
+their conversion contract. Walker echo, owned output and both binary consumers
+share the same tag checks while their existing owner finishers handle failures.
+AOT string-kind predicates also recognize logical null behind concrete string
+storage, such as a missing typed-array entry. Shared Mixed boxers preserve that
+logical kind, and unboxing recognizes legacy string-shaped null cells. Explicit
+formatting and string casts still produce an empty string.
+Native activation snapshots authenticate managed reference storage and promote
+reviewed raw payloads through the shared canonical reference adapters. All names
+then observe the same current child while headerless references retain their ABI
+fallback. After native writeback, activation copies retire through the bounded
+cleanup adapter, preserving interpreter-only bindings and transferring a copied
+lease to a surviving borrowed alias. Global scope remains materialized for
+callbacks between eval entries.
+Checked static reference rebinding uses the scoped declaration selector and a
+rooted staging cell. The version-two validator copies the proposed declaration
+without registering it, so a reentrant coercion can still modify the unbound
+source. Existing declarations and the proposed source see the original RHS.
+Successful publication installs the declaration and removes interpreter-only
+alias indirection; the version-one native validation ABI remains available.
+Native aliases own their managed cells, so replacing a static binding preserves
+aliases of its previous reference. Reflection class setters capture whether that
+reference was shared before conversion. Originally shared references remain the
+write target; otherwise the property receives the converted value even when
+argument retirement introduced another reference. Native and eval class setters
+share exact source-argument ownership and the protected static publisher.
+Eval backing-property unset removes the physical hash entry before releasing its
+owner. Writing null through a stored reference would also change a previously
+captured argument. The protected unset boundary installs any COW table first,
+then removes the entry without republishing storage after a destructor callback.
+Native XML compound concatenation also checks the original property operand.
+The shared `ObjectProperty::UpdateRead` adapter validates the update name and
+returns a read-only selection before either consumer enters the writable update
+helper. A failed string check therefore cannot create a missing XML child.
+The caller evaluates the RHS first and retains its owner through selection and
+failure cleanup. Ordinary objects keep their regular getter and setter path.
 Fast calls register ordinary PHP argument and
 backtrace metadata against boxed scopes, whose addresses stay stable as the
 explicit stack grows. Returns and errors remove that metadata before releasing
@@ -602,6 +679,8 @@ The format guard covers the combined serialized IR and its corresponding type so
 Format 28 records the source change for bytecode-backed function metadata. Executable
 images remain excluded from serialization, but the conservative source guard still
 requires a new cache identity.
+Format 31 retains interpolation formatting casts and lexer prefix tokens, so old
+entries cannot erase the distinction between formatting and ordinary concatenation.
 Retained token streams distinguish reserved words used as qualified-name segments, so
 entries written before that token variant was introduced must also be rejected.
 Format 24 also retains method reference-return flags and generic dimension-write
@@ -692,6 +771,150 @@ including when compiled callable cells share a function with opaque eval.
 Receiver, converted-name and result owners remain published through these checks
 and through normal cleanup.
 
+Literal eval AOT plans receive an immutable `EvalSourceProfile` containing the
+physical call site's PHP-only visibility and the compilation's semantic profile.
+The same profile travels on source-sensitive EIR data references, and internal
+fragment names include the semantic ABI and profile bits. EIR validation refuses
+metadata that disagrees with its module.
+
+`EvalProgram` retains the semantic policy used during tokenization. Hosts using
+`parse_fragment_with_semantics()` must install the same profile on the execution
+context. Pre-parsed execution returns `AbiMismatch` before running a mismatched
+program. Runtime includes apply the same check, including the direct walker replay
+path. This prevents reuse of already-normalized literals or interpolation keys
+under different guarantees.
+
+Generated native value hooks expose their semantic ABI and immutable profile
+through two C getters. The native profile setter rejects mismatches before
+pinning a context. Program entry and direct walker replay also check the
+`RuntimeValueOps::fixed_semantic_profile()` contract before value operations.
+Existing host adapters default to permissive hooks. A host may return `None`
+only when its primitives do not encode a fixed semantic policy. The versioned
+profile decoder is shared by context installation, native hooks and disk-cache
+identity checks.
+
+
+Native snapshot imports distinguish three `EvalBindingRole` values:
+`Contract` preserves the existing inferred local-kind constraint, `Source`
+transports checked source evidence, and `DeclaredSource` also retains an explicit
+local declaration. The checker records source types at the eval call site;
+EIR lowering publishes them only for a present native binding. These decisions
+participate in the optimizer's protected names and spans.
+
+`__elephc_eval_scope_source_type_v1` stages the full logical type before the
+value flush. `set_from_aot` consumes that metadata and stamps the source with
+the newly imported binding generation and current write epoch. Shared
+`SOURCE_DECLARED` and `SOURCE_ARRAY_CONTENTS` flags separate declaration
+validation from conditional inferred-array contents. Neither source transport
+nor inferred contents adds an inferred whole-binding `Locals` constraint.
+Native snapshot retirement removes the transient source facts.
+
+Logical source snapshots belong to scope bindings and evaluated arguments. A
+snapshot may contain optional per-key entry evidence for a literal argument array;
+this evidence is separate from its inferred homogeneous content constraint. Stored
+arrays and value copies preserve entry snapshots, while binding generations and
+canonical reference writes invalidate stale evidence. Entry proofs keep their
+original write epochs. Observation stamps use a common monotonic sequence across
+eval contexts, while each context retains weak per-allocation last-write records.
+Reading a stored snapshot retains the container's declared
+alternatives or observed predicate view, so element evidence cannot narrow an
+explicit `mixed` container by itself. Spread, callback-array and reflection
+invocation share the same entry projection and owner cleanup adapters. Native
+function and method binders also retain source packets through named, variadic and
+default normalization. They check logical alternatives and canonical reference
+stamps before coercing payloads; method variadic collectors keep each entry's
+optional evidence independently. Logical operator result domains preserve finite
+alternatives, exact float and checked integer signatures, and reviewed native
+class result kinds. Lazy conditional expressions retain the reached branch's
+source, and selected boolean signatures validate every logical alternative before
+truthiness conversion. Dynamic invocation captures the normalized callable's
+immutable declared return before argument effects, resolving bound and late-static
+class scopes through the same declaration resolver. The value and optional source
+leave the receiver owner scope together. Unknown or missing descriptor declarations
+remain unknown rather than acquiring evidence from their current return tags.
+Callback forwarding through `call_user_func` and `call_user_func_array` carries
+the selected target declaration through the shared argument owner coordinator,
+including nested wrappers. Each invocation returns its value and optional source
+together; source metadata never uses a global last-result slot.
+Selected object and static method calls retain their actual declaration through
+argument effects. Runtime member names validate their logical string-conversion
+domain before conversion; class selectors require a string or object source.
+Reflection `invoke` and `invokeArgs` read the reflected declaration, including
+callback forwarding. Discarded method results share the same receiver scope and
+retain their existing warning behavior.
+Nullsafe postfix chains carry each reached value and its optional logical source
+separately from the upstream short-circuit marker. A method returning null keeps
+its ordinary successor; an upstream nullsafe short circuit skips later selectors,
+keys and arguments. Quiet `??` probes preserve missing roots and initialized null
+receivers without deriving type evidence from them. Reached PHP array/string
+keys use their source alternatives; custom ArrayAccess keys keep their own domain.
+Ordinary postfix accesses reuse this same source and owner scope. A reached index
+or dynamic member selector runs before its access proof is checked; method
+arguments remain behind receiver validation. Open array elements and undeclared
+properties retain unknown sources instead of inheriting their current value tags.
+Foreach checks its iterable source and publishes declared array key/value domains
+or selected Iterator method returns with the prepared operands. IteratorAggregate
+results use the same iterable check. `Mixed + Bools` also checks the declared
+`valid()` result. Source metadata stays outside runtime owner slots, while the
+existing value-before-key publication and destructor cleanup order remains intact.
+ArrayTypes loop content origins preserve their separate conditional role.
+Dynamic class consumers share a class operand scope. Class source validation and
+resolution precede member selectors and later arguments. Constructors preserve
+the selected nominal result; static reads and first-class methods keep immutable
+declaration metadata. Dynamic static writes normalize to the ordinary static
+statement dispatcher, with the class owner retained through RHS effects and
+released on success or failure.
+Declared property writes reuse the original-RHS weak candidate planner. Unaliased
+writes recheck access after conversion callbacks; aliases retain the original
+input for joint source arbitration. Mixed and ArrayTypes select the same checked
+reference machinery. A new typed property alias contributes a stack-scoped
+prospective declaration to exactly one publication, before callbacks execute.
+Nested callback writes keep the actual unbound storage rules; successful binding
+then publishes the normal property association. These admissions own metadata,
+while existing runtime frames retain the original values and canonical cells.
+Interior local array writes additionally project the live property associations
+into conditional content checks. These borrowed obligations are consulted at the
+write and never copied into persistent local or parameter contracts, so retiring
+the receiver releases its constraints. Whole reference replacements still use
+the original-RHS coordinator and preserve weak scalar conversion. Instance and
+static property defaults share initialization that widens an integer literal
+to a sole declared float representation, independently of assignment coercions.
+Untyped array defaults additionally establish conditional origins owned by the
+physical property binding. Whole replacements validate that origin, while
+instance/static dimension writers validate the candidate element before any
+published payload changes. Private storage names and cloned bindings retain
+separate origins; unset and final-object retirement remove instance metadata.
+Each origin tracks its currently published array through an allocation-validity
+token, without retaining a PHP owner. Canonical reference checks also inspect
+these property-owned roots, so nested element aliases cannot invalidate their
+contents. Rebinding or replacing a property retires only its departed root.
+Checked property profiles validate declared defaults before publishing successful
+initialization and derive the same conditional roots from explicit structural
+declarations, independently from inferred array policy. Reinitialization after
+unset recreates these declaration-backed obligations. Conditional content
+projections validate array candidates without contributing a scalar coercion
+candidate; real declarations, including explicit mixed, retain their normal
+role in joint reference conversion arbitration.
+Source-aware whole-property writes retain RHS proof packets through the existing
+late-receiver/name operand owner scope. They reuse call argument source checks
+for an authorized physical declaration, and pass the original packet into a
+selected setter hook's input contract. Validated internal stores retain their
+separate role. Runtime first array producers use the shared content-origin
+planner, preserving explicit mixed openness and leaving rejected origins pending.
+Canonical reference replacement publishes a prepared origin before retiring its
+old value. Readonly and visibility failures retain their original ordering.
+
+Native descriptor signatures retain their original twelve physical metadata words.
+Flag bit 1 marks an appended logical-source record pointer at word 12. The
+versioned record carries optional parameter and return declarations as JSON of the
+shared structural `Type`, preserving nested arrays and unions independently from
+storage tags or PHP reflection names. A signature without the flag supplies no
+logical source evidence and is read without accessing the extension slot. Mixed
+rejects invocation through such legacy descriptors with a catchable TypeError;
+permissive invocation retains its existing behavior. An untyped parameter in a
+new record remains distinct from an absent record. The same data-section writer emits this record for every supported target.
+
+
 ## Runtime script cache
 
 **Sources:** `crates/elephc-magician/src/script_cache/`, the
@@ -710,11 +933,12 @@ implementation must keep.
 
 ### The unit and the load path
 
-The unit is the FILE, keyed by its canonical path. `segments::parse_script`
+The PHP-visible unit is the FILE, keyed by its canonical path. Internally, each
+semantic profile has an independent parser entry for that path. `segments::parse_script`
 parses a whole file as PHP compiles it: the tags cut it, inline HTML becomes
 `echo` of its exact bytes, and the pieces join into one token stream parsed
 once, so a block may span the tags and a parse error anywhere fails the whole
-file. An entry holds that one program (or the parse error).
+file. A profile entry holds that one program (or the parse error).
 
 `store::load_script` serves a warm entry, or fills one in this order, which is
 php-src's and is pinned by tests:
@@ -744,6 +968,14 @@ replacement, so a refused replacement never leaves the old version live. The
 request time is fixed per request: `__elephc_eval_configure_opcache` stamps it,
 once in the CLI prologue and once per `--web` request.
 
+Discarded profile variants no longer participate in path staleness checks, so a
+stale retired variant cannot invalidate a fresh live sibling. OPcache status
+still exposes one row per path: it sums hits and retained memory across profile
+variants, takes freshness from the most recently used live variant, and reports
+timestamp `0` only when every variant for that path is discarded. The
+`num_cached_scripts` counter counts those distinct paths, while capacity still
+counts every internal profile artifact.
+
 ### Capacity
 
 The cache NEVER evicts. Once the `opcache.memory_consumption` byte budget (the
@@ -770,12 +1002,20 @@ same configuration. The blacklist is loaded once per process.
 `file_store` implements `opcache.file_cache`. Invariants:
 
 - An entry lives at
-  `<file_cache>/<crate version>-<FORMAT_VERSION>/<FNV-1a of the path bytes>.bin`.
-  Its header carries a magic, the format version, the canonical path's raw
-  bytes, the mtime, the size and the writer's `revalidate`. A read checks the
+  `<file_cache>/<crate version>-<FORMAT_VERSION>/<path hash>-<semantic ABI>-<profile>.bin`.
+  Its header carries a magic, the format version, the semantic ABI and profile
+  bits, the canonical path's raw bytes, the mtime, the size and the writer's
+  `revalidate`. A read checks the
   header on the raw bytes before decoding, bounds the decode by the file size,
-  and treats every failure as a miss.
-- Identity is unconditional (the path bytes must match); freshness is checked
+  verifies the decoded program's own parser profile, and treats every failure as
+  a miss.
+- Identity is unconditional (path bytes, semantic ABI and profile must match).
+  Memory entries follow the same profile rule. Each path-and-profile pair has an
+  independent slot, so a failed fill in one eval context cannot discard the warm,
+  timestamp-free script owned by another context. Path invalidation still retires
+  every profile variant. Fragment and uncached-file parse memos also separate
+  successful results and errors by profile, sharing their existing total capacity
+  across profiles. Freshness is checked
   only under `validate_timestamps`, and a stale entry is removed by the read
   that rejects it.
 - A write goes to an `O_EXCL` temporary under a random name, then a rename.
@@ -846,3 +1086,81 @@ from the shared `elephc-builtin-contract` catalog joined to the `builtin!` and
 [Builtin Reference](../php/builtins.md). [The Runtime](the-runtime.md) documents
 the shared `__rt_*` assembly families and links here for the optional eval
 boundary.
+
+
+## Checked element-read boundary
+
+The Indexing implementation shares the existing native lookup instead of
+probing and then reading the same key. `RuntimeValueOps::array_get_checked`
+returns `Some(owned_cell)` for a present element, including initialized null,
+and `None` for a missing element. Its reference-preserving mode keeps a stored
+reference identity; ordinary reads detach reference cells through the existing
+copy contract. Providers implement this operation explicitly.
+
+The generated `__elephc_eval_value_array_get_checked` callback normalizes its key
+once and uses report mode `8` plus canonical-tuple mode `16` in
+`__rt_mixed_array_get`. The receiver-side reader skips repeat normalization. A real array/hash/string
+miss returns a null pointer with no cell owner. Successful reads return owned
+Mixed cells. Rust creates `OutOfBoundsException` through the interpreter's
+pending-throwable channel, so missing-read failure does not unwind across a Rust
+stack frame. Native EIR uses the separate checked mode `4`; warning mode `1` and
+internal write-fetch mode `2` remain independent.
+
+`eval_array_get_quiet_result` is the shared intentional-probe and writable-root
+read. Coalescing traverses only the receiver chain quietly; key expressions keep
+their ordinary initialization and indexing checks. Slot creation, unset probes,
+ArrayAccess hooks and native object dimension protocols keep their existing
+contracts. Array expressions and `ArrayGet` currently cause the bytecode
+selector to fall back to the tree walker; these checks do not claim a new array
+bytecode opcode. The public checker, CLI, interpreter API, includes and REPL
+share the same independently selected profile.
+
+Inferred empty array origins use the reserved `@array-contents-pending` term,
+separate from declared `array<never>` schemas. The pending planner refines nested
+leaves after informative writes and validates each candidate before publishing
+its schema. Instance/static dimension writes carry a data-content source role
+separate from original argument proof packets. First builtin mutations update
+only the live property binding, before displaced-value callbacks, without copying
+its obligation into permanent local metadata. Mixed-only literal capture uses
+ordinary runtime type projection and does not enable homogeneous array inference.
+
+Mutable consumers retain original operand proofs through receiver and early/late
+key staging. Reached instance/static/nested array writes check key domains and
+declared element inputs before changing contents. Exact structural element input
+checks share packet/reference-epoch validation with PHP argument binding, while
+PHP scalar parameters keep their selected weak conversion policy. Computed and
+nested receivers project the selected declaration without inspecting their boxed
+occupants to manufacture a logical proof. Quiet unset traversal remains quiet.
+
+Generated native registration carries full structural `Type` terms through the
+trusted `@logical-type:` encoding. PHP Reflection projects structural arrays and
+callables to their PHP display names separately. Exact bare PHP `array` remains
+open rather than acquiring a storage-derived key/element constraint. Native
+instance/static field contents are checked before storage publication and their
+physical declarations feed the shared element-write planner. The compact legacy
+registration grammar remains accepted for existing producers.
+
+Mixed catalog predicates can narrow stable physical properties and literal
+integer/string array projections. Facts belong to the activation's root binding,
+not a global value-handle proof map. Root generations and observation epochs
+retire them after replacements, member effects, calls or shared writes. Getter,
+magic and ArrayAccess results remain separate values and require their own local
+narrowing. Prepared mutable receivers consult reached facts after RHS effects.
+Member reference binds validate the original source before hidden alias setup.
+
+
+## Public strict profile acceptance
+
+All sixteen semantic guarantees are admitted by the compiler and interpreter.
+Native source imports use their own EIR role and preserve full structural terms;
+only inferred local-kind contracts use the reduced canonical kind representation.
+Mixed and ArrayTypes native imports, independent content versus binding policies,
+source generation retirement, all five target emitters and the complete public
+CLI example are covered by focused regression tests.
+
+Native descriptor `self` and `static` results also preserve their declaration
+scopes. The receiver-bound descriptor plus opaque-eval fixture compares ownership
+with permissive execution: both currently retain three blocks (384 bytes). This
+profile-independent ownership investigation remains separate from source metadata
+and is tracked in Code Journal task `97836066`; it is not a clean-heap fixture.
+The native array import and complete umbrella examples require clean heaps.

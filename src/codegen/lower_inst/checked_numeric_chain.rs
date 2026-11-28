@@ -97,7 +97,7 @@ fn expect_operations(inst: &Instruction) -> Result<&[MixedNumericOp]> {
                 && chain
                     .operations()
                     .iter()
-                    .all(|op| !matches!(op, MixedNumericOp::Pow)) =>
+                    .all(|op| op.supports_checked_chain()) =>
         {
             Ok(chain.operations())
         }
@@ -160,7 +160,7 @@ fn emit_aarch64_checked_step(
             ctx.emitter.instruction(&compare);                                  // compare the high product with the low half's sign extension
             emit_overflow_branch(ctx, "eq", "jne", overflow_label);
         }
-        MixedNumericOp::Pow => unreachable!("validated checked chains exclude pow"),
+        MixedNumericOp::Pow | MixedNumericOp::Div | MixedNumericOp::Mod => unreachable!("validated chains accept add/sub/mul only"),
     }
 }
 
@@ -230,7 +230,7 @@ fn integer_mnemonic(operation: MixedNumericOp, arch: Arch) -> &'static str {
         (MixedNumericOp::Add, Arch::X86_64) => "add",
         (MixedNumericOp::Sub, Arch::X86_64) => "sub",
         (MixedNumericOp::Mul, Arch::X86_64) => "imul",
-        (MixedNumericOp::Pow, _) => unreachable!("validated checked chains exclude pow"),
+        (MixedNumericOp::Pow | MixedNumericOp::Div | MixedNumericOp::Mod, _) => unreachable!("validated chains accept add/sub/mul only"),
     }
 }
 
@@ -243,6 +243,6 @@ fn float_mnemonic(operation: MixedNumericOp, arch: Arch) -> &'static str {
         (MixedNumericOp::Add, Arch::X86_64) => "addsd",
         (MixedNumericOp::Sub, Arch::X86_64) => "subsd",
         (MixedNumericOp::Mul, Arch::X86_64) => "mulsd",
-        (MixedNumericOp::Pow, _) => unreachable!("validated checked chains exclude pow"),
+        (MixedNumericOp::Pow | MixedNumericOp::Div | MixedNumericOp::Mod, _) => unreachable!("validated chains accept add/sub/mul only"),
     }
 }

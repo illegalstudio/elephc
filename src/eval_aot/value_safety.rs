@@ -24,7 +24,7 @@ where
         ExprKind::Variable(name) => {
             facts.is_assigned(name) || scope_reads.is_some_and(|reads| reads.contains(name))
         }
-        ExprKind::Cast { target, expr } if matches!(target, CastType::String) => {
+        ExprKind::Cast { target, expr } if matches!(target, CastType::String | CastType::StringFormat) => {
             expr_is_eir_function_safe(expr, support, facts, scope_reads)
         }
         _ => false,
@@ -44,7 +44,7 @@ where
     match &expr.kind {
         ExprKind::IntLiteral(_) => true,
         ExprKind::Variable(name) => facts.is_int_local(name),
-        ExprKind::Negate(inner) | ExprKind::BitNot(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) | ExprKind::ErrorSuppress(inner) => {
             expr_is_eir_int_value_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Print(inner) => expr_is_eir_function_safe(inner, support, facts, scope_reads),
@@ -79,7 +79,7 @@ where
             fold_static_builtin_int_call(
                 name.as_str().trim_start_matches('\\'),
                 args,
-                support.strict_php(),
+                EvalSourceProfile::new(support.php_only(), support.semantic_profile()),
             )
             .is_some()
         }
@@ -100,7 +100,7 @@ where
     match &expr.kind {
         ExprKind::FloatLiteral(_) => true,
         ExprKind::Variable(name) => facts.is_float_local(name),
-        ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
             expr_is_eir_float_value_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Cast { target, expr } if matches!(target, CastType::Float) => {

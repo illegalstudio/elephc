@@ -21,11 +21,12 @@
 
 use std::collections::HashMap;
 
+use crate::errors::CompileError;
 use crate::optimize::fold_constant_expression;
 use crate::parser::ast::{ArrayEntry, BinOp, Expr, ExprKind};
 
 use super::super::Checker;
-use super::property_default_selectors::bind_constants;
+use super::property_default_selectors::{bind_constant_reads, bind_constants};
 
 /// A folded backing value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,9 +45,20 @@ pub(super) fn fold_backing_value(
     global_constants: &HashMap<String, Expr>,
     owner: &str,
     expr: &Expr,
-) -> Option<FoldedBacking> {
+) -> Result<Option<FoldedBacking>, CompileError> {
+    let profile = checker.semantic_profile;
+    let strict = profile != elephc_semantics::SemanticProfile::PERMISSIVE;
+    if strict {
+        let mut bound = expr.clone();
+        bind_constant_reads(&mut bound, owner, checker, global_constants, 0, false);
+        crate::semantics::validate_bound_expression(bound, profile)?;
+    }
     let mut value = expr.clone();
     bind_constants(&mut value, owner, checker, global_constants, 0);
+    if strict {
+        // A folded alias can reveal an integer operand before PHP's concat conversion runs.
+        crate::semantics::validate_bound_expression(value.clone(), profile)?;
+    }
     join_int_concats(&mut value);
     // A joined concatenation can decide a ternary whose skipped branch is not a literal
     // (`('n' . 1) ? 6 : $v`); the forms check already let PHP's compile-time pruning skip it.
@@ -58,17 +70,17 @@ pub(super) fn fold_backing_value(
         value.kind,
         ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_)
     ) {
-        return crate::types::deferred_defaults::literal_truthiness(&value)
-            .map(|_| FoldedBacking::OtherType("array"));
+        return Ok(crate::types::deferred_defaults::literal_truthiness(&value)
+            .map(|_| FoldedBacking::OtherType("array")));
     }
-    match value.kind {
+    Ok(match value.kind {
         ExprKind::IntLiteral(value) => Some(FoldedBacking::Int(value)),
         ExprKind::StringLiteral(value) => Some(FoldedBacking::Str(value)),
         ExprKind::FloatLiteral(_) => Some(FoldedBacking::OtherType("float")),
         ExprKind::BoolLiteral(_) => Some(FoldedBacking::OtherType("bool")),
         ExprKind::Null => Some(FoldedBacking::OtherType("null")),
         _ => None,
-    }
+    })
 }
 
 /// Joins the `.` concatenations of int and string literals that the shared folder leaves alone
@@ -90,7 +102,7 @@ pub(super) fn join_int_concats(expr: &mut Expr) {
             join_int_concats(value);
             join_int_concats(default);
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::Cast { expr: value, .. } => join_int_concats(value),
         ExprKind::ArrayAccess { array, index } => {
             join_int_concats(array);

@@ -5,13 +5,13 @@
 //! - `crate::ir_lower::tests` through the library test harness.
 //!
 //! Key details:
-//! - Scope-array capacities expose definitely visible PHP locals at each case body.
+//! - Runtime scope enumeration excludes a later label until that label executes.
 //! - Single and joined dispatch edges must not inherit a later label's assignment.
 
 use std::path::Path;
 
 use crate::codegen::platform::Target;
-use crate::ir::{Immediate, Op};
+
 
 /// Both dispatch shapes build the earlier scope without the later label's local on all targets.
 #[test]
@@ -33,7 +33,11 @@ function joined_scope(int $n): void {
     }
 }
 single_scope($argc);
+single_scope($argc + 1);
+single_scope($argc - 1);
 joined_scope($argc);
+joined_scope($argc + 1);
+joined_scope($argc - 1);
 "#;
     for target in [
         "macos-aarch64",
@@ -48,22 +52,15 @@ joined_scope($argc);
             Path::new("."),
             Target::parse(target).expect("supported target"),
         );
-        for name in ["single_scope", "joined_scope"] {
-            let function = module.functions.iter()
-                .find(|function| function.name == name)
-                .expect("scope fixture survives optimization");
-            let capacities = function.instructions.iter()
-                .filter_map(|instruction| {
-                    if instruction.op != Op::HashNew {
-                        return None;
-                    }
-                    match instruction.immediate {
-                        Some(Immediate::Capacity(capacity)) => Some(capacity),
-                        _ => None,
-                    }
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(capacities, [1, 2, 2], "{target:?}: {name} scope inventory");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        if module.target == Target::detect_host() {
+            let output = super::native_module::run(&module);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stderr}");
+            assert_eq!(String::from_utf8_lossy(&output.stdout),
+                "1early2selected2default1early1early2default", "{stderr}");
+            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
         }
     }
 }

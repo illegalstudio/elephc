@@ -7,9 +7,9 @@
 //! Key details:
 //! - Mixed cells detach from the global; array payloads retain a separate caller lease.
 
-use crate::ir::{Op, Ownership};
+use crate::ir::{Immediate, Op, Ownership};
 
-/// A function-local reference must borrow its global symbol, never an uninitialized local.
+/// A function-local reference must acquire a managed lease from its global symbol.
 #[test]
 fn named_global_aliases_use_global_addresses_on_all_targets() {
     let source = r#"<?php
@@ -30,13 +30,28 @@ echo json_encode(aliasGlobal(['updated']));
         let function = module.functions.iter().find(|function| function.name == "aliasGlobal").unwrap();
         let reference = function.instructions.iter().find(|inst| inst.op == Op::LoadGlobalRefCell)
             .expect("the reference must name global storage");
-        let Some(crate::ir::Immediate::GlobalName(name)) = reference.immediate else { panic!("{target}: missing global name"); };
+        let Some(Immediate::GlobalName(name)) = reference.immediate else { panic!("{target}: missing global name"); };
         assert_eq!(module.data.global_names[name.as_raw() as usize], "shared", "{target}");
         assert_eq!(reference.result_php_type, crate::types::PhpType::Pointer(None), "{target}");
-        assert!(!function.instructions.iter().any(|inst| inst.op == Op::PromoteLocalRefCell),
-            "{target}: the global declaration has no local payload to promote");
+        let lease = reference.result.unwrap();
+        let (bind_at, shared_slot) = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            let Some(Immediate::LocalSlotPair { first, .. }) = inst.immediate else { return None; };
+            (inst.op == Op::BindRefCellPtr && inst.operands == [lease]
+                && function.locals[first.as_raw() as usize].name.as_deref() == Some("shared"))
+                .then_some((index, first))
+        }).expect("the global lease must be retained by the shared local");
+        for (index, inst) in function.instructions.iter().enumerate() {
+            if inst.op == Op::PromoteLocalRefCell {
+                let Some(Immediate::LocalSlotPair { first, .. }) = inst.immediate else {
+                    panic!("{target}: promotion must name its local and owner slots");
+                };
+                assert_eq!(first, shared_slot, "{target}: promotion must name the bound local");
+                assert!(bind_at < index, "{target}: promotion must follow the managed bind");
+            }
+        }
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(assembly.contains("global_reference_publish"), "{target}: stores must preserve persistent global references");
+        assert!(assembly.contains("__rt_reference_cell_retain_mixed"), "{target}: the binding must acquire the global lease");
+        assert!(assembly.contains("global_value_publication"), "{target}: stores must preserve persistent global references");
     }
 }
 
@@ -57,8 +72,10 @@ $copy = returnGlobalMixed(); $rowCopy = returnGlobalRows();
         );
         for name in ["returnGlobalMixed", "returnGlobalRows"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let global = function.instructions.iter().find(|inst| inst.op == Op::LoadGlobal)
-                .expect("the return must read global storage").result.unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadGlobalRefCell),
+                "{target}: the local name must acquire a global reference lease");
+            let global = function.instructions.iter().find(|inst| inst.op == Op::LoadRefCell)
+                .expect("the return must read its attached global value").result.unwrap();
             if name == "returnGlobalMixed" {
                 assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedClone && inst.operands == [global]),
                     "{target}: mutable global cells must detach before returning");

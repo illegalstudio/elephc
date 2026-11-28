@@ -247,6 +247,11 @@ pub(super) fn array_type() -> TypeExpr {
     TypeExpr::Array(Box::new(mixed_type()))
 }
 
+/// Describes PHP's layout-neutral public `array` hint for reflected and eval signatures.
+pub(super) fn plain_array_type() -> TypeExpr {
+    named_type("array")
+}
+
 /// Computes the type metadata for array<string>.
 pub(super) fn string_array_type() -> TypeExpr {
     TypeExpr::Array(Box::new(TypeExpr::Str))

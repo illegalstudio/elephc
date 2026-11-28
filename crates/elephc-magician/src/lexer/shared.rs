@@ -13,20 +13,44 @@ use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_ch
 
 use crate::errors::EvalParseError;
 
-use super::{Token, TokenKind, decode::{decode_double_quoted, decode_number, eval_operator, magic_const_token}};
+use super::{
+    decode::{decode_double_quoted, decode_number, eval_operator, magic_const_token},
+    Token, TokenKind,
+};
 
 /// Tokenizes an eval fragment that starts inside PHP mode.
 pub(super) fn tokenize_fragment(source: &str) -> Result<Vec<Token>, EvalParseError> {
-    tokenize(source.as_bytes(), false)
+    tokenize_fragment_with_semantics(source, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Tokenizes an eval fragment under the immutable semantic profile.
+pub(super) fn tokenize_fragment_with_semantics(
+    source: &str,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<Token>, EvalParseError> {
+    tokenize(source.as_bytes(), false, profile)
 }
 
 /// Scans a PHP file beginning in HTML mode with its original source line numbering.
+#[cfg(test)]
 pub(crate) fn tokenize_script(source: &[u8]) -> Result<Vec<Token>, EvalParseError> {
-    tokenize(source, true)
+    tokenize_script_with_semantics(source, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Scans a PHP file without discarding profile-dependent literal evidence.
+pub(crate) fn tokenize_script_with_semantics(
+    source: &[u8],
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<Token>, EvalParseError> {
+    tokenize(source, true, profile)
 }
 
 /// Adapts Chopper code and HTML tokens to the input required by the runtime grammar.
-fn tokenize(source: &[u8], file: bool) -> Result<Vec<Token>, EvalParseError> {
+fn tokenize(
+    source: &[u8],
+    file: bool,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<Token>, EvalParseError> {
     let scan = scan_runtime(source, file).map_err(|_| EvalParseError::UnsupportedConstruct)?;
     let mut tokens = Vec::new();
     let mut html_origin = None;
@@ -84,7 +108,7 @@ fn tokenize(source: &[u8], file: bool) -> Result<Vec<Token>, EvalParseError> {
                 magic_const_token(text, line).ok_or(EvalParseError::UnexpectedToken)?
             }
             Some("T_LNUMBER" | "T_DNUMBER") => {
-                decode_number(text, &rest[token.len..]).ok_or(EvalParseError::InvalidNumber)?
+                decode_number(text, &rest[token.len..], profile)?
             }
             Some("T_ATTRIBUTE") => TokenKind::AttributeStart,
             Some(
@@ -112,7 +136,7 @@ fn tokenize(source: &[u8], file: bool) -> Result<Vec<Token>, EvalParseError> {
                 continue;
             }
             Some("T_CONSTANT_ENCAPSED_STRING") if text.starts_with('"') => {
-                let (literal_tokens, length) = decode_double_quoted(text, line)?;
+                let (literal_tokens, length) = decode_double_quoted(text, line, profile)?;
                 if length != token.len {
                     return Err(EvalParseError::UnexpectedToken);
                 }
@@ -120,7 +144,7 @@ fn tokenize(source: &[u8], file: bool) -> Result<Vec<Token>, EvalParseError> {
                 continue;
             }
             None if text == "\"" => {
-                let (literal_tokens, length) = decode_double_quoted(rest, line)?;
+                let (literal_tokens, length) = decode_double_quoted(rest, line, profile)?;
                 let end = token.pos + length;
                 loop {
                     let part = raw.next().ok_or(EvalParseError::UnterminatedString)?;

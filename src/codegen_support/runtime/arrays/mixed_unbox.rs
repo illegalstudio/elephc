@@ -16,7 +16,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{emit_branch_if_null_container, emit_branch_if_null_string};
 
 /// Unwraps a boxed Mixed cell into a concrete runtime payload triple.
 ///
@@ -51,6 +51,10 @@ pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x9");                                          // return the concrete runtime tag in x0
     emitter.instruction("ldr x1, [x10, #8]");                                   // return the concrete payload low word in x1
     emitter.instruction("ldr x2, [x10, #16]");                                  // return the concrete payload high word in x2
+    emitter.instruction("cmp x0, #1");                                          // legacy string boxes may still carry a missing-value marker
+    emitter.instruction("b.ne __rt_mixed_unbox_container");                     // non-string tags keep their existing payload rules
+    emit_branch_if_null_string(emitter, "x1", "x9", "__rt_mixed_unbox_null");
+    emitter.label("__rt_mixed_unbox_container");
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can encode null in their payload pointer
     emitter.instruction("b.lt __rt_mixed_unbox_return");                        // scalar payloads preserve sentinel-colliding integer bit patterns
     emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
@@ -89,6 +93,10 @@ fn emit_mixed_unbox_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r11");                                        // return the concrete runtime tag in rax
     emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // return the concrete payload low word in rdi
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // return the concrete payload high word in rdx
+    emitter.instruction("cmp rax, 1");                                          // legacy string boxes may still carry a missing-value marker
+    emitter.instruction("jne __rt_mixed_unbox_container");                      // non-string tags keep their existing payload rules
+    emit_branch_if_null_string(emitter, "rdi", "r10", "__rt_mixed_unbox_null");
+    emitter.label("__rt_mixed_unbox_container");
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can encode null in their payload pointer
     emitter.instruction("jl __rt_mixed_unbox_return");                          // scalar payloads preserve sentinel-colliding integer bit patterns
     emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6

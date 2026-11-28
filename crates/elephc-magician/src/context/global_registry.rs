@@ -27,6 +27,22 @@ pub(crate) fn unregister_live_native_context(context: *mut ElephcEvalContext) {
     LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow_mut().retain(|entry| *entry != context));
 }
 
+/// Copies stable ABI contexts and the current native caller without retaining either owner.
+///
+/// # Safety
+/// Registered contexts must remain live while metadata is read. The active native caller also
+/// keeps its borrowed context live through a recursive call made during outer teardown.
+pub(crate) unsafe fn live_native_reference_contexts() -> Vec<*mut ElephcEvalContext> {
+    let mut contexts = LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow().clone());
+    let active = native_frame_active_eval_context();
+    if let Some(active) = active {
+        if !contexts.contains(&active) { contexts.push(active); }
+    }
+    contexts.retain(|context| unsafe { context.as_ref() }.is_some_and(|owner|
+        !owner.teardown_active() || Some(*context) == active));
+    contexts
+}
+
 /// Finds a live request owner for class-based factories called after an eval activation returns.
 ///
 /// # Safety
@@ -51,6 +67,7 @@ pub(crate) unsafe fn live_native_context_for_class(name: &str) -> Option<*mut El
 ///
 /// # Safety
 /// Context handles must be registered and removed on their owning thread before reclamation.
+#[cfg(not(test))]
 pub(crate) unsafe fn live_native_context_constant(
     excluded: *mut ElephcEvalContext,
     name: &str,
@@ -226,6 +243,20 @@ pub(crate) fn native_frame_active_eval_context() -> Option<*mut ElephcEvalContex
 #[cfg(test)]
 mod active_context_tests {
     use super::*;
+
+    /// A borrowed native activation keeps current reference metadata visible during outer teardown.
+    #[test]
+    fn native_reference_context_snapshot_preserves_active_outer_teardown() {
+        let mut context = ElephcEvalContext::new();
+        assert!(context.release_abi_owner());
+        assert!(context.begin_teardown());
+        let pointer = &mut context as *mut ElephcEvalContext;
+        let frame = push_native_frame_context(pointer);
+        assert!(unsafe { live_native_reference_contexts() }.contains(&pointer));
+        drop(frame);
+        assert!(!unsafe { live_native_reference_contexts() }.contains(&pointer));
+        context.end_teardown();
+    }
 
     /// Factories and class-name lookups reuse a live ABI owner and never return a handle after
     /// its final reclamation; the catalog lookup also skips an owner whose catalog is deferred.

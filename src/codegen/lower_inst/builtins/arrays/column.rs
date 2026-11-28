@@ -33,7 +33,7 @@ pub(super) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
     require_array_column_key_type(ctx.value_php_type(key)?)?;
     let result_elem_ty = array_column_result_element_type(inst, &value_ty)?;
     let helper = if boxed { "__rt_array_column_boxed" } else { array_column_runtime_helper(&value_ty) };
-    lower_array_column_call(ctx, array, key, helper)?;
+    lower_array_column_call(ctx, array, key, helper, boxed)?;
     if boxed {
         let valid = ctx.next_label("array_column_boxed_valid");
         abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
@@ -104,15 +104,22 @@ fn lower_array_column_call(
     array: ValueId,
     key: ValueId,
     helper: &str,
+    boxed: bool,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            if boxed { ctx.load_string_value_to_regs(key, "x1", "x2")?; }
+            else { super::super::super::hashes::materialize_hash_key_aarch64(ctx, key)?; }
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.load_string_value_to_regs(key, "x1", "x2")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
         }
         Arch::X86_64 => {
+            if boxed { ctx.load_string_value_to_regs(key, "rsi", "rdx")?; }
+            else { super::super::super::hashes::materialize_hash_key_x86_64(ctx, key)?; }
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.load_string_value_to_regs(key, "rsi", "rdx")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
         }
     }
     abi::emit_call_label(ctx.emitter, helper);

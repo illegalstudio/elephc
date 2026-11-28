@@ -21,6 +21,21 @@ fn test_erased_property_xml_append_storage_bundle() {
     verify(true);
 }
 
+/// A read-write element update separates a declared `mixed` property shared by an object clone.
+#[test]
+fn test_mixed_property_compound_update_separates_object_clone() {
+    let out = compile_and_run(
+        r#"<?php
+class MixedPropertyClone { public mixed $items = [1]; }
+$source = new MixedPropertyClone();
+$clone = clone $source;
+$source->items[0]++;
+echo $source->items[0] . ":" . $clone->items[0];
+"#,
+    );
+    assert_eq!(out, "2:1");
+}
+
 /// Covers declared arrays, ordinary dynamic hashes, clones and declared managed references.
 fn verify(xml: bool) {
     let source = r#"<?php

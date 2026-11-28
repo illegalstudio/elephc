@@ -7,7 +7,7 @@
 //! - `crate::types::checker::builtins` and `crate::ir_lower::expr` while consuming it.
 //!
 //! Key details:
-//! - Semantic hooks only see PHP types, AST arguments, EIR values/opcodes, and source spans.
+//! - Semantic hooks see PHP types, AST arguments, EIR values/opcodes, profiles and source spans.
 //! - Assembly contexts, physical registers, frame layout, ABI details, and raw symbols are absent.
 
 use std::fmt;
@@ -18,6 +18,18 @@ use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::PhpType;
 
+#[path = "semantics/numeric.rs"]
+mod numeric;
+pub use numeric::normalize_numeric_result;
+
+#[path = "semantics/comparisons.rs"]
+mod comparisons;
+pub use comparisons::comparison_boundary_effects;
+
+#[cfg(test)]
+#[path = "semantics/profile_tests.rs"]
+mod profile_tests;
+
 pub use crate::builtins::requirements::{
     file_get_contents_requirements, file_put_contents_requirements, fopen_requirements,
     stream_filter_requirements, unlink_requirements, BuiltinRequirement,
@@ -27,6 +39,10 @@ pub use crate::builtins::requirements::{
 /// Inputs shared by backend-neutral validation, result-type, and effect resolvers.
 #[allow(dead_code)]
 pub struct BuiltinSemanticInput<'a> {
+    /// Immutable guarantees selected for this compilation and its runtime.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
+    /// Invocation contract policy, independent of the physical mode of argument expressions.
+    pub source_mode: crate::source::SourceMode,
     /// Canonical lower-case PHP builtin name.
     pub name: &'a str,
     /// Source-order argument expressions after common call normalization.
@@ -39,6 +55,9 @@ pub struct BuiltinSemanticInput<'a> {
 
 /// Backend-neutral validator for argument semantics beyond signature and arity checks.
 pub type ValidateFn = for<'a> fn(&BuiltinSemanticInput<'a>) -> Result<(), CompileError>;
+
+/// Selects operation-specific argument domains while retaining the shared PHP signature.
+pub type MixedInputsFn = for<'a> fn(&BuiltinSemanticInput<'a>) -> Vec<(usize, PhpType)>;
 
 /// Backend-neutral resolver for argument- or value-dependent return types.
 pub type ResultTypeFn = for<'a> fn(&BuiltinSemanticInput<'a>) -> PhpType;
@@ -60,6 +79,12 @@ pub enum BuiltinValidation {
     SignatureOnly,
     /// Run one backend-neutral semantic validator after inferring arguments once.
     Shared(ValidateFn),
+    /// Requires logical source alternatives to support the selected overloaded argument roles.
+    MixedInputs(MixedInputsFn),
+    /// Shares explicit cast identity with original-source evidence and full checker validation.
+    ExplicitNumericCast(elephc_semantics::numeric_cast::NumericCastTarget),
+    /// Preserves the original GMP integer source before native operand normalization.
+    GmpIntegerCast,
 }
 
 /// Describes the single authoritative return-type resolver for a builtin.
@@ -109,6 +134,8 @@ pub type CallableSourceFn = for<'a> fn(Option<&'a PhpType>) -> bool;
 pub enum BuiltinCallablePolicy {
     /// Direct, first-class, and runtime-known dynamic callable paths are supported.
     Dynamic(CallableSourceFn),
+    /// Dynamic dispatch needs the full lowering context for object and numeric operator graphs.
+    Prepared(CallableSourceFn),
     /// Only direct calls work; PHP forbids first-class and generic dynamic invocation.
     DirectOnly(&'static str),
     /// Dynamic dispatch eligibility is defined by the typed builtin target descriptor.
@@ -159,6 +186,8 @@ pub enum BuiltinArgumentLowering {
     PreserveValues,
     /// Keep source storage without scalar binding or runtime-parser capture allocations.
     PreserveUncoerced,
+    /// Preserve original numeric argument kinds only when a numeric domain guarantee applies.
+    NumericParameters(elephc_semantics::numeric_domains::NumericOperator),
     /// Materialize every regular default through shared planning, including positional calls.
     MaterializeDefaults,
     /// Drop the unsupported statically-default count mode after shared planning.
@@ -219,6 +248,21 @@ pub enum BuiltinArgumentLowering {
     /// receiver to a plain local and pairs it with a compiler-allocated cursor slot
     /// instead of passing the array alone.
     ArrayInternalPointer(ArrayPointerOp),
+}
+
+impl BuiltinArgumentLowering {
+    /// Resolves profile-sensitive preparation before any source argument can be coerced.
+    pub(crate) fn with_semantics(self, profile: elephc_semantics::SemanticProfile,
+        source_mode: crate::source::SourceMode) -> Self {
+        match self {
+            Self::NumericParameters(operator) => {
+                if crate::semantics::numeric::operator_rule(profile, source_mode, operator).is_some() {
+                    Self::PreserveUncoerced
+                } else { Self::Standard }
+            }
+            other => other,
+        }
+    }
 }
 
 /// One PHP internal-array-pointer operation, selected by the registry declaration.
@@ -303,6 +347,54 @@ impl fmt::Display for BuiltinLoweringError {
 
 /// Minimal EIR construction surface exposed to builtin semantic lowering.
 pub trait BuiltinLoweringContext {
+    /// Returns the immutable semantic identity of the compiled module.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile;
+
+    /// Identifies whether the operation implements a user builtin contract or trusted PHP code.
+    fn source_mode(&self) -> crate::source::SourceMode;
+
+    /// Identifies a prepared public builtin body or invocation rather than an ordinary source call.
+    fn uses_prepared_builtin_semantics(&self) -> bool { false }
+
+    /// Guards original numeric argument kinds through the full rooted EIR control-flow path.
+    fn emit_numeric_domain_guard(
+        &mut self, _operator: elephc_semantics::numeric_domains::NumericOperator, _operands: &[ValueId],
+        _source_mode: crate::source::SourceMode, _span: Span,
+    ) -> Result<(), BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("numeric argument guards require a prepared builtin wrapper"))
+    }
+
+    /// Guards one original builtin key after normalized arguments have been evaluated and rooted.
+    fn emit_array_key_guard(&mut self, _input: super::array_key_inputs::ArrayKeyInput,
+        _operands: &[ValueId], _span: Span) -> Result<(), BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("array key guards require a prepared builtin context"))
+    }
+
+    /// Lowers an operator graph over borrowed operands after argument evaluation has finished.
+    fn emit_numeric_binary(
+        &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,
+        source_mode: crate::source::SourceMode, span: Span,
+    ) -> Result<LoweredBuiltinValue, BuiltinLoweringError>;
+
+    /// Applies an explicit numeric cast after source-order argument evaluation and owner rooting.
+    fn emit_numeric_cast(&mut self, _target: elephc_semantics::numeric_cast::NumericCastTarget,
+        _value: ValueId, _base: Option<ValueId>, _source_mode: crate::source::SourceMode, _span: Span)
+        -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("checked numeric casts require a prepared builtin wrapper"))
+    }
+
+    /// Uses the full explicit scalar cast graph for a borrowed, already evaluated operand.
+    fn emit_scalar_cast(&mut self, _target: &crate::parser::ast::CastType, _value: ValueId,
+        _source_mode: crate::source::SourceMode, _span: Span) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("scalar conversion requires a prepared builtin wrapper"))
+    }
+
+    /// Converts an evaluated settype operand before publishing it to its original reference binding.
+    fn emit_settype_conversion(&mut self, _value: ValueId, _target: ValueId,
+        _source_mode: crate::source::SourceMode, _span: Span) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("checked settype requires a prepared builtin wrapper"))
+    }
+
     /// Returns the current source path when the lowering owns a user-written call site.
     fn source_path(&self) -> Option<&str> {
         None
@@ -397,6 +489,10 @@ pub trait BuiltinLoweringContext {
 
 /// Normalized builtin call consumed by backend-neutral EIR lowering.
 pub struct NormalizedBuiltinCall<'a> {
+    /// Immutable module guarantees retained through callable dispatch.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
+    /// Contract source policy selected before evaluating this call's arguments.
+    pub source_mode: crate::source::SourceMode,
     /// Canonical lower-case PHP builtin name.
     pub name: &'a str,
     /// EIR operands after shared named/positional/spread planning.
@@ -457,6 +553,8 @@ pub struct BuiltinSemantics {
     pub target_support: BuiltinTargetSupport,
     /// Runtime functions the backend-neutral lowering may emit.
     pub runtime_functions: BuiltinRuntimeFunctions,
+    /// Original key inputs retained before array builtin normalization.
+    pub array_key_input: Option<super::array_key_inputs::ArrayKeyInput>,
     /// Source-order argument preparation used before normalized semantic lowering.
     pub argument_lowering: BuiltinArgumentLowering,
     /// Callable availability contract.
@@ -500,6 +598,19 @@ pub const fn with_argument_lowering(
     semantics
 }
 
+/// Associates a builtin with its original-key contract while preserving its existing runtime target.
+pub const fn with_array_key_input(mut semantics: BuiltinSemantics,
+    input: super::array_key_inputs::ArrayKeyInput) -> BuiltinSemantics {
+    semantics.array_key_input = Some(input);
+    if matches!(input, super::array_key_inputs::ArrayKeyInput::Value { .. }) {
+        semantics.argument_lowering = BuiltinArgumentLowering::PreserveUncoerced;
+        if matches!(semantics.runtime_functions, BuiltinRuntimeFunctions::One(RuntimeFnId::ArrayKeyExists)) {
+            semantics.callable = BuiltinCallablePolicy::Prepared(callable_accepts_any_source);
+        }
+    }
+    semantics
+}
+
 /// Builds the complete semantic descriptor for a fresh `Str -> Str` runtime transform.
 pub const fn unary_string_runtime(
     target: RuntimeCallTarget,
@@ -514,6 +625,7 @@ pub const fn unary_string_runtime(
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts_string_coercible_source),
         lowering: BuiltinLowering::Runtime(target),
@@ -531,6 +643,7 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(target),
+        array_key_input: None,
         argument_lowering: if target.uses_mbstring_runtime() {
             BuiltinArgumentLowering::PreserveValues
         } else { BuiltinArgumentLowering::Standard },
@@ -588,6 +701,7 @@ pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantic
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly(
             "PCNTL callbacks use a dedicated process-runtime ABI",
@@ -665,6 +779,7 @@ pub const fn array_pointer_semantics(
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::ArrayInternalPointer(op),
         callable: BuiltinCallablePolicy::StaticOnly(
             "the internal array pointer needs a named array variable receiver",
@@ -684,6 +799,7 @@ pub const fn type_predicate_semantics(predicate: PhpTypePredicate) -> BuiltinSem
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts_any_source),
         lowering: BuiltinLowering::TypePredicate(predicate),
@@ -709,6 +825,7 @@ pub const fn internal_eir_semantics(
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly("internal compiler primitive"),
         lowering: BuiltinLowering::Eir(lower),
@@ -755,11 +872,24 @@ pub fn lower_registry_call(
     result_type: &PhpType,
     span: Span,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    let source_mode = ctx.source_mode();
+    lower_registry_call_with_source_mode(ctx, def, operands, result_type, span, source_mode)
+}
+
+/// Applies an explicit invocation contract without changing how argument expressions are lowered.
+pub fn lower_registry_call_with_source_mode(
+    ctx: &mut dyn BuiltinLoweringContext,
+    def: &crate::builtins::registry::BuiltinDef,
+    operands: &[ValueId], result_type: &PhpType, span: Span,
+    source_mode: crate::source::SourceMode,
+) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     let arg_types = operands
         .iter()
         .map(|operand| ctx.value_php_type(*operand))
         .collect::<Vec<_>>();
     let semantic_input = BuiltinSemanticInput {
+        semantic_profile: ctx.semantic_profile(),
+        source_mode,
         name: def.name,
         args: &[],
         arg_types: &arg_types,
@@ -772,11 +902,18 @@ pub fn lower_registry_call(
         BuiltinResultType::Shared(resolve) => resolve(&semantic_input),
     };
     let normalized = NormalizedBuiltinCall {
+        semantic_profile: semantic_input.semantic_profile,
+        source_mode,
         name: def.name,
         operands,
         result_type: &resolved_result_type,
         span,
     };
+    if ctx.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayKeys) {
+        if let Some(input @ super::array_key_inputs::ArrayKeyInput::Value { .. }) = def.spec.semantics.array_key_input {
+            ctx.emit_array_key_guard(input, operands, span)?;
+        }
+    }
     match def.spec.semantics.lowering {
         BuiltinLowering::Eir(lower) => lower(ctx, &normalized),
         BuiltinLowering::TypePredicate(predicate) => Ok(ctx.emit_value(
@@ -806,6 +943,11 @@ pub fn resolve_builtin_effects(
         BuiltinEffects::Static(effects) => effects,
         BuiltinEffects::Shared(resolve) => resolve(input),
     };
+    effects |= comparison_boundary_effects(def, input);
+    if input.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        && def.spec.semantics.array_key_input.is_some() {
+        effects |= Op::ThrowTypeError.default_effects();
+    }
     let weak_float_int = def
         .params
         .iter()
@@ -866,6 +1008,7 @@ pub(crate) const fn test_probe_semantics() -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly("test-only registry probe"),
         lowering: BuiltinLowering::Eir(lower_test_probe),

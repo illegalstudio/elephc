@@ -121,6 +121,10 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
 pub(super) fn lower_scalar_cast_value(
     ctx: &mut LoweringContext<'_, '_>, target: &CastType, value: LoweredValue, expr: &Expr,
 ) -> LoweredValue {
+    if *target == CastType::StringFormat {
+        let value = super::string_contracts::formatting(ctx, value, expr.span);
+        return lower_scalar_cast_value(ctx, &CastType::String, value, expr);
+    }
     let source_type = ctx.builder.value_php_type(value.value);
     let source_repr = source_type.codegen_repr();
     if matches!(target, CastType::Int | CastType::Float) {
@@ -128,6 +132,11 @@ pub(super) fn lower_scalar_cast_value(
             release_binary_operand_temporary(ctx, value, expr.span);
             return result;
         }
+    }
+    if super::checked_cast::active(ctx, target) {
+        let result = super::checked_cast::lower(ctx, target, value, expr);
+        release_binary_operand_temporary(ctx, value, expr.span);
+        return result;
     }
     // `(int)` over an integer is the identity: both are already I64 and the explicit cast
     // cannot warn or fail. A resource also has an Int codegen representation, but its PHP
@@ -179,7 +188,9 @@ pub(super) fn lower_scalar_cast_value(
         vec![value.value],
         Some(Immediate::CastTarget(value_ir_type(&php_type))),
         php_type,
-        Op::Cast.default_effects(),
+        if matches!(target, CastType::String | CastType::Bool) {
+            crate::ir::Effects::php_conversion()
+        } else { Op::Cast.default_effects() },
         Some(expr.span),
     );
     if matches!(target, CastType::String) {
@@ -307,6 +318,11 @@ fn php_string_local_load_name(ctx: &LoweringContext<'_, '_>, value: LoweredValue
 /// `__rt_mixed_cast_array`, which applies the same four rules.
 fn lower_array_cast(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    lower_array_cast_value(ctx, value, expr)
+}
+
+/// Converts one evaluated array-cast operand without repeating its producer or side effects.
+pub(super) fn lower_array_cast_value(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
     let source_type = ctx.builder.value_php_type(value.value);
     let cast = crate::types::ArrayCast::for_source(&source_type);
     let result_type = cast.result_type(&source_type);
@@ -334,13 +350,13 @@ fn lower_array_cast(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr
                 vec![array.value, value.value],
                 None,
                 Op::ArrayPush.default_effects(),
-                Some(inner.span),
+                Some(expr.span),
             );
             crate::ir_lower::stmt::release_indexed_array_write_operand(
                 ctx,
                 Some(&element_type),
                 value,
-                inner.span,
+                expr.span,
             );
             array
         }
@@ -348,7 +364,7 @@ fn lower_array_cast(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr
             let source = if matches!(cast, crate::types::ArrayCast::Dynamic)
                 && !matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
             {
-                ctx.box_value_as_mixed(value, PhpType::Mixed, Some(inner.span))
+                ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
             } else {
                 value
             };

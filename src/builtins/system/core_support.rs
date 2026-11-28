@@ -32,6 +32,7 @@ pub const fn core_builtin_semantics(
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts_any_source),
         lowering: BuiltinLowering::Eir(lower),

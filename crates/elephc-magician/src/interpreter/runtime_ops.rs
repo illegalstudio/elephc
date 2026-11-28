@@ -27,6 +27,9 @@ thread_local! {
     /// Fallback recursion chain for embedders without the generated Fiber-aware runtime hook.
     static FALLBACK_MAGIC_SET_GUARDS: std::cell::RefCell<Vec<(usize, u64, String)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// Getter identities have a separate namespace for non-native embedders.
+    static FALLBACK_MAGIC_GET_GUARDS: std::cell::RefCell<Vec<(usize, u64, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// One PHP-visible parameter decoded from a native callable descriptor.
@@ -38,11 +41,17 @@ pub struct NativeCallableParameterMetadata {
     pub type_tag: u64,
     /// Whether the PHP declaration passes this parameter by reference.
     pub by_ref: bool,
+    /// Exact optional source declaration, independent from the physical type tag.
+    pub logical_type: Option<elephc_generics::Type>,
 }
 
 /// The caller-visible argument shape carried by a native callable descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeCallableSignatureMetadata {
+    /// Whether the declaration record exists, separate from untyped parameters in a new record.
+    pub has_logical_sources: bool,
+    /// Optional immutable declared result, never inferred from a returned cell.
+    pub return_type: Option<elephc_generics::Type>,
     /// PHP display name retained by the descriptor.
     pub display_name: String,
     /// Caller-visible regular parameters followed by the source variadic, when present.
@@ -55,6 +64,13 @@ pub struct NativeCallableSignatureMetadata {
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Reports the policy encoded by these hooks before any value operation runs.
+    /// Existing hosts default to permissive hooks. Only a policy-independent implementation
+    /// may return None; generated native hooks report their immutable compiled profile.
+    fn fixed_semantic_profile(&self) -> Result<Option<elephc_semantics::SemanticProfile>, EvalStatus> {
+        Ok(Some(elephc_semantics::SemanticProfile::PERMISSIVE))
+    }
+
     /// Replaces the explicitly authorized native bridge scope, returning the previous override.
     fn replace_native_class_scope(&mut self, _scope: Option<String>) -> Option<String> { None }
 
@@ -106,6 +122,36 @@ pub trait RuntimeValueOps {
 
     /// Restores a previously acquired native formatter recursion depth.
     fn debug_guard_restore(&mut self, _depth: u64) -> Result<(), EvalStatus> { Ok(()) }
+
+    /// Borrows operands for an explicitly checked operation and returns one independent owner.
+    /// The versioned native adapter contains exceptions below Rust; unsupported hosts fail closed.
+    fn checked_numeric(
+        &mut self, _op: elephc_semantics::numeric::CheckedNumericOp,
+        _left: RuntimeCellHandle, _right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Borrows one scalar for exact unary arithmetic; strict hosts must provide the protected hook.
+    fn numeric_unary(
+        &mut self, op: elephc_semantics::numeric_unary::NumericUnaryOp,
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, value: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !policy.is_permissive() { return Err(EvalStatus::UnsupportedConstruct); }
+        let zero = self.int(0)?;
+        let result = match op {
+            elephc_semantics::numeric_unary::NumericUnaryOp::Plus => self.add_raw(zero, value),
+            elephc_semantics::numeric_unary::NumericUnaryOp::Negate => self.sub_raw(zero, value),
+        };
+        match (result, self.release(zero)) {
+            (Err(status), _) => Err(status),
+            (Ok(result), Err(status)) => {
+                if !result.is_borrowed() { let _ = self.release(result); }
+                Err(status)
+            }
+            (Ok(result), Ok(())) => Ok(result),
+        }
+    }
 
     /// Applies the shared internal-class handler before scalar runtime arithmetic.
     fn add(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -353,6 +399,12 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Reads once, distinguishing an absent element from an owned present null cell.
+    /// Providers preserve original-key conversion and return no lease for absence.
+    fn array_get_checked(
+        &mut self, array: RuntimeCellHandle, index: RuntimeCellHandle, preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
+
     /// Returns an owned argument read, preserving a stored PHP reference when supported.
     fn array_get_preserving_references(
         &mut self,
@@ -435,7 +487,16 @@ pub trait RuntimeValueOps {
     /// Providers with distinct numeric string keys must override the normalized-key fallback.
     fn array_iter_value(&mut self, array: RuntimeCellHandle, position: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         let key = self.array_iter_key(array, position)?;
-        self.array_get(array, key)
+        let value = self.array_get(array, key);
+        let released = if key.is_borrowed() { Ok(()) } else { self.release(key) };
+        match (value, released) {
+            (Err(error), _) => Err(error),
+            (Ok(value), Err(error)) => {
+                if !value.is_borrowed() { let _ = self.release(value); }
+                Err(error)
+            }
+            (Ok(value), Ok(())) => Ok(value),
+        }
     }
 
     /// Creates an independent PHP array value for a by-value variable assignment.
@@ -514,6 +575,13 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Writes a byte-exact property name, with UTF-8 fallback for providers without raw names.
+    fn property_set_bytes(&mut self, object: RuntimeCellHandle, property: &[u8],
+        value: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let property = std::str::from_utf8(property).map_err(|_| EvalStatus::UnsupportedConstruct)?;
+        self.property_set(object, property, value)
+    }
+
     /// Mirrors an eval `__set` pair into the generated runtime's Fiber-local guard chain.
     fn native_magic_set_guard_push(
         &mut self,
@@ -545,7 +613,38 @@ pub trait RuntimeValueOps {
         Ok(())
     }
 
-    /// Uninitializes an authorized typed native slot, returning false for eval-only storage.
+    /// Mirrors an eval `__get` pair into the generated runtime's Fiber-local guard chain.
+    fn native_magic_get_guard_push(
+        &mut self,
+        object_identity: u64,
+        property: &str,
+        node: &mut [u64; 4],
+    ) -> Result<bool, EvalStatus> {
+        FALLBACK_MAGIC_GET_GUARDS.with(|guards| {
+            let mut guards = guards.borrow_mut();
+            if guards.iter().any(|(_, active_object, active_property)| {
+                *active_object == object_identity && active_property == property
+            }) {
+                return Ok(false);
+            }
+            guards.push((node.as_ptr() as usize, object_identity, property.to_string()));
+            Ok(true)
+        })
+    }
+
+    /// Removes a guard node previously accepted by `native_magic_get_guard_push`.
+    fn native_magic_get_guard_pop(
+        &mut self,
+        node: &mut [u64; 4],
+    ) -> Result<(), EvalStatus> {
+        FALLBACK_MAGIC_GET_GUARDS.with(|guards| {
+            let removed = guards.borrow_mut().pop();
+            debug_assert_eq!(removed.as_ref().map(|guard| guard.0), Some(node.as_ptr() as usize));
+        });
+        Ok(())
+    }
+
+    /// Uninitializes an authorized native slot or removes a public dynamic entry, returning false for eval-only storage.
     /// The native owner is released after the slot receives its uninitialized marker.
     fn unset_native_typed_property(
         &mut self,
@@ -567,6 +666,11 @@ pub trait RuntimeValueOps {
         &mut self, _class_name: &str, _property: &str, _scope: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> { Ok(None) }
 
+    /// Physically rebinds an eligible native static declaration to a borrowed persistent reference.
+    fn static_property_reference_bind(
+        &mut self, _class_name: &str, _property: &str, _reference: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> { Ok(false) }
+
     /// Checks whether a generated/AOT static property is initialized.
     fn static_property_is_initialized(
         &mut self,
@@ -581,6 +685,15 @@ pub trait RuntimeValueOps {
         property: &str,
         value: RuntimeCellHandle,
     ) -> Result<bool, EvalStatus>;
+
+    /// Consumes one ReflectionClass value argument, retiring conversions before publication when supported.
+    fn static_property_class_set(
+        &mut self, class_name: &str, property: &str, argument: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        let result = self.static_property_set(class_name, property, argument);
+        let cleanup = self.release(argument);
+        match result { Err(status) => Err(status), Ok(updated) => cleanup.map(|()| updated) }
+    }
 
     /// Reads a generated/AOT class-like constant through the generated bridge.
     fn class_constant_get(
@@ -966,14 +1079,34 @@ pub trait RuntimeValueOps {
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Appends a borrowed Throwable at an existing chain's tail, preserving identity and avoiding cycles.
+    /// Both arguments remain owned by the caller on success and failure.
+    fn chain_throwables(&mut self, _current: RuntimeCellHandle, _previous: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Reports whether the host stores PHP references independently of eval scope metadata.
     fn supports_persistent_references(&self) -> bool { false }
+
+    /// Native publishers coordinate eval and native declarations from the same original RHS.
+    fn coordinates_property_reference_candidates(&self) -> bool { false }
+
+    /// Checks logical source retirement for runtimes whose live metadata cells remain inspectable.
+    /// Native allocations are already protected by their allocation-lifetime token.
+    fn reference_source_is_live(&self, _value: RuntimeCellHandle) -> bool { true }
 
     /// Reports whether a boxed value is a writable persistent PHP reference.
     fn is_reference(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
 
     /// Reports whether a reference still has another physical owner before array COW.
     fn reference_is_shared(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
+
+    /// Pins the current value cell without copying it or retaining a mutable reference wrapper.
+    /// Reference-aware hosts must override this with an owner of the dereferenced current cell.
+    fn retain_value_cell(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if self.is_reference(value)? { return Err(EvalStatus::UnsupportedConstruct); }
+        self.retain(value)
+    }
 
     /// Creates an owned reference containing an independent PHP value.
     fn reference_new(&mut self, _value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {

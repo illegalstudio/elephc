@@ -32,6 +32,28 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Validates exact static unpack members through the same expansion and named-argument planner.
+    pub(super) fn validate_noncoercive_static_spread(&mut self, sig: &FunctionSig,
+        args: &[Expr], env: &TypeEnv, context: &str) -> Result<(), CompileError> {
+        if self.semantic_source_mode == crate::source::SourceMode::Internal
+            || !self.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
+        let expanded = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
+        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(&expanded, self.semantic_profile) else { return Ok(()); };
+        if expanded.iter().any(|arg| matches!(arg.kind, crate::parser::ast::ExprKind::Spread(_))) { return Ok(()); }
+        let span = args.first().map(|arg| arg.span).unwrap_or_else(Span::dummy);
+        let plan = self.plan_named_call_args(sig, &expanded, span, context, env)?;
+        let regular = crate::types::call_args::regular_param_count(sig);
+        let variadic = self.variadic_argument_element_type(sig, span, context)?;
+        for (index, argument) in plan.normalized_args().iter().enumerate() {
+            let expected = if index < regular { sig.params.get(index).map(|(_, ty)| ty) }
+                else { variadic.as_ref() };
+            let Some(expected) = expected else { continue; };
+            let actual = self.infer_type(argument, env)?;
+            self.require_strict_types_param_binding(expected, &actual, argument.span, context)?;
+        }
+        Ok(())
+    }
+
     /// Validates one declared parameter against an argument, allowing PHP's coercive
     /// parameter binding and callable-name strings before reporting a type mismatch.
     ///
@@ -153,6 +175,13 @@ impl Checker {
             return Ok(());
         }
 
+        if !by_ref && *actual == PhpType::Mixed
+            && crate::semantics::conversions::permits_guarded_unknown(expected)
+            && matches!(crate::semantics::conversions::implicit(self.semantic_profile,
+                self.semantic_source_mode, expected, actual),
+                elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
+            return Ok(());
+        }
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }
@@ -332,6 +361,7 @@ impl Checker {
         span: Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        self.require_noncoercive_value_type(expected, actual, self.semantic_source_mode, span, context)?;
         // Every declared parameter binding passes through here, in both modes. EIR lowering
         // checks a `mixed`/union argument bound to a declared scalar at run time; record the
         // argument so the AST optimizer neither drops the call as pure nor prunes a
@@ -374,7 +404,10 @@ impl Checker {
         if !self.strict_types || !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
             return Ok(());
         }
-        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(args) else {
+        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(
+            args,
+            self.semantic_profile,
+        ) else {
             return Ok(());
         };
         let regular_param_count = crate::types::call_args::regular_param_count(sig);
@@ -595,7 +628,7 @@ impl Checker {
         CompileError::new(
             span,
             &format!(
-                "{} expects {}, got {} — {}",
+                "{} expects {}, got {}: {}",
                 context, expected, actual, detail
             ),
         )

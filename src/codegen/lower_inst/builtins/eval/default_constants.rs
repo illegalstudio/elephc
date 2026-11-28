@@ -5,7 +5,7 @@
 //! - The eval lowering facade and sibling eval support modules.
 //!
 //! Key details:
-//! - Class ancestry, array-key normalization, and binary formats are unchanged.
+//! - Class ancestry and profile-aware key identity share native default semantics.
 //! - Class ancestry and key normalization are resolved by the SHARED folder in
 //!   `crate::codegen::const_default_values`; only the libelephc-magician binary encoding and the
 //!   eval-specific property-default subset live here.
@@ -14,11 +14,12 @@ use super::*;
 
 use crate::codegen::const_default_values::const_default_string_array_key;
 
-/// Normalizes one string default-array key to PHP's integer-key rules.
+/// Classifies one string default-array key under the selected semantic profile.
 pub(super) fn eval_native_string_array_default_key(
     value: &str,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<EvalNativeCallableArrayDefaultKey> {
-    const_default_string_array_key(value)
+    const_default_string_array_key(value, profile)
 }
 
 /// Converts supported property defaults into the compact eval bridge default ABI.
@@ -38,9 +39,7 @@ pub(super) fn eval_native_property_default(
         }
         if let Some(value) =
             crate::codegen::const_default_values::resolve_enum_case_default(default,
-                &crate::codegen::const_default_values::ConstDefaultContext {
-                    module: default_context.module, current_class: default_context.current_class,
-                })
+                &crate::codegen::const_default_values::ConstDefaultContext::new(default_context.module, default_context.current_class))
         {
             return Some(EvalNativePropertyDefault::EnumCase(value));
         }

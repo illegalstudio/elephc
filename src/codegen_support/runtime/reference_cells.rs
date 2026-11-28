@@ -19,9 +19,14 @@ use crate::types::PhpType;
 
 mod property_unset;
 mod mixed_payload;
+mod function_statics;
+pub(crate) use function_statics::detach as detach_function_static;
 mod mixed_symbol;
 mod property_payload;
+mod iterable_payload;
 mod canonical;
+mod canonical_promotion;
+pub(crate) use canonical_promotion::promotion_entry;
 mod parameter_bindings;
 mod argument_pins;
 mod validation_pins;
@@ -35,15 +40,18 @@ mod validation_publish;
 pub(super) use validation_publish::emit as emit_validation_publish;
 mod source_lifecycle;
 mod static_cells;
+mod static_destination;
+mod sharing;
 pub(crate) use static_cells::{BINDING_BYTES as STATIC_BINDING_BYTES, load_mixed_value as load_mixed_static_value};
 pub(super) use source_lifecycle::emit as emit_source_lifecycle;
 pub(super) use source_lifecycle::require_success as require_source_success;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;
-pub(crate) use canonical::resolve_scalar_property;
+pub(crate) use canonical::resolve_property_payload_shape;
 pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;
-pub(crate) use mixed_symbol::publish_mixed_symbol;
+pub(crate) use mixed_symbol::{publish_mixed_symbol, swap_mixed_symbol};
 pub(crate) use property_payload::resolve as resolve_property_payload;
+pub(crate) use iterable_payload::resolve as resolve_iterable_property_payload;
 
 /// Byte length of `_unmanaged_reference_escape_msg`, kept beside the data that defines it.
 const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;
@@ -62,13 +70,15 @@ pub(crate) const TAGGED_REFERENCE_ASSIGNMENT_MSG: &str =
     "Unsupported assignment through a nullable integer reference: value must be int or null";
 
 /// Emits managed reference cells with the same ownership rules on every supported target.
-pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: bool) {
+pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: bool, eval_scope: bool) {
     emit_new(emitter);
     super::property_ref_cells::emit(emitter);
     emit_value_release(emitter);
     emit_release(emitter);
     emit_clone(emitter);
     mixed_payload::emit_promote_mixed(emitter, native_validation);
+    mixed_payload::emit_managed_address(emitter);
+    if native_validation || eval_scope { canonical_promotion::emit(emitter); }
     mixed_payload::emit_retain_mixed(emitter);
     validation_pins::emit(emitter);
     argument_pins::emit(emitter);
@@ -78,6 +88,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: boo
     emit_owner_lookup(emitter);
     parameter_bindings::emit(emitter);
     canonical::emit(emitter);
+    sharing::emit(emitter);
     emit_unmanaged_borrow_lookup(emitter);
     emit_unmanaged_borrow_escape_error(emitter);
     emit_borrowed_reference_return_error(emitter);
@@ -85,7 +96,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: boo
         "_tagged_reference_argument_msg", TAGGED_REFERENCE_ARGUMENT_MSG.len() as i64);
     emit_reference_escape_error(emitter, "__rt_tagged_reference_assignment_error",
         "_tagged_reference_assignment_msg", TAGGED_REFERENCE_ASSIGNMENT_MSG.len() as i64);
-    if native_validation { static_cells::emit(emitter); }
+    if native_validation { static_cells::emit(emitter); static_destination::emit(emitter); }
 }
 
 /// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.
@@ -522,7 +533,7 @@ mod tests {
     fn reference_cell_dispatch_uses_local_stubs_before_global_tail_calls() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_reference_cells(&mut emitter, false);
+            emit_reference_cells(&mut emitter, false, false);
             super::super::arrays::emit_decref_any(&mut emitter);
             let assembly = emitter.output();
             for entry in ["__rt_decref_any", "__rt_callable_descriptor_release",
@@ -560,7 +571,7 @@ mod tests {
     fn owned_reference_cells_are_complete_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_reference_cells(&mut emitter, false);
+            emit_reference_cells(&mut emitter, false, false);
             super::super::exceptions::emit_local_ref_cell_release(&mut emitter);
             super::super::arrays::emit_decref_any(&mut emitter);
             super::super::arrays::emit_gc_collect_cycles(&mut emitter);
@@ -603,7 +614,7 @@ mod tests {
     fn unmanaged_reference_escape_guard_is_target_complete() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_reference_cells(&mut emitter, false);
+            emit_reference_cells(&mut emitter, false, false);
             let assembly = emitter.output();
             assert!(assembly.contains("_rt_unmanaged_ref_borrow_top"), "{name}");
             assert!(assembly.contains("_unmanaged_reference_escape_msg"), "{name}");

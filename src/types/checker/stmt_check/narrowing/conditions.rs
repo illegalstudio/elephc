@@ -145,11 +145,12 @@ impl Checker {
                 return Ok(guards);
             }
         }
-        if with_effects {
-            self.infer_type_with_assignment_effects(condition, env)?;
+        let ty = if with_effects {
+            self.infer_type_with_assignment_effects(condition, env)?
         } else {
-            self.infer_type(condition, env)?;
-        }
+            self.infer_type(condition, env)?
+        };
+        self.require_boolean_type(&ty, condition.span)?;
         self.guard_narrowings(condition, env)
     }
 

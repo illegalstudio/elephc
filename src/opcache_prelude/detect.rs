@@ -318,7 +318,7 @@ fn args_select_subject(args: &[Expr], target: Symbol<'_>) -> bool {
         }
         ArgFilter::EvalBridge => crate::eval_aot::plan_literal_fragment_with_static_calls(
             value,
-            crate::strict_php::is_enabled(),
+            crate::source::EvalSourceProfile::permissive(crate::php_only::is_enabled()),
             |_, _| false,
         )
         .requires_runtime_eval_bridge(),
@@ -728,7 +728,7 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::InstanceOf { value, target: iof } => {
             expr_refs(value, target).or_else(|| instanceof_target_refs(iof, target))
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

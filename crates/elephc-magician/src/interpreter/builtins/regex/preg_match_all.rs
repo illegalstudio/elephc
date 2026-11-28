@@ -41,7 +41,7 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
     // the call) can run a destructor whose nested `preg_*` call resets the error state. php-src
     // empties `$matches` before matching, so the call's own outcome is restored last.
     let mut outcome = None;
-    let result = with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    let result = with_eval_builtin_call_arguments("preg_match_all", args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) = bind_evaluated_ref_builtin_args(
             &["pattern", "subject", "matches", "flags", "offset"],
             &evaluated_args,

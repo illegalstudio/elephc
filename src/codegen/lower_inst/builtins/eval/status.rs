@@ -41,6 +41,16 @@ pub(super) fn protect_eval_reload_owners(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Releases native activation copies once the native frame owns every published replacement.
+/// Global scope remains materialized for callbacks between eval entries.
+pub(super) fn retire_native_scope_snapshots(ctx: &mut FunctionContext<'_>) {
+    if ctx.is_main { return; }
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_SCOPE_HANDLE_OFFSET);
+    let entry = ctx.emitter.target.extern_symbol("__elephc_eval_scope_retire_native_snapshots");
+    scope_reload::retire_eval_owner_with_entry(ctx.emitter, &entry, Some(EVAL_RELOAD_THROWABLE_OFFSET));
+}
+
 /// Propagates an accumulated Throwable only after all synchronized locals and globals are current.
 pub(super) fn finish_eval_scope_reload(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("finish guarded eval scope writeback");

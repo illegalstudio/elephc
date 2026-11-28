@@ -9,6 +9,7 @@
 
 use super::*;
 mod mixed_dimension;
+mod local_elements;
 mod opaque_property_dimension;
 
 mod property_elements;
@@ -255,93 +256,26 @@ fn lower_unset_array_access_from_key(
     None
 }
 
-/// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
+/// Removes a key from a boxed local after evaluating key effects and selecting current storage.
 fn lower_unset_boxed_array_element(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    array_span: Span,
-    index: &Expr,
-    expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, name: &str, array_span: Span, index: &Expr, expr: &Expr,
 ) -> LoweredValue {
-    let index_value = lower_expr(ctx, index);
-    // Clearing a key temp through a PHP null assignment widens its storage to Mixed.
-    // Reloading it as Str then creates an unrooted copy before the destructor can throw.
-    // Keep the concrete operand and clear its scoped owner without changing the slot type.
-    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
-    let array_value = crate::ir_lower::stmt::load_array_local_for_write(ctx, name, array_span);
-    let removed = ctx.emit_value(
-        Op::OffsetUnset,
-        vec![array_value.value, index_value.value],
-        None,
-        PhpType::Bool,
-        Op::OffsetUnset.default_effects(),
-        Some(expr.span),
-    );
-    if let Some(slot) = key_owner {
-        retire_owned_call_operand(ctx, slot, expr.span);
-    }
-    removed
+    local_elements::lower(ctx, name, array_span, index, expr)
 }
 
-/// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
-///
-/// Loads the array local, lowers the key, and emits the removal. The backend (`lower_hash_unset`)
-/// copy-on-write splits the table, releases the removed key/value payloads, and stores the unique
-/// table pointer back into the local slot, so no explicit store-back is needed here. Owned key
-/// temporaries remain unwind-visible across destructors and are retired before collection.
+/// Removes a hash-local element using the current receiver after key evaluation.
 pub(super) fn lower_unset_hash_element(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    array_span: Span,
-    index: &Expr,
-    expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, name: &str, array_span: Span, index: &Expr, expr: &Expr,
 ) -> LoweredValue {
-    let array_value = ctx.load_local(name, Some(array_span));
-    let index_value = lower_expr(ctx, index);
-    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
-    let removed = ctx.emit_value(
-        Op::HashUnset,
-        vec![array_value.value, index_value.value],
-        None,
-        PhpType::Bool,
-        Op::HashUnset.default_effects(),
-        Some(expr.span),
-    );
-    if let Some(slot) = key_owner {
-        retire_owned_call_operand(ctx, slot, index.span);
-    }
-    removed
+    local_elements::lower(ctx, name, array_span, index, expr)
 }
 
-/// Lowers `unset($arr[$key])` for a packed indexed-array local.
-///
-/// PHP's `unset()` removes a key without renumbering, so the array can no longer be a contiguous
-/// packed list (e.g. `unset([1,2,3][1])` leaves keys `0` and `2`). The local is converted to a hash
-/// (`Op::ArrayToHash`) and retyped as `AssocArray<Int, T>`, after which the element is removed
-/// through `HashUnset`. Subsequent uses of the local therefore see the associative representation.
+/// Removes a packed-local element without retaining its pre-key representation or element type.
 pub(super) fn lower_unset_indexed_element(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    elem_ty: PhpType,
-    array_span: Span,
-    index: &Expr,
-    expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, name: &str, _elem_ty: PhpType,
+    array_span: Span, index: &Expr, expr: &Expr,
 ) -> LoweredValue {
-    let array_value = ctx.load_local(name, Some(array_span));
-    let assoc_ty = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
-        value: Box::new(elem_ty),
-    };
-    let hash = ctx.emit_value(
-        Op::ArrayToHash,
-        vec![array_value.value],
-        None,
-        assoc_ty.clone(),
-        Op::ArrayToHash.default_effects(),
-        Some(array_span),
-    );
-    ctx.store_mutated_local(name, hash, assoc_ty, Some(array_span));
-    lower_unset_hash_element(ctx, name, array_span, index, expr)
+    local_elements::lower(ctx, name, array_span, index, expr)
 }
 
 /// Returns true when a property unset target can be lowered without normal property storage support.
@@ -460,13 +394,13 @@ pub(super) fn unset_dynamic_property_access_has_direct_lowering(
 fn unset_operand_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::Variable(name) => ctx.local_types.get(name).cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
+            .unwrap_or_else(|| infer_expr_type_syntactic(expr, ctx.semantic_profile)),
         ExprKind::FunctionCall { name, .. }
             if ctx.functions.contains_key(name.as_str()) || ctx.extern_functions.contains_key(name.as_str()) =>
         {
             call_return_type(ctx, name.as_str(), &[])
         }
-        ExprKind::FunctionCall { .. } => infer_expr_type_syntactic(expr),
+        ExprKind::FunctionCall { .. } => infer_expr_type_syntactic(expr, ctx.semantic_profile),
         _ => super::array_cast_source::array_cast_source_type_for_ir(ctx, expr),
     }
 }

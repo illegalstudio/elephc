@@ -61,11 +61,13 @@ pub(super) fn check_array_assign(
     // instead of rejecting the target, exactly as the append form already does.
     if !env.contains_key(array) {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+        checker.require_mixed_dimension_write(&PhpType::Void, Some(&idx_ty), index.span)?;
+        crate::semantics::array_keys::validate(checker.semantic_profile, &idx_ty, index.span)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
         checker.record_element_value_view(value, &val_ty, env);
         record_reference_element_source(checker, value);
         let val_ty = checker.element_storage_type(value, val_ty);
-        let key_ty = normalized_array_key_type(index, idx_ty);
+        let key_ty = normalized_array_key_type(index, idx_ty, checker.semantic_profile);
         let created = if key_ty == PhpType::Int {
             PhpType::Array(Box::new(val_ty))
         } else {
@@ -86,9 +88,13 @@ pub(super) fn check_array_assign(
     let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
         .or_else(|| env.get(array).cloned());
     let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    checker.require_mixed_dimension_write(&current, Some(&idx_ty), span)?;
     let nullable = nullable_array_write_view(&current);
     let had_nullable_read = nullable.is_some();
     let arr_ty = nullable.unwrap_or(current);
+    checker.require_array_write_contract(&arr_ty,
+        &normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile), &val_ty, span)?;
+    crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &arr_ty, &idx_ty, index.span)?;
     if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     if arr_ty == PhpType::Str {
         if matches!(value.kind, ExprKind::Reference(_)) {
@@ -102,7 +108,7 @@ pub(super) fn check_array_assign(
     // A boxed, volatile source (a global, a by-reference capture) is stored as the box it is.
     let val_ty = checker.element_storage_type(value, val_ty);
     if let PhpType::Array(elem_ty) = &arr_ty {
-        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile);
         // A foreach loop key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
         // even when the checker types it as `Int`/`Str` from the source array, so it
         // may hold either an integer or a string and the destination must stay indexed
@@ -128,7 +134,7 @@ pub(super) fn check_array_assign(
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
-                && (static_array_key_forces_hash_storage(index)
+                && (static_array_key_forces_hash_storage(index, checker.semantic_profile)
                     || (matches!(normalized_idx_ty, PhpType::Int)
                         && !index_is_foreach_key
                         && !checker.index_is_packed_loop_counter(array, index)
@@ -158,7 +164,7 @@ pub(super) fn check_array_assign(
         let forces_hash = forces_hash
             || (!promotable
                 && !matches!(elem_ty.as_ref(), PhpType::Never)
-                && nonempty_array_key_forces_hash_storage(index));
+                && nonempty_array_key_forces_hash_storage(index, checker.semantic_profile));
         if promotable {
             checker.record_promotable_array_local(array);
         }
@@ -169,7 +175,7 @@ pub(super) fn check_array_assign(
             && matches!(normalized_idx_ty, PhpType::Int)
             && !index_is_foreach_key
             && !matches!(idx_ty, PhpType::Mixed | PhpType::Union(_))
-            && !nonempty_array_key_stays_in_range(index);
+            && !nonempty_array_key_stays_in_range(index, checker.semantic_profile);
         if skips_nonempty_slot {
             checker
                 .sparse_key_write_sites
@@ -231,7 +237,7 @@ pub(super) fn check_array_assign(
     {
         let merged_key = merge_array_key_types(
             *key.clone(),
-            normalized_array_key_type(index, idx_ty),
+            normalized_array_key_type(index, idx_ty, checker.semantic_profile),
         );
         let merged_value = if **existing_value == val_ty {
             *existing_value.clone()
@@ -434,11 +440,15 @@ pub(super) fn check_nested_array_assign(
 
     super::static_properties::promote_static_nested_write_root(checker, target, span)?;
     let arr_ty = checker.infer_nested_write_parent_with_effects(array, env)?;
-    checker.infer_type_with_assignment_effects(index, env)?;
+    let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    checker.require_mixed_dimension_write(&arr_ty, Some(&idx_ty), span)?;
+    crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &arr_ty, &idx_ty, index.span)?;
     if !nested_write_parent_can_promote(&arr_ty, array)
         || !check_promoted_nested_update_value(checker, target, value, span, env)?
     {
-        checker.infer_type_with_assignment_effects(value, env)?;
+        let value_ty = checker.infer_type_with_assignment_effects(value, env)?;
+        let key_ty = normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile);
+        checker.require_array_write_contract(&arr_ty, &key_ty, &value_ty, span)?;
     }
     match arr_ty {
         PhpType::Mixed => Ok(()),
@@ -565,8 +575,12 @@ pub(super) fn check_array_push(
     // empty array and stores the value. Mirror that here instead of rejecting the write;
     // the generic Mixed element keeps subsequent pushes of other types representable.
     if !env.contains_key(array) {
-        let _ = checker.infer_type_with_assignment_effects(value, env)?;
-        env.insert(array.to_string(), PhpType::Array(Box::new(PhpType::Mixed)));
+        let candidate = checker.infer_type_with_assignment_effects(value, env)?;
+        let element = if checker.semantic_source_mode != crate::source::SourceMode::Internal
+            && checker.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayTypes) {
+            candidate
+        } else { PhpType::Mixed };
+        env.insert(array.to_string(), PhpType::Array(Box::new(element)));
         return Ok(());
     }
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
@@ -576,9 +590,11 @@ pub(super) fn check_array_push(
     let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
         .or_else(|| env.get(array).cloned());
     let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    checker.require_mixed_dimension_write(&current, None, span)?;
     let nullable = nullable_array_write_view(&current);
     let had_nullable_read = nullable.is_some();
     let arr_ty = nullable.unwrap_or(current);
+    checker.require_array_write_contract(&arr_ty, &PhpType::Int, &val_ty, span)?;
     if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     // Nested appends retain their catchable runtime Error through the generated temporary.
     if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {

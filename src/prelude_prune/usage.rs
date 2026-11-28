@@ -498,7 +498,7 @@ fn scan_literal_eval_fragment(source: Option<&Expr>, usage: &mut Usage) -> bool 
         return false;
     };
     let Some(fragment) =
-        crate::eval_aot::parse_literal_fragment(source, crate::strict_php::is_enabled())
+        crate::eval_aot::parse_literal_fragment(source, crate::source::EvalSourceProfile::permissive(crate::php_only::is_enabled()))
     else {
         return false;
     };
@@ -1282,7 +1282,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 }
             }
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

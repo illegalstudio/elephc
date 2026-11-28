@@ -11,7 +11,6 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ir::{Function, Module, Op};
-use crate::parser::ast::ExprKind;
 use crate::types::{CheckResult, FunctionSig, PhpType};
 
 use super::function;
@@ -81,7 +80,7 @@ const REFLECTION_TYPE_CLASSES: &[&str] = &[
 pub(super) fn lower_referenced_builtin_methods(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
 ) {
     loop {
@@ -115,7 +114,7 @@ fn lower_builtin_reflection_property_init_thunk(
     class_name: &str,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
 ) {
     let Some(class_info) = check_result.classes.get(class_name) else {
@@ -406,7 +405,7 @@ fn lower_builtin_reflection_class_methods(
     class_name: &str,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
 ) {
     let Some(class_info) = check_result.classes.get(class_name) else {

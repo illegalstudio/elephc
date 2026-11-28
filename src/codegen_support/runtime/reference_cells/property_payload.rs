@@ -26,7 +26,7 @@ pub(crate) fn resolve(
             emitter.label(&reference);
             emitter.instruction(&format!("ldr {address}, [{address}]"));        // follow the object's native reference-cell pointer
             emitter.instruction(&format!("ldr {marker}, [{address}]"));         // the low word is either the value or the uninitialized sentinel
-            super::resolve_scalar_property(emitter, address, tag, marker, prefix);
+            super::resolve_property_payload_shape(emitter, address, tag, marker, prefix);
             emitter.label(&done);
             emitter.instruction(&format!("and {tag}, {tag}, #255"));            // keep storage flags out of value dispatch
         }
@@ -38,24 +38,26 @@ pub(crate) fn resolve(
             emitter.label(&reference);
             emitter.instruction(&format!("mov {address}, QWORD PTR [{address}]")); // follow the object's native reference-cell pointer
             emitter.instruction(&format!("mov {marker}, QWORD PTR [{address}]")); // the low word is either the value or the uninitialized sentinel
-            super::resolve_scalar_property(emitter, address, tag, marker, prefix);
+            super::resolve_property_payload_shape(emitter, address, tag, marker, prefix);
             emitter.label(&done);
             emitter.instruction(&format!("and {tag}, 255"));                    // keep storage flags out of value dispatch
         }
     }
+    super::resolve_iterable_property_payload(emitter, address, tag, marker, prefix);
 }
 
 #[cfg(test)]
 mod tests {
     use crate::codegen_support::{platform::Target, sentinels::{SERPROP_REFERENCE_PROPERTY_FLAG,
-        SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, CANONICAL_SCALAR_PROPERTY_FLAG}};
+        SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, CANONICAL_PROPERTY_PAYLOAD_FLAG}};
 
     /// Serialization rows retain each logical tag independently of native cell indirection.
     fn verify_native_reference_serialization_metadata(name: &str) {
         let source = "<?php class SerializationCellLayout { public string $text = 'text'; \
-            public mixed $value = 1; public mixed $missing; public int|string $choice = 1; \
+            public mixed $value = 1; public mixed $missing; public int|string $choice = 1; public array $items = [1]; \
             public function &textRef(): string { return $this->text; } \
-            public function &choiceRef(): int|string { return $this->choice; } } \
+            public function &choiceRef(): int|string { return $this->choice; } \
+            public function &itemsRef(): array { return $this->items; } } \
             class BorrowedSerializationCell { public function __construct(public string &$text) {} } \
             $code = $argc > 0 ? '' : 'echo 1;'; eval($code);";
         let target = Target::parse(name).unwrap();
@@ -69,9 +71,9 @@ mod tests {
             .split_once(".globl _class_serprop_declaring_").unwrap().0;
         assert_eq!(rows.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | SERPROP_MIXED_REFERENCE_PROPERTY_FLAG | 7)).count(), 2,
             "{name}: Mixed value and uninitialized slots remain distinct from their cell pointers");
-        assert_eq!(rows.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 1,
-            "{name}: the constrained union keeps its existing payload representation");
-        let scalar_tag = SERPROP_REFERENCE_PROPERTY_FLAG | CANONICAL_SCALAR_PROPERTY_FLAG | 1;
+        assert_eq!(rows.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | CANONICAL_PROPERTY_PAYLOAD_FLAG | 7)).count(), 2,
+            "{name}: scalar and array unions authenticate canonical storage without enabling raw promotion");
+        let scalar_tag = SERPROP_REFERENCE_PROPERTY_FLAG | CANONICAL_PROPERTY_PAYLOAD_FLAG | 1;
         assert!(rows.contains(&format!("    .quad {scalar_tag}\n")),
             "{name}: owned scalar metadata authenticates physical shape without changing the logical tag");
         let borrowed_class = &module.class_infos["BorrowedSerializationCell"];
@@ -83,8 +85,10 @@ mod tests {
         let marker = format!("_class_vd_desc_{}:\n", class.class_id);
         let dump = assembly.split_once(&marker).unwrap().1
             .split_once(".globl _class_prop_desc_").unwrap().0;
-        assert_eq!(dump.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 3,
-            "{name}: dump and serialization agree on Mixed cell indirection");
+        assert_eq!(dump.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 2,
+            "{name}: exact Mixed slots keep their original metadata");
+        assert_eq!(dump.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | CANONICAL_PROPERTY_PAYLOAD_FLAG | 7)).count(), 2,
+            "{name}: dump and serialization authenticate the same constrained-union cells");
         assert!(dump.contains(&format!("    .quad {scalar_tag}\n")),
             "{name}: dump preserves the raw string's logical tag");
     }
