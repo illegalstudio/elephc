@@ -784,6 +784,41 @@ foreach ($d as $key => $value) { echo $key, "=", $value, " "; }
     );
 }
 
+/// Verifies builtins that follow a key-preserving sort still see the list's keys.
+///
+/// The sort promotes the packed list. `array_walk`, `array_reverse`, `array_splice`, and
+/// `array_unshift` must keep working, including when the sort is in a branch that does not run.
+#[test]
+fn test_packed_list_after_key_sort_accepts_followup_builtins() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [30, 10];
+asort($a);
+array_walk($a, function ($value, $key) { echo $key, "=", $value, " "; });
+echo "\n";
+$b = [30, 10];
+asort($b);
+$rev = array_reverse($b);
+echo $rev[0], ",", $rev[1], "\n";
+$c = [30, 10];
+asort($c);
+$removed = array_splice($c, 0, 1);
+echo $removed[0], "\n";
+foreach ($c as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$d = [30, 10];
+asort($d);
+array_unshift($d, 9);
+foreach ($d as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$e = [30, 10];
+if ($argc < 0) { asort($e); }
+array_walk($e, function ($value, $key) { echo $key, "=", $value, " "; });
+"#,
+    );
+    assert_eq!(out, "1=10 0=30 \n30,10\n10\n0=30 \n0=9 1=10 2=30 \n0=30 1=10 ");
+}
+
 /// Verifies `krsort` through a reference sorts the packed list and leaves an earlier copy intact.
 #[test]
 fn test_krsort_reference_to_packed_list() {
