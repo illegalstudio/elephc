@@ -3671,7 +3671,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Indexed-to-hash promotion keeps the same raw pointer slot. Widening the frame metadata from
     /// `Array` to `AssocArray` would instead choose boxed Mixed storage and invalidate earlier
     /// indexed loads, so this path preserves the established frame representation while making
-    /// every subsequent load select associative lowering.
+    /// every subsequent load select associative lowering. Sibling aliases of the same cell get
+    /// that layout too, because they read the pointer this store just published.
     pub(crate) fn store_retyped_container_local(
         &mut self,
         name: &str,
@@ -3680,7 +3681,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         self.record_array_storage_conversion(name, &php_type);
-        self.store_mutated_local_impl(name, value, php_type, span, true, true, true)
+        let stored = self.store_mutated_local_impl(name, value, php_type.clone(), span, true, true, true);
+        // Sibling names share this cell. A later load must use the layout just stored.
+        self.retype_ref_alias_group(name, php_type);
+        stored
     }
 
     /// Changes only the flow-sensitive view of a raw one-word container slot.

@@ -745,6 +745,45 @@ echo isset($u) ? "yes" : "no", "\n";
     );
 }
 
+/// Verifies a conditional sort of an aliased packed list keeps both names on the hash layout.
+///
+/// The branch is taken (`$argc > 0`). An untaken loop must leave the original list readable
+/// instead of treating the packed storage as the hash the body would have built.
+#[test]
+fn test_conditional_aliased_packed_list_sort_keeps_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1, 2];
+$r = &$a;
+if ($argc > 0) { asort($a); }
+foreach ($a as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+foreach ($r as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$b = [3, 1, 2];
+$s = &$b;
+if ($argc > 0) { asort($s); }
+foreach ($b as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$c = [3, 1, 2];
+$t = &$c;
+$n = 0;
+while ($n < 0) { asort($c); }
+foreach ($c as $key => $value) { echo $key, "=", $value, " "; }
+echo "\n";
+$d = [3, 1, 2];
+$u = &$d;
+$n = 0;
+while ($n < 1) { asort($d); $n = $n + 1; }
+foreach ($d as $key => $value) { echo $key, "=", $value, " "; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "1=1 2=2 0=3 \n1=1 2=2 0=3 \n1=1 2=2 0=3 \n0=3 1=1 2=2 \n1=1 2=2 0=3 "
+    );
+}
+
 /// Verifies `krsort` through a reference sorts the packed list and leaves an earlier copy intact.
 #[test]
 fn test_krsort_reference_to_packed_list() {

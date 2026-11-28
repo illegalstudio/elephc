@@ -141,6 +141,20 @@ fn lower_region_at_type_fixpoint(
     lower_once(ctx);
 }
 
+/// A shared reference cell can be promoted from a packed list to an int-keyed hash.
+///
+/// The plain join still skips ref-bound locals, because boxing one to `Mixed` widens the
+/// cell. This only lets the region hoist that raw-pointer promotion so a branch or an
+/// untaken loop does not leave one path reading the other path's layout.
+fn ref_bound_array_local_is_canonicalizable(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    matches!(
+        ctx.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal),
+        LocalKind::PhpLocal
+    ) && ctx.is_ref_bound_local(name)
+        && !ctx.local_uses_global_storage(name)
+        && !crate::names::is_generated_local_name(name)
+}
+
 /// Returns the locals whose array storage a statement could still convert, in a deterministic order.
 ///
 /// Both packed and hash locals can become boxed PHP arrays through reference binding.
@@ -151,7 +165,8 @@ fn convertible_array_locals(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
         .iter()
         .filter(|(name, php_type)| {
             matches!(php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-                && local_slot_is_convertible_here(ctx, name)
+                && (local_slot_is_convertible_here(ctx, name)
+                    || ref_bound_array_local_is_canonicalizable(ctx, name))
         })
         .map(|(name, _)| name.clone())
         .collect::<Vec<_>>();
@@ -241,6 +256,27 @@ fn canonicalize_array_locals(
     span: Span,
 ) {
     for (name, target) in conversions {
+        if ctx.is_ref_bound_local(name) {
+            // A shared cell only accepts the raw packed-to-hash promotion. Boxing it to Mixed
+            // is the fault a sort of the original name already hit.
+            let Some(op) = conversion_op(&ctx.local_type(name), target) else {
+                continue;
+            };
+            if op != Op::ArrayToHash {
+                continue;
+            }
+            let array = ctx.load_local(name, Some(span));
+            let converted = ctx.emit_value(
+                op,
+                vec![array.value],
+                None,
+                target.clone(),
+                op.default_effects(),
+                Some(span),
+            );
+            ctx.store_retyped_container_local(name, converted, target.clone(), Some(span));
+            continue;
+        }
         if target.is_php_array() {
             if array_storage_conversion(Some(&ctx.local_type(name)), target).is_some() {
                 let array = ctx.load_local(name, Some(span));
@@ -296,9 +332,9 @@ fn canonicalize_array_locals(
 /// duplicate). A false positive costs one speculative lowering; a false negative is a silent
 /// miscompile, so the hiding set is deliberately broad — every branching form is in it.
 ///
-/// A local reached only through an ALIAS (`$r = &$m`) is not covered, and does not need to be:
-/// `local_slot_is_convertible_here` excludes ref-bound and global-storage locals from the candidates
-/// in the first place.
+/// A local reached through an alias is canonicalized only for the raw packed-to-hash
+/// promotion (`ref_bound_array_local_is_canonicalizable`). Other ref-bound and
+/// global-storage locals stay out of the candidate set.
 fn may_convert_array_local(stmt: &Stmt, candidates: &[String]) -> bool {
     let mut scan = ConversionScan::new(candidates);
     scan.stmt(stmt);
