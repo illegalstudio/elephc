@@ -877,12 +877,13 @@ fn lower_hash_get_aarch64(
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
     if warn_on_missing {
+        super::core_builtins::publish_diagnostic_site(ctx, inst);
         emit_undefined_hash_key_warning_aarch64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);
     ctx.emitter.label(&null_receiver);
     if warn_on_missing {
-        super::arrays::emit_array_offset_on_null_warning(ctx);
+        super::arrays::emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback);
     emit_hash_get_miss(ctx, result_ty, !warn_on_missing);
@@ -929,12 +930,13 @@ fn lower_hash_get_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
     if warn_on_missing {
+        super::core_builtins::publish_diagnostic_site(ctx, inst);
         emit_undefined_hash_key_warning_x86_64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);
     ctx.emitter.label(&null_receiver);
     if warn_on_missing {
-        super::arrays::emit_array_offset_on_null_warning(ctx);
+        super::arrays::emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback);
     emit_hash_get_miss(ctx, result_ty, !warn_on_missing);
