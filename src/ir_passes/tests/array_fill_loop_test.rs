@@ -32,6 +32,7 @@ struct Fixture {
     function: Function,
     push: crate::ir::InstId,
     array_new: crate::ir::InstId,
+    body: crate::ir::BlockId,
 }
 
 /// Builds `entry -> header(i < bound) -> body(data[] = i % 97; i += 1) -> header`.
@@ -173,7 +174,7 @@ fn fixture(failure: Break) -> Fixture {
         .copied()
         .find(|id| function.instruction(*id).is_some_and(|inst| inst.op == Op::ArrayPush))
         .expect("body append");
-    Fixture { function, push, array_new }
+    Fixture { function, push, array_new, body }
 }
 
 /// Returns the instruction id that defines a value.
@@ -187,11 +188,20 @@ fn defining(value: &crate::ir::Value) -> crate::ir::InstId {
 /// A pure constant-bound fill reserves capacity and switches to the reserved append.
 #[test]
 fn fill_loop_reserves_constant_capacity() {
-    let Fixture { mut function, push, array_new } = fixture(Break::None);
+    let Fixture { mut function, push, array_new, .. } = fixture(Break::None);
     assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
     assert!(ArrayFillLoop.run(&mut function, &mut DataPool::default()));
     assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
-    assert_eq!(function.instruction(push).unwrap().op, Op::ArrayPushReserved);
+    let rewritten = function.instruction(push).unwrap();
+    assert_eq!(rewritten.op, Op::ArrayPushReserved);
+    assert_eq!(rewritten.operands.len(), 3, "the append carries its induction index");
+    assert!(
+        function
+            .instructions
+            .iter()
+            .any(|inst| inst.op == Op::ArraySetLength),
+        "the final length is published once after the loop"
+    );
     let new = function.instruction(array_new).unwrap();
     assert_eq!(new.immediate, Some(Immediate::Capacity(50000)));
     assert!(matches!(
@@ -204,7 +214,7 @@ fn fill_loop_reserves_constant_capacity() {
 #[test]
 fn fill_loop_rejects_unproven_fills() {
     for failure in [Break::RuntimeBound, Break::ObserveIndex, Break::PriorPush] {
-        let Fixture { mut function, push, array_new } = fixture(failure);
+        let Fixture { mut function, push, array_new, .. } = fixture(failure);
         assert!(!ArrayFillLoop.run(&mut function, &mut DataPool::default()), "{failure:?}");
         assert_eq!(
             function.instruction(push).unwrap().op,
@@ -217,4 +227,27 @@ fn fill_loop_rejects_unproven_fills() {
             "{failure:?}"
         );
     }
+}
+
+/// The fill array's single-use pointer load moves to the preheader.
+#[test]
+fn fill_loop_hoists_array_load() {
+    let Fixture { mut function, push, body, .. } = fixture(Break::None);
+    assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
+    assert!(ArrayFillLoop.run(&mut function, &mut DataPool::default()));
+    assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
+    assert!(
+        !function
+            .block(body)
+            .unwrap()
+            .instructions
+            .iter()
+            .any(|id| function.instruction(*id).is_some_and(|inst| inst.op == Op::LoadLocal)),
+        "the fill body still reloads the array"
+    );
+    let array_value = function.instruction(push).unwrap().operands[0];
+    let ValueDef::Instruction { block, .. } = function.value(array_value).unwrap().def else {
+        panic!("the append array is not instruction-defined");
+    };
+    assert_ne!(block, body, "the append still uses a body-local load");
 }

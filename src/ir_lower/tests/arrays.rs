@@ -1343,8 +1343,14 @@ echo $floats[$argc];
         "missing string array_get metadata in {text}"
     );
     assert!(
-        text.contains(": F64 php=float = array_get"),
-        "missing float array_get metadata in {text}"
+        text.contains("php=array<float>"),
+        "missing float array element metadata in {text}"
+    );
+    // A float slot cannot carry PHP's null, so a read whose key may miss is boxed; only a
+    // fill-proven read keeps the raw `F64` result (covered by the indexed fill-update suite).
+    assert!(
+        text.contains("php=mixed own=owned = array_get"),
+        "miss-capable float array_get must box its result in {text}"
     );
 }
 

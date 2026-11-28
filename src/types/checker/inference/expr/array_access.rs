@@ -66,6 +66,25 @@ impl Checker {
                 Ok(PhpType::Str)
             }
             PhpType::Array(elem_ty) => {
+                if **elem_ty != PhpType::Never {
+                    if let ExprKind::Variable(name) = &array.kind {
+                        if self.nonnull_array_read(name, index) {
+                            // Codegen keeps the raw slot representation only for reads the fill
+                            // proof proves in range; every other float read needs a boxed result.
+                            let site =
+                                (self.current_loop_storage_scope.clone(), expr.span);
+                            self.promotable_arrays
+                                .nonnull_read_sites
+                                .insert(site.clone());
+                            // The read is re-executed by every enclosing consumer loop, so a
+                            // later removal must unmark it from each of their scopes.
+                            for scope in &mut self.active_fill_read_scopes {
+                                scope.insert(site.clone());
+                            }
+                            return Ok((**elem_ty).clone());
+                        }
+                    }
+                }
                 if normalized_idx_ty != PhpType::Int {
                     // A candidate `array<int>` local read under a boxed key reads as `?int`,
                     // the unboxed nullable integer its read already produces, instead of `mixed`:
@@ -73,7 +92,10 @@ impl Checker {
                     // and stores PHP's `null`), where `mixed` would box every slot.
                     if let ExprKind::Variable(name) = &array.kind {
                         if self.promotable_array_element_read(name, elem_ty, &idx_ty) {
-                            return Ok(PhpType::Union(vec![PhpType::Int, PhpType::Void]));
+                            return Ok(self.normalize_union_type(vec![
+                                (**elem_ty).clone(),
+                                PhpType::Void,
+                            ]));
                         }
                     }
                     // PHP allows string keys on indexed arrays: the array
@@ -89,10 +111,10 @@ impl Checker {
                         && super::super::super::promotable_arrays::promotable_element(elem_ty))
                 {
                     // Once a promotable local may hold PHP's `null` (a missed read stored back,
-                    // or any key that skipped), its integer-key reads are `?int` too: the read
-                    // already produces that representation, and an `int` view would turn a
-                    // stored `null` into zero the next time the value is written back.
-                    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Void]))
+                    // or any key that skipped), its integer-key reads are nullable elements too:
+                    // the read already produces that representation, and an `int` view would
+                    // turn a stored `null` into zero (or truncate a float) when written back.
+                    Ok(self.normalize_union_type(vec![(**elem_ty).clone(), PhpType::Void]))
                 } else {
                     Ok(*elem_ty.clone())
                 }

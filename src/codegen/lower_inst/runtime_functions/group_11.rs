@@ -82,6 +82,12 @@ pub(super) fn lower(
         RuntimeFnId::JsonEncodeStr => Some({
             crate::codegen::lower_inst::builtins::json::lower_json_encode_str(ctx, inst)
         }),
+        RuntimeFnId::JsonRowsScalarGuard => Some({
+            crate::codegen::lower_inst::builtins::json::lower_json_rows_scalar_guard(ctx, inst)
+        }),
+        RuntimeFnId::JsonEncodeLenCached => Some({
+            crate::codegen::lower_inst::builtins::json::lower_json_encode_len_cached(ctx, inst)
+        }),
         RuntimeFnId::JsonLastError => Some({
             crate::codegen::lower_inst::builtins::json::lower_json_last_error(ctx, inst)
         }),

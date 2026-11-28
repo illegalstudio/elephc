@@ -31,6 +31,22 @@ pub(super) fn lower(
         RuntimeFnId::ArraySum => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_sum(ctx, inst)
         }),
+        RuntimeFnId::ArrayReduceSumSeed => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_reduce_sum_seed(ctx, inst)
+        }),
+        RuntimeFnId::ArrayReduceSumFloatSeed => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_reduce_sum_float_seed(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ArrayReduceProductSeed => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_reduce_product_seed(ctx, inst)
+        }),
+        RuntimeFnId::ArrayReduceProductFloatSeed => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_reduce_product_float_seed(
+                ctx, inst,
+            )
+        }),
         RuntimeFnId::Base64EncodedLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_base64_encoded_len(ctx, inst)
         }),
@@ -42,6 +58,33 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ArraySumIntCached => Some({
             crate::codegen::lower_inst::arrays::lower_array_sum_int_cached(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapNumeric => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_numeric(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapAffine => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_affine(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSquare => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_square(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSquareAffine => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_square_affine(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapFloatScale => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_float_scale(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapFloatAffine => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_float_affine(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapFloatDiv => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_float_div(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapIntDiv => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_int_div(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSumIntDiv => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_int_div(ctx, inst)
         }),
         RuntimeFnId::ArrayMapSumAdd => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)

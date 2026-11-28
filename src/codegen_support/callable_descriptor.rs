@@ -30,6 +30,7 @@ pub(crate) const CALLABLE_DESC_KIND_FIRST_CLASS: u64 =
     CallableDescriptorShape::FirstClass as u64;
 pub(crate) const CALLABLE_DESC_KIND_CALLBACK_ADAPTER: u64 =
     CallableDescriptorShape::CallbackAdapter as u64;
+pub(crate) const CALLABLE_DESC_KIND_ARRAY: u64 = CallableDescriptorShape::Array as u64;
 pub(crate) const CALLABLE_DESC_KIND_OBJECT_INVOKE: u64 =
     CallableDescriptorShape::ObjectInvoke as u64;
 pub(crate) const CALLABLE_DESC_KIND_FUNCTION: u64 = CallableDescriptorShape::Function as u64;

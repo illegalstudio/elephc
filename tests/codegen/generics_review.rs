@@ -566,3 +566,28 @@ function run(mixed $c): void {
 $c = new C(null); run($c);
 "#), "C::__construct(): Argument #1 ($v) must be of type null, int given\n1\nNULL\n");
 }
+
+/// The generic marker still answers class checks even though reflection hides it.
+#[test]
+fn test_generic_class_relation_checks_match_the_template() {
+    let source = r#"<?php
+/** @template T */
+class Box {
+    /** @param T $value */
+    public function __construct(public $value) {}
+}
+class Child extends Box<int> {
+    public function __construct() { parent::__construct(1); }
+}
+$box = new Box<int>(1);
+echo is_a($box, 'Box') ? "A" : "a";
+echo is_subclass_of($box, 'Box') ? "S" : "s";
+$child = new Child();
+echo is_subclass_of($child, 'Box') ? "C" : "c";
+echo is_a($child, 'Box') ? "D" : "d";
+echo is_a("Box<int>", "Box", true) ? "E" : "e";
+echo is_subclass_of("Child", "Box") ? "F" : "f";
+echo "\n";
+"#;
+    assert_clean(compile_and_run_with_heap_debug(source), "AsCDEF\n");
+}

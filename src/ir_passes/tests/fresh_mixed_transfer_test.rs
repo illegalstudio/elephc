@@ -75,7 +75,13 @@ fn fresh_mixed_transfer_checked_numeric_results() {
 /// Dynamic arithmetic boxes are fresh too, but an unreviewed operation keeps its copy.
 #[test]
 fn fresh_mixed_transfer_dynamic_numeric_results() {
-    for operation in [MixedNumericOp::Add, MixedNumericOp::Sub, MixedNumericOp::Mul, MixedNumericOp::Pow] {
+    for operation in [
+        MixedNumericOp::Add,
+        MixedNumericOp::Sub,
+        MixedNumericOp::Mul,
+        MixedNumericOp::Div,
+        MixedNumericOp::Pow,
+    ] {
         for (extra, gap, owner) in [(false, false, Ownership::Owned),
             (true, false, Ownership::Owned), (false, true, Ownership::Owned),
             (false, false, Ownership::Borrowed), (false, false, Ownership::MaybeOwned)]
@@ -83,7 +89,10 @@ fn fresh_mixed_transfer_dynamic_numeric_results() {
             let mut function = fixture(Op::MixedNumericBinop, owner, extra, gap);
             function.instructions[2].immediate = Some(Immediate::MixedNumericOp(operation));
             assert!(validate_function(&function).is_ok());
-            let eligible = operation != MixedNumericOp::Pow && !extra && !gap && owner == Ownership::Owned;
+            let eligible = !matches!(operation, MixedNumericOp::Div | MixedNumericOp::Pow)
+                && !extra
+                && !gap
+                && owner == Ownership::Owned;
             assert_eq!(transfer(&mut function), eligible, "{operation:?}, extra={extra}, gap={gap}, owner={owner:?}");
             assert!(validate_function(&function).is_ok());
         }

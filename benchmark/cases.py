@@ -52,7 +52,7 @@ def discover(suites: list[str], selected: list[str]) -> dict[str, list[dict]]:
             metadata = {}
             if suite == "native":
                 variants = [("elephc", "elephc", "main.php"), ("php", "php", "main.php"),
-                            ("c", "c", "main.c")]
+                            ("php-jit", "php-jit", "main.php"), ("c", "c", "main.c")]
             elif suite == "magician":
                 metadata = magician_metadata(directory)
                 variants = [(f"elephc-{v}", "elephc", f"{v}.php") for v in ("native", "eval")]

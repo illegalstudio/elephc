@@ -114,8 +114,15 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- compute slot index: hash % capacity --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
     emitter.instruction("ldr x6, [x5, #8]");                                    // x6 = capacity from header
+    emitter.instruction("sub x9, x6, #1");                                      // mask candidate for a power-of-two capacity
+    emitter.instruction("tst x6, x9");                                          // is the capacity a power of two?
+    emitter.instruction("b.ne __rt_hash_set_slot_div");                         // arbitrary capacities still need division
+    emitter.instruction("and x8, x0, x9");                                      // power-of-two modulo is a single mask
+    emitter.instruction("b __rt_hash_set_slot_ready");                          // skip the divide on the common growth capacity
+    emitter.label("__rt_hash_set_slot_div");
     emitter.instruction("udiv x7, x0, x6");                                     // x7 = hash / capacity
     emitter.instruction("msub x8, x7, x6, x0");                                 // x8 = hash - (hash/capacity)*capacity = hash % capacity
+    emitter.label("__rt_hash_set_slot_ready");
 
     // -- linear probe loop --
     emitter.instruction("str x8, [sp, #48]");                                   // save initial probe index
@@ -155,8 +162,15 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
 
     // -- keys don't match, advance to next slot --
     emitter.instruction("add x9, x9, #1");                                      // index += 1
+    emitter.instruction("sub x7, x6, #1");                                      // mask candidate for a power-of-two capacity
+    emitter.instruction("tst x6, x7");                                          // is the capacity a power of two?
+    emitter.instruction("b.ne __rt_hash_set_wrap_div");                         // arbitrary capacities still need division
+    emitter.instruction("and x9, x9, x7");                                      // power-of-two wraparound is a single mask
+    emitter.instruction("b __rt_hash_set_wrap_ready");                          // skip the divide on the common growth capacity
+    emitter.label("__rt_hash_set_wrap_div");
     emitter.instruction("udiv x7, x9, x6");                                     // x7 = index / capacity
     emitter.instruction("msub x9, x7, x6, x9");                                 // x9 = index % capacity (wrap around)
+    emitter.label("__rt_hash_set_wrap_ready");
     emitter.instruction("str x9, [sp, #48]");                                   // save updated probe index
 
     // -- increment probe count and continue --
@@ -517,8 +531,16 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the normalized inserted key
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the hash helper returns
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the table capacity for the modulo operation and linear-probe loop
+    emitter.instruction("lea rdx, [r11 - 1]");                                  // mask candidate for a power-of-two capacity
+    emitter.instruction("test r11, rdx");                                       // is the capacity a power of two?
+    emitter.instruction("jnz __rt_hash_set_slot_div_x");                        // arbitrary capacities still need division
+    emitter.instruction("and rax, rdx");                                        // power-of-two modulo is a single mask
+    emitter.instruction("mov rdx, rax");                                        // publish the masked probe index in the remainder register
+    emitter.instruction("jmp __rt_hash_set_slot_ready_x");                      // skip the divide on the common growth capacity
+    emitter.label("__rt_hash_set_slot_div_x");
     emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
     emitter.instruction("div r11");                                             // compute hash % capacity using the SysV integer divide remainder register
+    emitter.label("__rt_hash_set_slot_ready_x");
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save the initial probe index so the loop can survive helper calls
 
     emitter.label("__rt_hash_set_probe");

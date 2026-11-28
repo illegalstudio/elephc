@@ -807,3 +807,39 @@ null_scope();
 "#);
     assert_eq!(out, "parameter,first,alias:set:null:unset");
 }
+
+/// `@` intersects the active reporting mask with PHP's suppression mask and restores it.
+#[test]
+fn test_core_at_error_reporting_intersects_the_active_mask() {
+    let out = compile_and_run(
+        r#"<?php
+        error_reporting(E_ALL);
+        echo @error_reporting(), ":";
+        echo error_reporting(), ":";
+        error_reporting(E_WARNING);
+        echo @error_reporting(), ":";
+        error_reporting(E_ERROR | E_WARNING);
+        echo @error_reporting(), ":";
+        error_reporting(0);
+        echo @error_reporting(), ":";
+        echo error_reporting();
+        "#,
+    );
+    assert_eq!(out, "4437:30719:0:1:0:0");
+}
+
+/// A fatal-only level set inside `@` restores the mask active before the expression.
+#[test]
+fn test_core_at_restores_the_outer_mask_after_a_fatal_only_level() {
+    let out = compile_and_run(
+        r#"<?php
+        error_reporting(E_ALL);
+        $ignored = @(error_reporting(E_ERROR));
+        echo error_reporting(), ":";
+        error_reporting(0);
+        $ignored = @(error_reporting(E_ALL));
+        echo error_reporting();
+        "#,
+    );
+    assert_eq!(out, "30719:30719");
+}

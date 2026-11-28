@@ -16,10 +16,16 @@ use crate::ir::{BlockId, Function, Immediate, IrHeapKind, IrType, LocalKind, Loc
 use crate::types::PhpType;
 use crate::ir::MixedNumericOp;
 
-/// Accepts only the three arithmetic operations with exact integer overflow-to-float semantics.
+/// Accepts arithmetic operations whose result is always a PHP integer or double.
+///
+/// Add/subtract/multiply promote an overflowing integer to double. Division keeps an exact
+/// integer quotient or promotes to double and otherwise raises `DivisionByZeroError`, so its
+/// result is still confined to the numeric tags admitted by this proof.
 pub(crate) fn mixed(inst: &crate::ir::Instruction) -> bool {
     inst.op == Op::MixedNumericBinop && matches!(inst.immediate,
-        Some(Immediate::MixedNumericOp(MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)))
+        Some(Immediate::MixedNumericOp(
+            MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul | MixedNumericOp::Div
+        )))
 }
 
 /// Recognizes a `min()`/`max()` selection, which copies one operand's tag and payload.

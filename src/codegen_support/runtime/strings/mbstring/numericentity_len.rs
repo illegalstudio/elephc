@@ -126,11 +126,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w11, [x9]");                                      // peek at the next source byte
     emitter.instruction("cmp w11, #'&'");                                       // does a numeric entity start here?
     emitter.instruction("b.ne __rt_mb_decode_numericentity_len_copy");          // ordinary bytes copy one for one
-    emitter.instruction("cmp x10, #4");                                         // is a minimal entity present?
-    emitter.instruction("b.lo __rt_mb_decode_numericentity_len_invalid");       // a short entity falls back
+    emitter.instruction("cmp x10, #2");                                         // can the marker byte be read?
+    emitter.instruction("b.lo __rt_mb_decode_numericentity_len_copy");          // a lone ampersand copies one byte
     emitter.instruction("ldrb w11, [x9, #1]");                                  // load the entity marker
     emitter.instruction("cmp w11, #'#'");                                       // is this a decimal numeric entity?
-    emitter.instruction("b.ne __rt_mb_decode_numericentity_len_invalid");       // non-decimal entities fall back
+    emitter.instruction("b.ne __rt_mb_decode_numericentity_len_copy");          // a plain ampersand copies one byte
+    emitter.instruction("cmp x10, #4");                                         // is a minimal entity present?
+    emitter.instruction("b.lo __rt_mb_decode_numericentity_len_invalid");       // a truncated entity falls back
     emitter.instruction("add x12, x9, #2");                                     // digit cursor
     emitter.instruction("sub x13, x10, #2");                                    // remaining bytes after "&#"
     emitter.instruction("mov x14, xzr");                                        // parsed codepoint
@@ -155,6 +157,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mb_decode_numericentity_len_digits");           // parse the next digit
     emitter.label("__rt_mb_decode_numericentity_len_digits_end");
     emitter.instruction("cbz x15, __rt_mb_decode_numericentity_len_invalid");   // an empty digit run falls back
+    emitter.instruction("cmp x15, #10");                                        // PHP bounds a decimal reference to ten digits
+    emitter.instruction("b.hi __rt_mb_decode_numericentity_len_invalid");       // longer runs stay literal through the bridge
     emitter.instruction("ldrb w11, [x12]");                                     // load the entity terminator
     emitter.instruction("cmp w11, #';'");                                       // is this a decimal entity terminator?
     emitter.instruction("b.ne __rt_mb_decode_numericentity_len_invalid");       // malformed entities fall back
@@ -163,14 +167,14 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_mb_decode_numericentity_len_invalid");       // ASCII entities fall back
     emitter.instruction("cmp x14, #0x800");                                     // does the codepoint need two UTF-8 bytes?
     emitter.instruction("b.lo __rt_mb_decode_numericentity_len_two");           // a two-byte codepoint
-    emitter.instruction("movz w16, #0xD800");                                   // first UTF-16 surrogate
-    emitter.instruction("cmp x14, x16");                                        // is this below the surrogate range?
+    emitter.instruction("movz w17, #0xD800");                                   // first UTF-16 surrogate
+    emitter.instruction("cmp x14, x17");                                        // is this below the surrogate range?
     emitter.instruction("b.lo __rt_mb_decode_numericentity_len_three");         // a three-byte codepoint
-    emitter.instruction("movz w16, #0xE000");                                   // first post-surrogate codepoint
-    emitter.instruction("cmp x14, x16");                                        // is this inside the surrogate range?
+    emitter.instruction("movz w17, #0xE000");                                   // first post-surrogate codepoint
+    emitter.instruction("cmp x14, x17");                                        // is this inside the surrogate range?
     emitter.instruction("b.lo __rt_mb_decode_numericentity_len_invalid");       // surrogates fall back
-    emitter.instruction("movz w16, #1, lsl #16");                               // first four-byte codepoint
-    emitter.instruction("cmp x14, x16");                                        // does the codepoint need three UTF-8 bytes?
+    emitter.instruction("movz w17, #1, lsl #16");                               // first four-byte codepoint
+    emitter.instruction("cmp x14, x17");                                        // does the codepoint need three UTF-8 bytes?
     emitter.instruction("b.lo __rt_mb_decode_numericentity_len_three");         // a three-byte codepoint
     emitter.instruction("add x0, x0, #4");                                      // a four-byte codepoint
     emitter.instruction("b __rt_mb_decode_numericentity_len_advance");          // consume the entity
@@ -303,10 +307,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_mb_decode_numericentity_len_done_x86");        // return the decoded length
     emitter.instruction("cmp BYTE PTR [r8], '&'");                              // does a numeric entity start here?
     emitter.instruction("jne __rt_mb_decode_numericentity_len_copy_x86");       // ordinary bytes decode one for one
-    emitter.instruction("cmp r9, 4");                                           // is a minimal entity present?
-    emitter.instruction("jb __rt_mb_decode_numericentity_len_invalid_x86");     // a short entity falls back
+    emitter.instruction("cmp r9, 2");                                           // can the marker byte be read?
+    emitter.instruction("jb __rt_mb_decode_numericentity_len_copy_x86");        // a lone ampersand copies one byte
     emitter.instruction("cmp BYTE PTR [r8 + 1], '#'");                          // is this a decimal numeric entity?
-    emitter.instruction("jne __rt_mb_decode_numericentity_len_invalid_x86");    // non-decimal entities fall back
+    emitter.instruction("jne __rt_mb_decode_numericentity_len_copy_x86");       // a plain ampersand copies one byte
+    emitter.instruction("cmp r9, 4");                                           // is a minimal entity present?
+    emitter.instruction("jb __rt_mb_decode_numericentity_len_invalid_x86");     // a truncated entity falls back
     emitter.instruction("lea r11, [r8 + 2]");                                   // digit cursor
     emitter.instruction("mov rcx, r9");                                         // remaining source bytes
     emitter.instruction("sub rcx, 2");                                          // bytes after "&#"
@@ -332,6 +338,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_decode_numericentity_len_digits_end_x86");
     emitter.instruction("test rdi, rdi");                                       // is the digit run empty?
     emitter.instruction("jz __rt_mb_decode_numericentity_len_invalid_x86");     // an empty digit run falls back
+    emitter.instruction("cmp rdi, 10");                                         // PHP bounds a decimal reference to ten digits
+    emitter.instruction("ja __rt_mb_decode_numericentity_len_invalid_x86");     // longer runs stay literal through the bridge
     emitter.instruction("cmp BYTE PTR [r11], ';'");                             // is this a decimal entity terminator?
     emitter.instruction("jne __rt_mb_decode_numericentity_len_invalid_x86");    // malformed entities fall back
     emitter.instruction("lea rax, [rdi + 3]");                                  // consumed bytes = "&#" + digits + ";"

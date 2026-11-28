@@ -138,7 +138,8 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
     matches!(
         op,
         // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | IOverflows | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
+        IAdd | ISub | IMul | IOverflows | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedDiv
+            | ICheckedAddToInt
             | ICheckedSubToInt | ICheckedMulToInt | ICheckedNumericChainToInt | ICheckedPow
             | IDiv | ISDiv | ISMod
             | IPow | INeg | IBitAnd | IBitOr | IBitXor
@@ -165,7 +166,7 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
             // Stores copy the value into other storage; they never alias the source slot.
             | StoreLocal | StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal
-            | StoreRefCell | ExternGlobalStore
+            | ExternGlobalStore
             // Value-level ownership/refcount bookkeeping.
             | Acquire | Release | Move | Borrow | EnsureOwned
             // Buffer element access reads its handle and index operands by value; the stored
@@ -205,6 +206,7 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::ArraySumProbeSmall
             | crate::ir::RuntimeFnId::ArraySumIntCached
             | crate::ir::RuntimeFnId::ArrayFilterCountMod
+            | crate::ir::RuntimeFnId::ArrayMapSumIntDiv
             | crate::ir::RuntimeFnId::ArrayMapSumAdd
             | crate::ir::RuntimeFnId::ArrayMapSumAddInt
             | crate::ir::RuntimeFnId::ArrayMapSumAddIntCached
@@ -229,6 +231,8 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::MbStrrichrLen
             | crate::ir::RuntimeFnId::MbStrimwidthLen
             | crate::ir::RuntimeFnId::MbChrLen
+            | crate::ir::RuntimeFnId::MbChrFirst
+            | crate::ir::RuntimeFnId::MbChrPacked
             | crate::ir::RuntimeFnId::MbConvertEncodingLen
             | crate::ir::RuntimeFnId::MbSplitCount
             | crate::ir::RuntimeFnId::MbEregReplaceLen
@@ -239,6 +243,7 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::MbConvertKana
             | crate::ir::RuntimeFnId::MbEncodeNumericentityLen
             | crate::ir::RuntimeFnId::MbDecodeNumericentityLen
+            | crate::ir::RuntimeFnId::SubstrCount
     )
 }
 

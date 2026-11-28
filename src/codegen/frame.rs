@@ -453,6 +453,7 @@ fn op_is_nested_call_reg_neutral(op: Op) -> bool {
         Op::ConstI64 | Op::ConstBool | Op::ConstNull | Op::ConstF64
         // Integer arithmetic, bitwise and shifts (`lower_inst::arithmetic`).
         | Op::IAdd | Op::ISub | Op::IMul | Op::INeg | Op::IDiv | Op::ISMod
+        | Op::IWrapIncrement
         | Op::IBitAnd | Op::IBitOr | Op::IBitXor | Op::IBitNot | Op::IShl | Op::IShrA
         // Floating-point arithmetic (`lower_inst::floats` and `arithmetic::lower_float_div`).
         | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FNeg

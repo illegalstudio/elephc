@@ -137,8 +137,8 @@ fn class_implements(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<
     names
 }
 
-/// Whether `name` is a generic class template's marker interface, which answers `instanceof`
-/// but is invisible to reflection (see `InterfaceInfo::reflection_hidden`).
+/// Returns whether `name` is the marker interface a generic class template leaves behind, which
+/// answers `instanceof` but is invisible to reflection (`InterfaceInfo::reflection_hidden`).
 pub(in crate::codegen::lower_inst) fn reflection_hidden_interface(
     ctx: &FunctionContext<'_>,
     name: &str,

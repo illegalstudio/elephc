@@ -37,3 +37,5 @@ mod shape_transforms;
 mod sorting;
 #[path = "indexed/oob_reads.rs"]
 mod oob_reads;
+#[path = "indexed/fill_update.rs"]
+mod fill_update;

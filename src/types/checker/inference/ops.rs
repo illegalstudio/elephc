@@ -18,6 +18,7 @@ use crate::span::Span;
 use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
+use super::checked_literal_int_division_type;
 use super::syntactic::infer_return_type_syntactic;
 
 impl Checker {
@@ -124,10 +125,25 @@ impl Checker {
                     ));
                 }
                 self.check_arithmetic_string_operands(left, &lt, right, &rt, expr)?;
-                // Division always returns float (PHP compat: 10/3 → 3.333...); keep that
-                // policy even when an operand is a numeric string.
-                if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
+                if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
+                } else if *op == BinOp::Div {
+                    // PHP keeps an int when the division is exact and the quotient fits;
+                    // otherwise it returns a double. The untracked case therefore needs the
+                    // boxed Mixed representation, while literal divisions stay precise.
+                    if uses_mixed_numeric_dispatch(&lt)
+                        || uses_mixed_numeric_dispatch(&rt)
+                        || lt == PhpType::Str
+                        || rt == PhpType::Str
+                    {
+                        // Mixed/string operands use the boxed division helper, which
+                        // preserves PHP's run-time exact-int-or-float result.
+                        Ok(PhpType::Mixed)
+                    } else if let Some(ty) = checked_literal_int_division_type(left, right) {
+                        Ok(ty)
+                    } else {
+                        Ok(PhpType::Mixed)
+                    }
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if uses_mixed_numeric_dispatch(&lt)
                         || uses_mixed_numeric_dispatch(&rt)
@@ -1806,6 +1822,10 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
     Some(if fits { PhpType::Int } else { PhpType::Float })
 }
 
+/// Returns PHP's exact result type for a division of two integer literals.
+///
+/// A zero divisor has no compile-time value (it raises `DivisionByZeroError` at run time),
+/// so it falls back to the generic representation.
 /// Returns whether PHP's `int ** int` keeps an integer result for these literals.
 ///
 /// Mirrors `zend_pow_function_base` (and `crate::optimize::fold::ops::try_fold_int_pow`):

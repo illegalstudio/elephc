@@ -6,7 +6,11 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` before PHP-visible helper emission.
 //!
 //! Key details:
-//! - Suppression depth lives in _rt_diag_suppression and warning output must follow each target syscall ABI.
+//! - `@` saves the active `error_reporting()` mask on a depth-indexed stack, installs that
+//!   mask intersected with PHP's 4437 suppression mask, and restores the saved mask on exit.
+//!   Warning output must follow
+//!   each target syscall ABI; the writer itself only receives diagnostics that were already
+//!   filtered by the reporting mask and user handler.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -24,9 +28,11 @@ use crate::codegen_support::RuntimeFeatures;
 /// * `emitter` - The code emitter used to append instructions and labels.
 ///
 /// # ABI behavior
-/// - `__rt_diag_push_suppression`: increments the global `_rt_diag_suppression` counter and returns.
-/// - `__rt_diag_pop_suppression`: decrements the counter (guarded against underflow) and returns.
-/// - `__rt_diag_write`: writes already-filtered diagnostics when suppression depth is zero.
+/// - `__rt_diag_push_suppression`: saves the active reporting mask at the current depth,
+///   installs that mask intersected with PHP's `@` mask, and increments `_rt_diag_suppression`.
+/// - `__rt_diag_pop_suppression`: decrements the counter (guarded against underflow), restores the
+///   saved reporting mask when the expression did not change it itself, and returns.
+/// - `__rt_diag_write`: writes already-filtered diagnostics; callers own reporting-mask filtering.
 /// - `__rt_diag_warning`: dispatches full warning lines through handlers and reporting masks.
 pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.handler_state || features.eval_bridge || features.web {
@@ -45,6 +51,16 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.label_global("__rt_diag_push_suppression");
     abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load the current nested diagnostic-suppression depth
+    abi::emit_symbol_address(emitter, "x11", "_rt_diag_mask_stack");
+    abi::emit_symbol_address(emitter, "x12", "_php_error_reporting");
+    emitter.instruction("ldr x13, [x12]");                                      // active reporting mask before the suppressed expression
+    emitter.instruction("cmp x10, #256");                                       // is the fixed mask stack exhausted?
+    emitter.instruction("b.hs __rt_diag_push_mask_saved");                      // an impossible depth keeps the mask without a saved slot
+    emitter.instruction("str x13, [x11, x10, lsl #3]");                         // save the previous mask at this depth
+    emitter.label("__rt_diag_push_mask_saved");
+    abi::emit_load_int_immediate(emitter, "x14", 4437);                         // PHP's @ mask: E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR
+    emitter.instruction("and x13, x13, x14");                                   // keep only the enabled bits in the @ mask
+    emitter.instruction("str x13, [x12]");                                      // expose the reduced suppression mask to error_reporting() and handlers
     emitter.instruction("add x10, x10, #1");                                    // enter one additional diagnostic-suppression scope
     emitter.instruction("str x10, [x9]");                                       // publish the incremented diagnostic-suppression depth
     emitter.instruction("ret");                                                 // return to the suppressed expression wrapper
@@ -54,19 +70,27 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.instruction("ldr x10, [x9]");                                       // load the current nested diagnostic-suppression depth
     emitter.instruction("cbz x10, __rt_diag_pop_done");                         // avoid underflow if suppression scopes are already balanced
     emitter.instruction("sub x10, x10, #1");                                    // leave one diagnostic-suppression scope
+    emitter.instruction("cmp x10, #256");                                       // was this scope's mask saved?
+    emitter.instruction("b.hs __rt_diag_pop_mask_restored");                    // only an impossible overflow can skip restoration
+    abi::emit_symbol_address(emitter, "x12", "_php_error_reporting");
+    emitter.instruction("ldr x13, [x12]");                                      // current reporting mask on leaving the @ expression
+    abi::emit_load_int_immediate(emitter, "x15", 4437);                         // PHP's fatal-only @ mask
+    emitter.instruction("bic x13, x13, x15");                                   // any remaining bit is a non-fatal level set inside @
+    abi::emit_symbol_address(emitter, "x11", "_rt_diag_mask_stack");
+    emitter.instruction("cbnz x13, __rt_diag_pop_mask_restored");               // a non-fatal level set inside @ stays
+    emitter.instruction("ldr x13, [x11, x10, lsl #3]");                         // a fatal-only level restores the original mask
+    emitter.instruction("str x13, [x12]");                                      // restore the caller-visible reporting level
+    emitter.label("__rt_diag_pop_mask_restored");
     emitter.instruction("str x10, [x9]");                                       // publish the decremented diagnostic-suppression depth
     emitter.label("__rt_diag_pop_done");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
     emitter.label_global("__rt_diag_write");
     if emitter.phpext_output { emit_phpext_diagnostic(emitter); return; }
-    abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
-    emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
-    emitter.instruction("cbnz x10, __rt_diag_warning_done");                    // suppress the warning while inside an active @ scope
     emitter.instruction("mov x0, #2");                                          // fd = stderr for runtime warning diagnostics
     emitter.syscall(4);
     emitter.label("__rt_diag_warning_done");
-    emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+    emitter.instruction("ret");                                                 // return after writing the already-filtered diagnostic
 }
 
 /// Emits x86_64 Linux-specific diagnostic helpers for suppression depth and warning output.
@@ -89,6 +113,16 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label_global("__rt_diag_push_suppression");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load the current nested diagnostic-suppression depth
+    abi::emit_symbol_address(emitter, "r11", "_rt_diag_mask_stack");
+    abi::emit_symbol_address(emitter, "r8", "_php_error_reporting");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // active reporting mask before the suppressed expression
+    emitter.instruction("cmp r10, 256");                                        // is the fixed mask stack exhausted?
+    emitter.instruction("jae __rt_diag_push_mask_saved_linux_x86_64");          // an impossible depth keeps the mask without a saved slot
+    emitter.instruction("mov QWORD PTR [r11 + r10 * 8], r9");                   // save the previous mask at this depth
+    emitter.label("__rt_diag_push_mask_saved_linux_x86_64");
+    abi::emit_load_int_immediate(emitter, "rax", 4437);                         // PHP's @ mask: E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR
+    emitter.instruction("and r9, rax");                                         // keep only the enabled bits in the @ mask
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // expose the reduced suppression mask to error_reporting() and handlers
     emitter.instruction("add r10, 1");                                          // enter one additional diagnostic-suppression scope
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);   // publish the incremented diagnostic-suppression depth
     emitter.instruction("ret");                                                 // return to the suppressed expression wrapper
@@ -98,22 +132,31 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // check whether a suppression scope is active before decrementing
     emitter.instruction("jz __rt_diag_pop_done_linux_x86_64");                  // avoid underflow if suppression scopes are already balanced
     emitter.instruction("sub r10, 1");                                          // leave one diagnostic-suppression scope
+    emitter.instruction("cmp r10, 256");                                        // was this scope's mask saved?
+    emitter.instruction("jae __rt_diag_pop_mask_restored_linux_x86_64");        // only an impossible overflow can skip restoration
+    abi::emit_symbol_address(emitter, "r8", "_php_error_reporting");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // current reporting mask on leaving the @ expression
+    abi::emit_load_int_immediate(emitter, "rax", 4437);                         // PHP's fatal-only @ mask
+    emitter.instruction("not rax");                                             // non-fatal bits are everything outside the @ mask
+    emitter.instruction("test r9, rax");                                        // did the expression install a non-fatal level?
+    abi::emit_symbol_address(emitter, "r11", "_rt_diag_mask_stack");
+    emitter.instruction("jnz __rt_diag_pop_mask_restored_linux_x86_64");        // a non-fatal level set inside @ stays
+    emitter.instruction("mov r9, QWORD PTR [r11 + r10 * 8]");                   // a fatal-only level restores the original mask
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // restore the caller-visible reporting level
+    emitter.label("__rt_diag_pop_mask_restored_linux_x86_64");
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);   // publish the decremented diagnostic-suppression depth
     emitter.label("__rt_diag_pop_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
     emitter.label_global("__rt_diag_write");
     if emitter.phpext_output { emit_phpext_diagnostic(emitter); return; }
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
-    emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
-    emitter.instruction("jnz __rt_diag_warning_done_linux_x86_64");             // suppress the warning while inside an active @ scope
     emitter.instruction("mov rdx, rsi");                                        // move warning length into the Linux write length register
     emitter.instruction("mov rsi, rdi");                                        // move warning pointer into the Linux write buffer register
     emitter.instruction("mov edi, 2");                                          // fd = stderr for runtime warning diagnostics
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // emit the runtime warning diagnostic to stderr
     emitter.label("__rt_diag_warning_done_linux_x86_64");
-    emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+    emitter.instruction("ret");                                                 // return after writing the already-filtered diagnostic
 }
 
 /// Calls the host warning API with native state parked behind a C bailout guard.

@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{Function, Immediate, Instruction, IrType, Op, Terminator, ValueId};
+use crate::ir::{Function, Immediate, Instruction, IrType, Op, Terminator, ValueDef, ValueId};
 use crate::types::PhpType;
 
 /// Checks that every boxed integer payload keeps its meaning in the active scalar representation.
@@ -37,6 +37,27 @@ pub(super) fn blocked_results(function: &Function, scalar: IrType) -> HashSet<Va
         }
     }
     for user in &function.instructions {
+        // A PHP comparison can keep one mixed/tagged operand and consume the
+        // other side as a raw integer. The tagged side must not itself be a
+        // checked producer in this batch, or narrowing both sides would leave no
+        // runtime-tagged operand for the comparison.
+        if user.op == Op::PhpRelCmp && user.operands.iter().any(|value| {
+            function.value(*value).is_some_and(|metadata| {
+                matches!(
+                    metadata.php_type.codegen_repr(),
+                    PhpType::Mixed | PhpType::TaggedScalar
+                ) && !matches!(
+                    metadata.def,
+                    ValueDef::Instruction { inst, .. }
+                        if function.instruction(inst).is_some_and(|definition| matches!(
+                            definition.op,
+                            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul
+                        ))
+                )
+            })
+        }) {
+            continue;
+        }
         if !accepts_scalar(function, user, scalar) {
             blocked.extend(user.operands.iter().copied());
         }

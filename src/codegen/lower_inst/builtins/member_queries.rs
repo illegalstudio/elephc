@@ -79,7 +79,6 @@ fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<St
                     .cloned(),
             );
         }
-        // A class template's marker interface is not an interface php-src would report.
         "interface_exists" => candidates.extend(
             ctx.module
                 .interface_infos

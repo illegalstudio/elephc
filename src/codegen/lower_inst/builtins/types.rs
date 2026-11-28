@@ -1682,23 +1682,38 @@ fn static_relation_holds(
     let object_class = object_class.trim_start_matches('\\');
     let target_class = target_class.trim_start_matches('\\');
     let target_key = php_symbol_key(target_class);
-    if exclude_self && super::class_relations::reflection_hidden_interface(ctx, target_class) {
-        // `Box` names a generic class template, and php-src's `Box` is the one class every
-        // instantiation stands for: `is_subclass_of` holds for a class EXTENDING an
-        // instantiation, never for the instantiation itself.
-        return Ok(lookup_class(ctx, object_class)
-            .and_then(|info| info.parent.clone())
-            .is_some_and(|parent| {
-                class_interfaces_contain(ctx, parent.trim_start_matches('\\'), &target_key)
-            }));
+    // A generic CLASS template leaves an interface marker under the template's own name. That
+    // marker stands for the class itself in relation checks: `is_a($box<int>, 'Box')` is true
+    // and `is_subclass_of($box<int>, 'Box')` is false, while a real child of `Box<int>` is a
+    // subclass of `Box`. Reflection still hides the marker (it is listed separately).
+    let marker_target = super::class_relations::reflection_hidden_interface(ctx, target_class);
+    let marker_base = marker_target.then(|| {
+        php_symbol_key(generic_base_name(target_class))
+    });
+    if marker_target
+        && php_symbol_key(generic_base_name(object_class))
+            == marker_base.as_deref().unwrap_or_default()
+    {
+        return Ok(!exclude_self);
     }
-    if !exclude_self && php_symbol_key(object_class) == target_key {
+    let object_key = php_symbol_key(object_class);
+    if !exclude_self && object_key == target_key {
         return Ok(true);
     }
-    if parent_chain_contains(ctx, object_class, &target_key) {
+    if parent_chain_contains(ctx, object_class, &target_key, marker_base.as_deref()) {
         return Ok(true);
     }
-    Ok(class_interfaces_contain(ctx, object_class, &target_key))
+    Ok(class_interfaces_contain(
+        ctx,
+        object_class,
+        &target_key,
+        marker_base.as_deref(),
+    ))
+}
+
+/// Returns the template base of an instantiated class name (`Box<int>` → `Box`).
+fn generic_base_name(name: &str) -> &str {
+    name.split_once('<').map_or(name, |(base, _)| base)
 }
 
 /// Returns true when an object's parent chain contains the target PHP symbol key.
@@ -1706,6 +1721,7 @@ fn parent_chain_contains(
     ctx: &FunctionContext<'_>,
     object_class: &str,
     target_key: &str,
+    marker_base: Option<&str>,
 ) -> bool {
     let mut current = object_class.to_string();
     while let Some(info) = lookup_class(ctx, &current) {
@@ -1713,7 +1729,9 @@ fn parent_chain_contains(
             return false;
         };
         let parent = parent.trim_start_matches('\\');
-        if php_symbol_key(parent) == target_key {
+        if php_symbol_key(parent) == target_key
+            || marker_base.is_some_and(|base| php_symbol_key(generic_base_name(parent)) == base)
+        {
             return true;
         }
         current = parent.to_string();
@@ -1726,11 +1744,14 @@ fn class_interfaces_contain(
     ctx: &FunctionContext<'_>,
     object_class: &str,
     target_key: &str,
+    marker_base: Option<&str>,
 ) -> bool {
     lookup_class(ctx, object_class).is_some_and(|info| {
-        info.interfaces
-            .iter()
-            .any(|name| php_symbol_key(name.trim_start_matches('\\')) == target_key)
+        info.interfaces.iter().any(|name| {
+            php_symbol_key(name.trim_start_matches('\\')) == target_key
+                || marker_base
+                    .is_some_and(|base| php_symbol_key(generic_base_name(name)) == base)
+        })
     })
 }
 
@@ -1755,6 +1776,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
             _ => unreachable!(),
         };
     }
+    if name == "get_declared_interfaces" {
+        // The marker a generic class template leaves answers `instanceof` only.
+        names.retain(|name| !super::class_relations::reflection_hidden_interface(ctx, name));
+    }
     if names.is_empty() {
         names = match name {
             "get_declared_classes" => ctx
@@ -1769,10 +1794,6 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
             "get_declared_traits" => ctx.module.trait_table.names.clone(),
             _ => unreachable!(),
         };
-    }
-    if name == "get_declared_interfaces" {
-        // A class template's marker interface is not an interface php-src would declare.
-        names.retain(|interface| !super::class_relations::reflection_hidden_interface(ctx, interface));
     }
     Ok(names)
 }

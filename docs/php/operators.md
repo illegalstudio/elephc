@@ -12,7 +12,7 @@ sidebar:
 | `+` | `$a + $b` | Numeric addition, or PHP array union when both operands are arrays. Integer overflow promotes to `double`. |
 | `-` | `$a - $b` | Subtraction. Integer overflow promotes to `double`. |
 | `*` | `$a * $b` | Multiplication. Integer overflow promotes to `double`. |
-| `/` | `$a / $b` | Division (always returns float). A zero divisor raises a catchable `DivisionByZeroError` ("Division by zero"). |
+| `/` | `$a / $b` | Division. Two `int` operands that divide evenly return an `int`; otherwise the result is a `double`. A zero divisor raises a catchable `DivisionByZeroError` ("Division by zero"). |
 | `%` | `$a % $b` | Modulo. A zero divisor raises a catchable `DivisionByZeroError` ("Modulo by zero"); `PHP_INT_MIN % -1` is `0`. |
 | `**` | `$a ** $b` | Exponentiation (right-associative). Int-preserving like PHP: two `int` operands with a non-negative exponent give an `int` while the result fits (`2 ** 3` is `int(8)`), and promote to `double` at the multiplication that overflows (`2 ** 63`). A negative exponent or a `float` operand always gives a `float`. |
 | `-$x` | `-$x` | Unary negation |
@@ -232,7 +232,7 @@ $value = @file_get_contents("missing.txt");
 echo "still running";
 ```
 
-The operand is evaluated normally and its value is preserved. Only suppressible runtime warnings are hidden; compile-time errors and fatal runtime errors still report normally. Nested `@` scopes are tracked with a runtime suppression depth, and exception unwinds restore the previous suppression state before entering a `catch`.
+The operand is evaluated normally and its value is preserved. Only suppressible runtime warnings are hidden; compile-time errors and fatal runtime errors still report normally. PHP 8 runs a user error handler even under `@`; while the operand runs, `error_reporting()` returns the reduced suppression mask `4437` (`E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR`). Nested `@` scopes save and restore their caller's level, and a level changed explicitly inside the operand is kept rather than overwritten. Exception unwinds restore the mask before entering a `catch`, so later warnings are not left suppressed.
 
 ## Print Expression
 

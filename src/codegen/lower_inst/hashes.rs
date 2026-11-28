@@ -877,12 +877,13 @@ fn lower_hash_get_aarch64(
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
     if warn_on_missing {
+        super::core_builtins::publish_diagnostic_site(ctx, inst);
         emit_undefined_hash_key_warning_aarch64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);
     ctx.emitter.label(&null_receiver);
     if warn_on_missing {
-        super::arrays::emit_array_offset_on_null_warning(ctx);
+        super::arrays::emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback);
     emit_hash_get_miss(ctx, result_ty, !warn_on_missing);
@@ -929,12 +930,13 @@ fn lower_hash_get_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
     if warn_on_missing {
+        super::core_builtins::publish_diagnostic_site(ctx, inst);
         emit_undefined_hash_key_warning_x86_64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);
     ctx.emitter.label(&null_receiver);
     if warn_on_missing {
-        super::arrays::emit_array_offset_on_null_warning(ctx);
+        super::arrays::emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback);
     emit_hash_get_miss(ctx, result_ty, !warn_on_missing);
@@ -2033,6 +2035,9 @@ fn emit_hash_get_success_aarch64_entry(
         }
         PhpType::Float => {
             ctx.emitter.instruction("fmov d0, x1");                             // move the borrowed hash float bits into the standard float result
+            if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+                crate::codegen_support::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
+            }
         }
         PhpType::Str => {}
         PhpType::Mixed => {
@@ -2103,6 +2108,9 @@ fn emit_hash_get_success_x86_64_entry(
         }
         PhpType::Float => {
             ctx.emitter.instruction("movq xmm0, rdi");                          // move the borrowed hash float bits into the standard float result
+            if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+                crate::codegen_support::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
+            }
         }
         PhpType::Str => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash string pointer into the standard string result

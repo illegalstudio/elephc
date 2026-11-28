@@ -43,17 +43,21 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: u
 pub(super) fn lower_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
-    let op = match super::expect_mixed_numeric_op(inst)? {
-        MixedNumericOp::Add => Op::ICheckedAdd,
-        MixedNumericOp::Sub => Op::ICheckedSub,
-        MixedNumericOp::Mul => Op::ICheckedMul,
-        _ => unreachable!("the numeric frame proof accepts add/sub/mul only"),
-    };
+    let mixed_op = super::expect_mixed_numeric_op(inst)?;
     let (left, right, left_tag, right_tag, _) = registers(ctx);
     ctx.load_value_to_reg(lhs, left)?;
     ctx.load_value_to_reg(rhs, right)?;
     let left_type = numeric_payloads::payload(ctx, lhs, left, left_tag)?;
     let right_type = numeric_payloads::payload(ctx, rhs, right, right_tag)?;
+    if mixed_op == MixedNumericOp::Div {
+        return division(ctx, inst, offset, left_type, right_type);
+    }
+    let op = match mixed_op {
+        MixedNumericOp::Add => Op::ICheckedAdd,
+        MixedNumericOp::Sub => Op::ICheckedSub,
+        MixedNumericOp::Mul => Op::ICheckedMul,
+        _ => unreachable!("the numeric frame proof accepts add/sub/mul/div only"),
+    };
     tagged(ctx, inst, offset, op, left_type, right_type)
 }
 
@@ -421,6 +425,116 @@ fn write_cell(ctx: &mut FunctionContext<'_>, offset: usize, payload: &str, tag: 
     }
     abi::emit_load_int_immediate(ctx.emitter, payload, 0);
     abi::store_at_offset(ctx.emitter, payload, offset - 16);
+}
+
+/// Divides two proven numeric payloads into the result's frame-local Mixed cell.
+///
+/// PHP keeps an exact integer quotient in the integer path and promotes an inexact quotient or
+/// `PHP_INT_MIN / -1` to double. A zero divisor raises `DivisionByZeroError` before any result is
+/// stored. This mirrors `__rt_mixed_numeric_div` without allocating a heap cell for the quotient.
+fn division(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    offset: usize,
+    left_type: PhpType,
+    right_type: PhpType,
+) -> Result<()> {
+    let (left, right, left_tag, right_tag, combined) = registers(ctx);
+    let zero = ctx.next_label("stack_numeric_div_zero");
+    let float_tags = ctx.next_label("stack_numeric_div_float_tags");
+    let float_int = ctx.next_label("stack_numeric_div_float_int");
+    let float_div = ctx.next_label("stack_numeric_div_float_div");
+    let int_quotient = ctx.next_label("stack_numeric_div_int_quotient");
+    let done = ctx.next_label("stack_numeric_div_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}")); // a zero combined tag means both payloads are PHP integers
+            ctx.emitter.instruction(&format!("cbnz {combined}, {float_tags}")); // a promoted double uses the float path
+            ctx.emitter.instruction(&format!("cbz {right}, {zero}"));           // a zero divisor raises DivisionByZeroError
+            abi::emit_load_int_immediate(ctx.emitter, "x12", i64::MIN);
+            ctx.emitter.instruction(&format!("cmp {left}, x12"));               // is the dividend PHP_INT_MIN?
+            ctx.emitter.instruction(&format!("b.ne {int_quotient}"));           // every other dividend is safe to divide
+            ctx.emitter.instruction(&format!("cmp {right}, #-1"));              // does INT_MIN divide by -1?
+            ctx.emitter.instruction(&format!("b.eq {float_int}"));              // that quotient is not representable
+            ctx.emitter.label(&int_quotient);
+            ctx.emitter.instruction(&format!("sdiv x12, {left}, {right}"));     // truncate toward zero like PHP integer division
+            ctx.emitter.instruction(&format!("msub x9, x12, {right}, {left}")); // remainder = dividend - quotient * divisor
+            ctx.emitter.instruction(&format!("cbnz x9, {float_int}"));          // a non-zero remainder yields a double
+            ctx.emitter.instruction("mov x0, x12");                             // publish the exact integer quotient
+            store(ctx, offset, 0);
+            ctx.emitter.instruction(&format!("b {done}"));                      // skip the float path after storing an integer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {combined}, {left_tag}"));    // preserve the individual tags for float conversion
+            ctx.emitter.instruction(&format!("or {combined}, {right_tag}"));    // a zero combined tag means both payloads are PHP integers
+            ctx.emitter.instruction(&format!("test {combined}, {combined}"));   // select integer or floating-point division from the actual tags
+            ctx.emitter.instruction(&format!("jnz {float_tags}"));              // a promoted double uses the float path
+            ctx.emitter.instruction(&format!("test {right}, {right}"));         // is the divisor zero?
+            ctx.emitter.instruction(&format!("jz {zero}"));                     // a zero divisor raises DivisionByZeroError
+            ctx.emitter.instruction("mov r8, rax");                             // preserve the dividend for the promoted float quotient
+            abi::emit_load_int_immediate(ctx.emitter, "r11", i64::MIN);
+            ctx.emitter.instruction("cmp rax, r11");                            // is the dividend INT64_MIN?
+            ctx.emitter.instruction(&format!("jne {int_quotient}"));            // every other dividend is safe to divide
+            ctx.emitter.instruction(&format!("cmp {right}, -1"));               // does INT64_MIN divide by -1?
+            ctx.emitter.instruction(&format!("je {float_int}"));                // that quotient would trap the hardware divide
+            ctx.emitter.label(&int_quotient);
+            ctx.emitter.instruction("cqo");                                     // sign-extend the dividend before signed division
+            ctx.emitter.instruction(&format!("idiv {right}"));                  // quotient in rax, remainder in rdx
+            ctx.emitter.instruction("test rdx, rdx");                           // is the division exact?
+            ctx.emitter.instruction(&format!("jnz {float_int}"));               // a non-zero remainder yields a double
+            store(ctx, offset, 0); // publish the exact integer quotient already in rax
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // skip the float path after storing an integer
+        }
+    }
+
+    // -- promote to double when either operand already holds a double --
+    ctx.emitter.label(&float_tags);
+    numeric_payloads::float(ctx, &left_type, left, left_tag, abi::float_result_reg(ctx.emitter));
+    let other = match ctx.emitter.target.arch {
+        Arch::AArch64 => "d1",
+        Arch::X86_64 => "xmm1",
+    };
+    numeric_payloads::float(ctx, &right_type, right, right_tag, other);
+    ctx.emit_branch(&float_div);
+
+    // -- promote the quotient when an exact integer division is not representable --
+    ctx.emitter.label(&float_int);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("scvtf d0, x0");                            // convert the original dividend to double
+            ctx.emitter.instruction("scvtf d1, x10");                           // convert the original divisor to double
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cvtsi2sd xmm0, r8");                       // convert the original dividend preserved before idiv
+            ctx.emitter.instruction("cvtsi2sd xmm1, r10");                      // convert the original divisor to double
+        }
+    }
+
+    ctx.emitter.label(&float_div);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fcmp d1, #0.0");                           // is the divisor positive or negative zero?
+            ctx.emitter.instruction(&format!("b.eq {zero}"));                   // zero divisors raise DivisionByZeroError
+            ctx.emitter.instruction("fdiv d0, d0, d1");                         // perform PHP floating-point division
+            ctx.emitter.instruction("fmov x0, d0");                             // store double bits in the Mixed payload word
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movq r8, xmm1");                           // copy the divisor bits for the zero test
+            ctx.emitter.instruction("add r8, r8");                              // shift up to clear the sign so -0.0 tests like +0.0
+            ctx.emitter.instruction(&format!("jz {zero}"));                     // zero divisors raise DivisionByZeroError
+            ctx.emitter.instruction("divsd xmm0, xmm1");                        // perform PHP floating-point division
+            ctx.emitter.instruction("movq rax, xmm0");                          // store double bits in the Mixed payload word
+        }
+    }
+    store(ctx, offset, 2);
+    ctx.emit_branch(&done);
+
+    ctx.emitter.label(&zero);
+    super::super::exceptions::emit_division_by_zero_error(ctx, super::DIVISION_BY_ZERO_MESSAGE);
+
+    ctx.emitter.label(&done);
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    store_if_result(ctx, inst)
 }
 
 /// Preserves both ARM64 inputs until the overflow branch has selected its result type.

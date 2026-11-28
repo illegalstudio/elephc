@@ -97,8 +97,8 @@ fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueI
         };
         let inst = &function.instructions[inst.as_raw() as usize];
         match inst.op {
-            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
-                | Op::MixedNumericBinop | Op::MixedMinMax | Op::StrIncDec => return true,
+            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedDiv
+                | Op::ICheckedPow | Op::MixedNumericBinop | Op::MixedMinMax | Op::StrIncDec => return true,
             Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned => {
                 pending.extend(inst.operands.first().copied());
             }
@@ -201,7 +201,9 @@ pub(crate) fn is_checked_int_seed(ctx: &LoweringContext<'_, '_>, mut value: Valu
                 };
                 value = source;
             }
-            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => return true,
+            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedDiv => {
+                return true
+            }
             Op::MixedNumericBinop => {
                 return matches!(inst.immediate, Some(Immediate::MixedNumericOp(
                     MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)));

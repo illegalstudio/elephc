@@ -608,6 +608,7 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+    Div,
     Pow,
 }
 
@@ -705,6 +706,7 @@ impl MixedNumericOp {
             MixedNumericOp::Add => "add",
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
+            MixedNumericOp::Div => "div",
             MixedNumericOp::Pow => "pow",
         }
     }
@@ -1109,6 +1111,9 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    /// Divides two integers with PHP's exact-result rule: an integer when the division is
+    /// exact and fits, a double otherwise. A zero divisor raises `DivisionByZeroError`.
+    ICheckedDiv,
     /// Adds two integers with PHP overflow promotion, then applies PHP's integer cast
     /// without materializing the intermediate boxed `Mixed` value.
     ICheckedAddToInt,
@@ -1127,6 +1132,12 @@ pub enum Op {
     ISMod,
     IPow,
     INeg,
+    /// Increments a non-negative remainder and wraps it to zero at the divisor.
+    ///
+    /// Both operands are `I64`. The result is `a + 1` when that is below `b`, and `0` when it
+    /// equals `b`. The fill-loop rotation proves `0 <= a < b` and `b > 0`, so the operation is
+    /// total and allocation-free.
+    IWrapIncrement,
     IBitAnd,
     IBitOr,
     IBitXor,
@@ -1212,6 +1223,12 @@ pub enum Op {
     /// int-shaped and has spare capacity for this append, so codegen stores the payload and
     /// advances the header length without COW, shape, growth or writeback work.
     ArrayPushReserved,
+    /// Publishes the final logical length of a private, reserved packed array.
+    ///
+    /// Operands: array, length. The fill-loop producer proved no instruction inside the loop
+    /// observes the length, so it can store the final element count once after the loop instead
+    /// of loading and advancing it on every append.
+    ArraySetLength,
     /// Sums a dense int-shaped indexed array range into a fresh Mixed int/float cell.
     ///
     /// Operands: array, inclusive start, exclusive end, borrowed seed Mixed cell. No immediate.
@@ -1601,6 +1618,7 @@ impl Op {
             | IAdd
             | ISub
             | IMul
+            | IWrapIncrement
             | IOverflows
             | ICheckedAddToInt
             | ICheckedSubToInt
@@ -1647,6 +1665,9 @@ impl Op {
             IShl | IShrA | FDiv => E::MAY_THROW,
             PtrCheckNonnull => E::MAY_FATAL,
             ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
+            // The quotient is boxed like the other checked operations and a zero divisor
+            // raises a catchable DivisionByZeroError.
+            ICheckedDiv => E::ALLOC_HEAP | E::READS_HEAP | E::MAY_THROW | E::MAY_FATAL,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
@@ -1717,7 +1738,7 @@ impl Op {
             // and allocates the boxed result. No PHP callback or warning runs inside.
             ArraySumInt => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             // Stores one raw int into preallocated spare capacity and advances the header length.
-            ArrayPushReserved => E::WRITES_HEAP,
+            ArrayPushReserved | ArraySetLength => E::WRITES_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | FirstClassCallableNew | CallableValueNew | CallableArrayNew | BufferNew
             | GeneratorNew => {
@@ -2066,10 +2087,12 @@ impl Op {
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
+            IWrapIncrement => "iwrap_increment",
             IOverflows => "ioverflows",
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedDiv => "ichecked_div",
             ICheckedAddToInt => "ichecked_add_to_int",
             ICheckedSubToInt => "ichecked_sub_to_int",
             ICheckedMulToInt => "ichecked_mul_to_int",
@@ -2147,6 +2170,7 @@ impl Op {
             HashLen => "hash_len",
             ArrayGet => "array_get",
             ArrayPushReserved => "array_push_reserved",
+            ArraySetLength => "array_set_length",
             ArraySumInt => "array_sum_int",
             ArrayGetUnchecked => "array_get_unchecked",
             ArrayGetSilent => "array_get_silent",

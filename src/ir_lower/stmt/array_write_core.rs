@@ -530,10 +530,14 @@ fn lower_array_assign_from_value(
     } else {
         (array_value, None)
     };
+    let empty_fill_write = ctx.is_recorded_sparse_key_write(span, array);
     if op == Op::ArraySet
         && ctx.is_promotable_array_local(array)
         && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
-            PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+            PhpType::Array(element)
+                if matches!(element.codegen_repr(), PhpType::Int | PhpType::Float)
+                    || (empty_fill_write
+                        && matches!(element.codegen_repr(), PhpType::Never | PhpType::Void)))
     {
         lower_promotable_array_local_set(
             ctx,

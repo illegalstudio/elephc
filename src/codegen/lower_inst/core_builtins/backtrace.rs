@@ -140,7 +140,22 @@ fn publish_call_site(
     // Local retirement cannot emit its own PHP warning. A nested destructor publishes its
     // source location from its own frame, so eagerly updating diagnostics here only burdens
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
+    // Array/hash element reads already publish this site on their own warning paths. Their
+    // fast path only needs it eagerly when the key may be a float and key normalization can
+    // emit the float-key deprecation before any miss branch runs.
+    let deferred_element_warning_site = matches!(
+        inst.op,
+        Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent | Op::HashGetForWrite
+    ) && inst.operands.get(1).is_some_and(|key| {
+        ctx.value_php_type(*key).map_or(false, |ty| {
+            !matches!(
+                ty.codegen_repr(),
+                PhpType::Float | PhpType::Mixed | PhpType::Union(_)
+            )
+        })
+    });
     let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
+        && !deferred_element_warning_site
         && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot | Op::ReleaseRawLocalSlot);
     // Injected prelude code is an internal function's body: php-src reports its notices at
     // the user's call site, so publishing the prelude's synthetic span here would overwrite
