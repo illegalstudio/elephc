@@ -17,6 +17,12 @@ pub(in crate::codegen::lower_inst) fn lower_mixed_is_a_literal_target(
     class_name: &str,
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
+    // Like `instanceof`, the synthetic class has no class-info entry to classify (#2433).
+    if normalized.eq_ignore_ascii_case("__PHP_Incomplete_Class") {
+        let value_ty = ctx.value_php_type(value)?;
+        emit_incomplete_class_instanceof(ctx, value, &value_ty)?;
+        return store_if_result(ctx, inst);
+    }
     let canonical = ctx.module.class_infos.keys().chain(ctx.module.interface_infos.keys())
         .find(|name| name.eq_ignore_ascii_case(normalized))
         .map(String::as_str).unwrap_or(normalized);

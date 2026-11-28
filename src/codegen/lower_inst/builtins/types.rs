@@ -807,7 +807,11 @@ pub(crate) fn lower_is_a_relation(
     }
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            if ctx.module.required_runtime_features.eval_bridge {
+            // The synthetic class has no eval-side entry either, so it skips the eval route (#2433).
+            let incomplete = target_class
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("__PHP_Incomplete_Class");
+            if ctx.module.required_runtime_features.eval_bridge && !incomplete {
                 return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
             }
             if !exclude_self {
