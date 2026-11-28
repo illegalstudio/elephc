@@ -239,17 +239,23 @@ fn test_fileinfo_relative_database_expansion() {
 $cwd = getcwd();
 $f = new finfo(FILEINFO_MIME_TYPE);
 try { new finfo(0, "./absent-part/../missing.mgc"); } catch (Exception $e) {
-    echo $e->getMessage() === 'finfo::__construct(): Failed to load magic database at "' . $cwd . '/missing.mgc"' ? "constructor\n" : $e->getMessage();
+    echo $e->getMessage() === 'finfo::__construct(' . $cwd . '/missing.mgc): Failed to open stream: No such file or directory' ? "constructor\n" : $e->getMessage();
 }
 set_error_handler(function(int $n, string $message) use ($cwd): bool {
-    echo $message === 'finfo_open(): Failed to load magic database at "' . $cwd . '/missing.mgc"' ? "procedural\n" : $message;
+    if ($message === 'finfo_open(' . $cwd . '/missing.mgc): Failed to open stream: No such file or directory') {
+        echo "stream\n";
+    } elseif ($message === 'finfo_open(): Failed to load magic database at "' . $cwd . '/missing.mgc"') {
+        echo "load\n";
+    } else {
+        echo "bad:", $message, "\n";
+    }
     return true;
 });
 finfo_open(0, "./absent-part/../missing.mgc");
 restore_error_handler();
 echo $f->buffer("HELLO"), "\n";
 "#);
-    assert_eq!(out, "constructor\nprocedural\ntext/plain\n");
+    assert_eq!(out, "constructor\nstream\nstream\nload\ntext/plain\n");
 }
 
 /// Every network scheme reports the original URL and the captured connection-refused cause.

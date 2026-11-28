@@ -115,3 +115,58 @@ fn test_coercive_binding_applies_to_named_arguments() {
     );
     assert_eq!(out, "4.5|7");
 }
+
+/// PHP's union coercion prefers `int` over `string`, regardless of declaration order.
+#[test]
+fn test_union_scalar_coercion_prefers_php_order() {
+    let out = compile_and_run(
+        r#"<?php
+        function describe(int|string $value): string {
+            return gettype($value) . ":" . $value;
+        }
+        echo describe(true), "\n";
+        echo describe(1.0), "\n";
+        "#,
+    );
+    assert_eq!(out, "integer:1\ninteger:1\n");
+}
+
+/// A strict call accepts a union-valued argument when one member can bind, and raises PHP's
+/// `TypeError` only when the rejected member actually arrives at runtime.
+#[test]
+fn test_strict_union_argument_raises_type_error_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+        declare(strict_types=1);
+        function want(string $value): string { return $value; }
+        function maybe(bool $ok): string|false { return $ok ? "ok" : false; }
+        echo want(maybe(true)), "\n";
+        try {
+            want(maybe(false));
+        } catch (TypeError $error) {
+            echo str_contains($error->getMessage(), "must be of type string, false given")
+                ? "TypeError\n" : $error->getMessage();
+        }
+        "#,
+    );
+    assert_eq!(out, "ok\nTypeError\n");
+}
+
+/// A discarded strict-union call is still observable: the parameter guard throws, so dead-code
+/// elimination must keep both the call and its catch.
+#[test]
+fn test_strict_union_argument_statement_keeps_guard() {
+    let out = compile_and_run(
+        r#"<?php
+        declare(strict_types=1);
+        function want(string $value): string { return $value; }
+        function maybe(bool $ok): string|false { return $ok ? "ok" : false; }
+        try {
+            want(maybe(false));
+        } catch (TypeError $error) {
+            echo "TypeError\n";
+        }
+        "#,
+    );
+    assert_eq!(out, "TypeError\n");
+}

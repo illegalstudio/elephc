@@ -639,6 +639,11 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
 # ``Area``. Both locale functions are `Area::String` (like the hash prelude) but live in
 # their own synthetic-AST prelude, so a per-name override keeps the page link truthful.
 PRELUDE_SOURCE_BY_NAME: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "pack": (
+        "pack_prelude.rs",
+        "pack",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "parse_str": (
         "parse_str_prelude.rs",
         "parse_str",

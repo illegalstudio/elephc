@@ -3967,3 +3967,13 @@ class InvalidLegacyIterator implements StrictLegacyIterator {
 }
 "#, "incompatible return type int (interface returns string)");
 }
+
+/// Strict files compare a definite scalar against union members by identity, without the
+/// weak-mode coercion that would turn `true` into `1` or `"1"`.
+#[test]
+fn test_error_strict_types_rejects_union_scalar_binding() {
+    expect_error(
+        "<?php declare(strict_types=1); function want(int|string $value): void {} want(true);",
+        "`declare(strict_types=1)` is active in this file",
+    );
+}

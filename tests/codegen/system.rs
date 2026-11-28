@@ -3895,3 +3895,89 @@ echo defined('LC_TIME') ? '1' : '0';
     );
     assert_eq!(out, "1111111");
 }
+
+/// `phpinfo()` renders the compile-time version, loaded modules, directives and environment.
+#[test]
+fn test_phpinfo_reports_full_compile_time_table() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(); phpinfo(); $o = ob_get_clean();
+foreach ([
+    "PHP Version => 8.5.0",
+    "Loaded Modules",
+    "Core",
+    "fileinfo support => enabled",
+    "pcre.backtrack_limit => 1000000",
+    "ELEPHC_TARGET => ",
+    "ELEPHC_SAPI => cli",
+] as $needle) {
+    echo str_contains($o, $needle) ? "1" : "0";
+}
+"#,
+    );
+    assert_eq!(out, "1111111");
+}
+
+/// `phpinfo(0)` prints only the page header, as php-src's zero flag selects no section.
+#[test]
+fn test_phpinfo_zero_flags_prints_only_the_header() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(); phpinfo(0); $o = ob_get_clean();
+echo strlen($o), "|", trim($o), "\n";
+"#,
+    );
+    assert_eq!(out, "10|phpinfo()\n");
+}
+
+/// The rendered version follows the selected `--php-version` profile.
+#[test]
+fn test_phpinfo_reports_selected_php_profile() {
+    let out = compile_and_run_with_php_version(
+        r#"<?php
+ob_start(); phpinfo(); $o = ob_get_clean();
+echo str_contains($o, "PHP Version => 8.4.0") ? "8.4" : "bad";
+"#,
+        elephc::php_version::PhpVersion::Php84,
+    );
+    assert_eq!(out, "8.4");
+}
+
+/// Compile-time `--ini` overrides replace the rendered directive defaults.
+#[test]
+fn test_phpinfo_reports_ini_overrides() {
+    struct IniRestore;
+    impl Drop for IniRestore {
+        /// Clears the per-thread overrides even when the assertion fails.
+        fn drop(&mut self) {
+            elephc::codegen::set_ini_overrides(Vec::new());
+        }
+    }
+    elephc::codegen::set_ini_overrides(vec![
+        ("display_errors".to_string(), "0".to_string()),
+        ("html_errors".to_string(), "1".to_string()),
+        ("date.timezone".to_string(), "Europe/Paris".to_string()),
+    ]);
+    let _restore = IniRestore;
+    let out = compile_and_run(
+        r#"<?php
+ob_start(); phpinfo(); $o = ob_get_clean();
+echo str_contains($o, "display_errors => Off") ? "1" : "0";
+echo str_contains($o, "html_errors => On") ? "1" : "0";
+echo str_contains($o, "date.timezone => Europe/Paris") ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "111");
+}
+
+/// `phpinfo(INFO_MODULES)` includes the fileinfo module row.
+#[test]
+fn test_phpinfo_reports_fileinfo_support() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(); phpinfo(8); $output = ob_get_clean();
+echo str_contains($output, "fileinfo support => enabled") ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}

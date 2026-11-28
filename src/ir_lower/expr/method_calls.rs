@@ -8,6 +8,165 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    /// Ancestor/method descendant searches already answered for this lowering run.
+    ///
+    /// The class set is fixed for a whole program, so a repeated statically-missing call site
+    /// would otherwise walk every descendant chain again. Cleared by `lower_program`.
+    static DESCENDANT_CACHE: RefCell<HashMap<(String, String), bool>> = RefCell::new(HashMap::new());
+}
+
+/// Clears the per-program descendant-dispatch cache.
+pub(crate) fn clear_descendant_cache() {
+    DESCENDANT_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Returns a cached descendant answer, computing and storing it on a miss.
+fn cached_descendant_answer(
+    ancestor: &str,
+    method: &str,
+    compute: impl FnOnce() -> bool,
+) -> bool {
+    let key = (
+        ancestor.trim_start_matches('\\').to_ascii_lowercase(),
+        method.to_ascii_lowercase(),
+    );
+    if let Some(answer) = DESCENDANT_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        return answer;
+    }
+    let answer = compute();
+    DESCENDANT_CACHE.with(|cache| {
+        cache.borrow_mut().insert(key, answer);
+    });
+    answer
+}
+
+/// Synthesizes `__call(string $name, array $arguments)` when only a descendant declares it.
+fn synthesized_magic_call_args(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+    args: &[Expr],
+    span: Span,
+) -> Option<Vec<Expr>> {
+    if method_signature(ctx, object, method).is_some() {
+        return None;
+    }
+    let object_ty = ctx.builder.value_php_type(object);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    if !descendant_provides_call(ctx, class_name.trim_start_matches('\\')) {
+        return None;
+    }
+    // Preserve positional, named and spread argument semantics in the forwarded array.
+    let entries = args
+        .iter()
+        .map(|arg| match &arg.kind {
+            ExprKind::NamedArg { name, value } => crate::parser::ast::ArrayEntry::Keyed(
+                Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                (**value).clone(),
+            ),
+            ExprKind::Spread(inner) => crate::parser::ast::ArrayEntry::Spread((**inner).clone()),
+            _ => crate::parser::ast::ArrayEntry::Value(arg.clone()),
+        })
+        .collect();
+    Some(vec![
+        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+        Expr::new(ExprKind::ArrayLiteralMixed(entries), span),
+    ])
+}
+
+/// Reports whether `type_name` is `ancestor` or reaches it through `extends`/`implements`.
+///
+/// PHP's class ancestry has two edges: a class's `parent` and the interfaces it implements
+/// (directly or through a parent class). Interface `extends` is a third, resolved by
+/// [`interface_extends`]. Missing the `implements` edge makes a call through an interface
+/// receiver look like an undefined method even when a descendant supplies it.
+fn descends_from(ctx: &LoweringContext<'_, '_>, type_name: &str, ancestor: &str) -> bool {
+    let ancestor_key = crate::names::php_symbol_key(ancestor.trim_start_matches('\\'));
+    let mut current = Some(type_name.trim_start_matches('\\'));
+    let mut visited = std::collections::HashSet::new();
+    while let Some(class_name) = current {
+        if !visited.insert(class_name) {
+            return false;
+        }
+        if crate::names::php_symbol_key(class_name) == ancestor_key {
+            return true;
+        }
+        let Some(info) = ctx.classes.get(class_name) else {
+            return false;
+        };
+        if info
+            .interfaces
+            .iter()
+            .any(|implemented| interface_extends(ctx, implemented, &ancestor_key))
+        {
+            return true;
+        }
+        current = info
+            .parent
+            .as_deref()
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
+}
+
+/// Reports whether `interface_name` is `ancestor_key` or extends it transitively.
+fn interface_extends(
+    ctx: &LoweringContext<'_, '_>,
+    interface_name: &str,
+    ancestor_key: &str,
+) -> bool {
+    let interface_name = interface_name.trim_start_matches('\\');
+    if crate::names::php_symbol_key(interface_name) == ancestor_key {
+        return true;
+    }
+    let Some(info) = ctx.interfaces.get(interface_name) else {
+        return false;
+    };
+    info.parents
+        .iter()
+        .any(|parent| interface_extends(ctx, parent, ancestor_key))
+}
+
+/// Reports whether a descendant of `ancestor` declares `__call`.
+fn descendant_provides_call(ctx: &LoweringContext<'_, '_>, ancestor: &str) -> bool {
+    cached_descendant_answer(ancestor, "__call", || {
+        let ancestor = ancestor.trim_start_matches('\\');
+        ctx.classes.iter().any(|(name, info)| {
+            info.methods.contains_key("__call") && descends_from(ctx, name, ancestor)
+        })
+    })
+}
+
+/// Reports whether a descendant of `ancestor` supplies `method` with public visibility.
+///
+/// A public descendant method is a real dynamic-dispatch candidate; the backend's mixed
+/// receiver path selects the runtime class' override (or raises PHP's abstract-method
+/// error). Protected and private descendants are not callable from an outside scope, so they
+/// must leave the call to `__call` or the undefined-method path.
+fn descendant_provides_public_method(
+    ctx: &LoweringContext<'_, '_>,
+    ancestor: &str,
+    method: &str,
+) -> bool {
+    cached_descendant_answer(ancestor, &format!("public:{method}"), || {
+        let ancestor = ancestor.trim_start_matches('\\');
+        let method_key = crate::names::php_symbol_key(method);
+        ctx.classes.iter().any(|(name, info)| {
+            info.methods.contains_key(&method_key)
+                && info
+                    .method_visibilities
+                    .get(&method_key)
+                    .is_none_or(|visibility| {
+                        *visibility == crate::parser::ast::Visibility::Public
+                    })
+                && descends_from(ctx, name, ancestor)
+        })
+    })
+}
 
 /// Returns the catchable `Error` message recorded for a private/protected method call at
 /// `expr` that PHP only rejects at runtime, or `None` when the call is accessible.
@@ -36,6 +195,44 @@ pub(super) fn recorded_method_access_message(
     })
 }
 
+/// Returns the declaring descendant and PHP visibility word for a method that is not
+/// callable from the current scope, when no public descendant provides it.
+///
+/// PHP reports `Call to private method Child::hook() from global scope` (or the protected
+/// equivalent) instead of dispatching to an inaccessible descendant implementation.
+fn descendant_hidden_method(
+    ctx: &LoweringContext<'_, '_>,
+    ancestor: &str,
+    method: &str,
+) -> Option<(String, &'static str)> {
+    let ancestor = ancestor.trim_start_matches('\\');
+    let method_key = crate::names::php_symbol_key(method);
+    let mut candidates: Vec<_> = ctx.classes.iter()
+        .filter(|(name, info)| {
+            info.methods.contains_key(&method_key) && descends_from(ctx, name, ancestor)
+        })
+        .collect();
+    // `ctx.classes` is a `HashMap`, whose iteration order is randomized per process. Sort so
+    // two compiles of the same program name the same descendant when several declare the
+    // hidden method.
+    candidates.sort_by(|left, right| left.0.cmp(right.0));
+    candidates.into_iter().find_map(|(name, info)| {
+        match info.method_visibilities.get(&method_key) {
+            Some(crate::parser::ast::Visibility::Private) => {
+                Some((name.trim_start_matches('\\').to_string(), "private"))
+            }
+            Some(crate::parser::ast::Visibility::Protected)
+                if !ctx.current_class.as_deref().is_some_and(|scope| {
+                    descends_from(ctx, scope, ancestor) || descends_from(ctx, ancestor, scope)
+                }) =>
+            {
+                Some((name.trim_start_matches('\\').to_string(), "protected"))
+            }
+            _ => None,
+        }
+    })
+}
+
 /// Lowers an object method call.
 pub(super) fn lower_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -54,12 +251,54 @@ pub(super) fn lower_method_call(
     let unrecorded_scalar_guards = std::mem::take(&mut ctx.scalar_guards_unrecorded);
     let object_expr = object;
     let mut object = lower_member_receiver(ctx, object_expr, expr);
+    // PHP dispatches an instance method on the RUNTIME class. A method missing from the static
+    // receiver but supplied by a closed-world descendant (or a descendant `__call`) must route
+    // through dynamic dispatch instead of the recorded undefined-method error: the checker can
+    // only judge the declared receiver type, while lowering sees the whole class set.
+    let statically_missing = matches!(op, Op::MethodCall | Op::NullsafeMethodCall)
+        && method_signature(ctx, object.value, method).is_none();
+    let descendant_public_method = statically_missing
+        && singular_object_class(&ctx.builder.value_php_type(object.value))
+            .is_some_and(|(class_name, _)| {
+                descendant_provides_public_method(
+                    ctx,
+                    class_name.trim_start_matches('\\'),
+                    method,
+                )
+            });
+    // A descendant `__call` is the only callable candidate when no public descendant method
+    // exists. Synthesizing its argument array here preserves named/spread order; the runtime
+    // receiver is boxed so the hook is selected on the actual class.
+    let descendant_magic_call = if statically_missing && !descendant_public_method {
+        synthesized_magic_call_args(ctx, object.value, method, args, expr.span)
+    } else {
+        None
+    };
+    let descendant_hidden_method = if statically_missing
+        && !descendant_public_method
+        && descendant_magic_call.is_none()
+    {
+        singular_object_class(&ctx.builder.value_php_type(object.value)).and_then(
+            |(class_name, _)| {
+                descendant_hidden_method(
+                    ctx,
+                    class_name.trim_start_matches('\\'),
+                    method,
+                )
+            },
+        )
+    } else {
+        None
+    };
+    let descendant_dispatch = descendant_public_method || descendant_magic_call.is_some();
     // PHP checks method visibility before it decides whether the call is instance or
     // static, so a recorded private/protected access must throw before the static-only
     // reroute below can run the method.
-    if let Some(message) = throw_access_message {
-        release_owning_receiver_temporary(ctx, object, expr.span);
-        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+    if let Some(message) = throw_access_message.as_ref() {
+        if !descendant_dispatch {
+            release_owning_receiver_temporary(ctx, object, expr.span);
+            return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, message, expr.span);
+        }
     }
     // PHP permits `$object->staticMethod()` and resolves the static method from the
     // object's class. The checker accepts that shape alongside the instance table; here
@@ -201,6 +440,42 @@ pub(super) fn lower_method_call(
     }
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
+    }
+    if let Some(synthesized) = descendant_magic_call {
+        // Only a descendant declares `__call`: forward the original name and arguments as
+        // PHP does, through the runtime class's magic method.
+        let boxed = ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span));
+        return super::nullable_method_calls::lower_method_call_with_receiver_direct(
+            ctx,
+            boxed,
+            "__call",
+            &synthesized,
+            op,
+            expr,
+        );
+    }
+    if let Some((class_name, visibility)) = descendant_hidden_method {
+        // PHP evaluates the receiver and every argument before reporting the inaccessible
+        // method, so release the argument temporaries and the receiver before throwing.
+        let result_type = method_call_result_type(ctx, object.value, method, op, expr);
+        let arg_values = lower_args_with_signature(ctx, None, args);
+        release_owned_call_arg_temporaries(
+            ctx,
+            &arg_values,
+            None,
+            &ReturnArgAlias::None,
+            expr.span,
+        );
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        let message = format!(
+            "Call to {visibility} method {class_name}::{method}() from global scope"
+        );
+        return crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+            ctx,
+            &message,
+            expr.span,
+            result_type,
+        );
     }
     if let Some(call) = selected_native_methods::lower(ctx, object, method, args, op, expr) {
         return call;

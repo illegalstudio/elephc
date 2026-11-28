@@ -546,6 +546,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::fileinfo_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
+    let pack_used = elephc::pack_prelude::program_uses_pack(&resolved);
+    let resolved = elephc::pack_prelude::inject_if_used(resolved, pack_used);
     let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
     let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
     let resolved = elephc::tokenizer_prelude::inject_if_used_with_web(resolved, false, heap_size, false, &mut prelude_inventory);

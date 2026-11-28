@@ -244,6 +244,11 @@ pub(super) fn guarded_scalar_param(
         return None;
     }
     let declared = crate::types::param_binding::runtime_scalar_guard_param(sig, index)?;
+    if matches!(declared, PhpType::Union(_)) {
+        // Scalar unions use the multi-member guard in call argument coercion, not the
+        // single-scalar conversion instruction.
+        return None;
+    }
     // The check uses the signature lowering resolved from the receiver's static class, but PHP
     // binds the method the object selects at run time: an override may accept more.
     if !overrides_keep_scalar_param(ctx, description, index, declared) {

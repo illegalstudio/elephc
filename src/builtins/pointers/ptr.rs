@@ -26,7 +26,7 @@ builtin! {
 /// The registry's `check_arity` handles arity enforcement (exactly 1 argument).
 /// `ptr()` requires a variable as its argument because taking the address of an
 /// arbitrary expression has no well-defined meaning in the pointer model.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     match &cx.args[0].kind {
         ExprKind::Variable(_) => {
             cx.checker.infer_type(&cx.args[0], cx.env)?;

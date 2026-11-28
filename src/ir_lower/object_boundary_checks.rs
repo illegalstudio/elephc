@@ -126,7 +126,7 @@ fn late_static_instance_of(
 }
 
 /// Throws the boundary `TypeError`, naming the rejected value's `get_debug_type()` spelling.
-fn throw_object_boundary_error(
+pub(crate) fn throw_object_boundary_error(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     prefix: Expr,

@@ -25,7 +25,7 @@ builtin! {
 /// The registry's `check_arity` handles arity enforcement (exactly 2 arguments).
 /// Returns the type of the first argument (the pointer) so that pointer type annotations
 /// are propagated through the offset expression.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ptr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.ensure_pointer_type(&ptr_ty, cx.span, "ptr_offset()")?;
     let offset_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;

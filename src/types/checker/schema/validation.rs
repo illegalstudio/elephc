@@ -128,6 +128,18 @@ pub(crate) fn build_method_sig(
             }
         }
     }
+    if checker.internal_class_decls.contains(declaring_type)
+        || checker
+            .classes
+            .get(declaring_type)
+            .is_some_and(|info| info.is_internal)
+    {
+        crate::fileinfo_prelude::abi::widen_method_params(
+            declaring_type,
+            &method.name,
+            &mut sig.params,
+        );
+    }
     Ok(sig)
 }
 

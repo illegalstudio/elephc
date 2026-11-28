@@ -157,6 +157,7 @@ pub mod pcntl_wifstopped;
 pub mod pcntl_wstopsig;
 pub mod pcntl_wtermsig;
 pub mod php_uname;
+pub mod phpinfo;
 pub mod phpversion;
 pub mod posix_errno;
 pub mod posix_get_last_error;

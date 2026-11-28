@@ -279,7 +279,10 @@ pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Inst
     } else {
         result_array_element_type("array_slice", &result_ty)?
     };
-    require_array_slice_result_type(&PhpType::Mixed, &result_elem_ty)?;
+    // The mixed helper unboxes each sliced element into the requested result layout
+    // (`normalize_indexed_array_result`), so a boxed source can feed any typed indexed
+    // result. `result_array_element_type` still rejects a result shape the backend cannot
+    // represent before any code is emitted.
     let keys_may_be_kept = slice_preserve_keys_may_be_set(ctx, preserve_keys)?;
     if keys_may_be_kept && !boxed_result {
         return Err(CodegenIrError::unsupported(format!(

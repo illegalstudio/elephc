@@ -11,9 +11,9 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 const PRECISION_PREFIX: &str = "Deprecated: Implicit conversion from float ";
-const PRECISION_SUFFIX: &str = " to int loses precision\n";
+const PRECISION_SUFFIX: &str = " to int loses precision";
 const RANGE_PREFIX: &str = "Warning: The float ";
-const RANGE_SUFFIX: &str = " is not representable as an int, cast occurred\n";
+const RANGE_SUFFIX: &str = " is not representable as an int, cast occurred";
 
 /// Emits the float-array-key conversion with PHP's warning and deprecation rules.
 ///
@@ -84,6 +84,37 @@ fn emit_diagnostic_aarch64(e: &mut Emitter, prefix: &str, prefix_len: usize, suf
     e.instruction("str x10, [x9]");                                             // release formatter scratch before invoking the handler
     abi::emit_symbol_address(e, "x1", suffix);
     abi::emit_load_int_immediate(e, "x2", suffix_len as i64);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    if e.phpext_output {
+        // The host warning API formats the location itself; adding the native suffix here
+        // would duplicate it and expose the native diagnostic line.
+        abi::emit_symbol_address(e, "x1", "_diag_newline");
+        abi::emit_load_int_immediate(e, "x2", 1);
+        abi::emit_call_label(e, "__rt_diag_warning");
+    } else {
+        emit_location_aarch64(e);
+    }
+}
+
+/// Appends PHP's ` in <file> on line <n>\n` suffix for the default diagnostic display.
+fn emit_location_aarch64(e: &mut Emitter) {
+    // Record the handler-visible message before the CLI-only location suffix is appended.
+    abi::emit_load_symbol_to_reg(e, "x10", "_rt_diag_pending_len", 0);
+    abi::emit_store_reg_to_symbol(e, "x10", "_rt_diag_warning_message_len", 0);
+    abi::emit_symbol_address(e, "x1", "_diag_location_in");
+    abi::emit_load_int_immediate(e, "x2", 4);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_load_symbol_to_reg(e, "x1", "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(e, "x2", "_php_diagnostic_file_len", 0);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(e, "x1", "_diag_location_line");
+    abi::emit_load_int_immediate(e, "x2", 9);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_load_symbol_to_reg(e, "x0", "_php_diagnostic_line", 0);
+    abi::emit_call_label(e, "__rt_itoa");
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(e, "x1", "_diag_newline");
+    abi::emit_load_int_immediate(e, "x2", 1);
     abi::emit_call_label(e, "__rt_diag_warning");
 }
 
@@ -145,5 +176,37 @@ fn emit_diagnostic_x86_64(e: &mut Emitter, prefix: &str, prefix_len: usize, suff
     abi::emit_store_reg_to_symbol(e, "r10", "_concat_off", 0);
     abi::emit_symbol_address(e, "rdi", suffix);
     abi::emit_load_int_immediate(e, "rsi", suffix_len as i64);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    if e.phpext_output {
+        // The host warning API formats the location itself.
+        abi::emit_symbol_address(e, "rdi", "_diag_newline");
+        abi::emit_load_int_immediate(e, "rsi", 1);
+        abi::emit_call_label(e, "__rt_diag_warning");
+    } else {
+        emit_location_x86_64(e);
+    }
+}
+
+/// Appends PHP's ` in <file> on line <n>\n` suffix on x86_64.
+fn emit_location_x86_64(e: &mut Emitter) {
+    // Record the handler-visible message before the CLI-only location suffix is appended.
+    abi::emit_load_symbol_to_reg(e, "r10", "_rt_diag_pending_len", 0);
+    abi::emit_store_reg_to_symbol(e, "r10", "_rt_diag_warning_message_len", 0);
+    abi::emit_symbol_address(e, "rdi", "_diag_location_in");
+    abi::emit_load_int_immediate(e, "rsi", 4);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_load_symbol_to_reg(e, "rdi", "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(e, "rsi", "_php_diagnostic_file_len", 0);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(e, "rdi", "_diag_location_line");
+    abi::emit_load_int_immediate(e, "rsi", 9);
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_load_symbol_to_reg(e, "rdi", "_php_diagnostic_line", 0);
+    abi::emit_call_label(e, "__rt_itoa");
+    e.instruction("mov rdi, rax");                                              // pass the formatted line pointer to the dispatcher
+    e.instruction("mov rsi, rdx");                                              // pass the formatted line length to the dispatcher
+    abi::emit_call_label(e, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(e, "rdi", "_diag_newline");
+    abi::emit_load_int_immediate(e, "rsi", 1);
     abi::emit_call_label(e, "__rt_diag_warning");
 }

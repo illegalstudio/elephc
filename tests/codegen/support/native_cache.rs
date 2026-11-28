@@ -104,6 +104,42 @@ pub(crate) fn find_package_library_dir(
     })
 }
 
+/// Finds the `lib/` directory of one exact locked package version and recipe revision.
+///
+/// Fileinfo fixtures pin `libmagic` and `pcre2` through `examples/fileinfo/elephc.lock`;
+/// taking the newest cached artifact there would silently link an unrelated newer version
+/// (for example a locally built 5.48 against the pinned 5.46 corpus).
+pub(crate) fn find_locked_package_library_dir(
+    artifacts: &Path,
+    package: &str,
+    version: &str,
+    revision: u32,
+    archives: &[&str],
+) -> Option<PathBuf> {
+    let base = artifacts
+        .join(package)
+        .join(version)
+        .join(format!("r{revision}"));
+    let target_name = target().as_str();
+    for source in std::fs::read_dir(&base).ok()?.flatten() {
+        if !source.file_type().ok()?.is_dir() {
+            continue;
+        }
+        for abi in std::fs::read_dir(source.path().join(target_name)).ok()?.flatten() {
+            if !abi.file_type().ok()?.is_dir() {
+                continue;
+            }
+            for toolchain in std::fs::read_dir(abi.path()).ok()?.flatten() {
+                let lib = toolchain.path().join("lib");
+                if archives.iter().all(|archive| lib.join(archive).is_file()) {
+                    return Some(lib);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Reads the `<version>` and `r<N>` recipe-revision components out of one enumerated
 /// artifact directory, as a sort key.
 ///

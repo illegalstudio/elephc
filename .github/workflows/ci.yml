@@ -1388,6 +1388,62 @@ jobs:
         if: always()
         uses: ./.github/actions/assert-consumer-builds
 
+  fileinfo-phpt-corpus:
+    name: Fileinfo PHPT corpus
+    needs: [plan, build-archive-linux-x86_64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
+    container:
+      image: ${{ needs.plan.outputs.ci-image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cache managed native libmagic and pcre2
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/artifacts/pcre2
+            ~/.cache/elephc/native/sources
+          key: fileinfo-native-linux-x86_64-${{ hashFiles('examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/pcre2.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            fileinfo-native-linux-x86_64-
+      - name: Restore shared compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: linux-x86_64
+          kind: compiler
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
+      - name: Restore shared bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: linux-x86_64
+          kind: bridges
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
+      - name: Restore shared tests
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
+      - name: Materialize managed libmagic
+        run: |
+          ./target/debug/elephc native install --locked \
+            --manifest-path examples/fileinfo/elephc.toml
+      - name: Run the ext/fileinfo PHPT corpus
+        env:
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+        run: |
+          export ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-x86_64)"
+          bash scripts/ci/run_prebuilt_tests.sh \
+            'binary(/^codegen_tests_/) and test(fileinfo)' --nocapture
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   fileinfo-ios-compile-link:
     name: Fileinfo iOS Compile & Link (${{ matrix.elephc_target }})
     needs: [plan, build-archive-macos-aarch64, build-ios]
@@ -2287,6 +2343,7 @@ jobs:
       - gmp-ios-compile-link
       - tidy-ios-compile-link
       - gmp-phpt-corpus
+      - fileinfo-phpt-corpus
       - uri-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
@@ -2342,7 +2399,7 @@ jobs:
             pdo-codegen-tests-linux-x86_64 pdo-codegen-tests-linux-aarch64
             curl-native-linux-x86_64 curl-native-linux-aarch64 curl-codegen-tests-linux-x86_64
             curl-codegen-tests-linux-aarch64 eval-codegen-tests-linux-x86_64
-            eval-codegen-tests-linux-aarch64 managed-native-smoke-macos-aarch64 managed-native-smoke-linux-x86_64 managed-native-smoke-linux-aarch64"
+            eval-codegen-tests-linux-aarch64 managed-native-smoke-macos-aarch64 managed-native-smoke-linux-x86_64 managed-native-smoke-linux-aarch64 fileinfo-phpt-corpus"
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64

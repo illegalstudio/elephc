@@ -420,6 +420,25 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, decl.params[i]),
                             decl.ref_params.get(i).copied().unwrap_or(false),
                         )?;
+                        // The fileinfo prelude widens its ABI slot so its body can raise PHP's
+                        // own TypeError. The CALL still binds against the declaration, which is
+                        // what `declare(strict_types=1)` compares.
+                        self.require_strict_types_param_binding(
+                            &declared_ty,
+                            &ty,
+                            arg.span,
+                            &format!("Function '{}' parameter ${}", name, decl.params[i]),
+                        )?;
+                        let declared_ty = if self
+                            .fn_decls
+                            .get(name)
+                            .is_some_and(|decl| decl.internal_prelude)
+                        {
+                            crate::fileinfo_prelude::abi::widened_function_param(name, i)
+                                .unwrap_or(declared_ty)
+                        } else {
+                            declared_ty
+                        };
                         // `validate_callable_spread_elements` above has already established that
                         // this spread is eligible for runtime descriptor validation. Only that
                         // projected Mixed value may be unboxed into a declared Callable slot, and
@@ -510,6 +529,29 @@ impl Checker {
                         )
                     })
                     .transpose()?;
+                // The fileinfo prelude widens its ABI slot so its body can raise PHP's own
+                // TypeError. The CALL still binds against the declaration, which is what
+                // `declare(strict_types=1)` compares.
+                if let Some(declared) = declared_ty.as_ref() {
+                    self.require_strict_types_param_binding(
+                        declared,
+                        &ty,
+                        arg.span,
+                        &format!("Function '{}' parameter ${}", name, param_name),
+                    )?;
+                }
+                let declared_ty = if self
+                    .fn_decls
+                    .get(name)
+                    .is_some_and(|decl| decl.internal_prelude)
+                {
+                    declared_ty.map(|ty| {
+                        crate::fileinfo_prelude::abi::widened_function_param(name, arg_idx)
+                            .unwrap_or(ty)
+                    })
+                } else {
+                    declared_ty
+                };
                 if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.

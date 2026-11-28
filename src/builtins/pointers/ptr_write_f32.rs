@@ -25,7 +25,7 @@ builtin! {
 ///
 /// The registry's `check_arity` handles arity enforcement (exactly 2 arguments).
 /// The value must be a float, an int (converted to float), or a runtime-typed `mixed` value.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ptr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.ensure_pointer_type(&ptr_ty, cx.span, &format!("{}()", cx.name))?;
     let value_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
