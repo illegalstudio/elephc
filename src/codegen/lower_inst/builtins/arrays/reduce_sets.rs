@@ -123,7 +123,11 @@ fn array_walk_passes_key(ctx: &FunctionContext<'_>, callback: ValueId) -> Result
         return Ok(true);
     };
     if let Some(callee) = ctx.callable_function_by_name(&callback.name) {
-        return Ok(callee.params.len() >= 2);
+        return Ok(
+            callee.params.iter().any(|param| param.variadic)
+                || callee.signature.as_ref().is_some_and(|sig| sig.variadic.is_some())
+                || callee.params.len() >= 2
+        );
     }
     let Some((label, method)) = callback.name.rsplit_once("::") else {
         return Ok(true);
@@ -148,7 +152,7 @@ fn array_walk_passes_key(ctx: &FunctionContext<'_>, callback: ValueId) -> Result
     };
     let source = crate::codegen_support::source_method_adapters::source_visible_signature(sig)
         .map_err(CodegenIrError::unsupported)?;
-    Ok(source.params.len() >= 2)
+    Ok(source.variadic.is_some() || source.params.len() >= 2)
 }
 
 /// Merges boxed PHP arrays through layout dispatch, retaining the concrete indexed fast path.

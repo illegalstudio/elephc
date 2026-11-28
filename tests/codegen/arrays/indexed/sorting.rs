@@ -890,6 +890,53 @@ walk_objects();
     assert_eq!(out, "1 2|d2d1\n0=30 1=7 \n0:1 1:2 |d1d2");
 }
 
+/// Verifies list builtins that discard keys still accept a list after a key-preserving sort.
+#[test]
+fn test_key_discarding_builtins_accept_a_sorted_packed_list() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [30, 10, 20];
+asort($a);
+usort($a, fn($x, $y) => $x <=> $y);
+echo $a[0], ",", $a[1], ",", $a[2], "\n";
+$b = [30, 10, 20];
+asort($b);
+$slice = array_slice($b, 0, 1);
+echo $slice[0], "\n";
+$kept = array_slice($b, 0, 2, true);
+echo $kept[1], ",", $kept[2], "\n";
+$c = [30, 10, 20];
+asort($c);
+$padded = array_pad($c, 4, 7);
+echo $padded[0], ",", $padded[1], ",", $padded[2], ",", $padded[3], "\n";
+"#,
+    );
+    assert_eq!(out, "10,20,30\n10\n10,20\n10,20,30,7\n");
+}
+
+/// Verifies a variadic walk receives the key and a variable by-reference callback writes it back.
+#[test]
+fn test_array_walk_variadic_and_variable_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function walk_all(...$args) { echo count($args); }
+function walk_ref(&$value, $key) { $value = $key; }
+function walk_one($value) { echo $value, " "; }
+$a = [30, 10];
+array_walk($a, "walk_all");
+echo "\n";
+$f = "walk_ref";
+$b = [30, 10];
+array_walk($b, $f);
+echo $b[0], ",", $b[1], "\n";
+$g = "walk_one";
+$c = [30, 10];
+array_walk($c, $g);
+"#,
+    );
+    assert_eq!(out, "22\n0,1\n30 10 ");
+}
+
 /// Verifies `krsort` through a reference sorts the packed list and leaves an earlier copy intact.
 #[test]
 fn test_krsort_reference_to_packed_list() {

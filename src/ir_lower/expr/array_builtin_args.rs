@@ -555,10 +555,37 @@ fn lower_planned_builtin_call_args(
         _ if canonical == "array_walk" => {
             lower_array_walk_args(ctx, sig, args)
         }
+        _ if matches!(canonical.as_str(), "array_slice" | "array_pad") => {
+            let mut operands = if args.iter().any(is_spread_arg) {
+                lower_args_with_signature(ctx, sig, args)
+            } else if !crate::types::call_args::has_named_args(args) {
+                lower_positional_builtin_args_with_signature(ctx, sig, args)
+            } else {
+                lower_named_builtin_args_with_signature(ctx, sig, args)
+            };
+            if canonical != "array_slice" || !slice_preserves_keys(args) {
+                replace_int_keyed_hash_operand_with_packed_values(ctx, sig, args, &mut operands);
+            }
+            operands
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if canonical == "uasort" =>
         {
             lower_packed_key_preserving_sort_args(ctx, &canonical, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
+            if canonical == "usort" =>
+        {
+            // `usort` renumbers. The promoted int-keyed hash has to be a packed list
+            // again before the indexed user-sort backend will accept it.
+            adopt_packed_values_into_int_keyed_hash_local(ctx, sig, args);
+            if args.iter().any(is_spread_arg) {
+                lower_args_with_signature(ctx, sig, args)
+            } else if !crate::types::call_args::has_named_args(args) {
+                lower_user_value_sort_args(ctx, sig, args)
+            } else {
+                lower_named_builtin_args_with_signature(ctx, sig, args)
+            }
         }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if !crate::types::call_args::has_named_args(args)
@@ -1056,6 +1083,123 @@ pub(super) fn reindex_lowered_splice_receiver(
     operands[0] = ctx.load_local(name, Some(receiver.span)).value;
 }
 
+/// Replaces an int-keyed hash local with a packed copy of its values.
+///
+/// `usort` renumbers and only accepts packed storage. The copy happens before the
+/// comparator is lowered, and the local is what the sort then mutates.
+fn adopt_packed_values_into_int_keyed_hash_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) {
+    let Some((name, packed, span)) = int_keyed_hash_local(ctx, sig, args) else {
+        return;
+    };
+    let fresh = ctx.load_local(&name, Some(span));
+    let values = emit_array_values(ctx, fresh.value, packed.clone(), span);
+    crate::ir_lower::ownership::release_if_owned(ctx, fresh, Some(span));
+    if let Some(slot) = ctx.local_slots.get(&name).copied() {
+        ctx.release_stored_local_value_before_overwrite(&name, slot, Some(span));
+    }
+    ctx.store_retyped_container_local(&name, values, packed, Some(span));
+}
+
+/// Passes a packed copy of an int-keyed hash without changing the caller's local.
+///
+/// `array_slice` and `array_pad` build a new list. The sorted hash stays in the local.
+fn replace_int_keyed_hash_operand_with_packed_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    operands: &mut [crate::ir::ValueId],
+) {
+    let Some((_, packed, span)) = int_keyed_hash_local(ctx, sig, args) else {
+        return;
+    };
+    let Some(source_value) = operands.first().copied() else {
+        return;
+    };
+    let values = emit_array_values(ctx, source_value, packed, span);
+    let source = crate::ir_lower::context::LoweredValue {
+        value: source_value,
+        ir_type: ctx.builder.value_type(source_value),
+    };
+    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    operands[0] = values.value;
+}
+
+/// Reports whether `array_slice`'s preserve-keys flag is a literal true.
+fn slice_preserves_keys(args: &[Expr]) -> bool {
+    let mut positional = 0usize;
+    for arg in args {
+        if is_spread_arg(arg) {
+            return false;
+        }
+        match &arg.kind {
+            ExprKind::NamedArg { name, value }
+                if crate::names::php_symbol_key(name) == "preserve_keys" =>
+            {
+                return expr_is_truthy(value);
+            }
+            ExprKind::NamedArg { .. } => {}
+            _ => {
+                if positional == 3 {
+                    return expr_is_truthy(arg);
+                }
+                positional += 1;
+            }
+        }
+    }
+    false
+}
+
+/// Reports whether a literal flag selects the truthy PHP branch.
+fn expr_is_truthy(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::BoolLiteral(value) => *value,
+        ExprKind::IntLiteral(value) => *value != 0,
+        _ => false,
+    }
+}
+
+/// Returns the local name and packed value type of an int-keyed hash receiver.
+fn int_keyed_hash_local(
+    ctx: &LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Option<(String, PhpType, crate::span::Span)> {
+    let receiver = visible_array_receiver(sig, args)?;
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return None;
+    };
+    let PhpType::AssocArray { key, value } = ctx.local_type(name).codegen_repr() else {
+        return None;
+    };
+    if key.codegen_repr() != PhpType::Int {
+        return None;
+    }
+    Some((name.clone(), PhpType::Array(value), receiver.span))
+}
+
+/// Copies one array operand into a packed list via `array_values`.
+fn emit_array_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: crate::ir::ValueId,
+    packed: PhpType,
+    span: crate::span::Span,
+) -> crate::ir_lower::context::LoweredValue {
+    ctx.emit_owned_value(
+        Op::RuntimeCall,
+        vec![source],
+        Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayValues),
+        )),
+        packed,
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        Some(span),
+    )
+}
+
 /// Returns the array variable passed as parameter 0 when it is not buried in a spread.
 fn visible_array_receiver(sig: Option<&FunctionSig>, args: &[Expr]) -> Option<Expr> {
     if let Some(sig) = sig {
@@ -1130,6 +1274,20 @@ fn callback_first_param_is_by_ref(ctx: &LoweringContext<'_, '_>, callback: &Expr
             .functions
             .get(name.as_str())
             .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false)),
+        ExprKind::Variable(name) => match ctx.static_callable_local(name) {
+            Some(crate::ir_lower::context::StaticCallableBinding::UserFunction(function)) => ctx
+                .functions
+                .get(function.as_str())
+                .is_none_or(|sig| sig.ref_params.first().copied().unwrap_or(false)),
+            Some(crate::ir_lower::context::StaticCallableBinding::Closure { signature, .. })
+            | Some(crate::ir_lower::context::StaticCallableBinding::InstanceMethod {
+                signature, ..
+            }) => signature.ref_params.first().copied().unwrap_or(false),
+            // A callback whose by-value shape is not known can write through its first
+            // parameter. Boxing keeps that write. A tracked by-value function stays unboxed.
+            None => true,
+            Some(_) => false,
+        },
         _ => false,
     }
 }
