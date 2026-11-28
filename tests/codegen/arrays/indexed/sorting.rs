@@ -851,6 +851,45 @@ echo $rev[0], ",", $rev[1], "\n";
     assert_eq!(out, "ddx\n1=10 0=30 \n30,10\n");
 }
 
+/// Verifies splice and by-reference walk release objects, and that a by-reference
+/// argument can append to the sorted list before splice renumbers it.
+#[test]
+fn test_sorted_list_splice_and_walk_release_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class D {
+    public int $id;
+    function __construct(int $id) { $this->id = $id; }
+    function __destruct() { echo "d", $this->id; }
+}
+function splice_objects() {
+    $a = [new D(1), new D(2)];
+    asort($a);
+    $removed = array_splice($a, 0, 1);
+    echo $removed[0]->id, " ", $a[0]->id, "|";
+}
+splice_objects();
+echo "\n";
+function poke_splice() {
+    $c = [30, 10];
+    asort($c);
+    $poke = function (array &$items): int { $items[] = 7; return 0; };
+    array_splice($c, $poke($c), 1);
+    foreach ($c as $key => $value) { echo $key, "=", $value, " "; }
+}
+poke_splice();
+echo "\n";
+function walk_objects() {
+    $a = [new D(1), new D(2)];
+    array_walk($a, function (&$v, $k) { echo $k, ":", $v->id, " "; });
+    echo "|";
+}
+walk_objects();
+"#,
+    );
+    assert_eq!(out, "1 2|d2d1\n0=30 1=7 \n0:1 1:2 |d1d2");
+}
+
 /// Verifies `krsort` through a reference sorts the packed list and leaves an earlier copy intact.
 #[test]
 fn test_krsort_reference_to_packed_list() {

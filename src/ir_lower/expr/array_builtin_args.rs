@@ -586,8 +586,11 @@ fn lower_planned_builtin_call_args(
             lower_array_splice_args(ctx, sig, args)
         }
         _ if canonical == "array_splice" => {
+            let pre_type = int_keyed_hash_receiver_type(ctx, sig, args);
             let mut operands = lower_args_with_signature(ctx, sig, args);
-            reindex_lowered_splice_receiver(ctx, sig, args, &mut operands);
+            if pre_type.is_some() {
+                reindex_lowered_splice_receiver(ctx, sig, args, &mut operands);
+            }
             operands
         }
         crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter => {
@@ -974,6 +977,26 @@ fn box_concrete_hash_local_to_mixed(
     ctx.retype_ref_alias_group(name, PhpType::Mixed);
 }
 
+/// Returns the receiver type when this splice started from an int-keyed hash.
+///
+/// Captured before the other arguments run. A by-reference argument can replace that
+/// hash, and only this starting shape should be copied back to a packed list.
+pub(super) fn int_keyed_hash_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Option<PhpType> {
+    let receiver = visible_array_receiver(sig, args)?;
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return None;
+    };
+    let ty = ctx.local_type(name);
+    match ty.codegen_repr() {
+        PhpType::AssocArray { key, .. } if key.codegen_repr() == PhpType::Int => Some(ty),
+        _ => None,
+    }
+}
+
 /// Reindexes an int-keyed hash after the other splice arguments have been lowered.
 ///
 /// Offset, length, and replacement must observe the sorted keys. A throw or a read in
@@ -991,23 +1014,32 @@ pub(super) fn reindex_lowered_splice_receiver(
     let ExprKind::Variable(name) = &receiver.kind else {
         return;
     };
-    let PhpType::AssocArray { key, value } = ctx.local_type(name).codegen_repr() else {
+    let Some(stale_value) = operands.first().copied() else {
         return;
     };
-    if key.codegen_repr() != PhpType::Int {
-        return;
-    }
-    let Some(source_value) = operands.first().copied() else {
-        return;
+    let stale = crate::ir_lower::context::LoweredValue {
+        value: stale_value,
+        ir_type: ctx.builder.value_type(stale_value),
     };
-    let packed = PhpType::Array(value);
-    let source = crate::ir_lower::context::LoweredValue {
-        value: source_value,
-        ir_type: ctx.builder.value_type(source_value),
+    // A by-reference argument may already have replaced the hash. Splice then has to
+    // see that storage, not the load taken before the argument ran. A Mixed cell can
+    // still hold the sorted hash, and the mixed splice helper ignores hash payloads.
+    let current = ctx.local_type(name).codegen_repr();
+    let packed = match current {
+        PhpType::AssocArray { key, value } if key.codegen_repr() == PhpType::Int => {
+            PhpType::Array(value)
+        }
+        PhpType::Mixed => PhpType::Array(Box::new(PhpType::Mixed)),
+        _ => {
+            crate::ir_lower::ownership::release_if_owned(ctx, stale, Some(receiver.span));
+            operands[0] = ctx.load_local(name, Some(receiver.span)).value;
+            return;
+        }
     };
+    let fresh = ctx.load_local(name, Some(receiver.span));
     let values = ctx.emit_owned_value(
         Op::RuntimeCall,
-        vec![source.value],
+        vec![fresh.value],
         Some(crate::ir::Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayValues),
         )),
@@ -1015,7 +1047,11 @@ pub(super) fn reindex_lowered_splice_receiver(
         crate::ir_lower::effects_lookup::runtime_effects(),
         Some(receiver.span),
     );
-    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(receiver.span));
+    crate::ir_lower::ownership::release_if_owned(ctx, fresh, Some(receiver.span));
+    crate::ir_lower::ownership::release_if_owned(ctx, stale, Some(receiver.span));
+    if let Some(slot) = ctx.local_slots.get(name).copied() {
+        ctx.release_stored_local_value_before_overwrite(name, slot, Some(receiver.span));
+    }
     ctx.store_retyped_container_local(name, values, packed, Some(receiver.span));
     operands[0] = ctx.load_local(name, Some(receiver.span)).value;
 }
@@ -1119,6 +1155,9 @@ fn box_packed_walk_receiver(
         Some(arg.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, source, Some(arg.span));
+    if let Some(slot) = ctx.local_slots.get(name).copied() {
+        ctx.release_stored_local_value_before_overwrite(name, slot, Some(arg.span));
+    }
     ctx.store_mutated_local(name, boxed, PhpType::Mixed, Some(arg.span));
     ctx.retype_ref_alias_group(name, PhpType::Mixed);
     Some(ctx.load_local(name, Some(arg.span)).value)
