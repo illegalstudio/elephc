@@ -576,16 +576,17 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if canonical == "usort" =>
         {
-            // `usort` renumbers. The promoted int-keyed hash has to be a packed list
-            // again before the indexed user-sort backend will accept it.
-            adopt_packed_values_into_int_keyed_hash_local(ctx, sig, args);
-            if args.iter().any(is_spread_arg) {
+            // Lower the comparator first so it still sees the sorted hash keys.
+            // `usort` then renumbers, which the indexed backend only accepts as a packed list.
+            let mut operands = if args.iter().any(is_spread_arg) {
                 lower_args_with_signature(ctx, sig, args)
             } else if !crate::types::call_args::has_named_args(args) {
                 lower_user_value_sort_args(ctx, sig, args)
             } else {
                 lower_named_builtin_args_with_signature(ctx, sig, args)
-            }
+            };
+            reindex_usort_receiver_after_arguments(ctx, sig, args, &mut operands);
+            operands
         }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if !crate::types::call_args::has_named_args(args)
@@ -1083,25 +1084,32 @@ pub(super) fn reindex_lowered_splice_receiver(
     operands[0] = ctx.load_local(name, Some(receiver.span)).value;
 }
 
-/// Replaces an int-keyed hash local with a packed copy of its values.
-///
-/// `usort` renumbers and only accepts packed storage. The copy happens before the
-/// comparator is lowered, and the local is what the sort then mutates.
-fn adopt_packed_values_into_int_keyed_hash_local(
+/// Copies an int-keyed hash to a packed list after `usort`'s comparator argument ran.
+fn reindex_usort_receiver_after_arguments(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
+    operands: &mut [crate::ir::ValueId],
 ) {
     let Some((name, packed, span)) = int_keyed_hash_local(ctx, sig, args) else {
+        return;
+    };
+    let Some(stale_value) = operands.first().copied() else {
         return;
     };
     let fresh = ctx.load_local(&name, Some(span));
     let values = emit_array_values(ctx, fresh.value, packed.clone(), span);
     crate::ir_lower::ownership::release_if_owned(ctx, fresh, Some(span));
+    let stale = crate::ir_lower::context::LoweredValue {
+        value: stale_value,
+        ir_type: ctx.builder.value_type(stale_value),
+    };
+    crate::ir_lower::ownership::release_if_owned(ctx, stale, Some(span));
     if let Some(slot) = ctx.local_slots.get(&name).copied() {
         ctx.release_stored_local_value_before_overwrite(&name, slot, Some(span));
     }
     ctx.store_retyped_container_local(&name, values, packed, Some(span));
+    operands[0] = ctx.load_local(&name, Some(span)).value;
 }
 
 /// Passes a packed copy of an int-keyed hash without changing the caller's local.
@@ -1288,7 +1296,74 @@ fn callback_first_param_is_by_ref(ctx: &LoweringContext<'_, '_>, callback: &Expr
             None => true,
             Some(_) => false,
         },
+        ExprKind::ArrayLiteral(items) => array_literal_callback_is_by_ref(ctx, items),
+        // A keyed callable array is not a plain function name. Box it: the element
+        // write-back is the safe side when the method signature is not in this shape.
+        ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
         _ => false,
+    }
+}
+
+/// Reports whether `["Class", "method"]` or `[$object, "method"]` assigns through its first parameter.
+///
+/// A resolved method uses that method's signature. An unresolved callable array is boxed,
+/// because a by-reference element write would otherwise be dropped.
+fn array_literal_callback_is_by_ref(ctx: &LoweringContext<'_, '_>, items: &[Expr]) -> bool {
+    if items.len() != 2 {
+        return true;
+    }
+    let Some(method_name) = expr_string_literal(&items[1]) else {
+        return true;
+    };
+    let Some(class_info) = array_callback_class(ctx, &items[0]) else {
+        return true;
+    };
+    let method_key = crate::names::php_symbol_key(method_name);
+    let prefer_static = expr_string_literal(&items[0]).is_some();
+    let signature = if prefer_static {
+        class_info
+            .static_methods
+            .get(&method_key)
+            .or_else(|| class_info.methods.get(&method_key))
+    } else {
+        class_info
+            .methods
+            .get(&method_key)
+            .or_else(|| class_info.static_methods.get(&method_key))
+    };
+    match signature {
+        Some(signature) => signature.ref_params.first().copied().unwrap_or(false),
+        None => true,
+    }
+}
+
+/// Resolves the class of a two-element callable array.
+fn array_callback_class<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
+    target: &Expr,
+) -> Option<&'a crate::types::ClassInfo> {
+    let class_name = match &target.kind {
+        ExprKind::StringLiteral(name) => name.trim_start_matches('\\').to_string(),
+        ExprKind::Variable(name) => match ctx.local_type(name).codegen_repr() {
+            PhpType::Object(class_name) => class_name,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if let Some(info) = ctx.classes.get(&class_name) {
+        return Some(info);
+    }
+    let folded = crate::names::php_symbol_key(&class_name);
+    ctx.classes.iter().find_map(|(name, info)| {
+        (crate::names::php_symbol_key(name) == folded).then_some(info)
+    })
+}
+
+/// Returns the text of a string literal expression.
+fn expr_string_literal(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::StringLiteral(text) => Some(text.as_str()),
+        _ => None,
     }
 }
 

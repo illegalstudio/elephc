@@ -472,7 +472,7 @@ fn lower_foreach_selected(
             ctx.builder.position_at_end(exit);
         }
     }
-    ctx.restore_ref_alias_groups(entry_groups);
+    ctx.intersect_ref_alias_groups_with(&entry_groups);
     ctx.clear_static_callable_locals();
     if by_ref_origin.is_some() {
         ctx.emit_void(

@@ -1576,6 +1576,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_alias_groups = groups;
     }
 
+    /// Keeps an alias after a branch only when every edge still has the same members.
+    ///
+    /// A normal exit that detached a name must not be overwritten by the entry set, and a
+    /// skipped edge must not grow an alias the other edge dropped.
+    pub(crate) fn intersect_ref_alias_groups_with(&mut self, earlier: &RefAliasGroups) {
+        let current = self.ref_alias_groups_snapshot();
+        self.ref_alias_groups = RefAliasGroups::intersect(&[earlier, &current]);
+    }
+
     /// Gives every current alias of `name` the layout `name` just stored.
     ///
     /// The receiver's own type is updated by the store. Sibling names share the cell but
@@ -3785,6 +3794,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits `unset($local)`, breaking by-reference aliases without writing through them.
     ///
+    /// A by-reference unset drops that name from this path's alias group immediately. A join
+    /// keeps the alias only when every edge still lists the same members, so a later sort does
+    /// not retag a name this path already detached.
+    ///
+    /// A by-reference unset drops that name from this path's alias group immediately. A join
+    /// keeps the alias only when every edge still lists the same members, so a later sort does
+    /// not retag a name this path already detached.
+    ///
     /// At a span the CHECKER recorded in `bind_kill_sites` the binding is also ABANDONED: the
     /// name loses its slot mapping, so the next `declare_local` mints a FRESH slot at whatever
     /// type the checker approved for the re-binding assignment. Only the checker decides
@@ -3871,10 +3888,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.unmark_ref_bound_local(name);
         self.clear_reference_marker_array_local(name);
+        // This path's `unset` ends the alias even when a catch or an untaken edge keeps it.
+        // A later join retains the alias only when every edge still lists the same members,
+        // so a key-preserving sort does not retag the abandoned name as the promoted hash.
+        self.ref_alias_groups.detach(name);
         if detaches_reference {
-            // `$r = &$a; unset($r);` ends the alias. Leaving `$r` in the group makes a later
-            // key-preserving sort retype the abandoned name to the promoted hash.
-            self.ref_alias_groups.detach(name);
             // UnsetLocal clears promotion state, but its null sentinel is not an inert raw
             // string pointer. Zero the old storage without widening the capture's payload ABI.
             self.emit_void(

@@ -80,6 +80,7 @@ pub(super) fn lower_try_catch(
     ctx.push_try_loop_depth();
     let entry_groups = ctx.ref_alias_groups_snapshot();
     lower_block(ctx, try_body);
+    let normal_groups = ctx.ref_alias_groups_snapshot();
     ctx.restore_ref_alias_groups(entry_groups);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
@@ -93,6 +94,9 @@ pub(super) fn lower_try_catch(
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
     after_reachable |= lower_catch_dispatch(ctx, catches, after_block, span);
+    let catch_groups = ctx.ref_alias_groups_snapshot();
+    ctx.restore_ref_alias_groups(normal_groups);
+    ctx.intersect_ref_alias_groups_with(&catch_groups);
     ctx.builder.position_at_end(after_block);
     if !after_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
@@ -157,18 +161,22 @@ pub(super) fn lower_try_catch_finally(
     ctx.push_try_loop_depth();
     let entry_groups = ctx.ref_alias_groups_snapshot();
     lower_block(ctx, try_body);
+    let normal_groups = ctx.ref_alias_groups_snapshot();
     ctx.restore_ref_alias_groups(entry_groups);
+    let handler_groups = ctx.ref_alias_groups_snapshot();
+    let mut normal_after = normal_groups.clone();
+    ctx.restore_ref_alias_groups(normal_groups);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
     // The finalizer is emitted once for the normal edge and again for every exceptional edge.
     // Preserve the try exit facts before the first copy: an `unset` or retype in that copy must
     // not change how the handler-side copies lower their earlier statements.
     let handler_types = ctx.local_types_snapshot();
-    let handler_groups = ctx.ref_alias_groups_snapshot();
     let handler_initialized = ctx.initialized_slots_snapshot();
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         lower_block(ctx, finally_body);
+        normal_after = ctx.ref_alias_groups_snapshot();
         if !ctx.builder.insertion_block_is_terminated() {
             branch_to(ctx, after_block);
             after_reachable = true;
@@ -183,6 +191,9 @@ pub(super) fn lower_try_catch_finally(
     emit_try_pop_handler(ctx, handler_token, span);
     after_reachable |=
         lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
+    let handler_exit_groups = ctx.ref_alias_groups_snapshot();
+    ctx.restore_ref_alias_groups(normal_after);
+    ctx.intersect_ref_alias_groups_with(&handler_exit_groups);
     ctx.builder.position_at_end(after_block);
     if !after_reachable {
         ctx.builder.terminate(Terminator::Unreachable);

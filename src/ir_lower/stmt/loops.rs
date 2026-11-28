@@ -60,7 +60,7 @@ pub(super) fn lower_while(
             ctx.builder.position_at_end(exit);
         }
     }
-    ctx.restore_ref_alias_groups(entry_groups);
+    ctx.intersect_ref_alias_groups_with(&entry_groups);
     ctx.clear_static_callable_locals();
 }
 
@@ -108,7 +108,7 @@ pub(super) fn lower_do_while(
         Some(joins) => joins.finish_exit(ctx, loop_span),
         None => ctx.builder.position_at_end(exit),
     }
-    ctx.restore_ref_alias_groups(entry_groups);
+    ctx.intersect_ref_alias_groups_with(&entry_groups);
     ctx.clear_static_callable_locals();
 }
 
@@ -209,7 +209,7 @@ fn lower_for_once(
         Some(joins) => joins.finish_exit(ctx, loop_span),
         None => ctx.builder.position_at_end(exit),
     }
-    ctx.restore_ref_alias_groups(entry_groups);
+    ctx.intersect_ref_alias_groups_with(&entry_groups);
     ctx.clear_static_callable_locals();
 }
 

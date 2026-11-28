@@ -1049,6 +1049,114 @@ echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
     assert_eq!(out, "apple,banana,cherry,date");
 }
 
+/// Verifies `usort` still shows the sorted keys to a callback argument, then renumbers.
+#[test]
+fn test_usort_callback_sees_keys_before_reindex() {
+    let out = compile_and_run(
+        r#"<?php
+function dump_keys($items) {
+    foreach ($items as $key => $_) { echo $key; }
+    return "cmp";
+}
+function cmp($left, $right) { return $left <=> $right; }
+$a = [30, 10, 20];
+asort($a);
+usort($a, dump_keys($a));
+echo "\n", $a[0], ",", $a[1], ",", $a[2];
+"#,
+    );
+    assert_eq!(out, "120\n10,20,30");
+}
+
+/// Verifies a method callable array writes a by-reference element back, and a by-value method does not.
+#[test]
+fn test_array_walk_method_array_writes_by_ref_element() {
+    let out = compile_and_run(
+        r#"<?php
+class Walker {
+    static function write(&$value, $key) { $value = $key; }
+    static function localOnly($value, $key) { $value = $key; }
+    function writeInstance(&$value, $key) { $value = $key; }
+}
+$a = [30, 10];
+array_walk($a, ["Walker", "write"]);
+echo $a[0], ",", $a[1], "\n";
+$b = [30, 10];
+array_walk($b, ["Walker", "localOnly"]);
+echo $b[0], ",", $b[1], "\n";
+$walker = new Walker();
+$c = [30, 10];
+array_walk($c, [$walker, "writeInstance"]);
+echo $c[0], ",", $c[1];
+"#,
+    );
+    assert_eq!(out, "0,1\n30,10\n0,1");
+}
+
+/// Verifies unsetting an alias inside a try or a loop does not resurrect that alias afterwards.
+///
+/// A later binding of the unset name is its own list. Sorting the original local must not
+/// retag that new list. A try that leaves the alias in place still sorts both names together.
+#[test]
+fn test_unset_alias_inside_try_or_loop_stays_detached() {
+    let out = compile_and_run(
+        r#"<?php
+function show($arr) {
+    foreach ($arr as $key => $value) { echo $key, "=", $value, " "; }
+    echo "\n";
+}
+$a = [3, 1, 2];
+$r = &$a;
+try { unset($r); } catch (Exception $err) {}
+$r = [9, 8];
+asort($a);
+show($r);
+$b = [3, 1, 2];
+$s = &$b;
+$n = 0;
+while ($n < 1) { unset($s); $n++; }
+$s = [9, 8];
+asort($b);
+show($s);
+$c = [3, 1, 2];
+$t = &$c;
+try { unset($t); } finally {}
+$t = [9, 8];
+asort($c);
+show($t);
+$d = [3, 1, 2];
+$u = &$d;
+$n = 0;
+do { unset($u); $n++; } while ($n < 1);
+$u = [9, 8];
+asort($d);
+show($u);
+$kept = [3, 1, 2];
+$alias = &$kept;
+for ($n = 0; $n < 1; $n++) { unset($alias); }
+$alias = [9, 8];
+asort($kept);
+show($alias);
+$f = [3, 1, 2];
+$w = &$f;
+foreach ([1] as $_) { unset($w); }
+$w = [9, 8];
+asort($f);
+show($w);
+$g = [3, 1, 2];
+$x = &$g;
+try { echo "t"; } catch (Exception $err) { echo "c"; }
+krsort($x);
+echo " ";
+show($g);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=9 1=8 \n0=9 1=8 \n0=9 1=8 \n0=9 1=8 \n0=9 1=8 \n0=9 1=8 \nt 2=2 1=1 0=3 \n"
+    );
+}
+
 /// Verifies compiled PHP output for rsort string array.
 #[test]
 fn test_rsort_string_array() {
