@@ -1178,6 +1178,27 @@ echo "\n", $c[0], ",", $c[1];
     assert_eq!(out, "0,1\n0,1\n0=30 1=10 \n30,10");
 }
 
+/// Verifies a by-reference first-class method callback writes the walk element back.
+#[test]
+fn test_array_walk_first_class_method_writes_by_ref_element() {
+    let out = compile_and_run(
+        r#"<?php
+class WalkMethod {
+    static function write(&$value, $key) { $value = $key; }
+    function writeInstance(&$value, $key) { $value = $key + 10; }
+}
+$a = [30, 10];
+array_walk($a, WalkMethod::write(...));
+echo $a[0], ",", $a[1], "\n";
+$walker = new WalkMethod();
+$b = [30, 10];
+array_walk($b, $walker->writeInstance(...));
+echo $b[0], ",", $b[1];
+"#,
+    );
+    assert_eq!(out, "0,1\n10,11");
+}
+
 /// Verifies compiled PHP output for rsort string array.
 #[test]
 fn test_rsort_string_array() {
