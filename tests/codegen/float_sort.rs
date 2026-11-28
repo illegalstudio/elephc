@@ -168,6 +168,23 @@ echo pairs($b), "\n";
     }
 }
 
+/// Verifies `sort` and `rsort` renumber a float list after a key-preserving sort promoted it.
+#[test]
+fn test_sort_renumbers_floats_after_key_preserving_sort() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1.5, 0.5, 2.5];
+asort($a);
+sort($a);
+echo $a[0], ",", $a[1], ",", $a[2], "\n";
+$b = [1.5, 0.5, 2.5];
+arsort($b);
+rsort($b);
+echo $b[0], ",", $b[1], ",", $b[2];
+"#,
+    );
+    assert_eq!(out, "0.5,1.5,2.5\n2.5,1.5,0.5");
+}
 
 /// A float sort over `NAN` elements terminates, and so does `usort()` with a comparator that
 /// answers "greater" both ways. `<=>` against `NAN` is 1 in both directions, which made the

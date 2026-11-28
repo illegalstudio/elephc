@@ -1278,10 +1278,9 @@ fn callback_first_param_is_by_ref(ctx: &LoweringContext<'_, '_>, callback: &Expr
         ExprKind::Closure { params, .. } => {
             params.first().is_some_and(|(_, _, _, by_ref)| *by_ref)
         }
-        ExprKind::StringLiteral(name) => ctx
-            .functions
-            .get(name.as_str())
-            .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false)),
+        ExprKind::StringLiteral(name) => user_function_signature(ctx, name)
+            .is_some_and(signature_assigns_through_first_param),
+        ExprKind::FirstClassCallable(target) => first_class_callback_is_by_ref(ctx, target),
         ExprKind::Variable(name) => match ctx.static_callable_local(name) {
             Some(crate::ir_lower::context::StaticCallableBinding::UserFunction(function)) => ctx
                 .functions
@@ -1301,6 +1300,69 @@ fn callback_first_param_is_by_ref(ctx: &LoweringContext<'_, '_>, callback: &Expr
         // write-back is the safe side when the method signature is not in this shape.
         ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
         _ => false,
+    }
+}
+
+/// Returns the user-function signature for a PHP name, ignoring ASCII case.
+fn user_function_signature<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
+    name: &str,
+) -> Option<&'a FunctionSig> {
+    let requested = name.trim_start_matches('\\');
+    if let Some(signature) = ctx.functions.get(requested) {
+        return Some(signature);
+    }
+    let canonical =
+        super::callable_resolution::lookup_folded_name(ctx.functions.keys(), requested)?;
+    ctx.functions.get(&canonical)
+}
+
+/// Reports whether a signature assigns through its first parameter.
+fn signature_assigns_through_first_param(signature: &FunctionSig) -> bool {
+    signature.ref_params.first().copied().unwrap_or(false)
+}
+
+/// Reports whether a first-class callable assigns through its first parameter.
+///
+/// An unresolved instance method is boxed. A resolved by-value function or static method
+/// stays unboxed, including builtins that are not in the user-function map.
+fn first_class_callback_is_by_ref(ctx: &LoweringContext<'_, '_>, target: &CallableTarget) -> bool {
+    match target {
+        CallableTarget::Function(name) => user_function_signature(ctx, name.as_str())
+            .is_some_and(signature_assigns_through_first_param),
+        CallableTarget::StaticMethod { receiver, method } => {
+            super::static_method_calls::static_method_implementation_signature(ctx, receiver, method)
+                .is_some_and(signature_assigns_through_first_param)
+        }
+        CallableTarget::Method { object, method } => {
+            instance_method_first_param_is_by_ref(ctx, object, method)
+        }
+    }
+}
+
+/// Reports whether an instance-method first-class callable assigns through its first parameter.
+fn instance_method_first_param_is_by_ref(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+) -> bool {
+    let ExprKind::Variable(name) = &object.kind else {
+        return true;
+    };
+    let PhpType::Object(class_name) = ctx.local_type(name).codegen_repr() else {
+        return true;
+    };
+    let Some(class_info) = ctx.classes.get(&class_name) else {
+        return true;
+    };
+    let method_key = crate::names::php_symbol_key(method);
+    match class_info
+        .methods
+        .get(&method_key)
+        .or_else(|| class_info.static_methods.get(&method_key))
+    {
+        Some(signature) => signature_assigns_through_first_param(signature),
+        None => true,
     }
 }
 

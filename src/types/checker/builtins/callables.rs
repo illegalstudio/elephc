@@ -314,11 +314,16 @@ fn check_array_callback_builtin_call_in_engine_frame(
     writable_mixed_value: bool,
 ) -> Result<PhpType, CompileError> {
     let mut callback_env = env.clone();
+    let first_param_by_ref = callback_first_param_is_by_ref(checker, callback);
     let callback_args = callback_arg_types
         .iter()
         .enumerate()
         .map(|(index, ty)| {
-            if index == 0
+            if index == 0 && first_param_by_ref {
+                // A by-reference parameter rejects the integer/string literals used for
+                // by-value probes, and an untyped `&$value` needs mixed storage.
+                writable_mixed_callback_dummy_arg(index, span, &mut callback_env)
+            } else if index == 0
                 && writable_mixed_value
                 && *ty == PhpType::Mixed
             {
@@ -2104,23 +2109,64 @@ fn callback_declares_at_least_two_params(checker: &Checker, callback: &Expr) -> 
             .get(name)
             .is_some_and(callback_signature_accepts_walk_key),
         ExprKind::StringLiteral(name) => {
-            let canonical = checker
-                .canonical_function_name_folded(name.as_str())
-                .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
-            checker
-                .functions
-                .get(canonical.as_str())
-                .is_some_and(callback_signature_accepts_walk_key)
-                || checker
-                    .fn_decls
-                    .get(canonical.as_str())
-                    .is_some_and(|decl| decl.params.len() >= 2 || decl.variadic.is_some())
+            user_callback_accepts_walk_key(checker, name)
+        }
+        ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Function(name)) => {
+            user_callback_accepts_walk_key(checker, name.as_str())
         }
         ExprKind::Assignment { value, .. } => {
             callback_declares_at_least_two_params(checker, value)
         }
         _ => false,
     }
+}
+
+/// Reports whether a named user callback consumes the walk key, ignoring ASCII case.
+fn user_callback_accepts_walk_key(checker: &Checker, name: &str) -> bool {
+    let canonical = checker
+        .canonical_function_name_folded(name)
+        .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+    checker
+        .functions
+        .get(canonical.as_str())
+        .is_some_and(callback_signature_accepts_walk_key)
+        || checker
+            .fn_decls
+            .get(canonical.as_str())
+            .is_some_and(|decl| decl.params.len() >= 2 || decl.variadic.is_some())
+}
+
+/// Reports whether the callback assigns through its first parameter.
+fn callback_first_param_is_by_ref(checker: &Checker, callback: &Expr) -> bool {
+    match &callback.kind {
+        ExprKind::Closure { params, .. } => {
+            params.first().is_some_and(|(_, _, _, by_ref)| *by_ref)
+        }
+        ExprKind::StringLiteral(name) => user_callback_first_param_is_by_ref(checker, name),
+        ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Function(name)) => {
+            user_callback_first_param_is_by_ref(checker, name.as_str())
+        }
+        ExprKind::Variable(name) => checker
+            .callable_sigs
+            .get(name)
+            .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false)),
+        _ => false,
+    }
+}
+
+/// Reports whether a named user function assigns through its first parameter.
+fn user_callback_first_param_is_by_ref(checker: &Checker, name: &str) -> bool {
+    let canonical = checker
+        .canonical_function_name_folded(name)
+        .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+    checker
+        .functions
+        .get(canonical.as_str())
+        .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false))
+        || checker
+            .fn_decls
+            .get(canonical.as_str())
+            .is_some_and(|decl| decl.ref_params.first().copied().unwrap_or(false))
 }
 
 /// Reports whether a resolved callable signature can consume the walk key argument.

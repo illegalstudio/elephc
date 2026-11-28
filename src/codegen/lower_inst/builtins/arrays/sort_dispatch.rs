@@ -119,6 +119,9 @@ pub(super) fn lower_hash_reindexing_sort(
     let helper = match value_ty {
         PhpType::Str => Some(str_helper),
         PhpType::Int => Some(int_helper),
+        // A key-preserving sort of floats leaves a hash. `sort`/`rsort` still renumber,
+        // and the extracted list uses the same float-slot sorter as a packed float array.
+        PhpType::Float => None,
         ref other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for hash values of PHP type {:?}",
@@ -156,10 +159,10 @@ pub(super) fn lower_hash_reindexing_sort(
             abi::emit_call_label(ctx.emitter, helper);
         }
         None => {
-            // `emit_mixed_slot_sort` reads its array from the first argument register, so move it
+            // `emit_float_slot_sort` reads its array from the first argument register, so move it
             // there first (a no-op on AArch64, where that is also the result register).
             abi::emit_reg_move(ctx.emitter, arg0, result_reg);
-            emit_mixed_slot_sort(ctx, name)?;
+            emit_float_slot_sort(ctx, name)?;
         }
     }
 
