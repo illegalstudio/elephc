@@ -2912,6 +2912,9 @@ fn tokenizer_reference_write_continuations_are_errors() {
             b"<?php $a = [1 => &$v++];",
             "syntax error, unexpected token \"++\", expecting \"->\" or \"?->\" or \"[\"",
         ),
+        (b"<?php [fn() => &$v = 1];", "syntax error, unexpected token \"&\""),
+        (b"<?php array(fn() => &$v++);", "syntax error, unexpected token \"&\""),
+        (b"<?php [fn(): int => &$v = 1];", "syntax error, unexpected token \"&\""),
         (
             b"<?php $f = function () use (&$x = 1) {};",
             "syntax error, unexpected token \"=\", expecting \")\"",
