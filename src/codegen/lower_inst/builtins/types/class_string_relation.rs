@@ -35,6 +35,8 @@ pub(super) fn lower(
         return store_if_result(ctx, inst);
     }
     let target_key = php_symbol_key(target.trim_start_matches('\\'));
+    let marker_base = super::super::class_relations::reflection_hidden_interface(ctx, target)
+        .then(|| php_symbol_key(super::generic_base_name(target)));
     let mut candidates = std::collections::BTreeSet::new();
     // `Closure` has no class-info entry; as a name it is a class whose only ancestor is itself.
     if !exclude_self && target_key == php_symbol_key("Closure") {
@@ -42,8 +44,17 @@ pub(super) fn lower(
     }
     for name in ctx.module.class_infos.keys() {
         let same = php_symbol_key(name.trim_start_matches('\\')) == target_key;
-        if (!exclude_self && same) || parent_chain_contains(ctx, name, &target_key)
-            || (class_interfaces_contain(ctx, name, &target_key)
+        // An instantiation is the template's own class, not a subclass of it.
+        if exclude_self
+            && marker_base.as_deref().is_some_and(|base| {
+                php_symbol_key(super::generic_base_name(name)) == base
+            })
+        {
+            continue;
+        }
+        if (!exclude_self && same)
+            || parent_chain_contains(ctx, name, &target_key, marker_base.as_deref())
+            || (class_interfaces_contain(ctx, name, &target_key, marker_base.as_deref())
                 && interface_is_relation(ctx, name, target, exclude_self))
         { candidates.insert(name.trim_start_matches('\\').to_string()); }
     }
@@ -518,10 +529,16 @@ fn interface_is_relation(ctx: &FunctionContext<'_>, class: &str, interface: &str
     if !exclude_self || !super::super::class_relations::reflection_hidden_interface(ctx, interface) {
         return true;
     }
+    let marker_base = php_symbol_key(super::generic_base_name(interface));
     lookup_class(ctx, class.trim_start_matches('\\'))
         .and_then(|info| info.parent.clone())
         .is_some_and(|parent| {
-            class_interfaces_contain(ctx, parent.trim_start_matches('\\'), &php_symbol_key(interface))
+            class_interfaces_contain(
+                ctx,
+                parent.trim_start_matches('\\'),
+                &php_symbol_key(interface),
+                Some(&marker_base),
+            )
         })
 }
 

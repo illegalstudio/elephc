@@ -169,6 +169,7 @@ fn expr_has_reference_capture(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Reference(inner)
         | ExprKind::Spread(inner)
         | ExprKind::NamedArg { value: inner, .. }
         | ExprKind::IncludeValue { path: inner, .. }
