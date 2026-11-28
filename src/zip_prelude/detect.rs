@@ -10,7 +10,7 @@
 
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
+    CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, MemberArguments, PackedField, RuntimeClassMember, RuntimeClassReceiver,
     RuntimeExpr, StaticReceiver, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeExpr,
 };
@@ -219,45 +219,16 @@ fn packed_field_refs_zip(field: &PackedField) -> bool {
     type_refs_zip(&field.type_expr)
 }
 
-/// Returns whether an expression can be a `zip://` path handed to an I/O entry point.
-///
-/// Only a string literal that *begins* with the scheme, or the concatenation and
-/// ternary shapes that build one from such a literal, counts. A URL quoted inside a
-/// message must not force the bridge, while `"zip://" . $file` must.
-fn path_expr_refs_zip(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::StringLiteral(value) => value.to_ascii_lowercase().starts_with("zip://"),
-        ExprKind::BinaryOp { left, right, op: BinOp::Concat } => {
-            path_expr_refs_zip(left) || path_expr_refs_zip(right)
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => path_expr_refs_zip(condition) || path_expr_refs_zip(then_expr) || path_expr_refs_zip(else_expr),
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
-            path_expr_refs_zip(value) || path_expr_refs_zip(default)
-        }
-        ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => path_expr_refs_zip(expr),
-        ExprKind::NamedArg { value, .. } => path_expr_refs_zip(value),
-        _ => false,
-    }
-}
-
-/// Returns whether a call argument list reaches the zip surface, including a literal
-/// `zip://` path argument that is not itself a zip call or class reference.
-fn args_ref_zip(args: &[Expr]) -> bool {
-    args.iter().any(|arg| expr_refs_zip(arg) || path_expr_refs_zip(arg))
-}
-
 /// Returns whether an expression references the zip surface at any function-call,
 /// class-name, or constant position, recursing into every child expression and statement.
 /// The `match` is exhaustive so a newly added `ExprKind` cannot silently bypass detection.
 fn expr_refs_zip(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
+        ExprKind::StringLiteral(value) => value
+            .as_bytes()
+            .get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"zip://")),
+        ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
@@ -304,9 +275,9 @@ fn expr_refs_zip(expr: &Expr) -> bool {
         ExprKind::FunctionCall { name, args } => {
             name_is_zip_function(name)
                 || name_lookup_refs_zip(name, args)
-                || args_ref_zip(args)
+                || args.iter().any(expr_refs_zip)
         }
-        ExprKind::ClosureCall { args, .. } => args_ref_zip(args),
+        ExprKind::ClosureCall { args, .. } => args.iter().any(expr_refs_zip),
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_refs_zip),
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
@@ -347,18 +318,18 @@ fn expr_refs_zip(expr: &Expr) -> bool {
         }
         ExprKind::NamedArg { value, .. } => expr_refs_zip(value),
         ExprKind::ExprCall { callee, args } => {
-            expr_refs_zip(callee) || args_ref_zip(args)
+            expr_refs_zip(callee) || args.iter().any(expr_refs_zip)
         }
         ExprKind::NewObject { class_name, args } => {
             name_is_zip_class(class_name)
                 || reflection_refs_zip(class_name, args)
-                || args_ref_zip(args)
+                || args.iter().any(expr_refs_zip)
         }
         ExprKind::NewGeneric { class_type, args } => {
-            type_refs_zip(class_type) || args_ref_zip(args)
+            type_refs_zip(class_type) || args.iter().any(expr_refs_zip)
         }
         ExprKind::NewDynamic { name_expr, args } => {
-            expr_refs_zip(name_expr) || args_ref_zip(args)
+            expr_refs_zip(name_expr) || args.iter().any(expr_refs_zip)
         }
         ExprKind::NewDynamicObject {
             class_name,
@@ -369,7 +340,7 @@ fn expr_refs_zip(expr: &Expr) -> bool {
             expr_refs_zip(class_name)
                 || name_is_zip_class(fallback_class)
                 || name_is_zip_class(required_parent)
-                || args_ref_zip(args)
+                || args.iter().any(expr_refs_zip)
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_refs_zip(object),
@@ -380,15 +351,15 @@ fn expr_refs_zip(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_zip(receiver),
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            expr_refs_zip(object) || args_ref_zip(args)
+            expr_refs_zip(object) || args.iter().any(expr_refs_zip)
         }
         ExprKind::NullsafeDynamicMethodCall {
             object,
             method,
             args,
-        } => expr_refs_zip(object) || expr_refs_zip(method) || args_ref_zip(args),
+        } => expr_refs_zip(object) || expr_refs_zip(method) || args.iter().any(expr_refs_zip),
         ExprKind::StaticMethodCall { receiver, args, .. } => {
-            receiver_refs_zip(receiver) || args_ref_zip(args)
+            receiver_refs_zip(receiver) || args.iter().any(expr_refs_zip)
         }
         ExprKind::FirstClassCallable(target) => callable_target_refs_zip(target),
         ExprKind::BufferNew { element_type, len } => {
@@ -398,16 +369,14 @@ fn expr_refs_zip(expr: &Expr) -> bool {
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_zip(receiver),
         ExprKind::ObjectClassName { object } => expr_refs_zip(object),
         ExprKind::NewScopedObject { receiver, args } => {
-            receiver_refs_zip(receiver) || args_ref_zip(args)
+            receiver_refs_zip(receiver) || args.iter().any(expr_refs_zip)
         }
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_zip)
                 || value.as_deref().is_some_and(expr_refs_zip)
         }
         ExprKind::Runtime(runtime) => runtime_expr_refs_zip(runtime),
-        ExprKind::IncludeValue { path, .. } => {
-            expr_refs_zip(path) || path_expr_refs_zip(path)
-        }
+        ExprKind::IncludeValue { path, .. } => expr_refs_zip(path),
         ExprKind::Reference(inner) => expr_refs_zip(inner),
     }
 }
@@ -557,7 +526,7 @@ fn stmt_refs_zip(stmt: &Stmt) -> bool {
                     .as_ref()
                     .is_some_and(|body| body.iter().any(stmt_refs_zip))
         }
-        StmtKind::Include { path, .. } => expr_refs_zip(path) || path_expr_refs_zip(path),
+        StmtKind::Include { path, .. } => expr_refs_zip(path),
         StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. } => body.iter().any(stmt_refs_zip),
@@ -701,6 +670,8 @@ mod tests {
             r"<?php file_get_contents('zip://archive.zip#entry');",
             r"<?php file_get_contents('zip://' . __DIR__ . '/a.zip#e');",
             r"<?php include 'zip://archive.zip#entry';",
+            r"<?php $path = 'zip://archive.zip#entry'; file_get_contents($path);",
+            r"<?php $path = 'zip://' . __DIR__ . '/a.zip#e'; readfile($path);",
         ] {
             let tokens = crate::lexer::tokenize(source).unwrap();
             let ast = crate::parser::parse(&tokens).unwrap();
@@ -719,12 +690,6 @@ mod tests {
             "<?php namespace App; class ReflectionFunction { public function __construct(string $name) {} } new ReflectionFunction('zip_close');",
             "<?php function custom($zip_close) {} new ReflectionParameter(function: 'custom', parameter: 'zip_close');",
             r#"<?php echo "see docs at zip://example\n";"#,
-            r#"<?php echo "zip://not-a-wrapper\n";"#,
-            r#"<?php $message = "zip://not-a-wrapper"; echo $message;"#,
-            // Detection is syntactic: a literal stored in a variable and only then
-            // handed to a path function needs `--with-zip`, because no path-position
-            // argument carries the literal.
-            r"<?php $path = 'zip://archive.zip#entry'; file_get_contents($path);",
         ] {
             let tokens = crate::lexer::tokenize(source).unwrap();
             let ast = crate::parser::parse(&tokens).unwrap();

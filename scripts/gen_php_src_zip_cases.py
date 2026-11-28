@@ -27,25 +27,11 @@ OUTPUT = ROOT / "tests" / "codegen" / "zip_php_src_cases.rs"
 DEFAULT_TAG = "php-8.5.13"
 PHP_SRC_URL = "https://codeload.github.com/php/php-src/tar.gz/refs/tags/{tag}"
 
-# Fixtures whose php-src assertion depends on a native `zip://` stream wrapper,
-# on libzip's exact torrentzip byte layout, or on an unconditional SKIPIF.
-# They stay in the provenance corpus; the reasons are repeated in the generated
-# module preamble so a reader never mistakes them for silently missing coverage.
-SKIPPED = {
-    "bug51353": "unconditional php-src SKIPIF (100,000-entry stress test)",
-    # PHP's expected bool(false) comes from its own freed archive resource after the
-    # caller overwrites the Zip Directory handle. Elephc keeps the entry name alive
-    # and returns "foo"; the regression (a crash) cannot occur, so the value differs
-    # by design rather than by a missing zip semantic.
-    "gh17319": "PHP expects false from its freed archive resource; elephc returns the safe entry name",
-    # The fixture resurrects a ZipArchive through `$GLOBALS` and then reads a typed
-    # property from the untyped value. Elephc's checker cannot narrow that dynamic
-    # global; the stream-lifetime behavior itself is covered by the *_progress_callback,
-    # *_cancel_callback, and *_close_with_open_stream fixtures.
-    "gh23276": "untyped $GLOBALS resurrection is outside the static checker; stream lifetime covered by sibling fixtures",
-    # The prelude's `zip://` wrapper snapshots the entry at open, so its metadata and
-    # fstat keep working after the backing archive is replaced with a non-zip file.
-    "stream_fstat_unreadable_archive": "snapshot zip:// wrapper keeps fstat available after the archive file changes",
+# Fixtures ported but left `#[ignore]` because upstream skips them unconditionally.
+# The generated test keeps the source and assertion so a manual `--ignored` run can
+# exercise it, while the default suite stays fast.
+IGNORED = {
+    "bug51353": "upstream SKIPIF: 100,000-entry stress test",
 }
 SECTION_RE = re.compile(r"^--([A-Z_]+)--$", re.MULTILINE)
 
@@ -266,6 +252,38 @@ def main() -> None:
             )
             source = source.replace("unpack('V', substr($raw, $i + 24, 4))[1]", "read_u32(substr($raw, $i + 24, 4))")
             source = source.replace("pack('V', $size + 10)", "write_u32($size + 10)")
+        if name == "gh17319":
+            # PHP's expected false comes from its freed Zip Directory resource. The
+            # original overwrites the only handle, which elephc cannot observe; close
+            # the directory explicitly so the entry-name-after-free value is still
+            # asserted without relying on a dangling C pointer.
+            source = source.replace("$zip = zip_read($zip);", "$entry = zip_read($zip);\n@zip_close($zip);")
+            source = source.replace("zip_entry_name($zip)", "zip_entry_name($entry)")
+        if name == "gh23276":
+            # The fixture resurrects through an untyped $GLOBALS entry; the static
+            # checker cannot narrow that value back to ResurrectingHolder. A global
+            # plus an explicit instanceof guard keeps the resurrection behavior and
+            # the typed stream read.
+            source = source.replace(
+                "        $GLOBALS['resurrected'] = $this;",
+                "        global $resurrected;\n        $resurrected = $this;",
+            )
+            source = source.replace(
+                "$filename = __DIR__ . '/gh23276.zip';",
+                "$resurrected = null;\n$filename = __DIR__ . '/gh23276.zip';",
+            )
+            source = source.replace(
+                "var_dump($resurrected instanceof ResurrectingHolder);\n"
+                "var_dump(stream_get_contents($resurrected->stream));\n"
+                "fclose($resurrected->stream);\n"
+                "unset($resurrected);",
+                "var_dump($resurrected instanceof ResurrectingHolder);\n"
+                "if ($resurrected instanceof ResurrectingHolder) {\n"
+                "    var_dump(stream_get_contents($resurrected->stream));\n"
+                "    fclose($resurrected->stream);\n"
+                "}\n"
+                "unset($resurrected);",
+            )
         if name == "gh19688":
             # The upstream fixture uses its own `001.phpt` file as a glob target. The
             # Rust port keeps a committed `001.txt` asset instead so no `.phpt` remains.
@@ -287,8 +305,6 @@ def main() -> None:
             source = source.replace("$done", "$state->done")
         ini = rust_pairs(parse_pairs(sections.get("INI", "")))
         env = rust_pairs(parse_pairs(sections.get("ENV", "")))
-        if name in SKIPPED:
-            continue
         ident = "test_php_src_zip_" + name.replace("-", "_").replace(".", "_")
         if "EXPECT" in sections:
             expected = sections["EXPECT"].replace("\r\n", "\n").replace(f"{name}.php", "test.php")
@@ -305,18 +321,16 @@ def main() -> None:
         else:
             raise SystemExit(f"{name}: missing EXPECT/EXPECTF/EXPECTREGEX section")
         platform_gate = '#[cfg(target_os = "linux")]\n' if name == "oo_addfile_proc" else ""
+        ignore = f'#[ignore = "{IGNORED[name]}"]\n' if name in IGNORED else ""
         functions.append(
             f"/// Replays php-src `{name}.phpt`.\n"
-            f"{platform_gate}#[test]\n"
+            f"{platform_gate}{ignore}#[test]\n"
             f"fn {ident}() {{\n"
             f"    if skip_without_zip_native(\"{ident}\") {{ return; }}\n"
             f"    let out = run_case({rust_raw(source)}, {ini}, {env});\n"
             f"{assertion}\n"
             "}"
         )
-    skipped_lines = "\n".join(
-        f"//! - `{name}`: {reason}." for name, reason in sorted(SKIPPED.items())
-    )
     header = f"""//! Purpose:
 //! Rust tests ported from the PHP 8.5.13 `ext/zip` PHPT corpus.
 //!
@@ -328,9 +342,6 @@ def main() -> None:
 //! - Each test carries its PHP source and assertion inline. No `.phpt` file is
 //!   committed or parsed at run time; the generator downloads the tagged upstream
 //!   corpus when the tests are refreshed.
-//! - Upstream fixtures intentionally not ported:
-{skipped_lines}
-
 use super::{{assert_format, run_case}};
 use crate::support::zip_native::skip_without_zip_native;
 """

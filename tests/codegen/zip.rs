@@ -504,22 +504,43 @@ fn test_zip_open_honors_open_basedir() {
     if skip_without_zip_native("test_zip_open_honors_open_basedir") { return; }
     let out = compile_and_run(r#"<?php
 $dir = __DIR__;
-file_put_contents($dir . '/outside.zip', '');
 mkdir($dir . '/allowed');
+mkdir($dir . '/outside');
+$make = new ZipArchive();
+$make->open($dir . '/allowed/inside.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE);
+$make->addFromString('a.txt', 'x');
+$make->close();
+$make->open($dir . '/outside/escape.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE);
+$make->addFromString('a.txt', 'x');
+$make->close();
+symlink($dir . '/outside', $dir . '/allowed/link');
+symlink($dir . '/allowed', $dir . '/allowed-link');
 $zip = new ZipArchive();
 ini_set('open_basedir', $dir . '/allowed');
-var_dump($zip->open($dir . '/outside.zip'));
-var_dump($zip->open($dir . '/allowed/../outside.zip'));
-var_dump(zip_open($dir . '/outside.zip'));
-var_dump($zip->open($dir . '/allowed/sub/../inside.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE));
+var_dump($zip->open($dir . '/outside/escape.zip'));
+var_dump(zip_open($dir . '/outside/escape.zip'));
+var_dump($zip->open($dir . '/allowed/./inside.zip'));
+var_dump($zip->open($dir . '/allowed/link/../outside/escape.zip'));
+chdir($dir);
+var_dump($zip->open('allowed/inside.zip'));
+ini_set('open_basedir', $dir . '/allowed-link');
+var_dump($zip->open($dir . '/allowed/inside.zip'));
+ini_set('open_basedir', $dir . '/other:' . $dir . '/allowed');
+var_dump($zip->open($dir . '/allowed/inside.zip'));
+chdir($dir);
+ini_set('open_basedir', 'allowed');
+var_dump($zip->open($dir . '/allowed/inside.zip'));
 $zip->close();
+@unlink($dir . '/allowed-link');
+@unlink($dir . '/allowed/link');
 @unlink($dir . '/allowed/inside.zip');
+@unlink($dir . '/outside/escape.zip');
 @rmdir($dir . '/allowed');
-@unlink($dir . '/outside.zip');
+@rmdir($dir . '/outside');
 "#);
     assert_eq!(
         out.replace("\r\n", "\n").trim_end(),
-        "bool(false)\nbool(false)\nbool(false)\nbool(true)"
+        "bool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(true)"
     );
 }
 
@@ -1272,11 +1293,87 @@ $zip->close();
 fn test_zip_scheme_text_does_not_inject_bridge() {
     let out = compile_and_run(r#"<?php
 echo "see zip://docs for details\n";
-$message = "zip://not-a-wrapper";
-echo $message, "\n";
 "#);
     assert_eq!(
         out.replace("\r\n", "\n").trim_end(),
-        "see zip://docs for details\nzip://not-a-wrapper"
+        "see zip://docs for details"
+    );
+}
+
+/// Verifies the procedural deprecation text follows the `--php-version` profile.
+#[test]
+fn test_zip_procedural_deprecation_follows_php_version() {
+    if skip_without_zip_native("test_zip_procedural_deprecation_follows_php_version") { return; }
+    let source = r#"<?php
+set_error_handler(function (int $errno, string $message): bool {
+    echo $message, "\n";
+    return true;
+});
+zip_open(__DIR__ . '/missing-deprecation.zip');
+"#;
+    use elephc::php_version::PhpVersion;
+    for version in [PhpVersion::Php82, PhpVersion::Php83] {
+        let out = compile_and_run_with_php_version(source, version);
+        assert_eq!(
+            out.replace("\r\n", "\n").trim_end(),
+            "Function zip_open() is deprecated",
+            "--php-version {version}"
+        );
+    }
+    for version in [PhpVersion::Php84, PhpVersion::Php85] {
+        let out = compile_and_run_with_php_version(source, version);
+        assert_eq!(
+            out.replace("\r\n", "\n").trim_end(),
+            "Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead",
+            "--php-version {version}"
+        );
+    }
+}
+
+/// Verifies extractTo() refuses to overwrite a pre-planted final-component symlink.
+#[test]
+fn test_zip_extract_rejects_symlinked_file_target() {
+    if skip_without_zip_native("test_zip_extract_rejects_symlinked_file_target") { return; }
+    let out = compile_and_run(r#"<?php
+$dir = __DIR__ . '/symlink-file';
+$file = __DIR__ . '/symlink-file.zip';
+mkdir($dir);
+mkdir($dir . '/outside');
+file_put_contents($dir . '/outside/target.txt', 'untouched');
+symlink($dir . '/outside/target.txt', $dir . '/a.txt');
+$zip = new ZipArchive();
+$zip->open($file, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+$zip->addFromString('a.txt', 'archive');
+$zip->close();
+$zip->open($file);
+var_dump($zip->extractTo($dir));
+$zip->close();
+var_dump(file_get_contents($dir . '/outside/target.txt'));
+@unlink($file);
+@unlink($dir . '/a.txt');
+@unlink($dir . '/outside/target.txt');
+@rmdir($dir . '/outside');
+@rmdir($dir);
+"#);
+    assert_eq!(
+        out.replace("\r\n", "\n").trim_end(),
+        "bool(false)\nstring(9) \"untouched\""
+    );
+}
+
+/// Verifies a `zip://` literal stored in a variable still injects the prelude.
+#[test]
+fn test_zip_scheme_literal_in_variable_injects_bridge() {
+    if skip_without_zip_native("test_zip_scheme_literal_in_variable_injects_bridge") { return; }
+    let out = compile_and_run(r#"<?php
+$file = __DIR__ . '/auto-detect.zip';
+file_put_contents($file, base64_decode('UEsDBAoAAAAAAHiBBDPps6IEBAAAAAQAAAADABUAYmFyVVQJAAMkIvJCTiLyQlV4BAD0AWQAYmFyClBLAwQKAAAAAACOgQQzAAAAAAAAAAAAAAAABwAVAGZvb2Jhci9VVAkAA0wi8kKCIvJCVXgEAPQBZABQSwMEFAAAAAgAjoEEM1g+xR0YAAAAGwAAAAoAFQBmb29iYXIvYmF6VVQJAANMIvJCTiLyQlV4BAD0AWQAS8pJTMpJVACSqUUKRYlJYLr48J6cKi4AUEsDBBQAAAAIAKGh5jTbZAz0CgAAAAgAAAAKAAAAZW50cnkxLnR4dEvNKymqVFA2BABQSwECFwMKAAAAAAB4gQQz6bOiBAQAAAAEAAAAAwANAAAAAAABAAAAtIEAAAAAYmFyVVQFAAMkIvJCVXgAAFBLAQIXAwoAAAAAAI6BBDMAAAAAAAAAAAAAAAAHAA0AAAAAAAAAEAD9QToAAABmb29iYXIvVVQFAANMIvJCVXgAAFBLAQIXAxQAAAAIAI6BBDNYPsUdGAAAABsAAAAKAA0AAAAAAAEAAAC0gXQAAABmb29iYXIvYmF6VVQFAANMIvJCVXgAAFBLAQIAABQAAAAIAKGh5jTbZAz0CgAAAAgAAAAKAAAAAAAAAAAAAAAAAMkAAABlbnRyeTEudHh0UEsFBgAAAAAEAAQA/QAAAPsAAAAAAA=='));
+$path = 'zip://' . $file . '#entry1.txt';
+var_dump(file_get_contents($path));
+@unlink($file);
+"#);
+    assert_eq!(
+        out.replace("\r\n", "\n").trim_end(),
+        "string(8) \"entry #1\""
     );
 }

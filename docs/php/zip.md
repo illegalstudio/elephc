@@ -27,10 +27,11 @@ toolchain. `cmake` must be available when the package is first built; the pinned
 OpenSSL archive provides AES support on every target, and no system compression or
 crypto library is consulted.
 
-Static references to `ZipArchive`, a `zip_*` function, or a `zip://` literal used
-directly as a call argument or include path inject the zip prelude automatically.
-A literal stored in a variable first needs the explicit flag. For code reached only
-through opaque `eval()` source, force it with:
+Static references to `ZipArchive`, a `zip_*` function, or any string literal that
+begins with `zip://` inject the zip prelude automatically. Detection is syntactic: a
+literal that begins with `zip://` but is only printed still links the bridge, while a
+`zip://` mention later in a message (for example `"see zip://docs"`) does not. For code
+reached only through opaque `eval()` source, force it with:
 
 ```bash
 elephc --with-zip main.php
@@ -161,9 +162,11 @@ AES-128/192/256, and traditional PKWARE (ZipCrypto). `setEncryptionName()` /
   deflate64, and PPMd encode are not. `isCompressionMethodSupported()` therefore
   reports `false` for those methods.
 - When no OPcache/web `ini_set()` owns the name, the zip prelude's fallback answers
-  `false` for directives other than `open_basedir`. The shared `open_basedir` arm
-  returns the previous value even when PHP would refuse a loosening, and resolves
-  `..` and relative path components before comparing against the allowed roots.
+  `false` for directives other than `open_basedir`. This `open_basedir` support is
+  zip-only: other filesystem functions do not observe it, and the fallback returns the
+  previous value even when PHP would refuse a loosening. Paths are resolved with
+  `realpath()` (symlinks, `.`, `..`, and relative components) before the allowed-root
+  prefix check; a `.` root uses the working directory, matching php-src.
 - `stream_get_meta_data()` on a generic user-space wrapper reports its URI, requested
   `mode`, `seekable` and `eof`; PHP's `wrapper_data` object is not exposed. Saved
   metadata copies the URI, so reusing the handle slot does not rewrite an earlier
@@ -207,8 +210,11 @@ AES-128/192/256, and traditional PKWARE (ZipCrypto). `setEncryptionName()` /
   write outside the destination for a `..` entry, so the bridge is deliberately stricter.
 - Zip warnings and deprecations use the engine's `E_WARNING`/`E_DEPRECATED` levels, so
   `set_error_handler()`, `error_reporting()`, and `error_get_last()` observe the same
-  values as php-src. The synthetic wrapper metadata tables and wrapper-backed readers
-  are emitted only for programs that can register or reach a user-space wrapper.
+  values as php-src. The procedural `zip_*` deprecation follows the profile: PHP 8.0–8.3
+  print the short `Function zip_open() is deprecated` text, while PHP 8.4+ adds the
+  `since 8.0` and replacement suffix. The synthetic wrapper metadata tables and
+  wrapper-backed readers are emitted only for programs that can register or reach a
+  user-space wrapper.
 - `torrentzip` is libzip's own implementation: `AFL_WANT_TORRENTZIP` writes the
   deterministic byte layout and `AFL_IS_TORRENTZIP` reports it on reopen.
 - `getStream*()` snapshots the entry when the stream is created, then marks the
@@ -222,17 +228,11 @@ The PHP 8.5.13 `ext/zip/tests` cases are ported to Rust in
 `tests/codegen/zip_php_src_cases.rs`; no `.phpt` file is committed or parsed at run
 time. `scripts/gen_php_src_zip_cases.py` downloads the tagged upstream tarball and
 regenerates that Rust module; `tests/php_src/zip/` holds only the binary/text assets
-the cases reference and the `prelude.php` transcription oracle. 125 fixtures run on
-macOS (one more, `oo_addfile_proc`, is Linux-only). Four fixtures are not generated:
-`bug51353` has
-an unconditional php-src `SKIPIF` for its 100,000-entry stress run; `gh17319`
-expects `false` from PHP's own freed archive resource while elephc safely returns
-the entry name; `gh23276` reads a typed property from an untyped `$GLOBALS`
-resurrection the static checker cannot narrow (its sibling stream-lifetime fixtures
-run); and `stream_fstat_unreadable_archive` expects a live archive check that the
-snapshot wrapper does not perform. The generator applies the compiler-compatibility
-source edits listed in `tests/php_src/zip/README.md`; the assertions still compare
-php-src's values.
+the cases reference and the `prelude.php` transcription oracle. All 130 fixtures are
+ported. `bug51353` carries `#[ignore]` because upstream skips its 100,000-entry stress
+run, and `oo_addfile_proc` is Linux-only, so 128 run by default on macOS and 129 on
+Linux. The generator applies the compiler-compatibility source edits listed in
+`tests/php_src/zip/README.md`; the assertions still compare php-src's values.
 `tests/codegen/zip.rs` carries focused end-to-end coverage, and
 `cargo test -p elephc-zip` runs the libzip-backed engine unit tests when
 `ELEPHC_ZIP_NATIVE_LIB_DIRS` points at the installed `lib/` directories.
