@@ -2,7 +2,7 @@
 //! Regressions for generic functions declared in files loaded by `elephc test`.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_core` through Rust's test harness.
 //!
 //! Key details:
 //! - Calls originate only in discovered test methods, with no top-level warm-up calls.

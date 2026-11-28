@@ -2,7 +2,7 @@
 //! Checks PHP overflow promotion for raw integer accumulator and counter loops.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests raw_promotable`.
+//! - `cargo test --test codegen_tests_core raw_promotable`.
 //!
 //! Key details:
 //! - Runtime `$argc` keeps the arithmetic out of the AST constant folder.

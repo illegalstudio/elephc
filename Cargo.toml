@@ -244,7 +244,7 @@ curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
-# the three test binaries. `line-tables-only` keeps file:line in panic backtraces
+# the nine test binaries. `line-tables-only` keeps file:line in panic backtraces
 # (so test failures stay legible) while cutting the debug info the assembler and
 # linker chew through on every edit -> `cargo test` cycle.
 # The test suites compile and run thousands of PHP programs through the dev build, so the

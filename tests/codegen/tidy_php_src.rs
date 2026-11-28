@@ -2,7 +2,7 @@
 //! Hand-written harness for the PHP 8.5.10 `ext/tidy` cases migrated from php-src.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests php_src_tidy`, through the test functions in
+//! - `cargo test --test codegen_tests_ext php_src_tidy`, through the test functions in
 //!   `tidy_php_src_cases.rs`.
 //!
 //! Key details:

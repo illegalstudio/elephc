@@ -2,7 +2,7 @@
 //! Checks PHP-exact results for accumulators that the lazy boxing pass keeps as raw integers.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_lazy_accumulator`.
+//! - `cargo test --test codegen_tests_core test_lazy_accumulator`.
 //!
 //! Key details:
 //! - Runtime `$argc` keeps the arithmetic out of the AST constant folder.

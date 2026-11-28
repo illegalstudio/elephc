@@ -2,7 +2,7 @@
 //! Lexer regressions for tagless `.lfc` physical source mode.
 //!
 //! Called from:
-//! - `cargo test --test lexer_tests lfc` through the integration test harness.
+//! - `cargo test --test integration lexer_tests::lfc` through the integration test harness.
 //!
 //! Key details:
 //! - Structural open tags are synthetic and PHP tag text is rejected only at code boundaries.

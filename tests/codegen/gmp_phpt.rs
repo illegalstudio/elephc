@@ -2,7 +2,7 @@
 //! Runs the vendored php-src 8.5 `ext/gmp/tests` PHPT corpus through the elephc backend.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_gmp_php_src_phpt_corpus -- --ignored` and
+//! - `cargo test --test codegen_tests_ext test_gmp_php_src_phpt_corpus -- --ignored` and
 //!   the dedicated `gmp-phpt-corpus` CI job.
 //!
 //! Key details:

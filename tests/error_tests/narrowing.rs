@@ -2,7 +2,7 @@
 //! Regression tests for sound flow-sensitive narrowing diagnostics.
 //!
 //! Called from:
-//! - `cargo test --test error_tests` through Rust's test harness.
+//! - `cargo test --test integration error_tests::narrowing` through Rust's test harness.
 //!
 //! Key details:
 //! - Negative fixtures ensure literal-false and property facts are not retained beyond mutations,

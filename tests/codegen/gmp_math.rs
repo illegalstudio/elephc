@@ -2,7 +2,7 @@
 //! End-to-end tests for GMP operands in PHP's math builtins and scalar casts.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests gmp_math` through the codegen test module.
+//! - `cargo test --test codegen_tests_ext gmp_math` through the codegen test module.
 //!
 //! Key details:
 //! - Expected output is php-src 8.5 output with ext/gmp; only `gmp_strval()` and scalar

@@ -2,7 +2,7 @@
 //! Regresses generic class specialization reached only from native test methods.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests testing_generics`.
+//! - `cargo test --test codegen_tests_core testing_generics`.
 //!
 //! Key details:
 //! - The real CLI appends a terminating test driver before specialization runs.

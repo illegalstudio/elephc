@@ -3,7 +3,7 @@
 //! when the callback throws, including after the output block has grown.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests preg_replace_callback_throw` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext preg_replace_callback_throw` through Rust's test harness.
 //!
 //! Key details:
 //! - Expected stdout was measured on PHP 8.5.9. PHP 8.2–8.4 share this behavior:

@@ -4,7 +4,7 @@
 //! counts and wrong argument types.
 //!
 //! Called from:
-//! - `cargo test --test error_tests curl` through Rust's test harness.
+//! - `cargo test --test integration error_tests::curl` through Rust's test harness.
 //!
 //! Key details:
 //! - These need only the INJECTED PRELUDE, never a link, so unlike

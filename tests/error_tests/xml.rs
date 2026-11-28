@@ -7,7 +7,7 @@
 //! event supplies).
 //!
 //! Called from:
-//! - `cargo test --test error_tests xml` through Rust's test harness.
+//! - `cargo test --test integration error_tests::xml` through Rust's test harness.
 //!
 //! Key details:
 //! - These need only the INJECTED PRELUDE, never a link, so they run on every machine.

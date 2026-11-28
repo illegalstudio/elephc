@@ -3,7 +3,7 @@
 //! released the returned string as its own, which freed the block the argument still used.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests string_param_return` through Rust's test harness.
+//! - `cargo test --test codegen_tests_runtime string_param_return` through Rust's test harness.
 //!
 //! Key details:
 //! - `value_is_borrowed_user_call_result` answered only for plain function calls. A method,

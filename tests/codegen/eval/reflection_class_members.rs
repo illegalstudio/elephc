@@ -2,7 +2,7 @@
 //! Regression tests for compiled code reading the member lists of eval-built reflectors.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval::reflection_class_members` through Rust's test
+//! - `cargo test --test codegen_tests_eval eval::reflection_class_members` through Rust's test
 //!   harness.
 //!
 //! Key details:

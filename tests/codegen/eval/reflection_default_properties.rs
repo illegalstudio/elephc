@@ -2,7 +2,7 @@
 //! Regression tests for compiled `getDefaultProperties()` on eval-built class reflectors.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval::reflection_default_properties` through Rust's
+//! - `cargo test --test codegen_tests_eval eval::reflection_default_properties` through Rust's
 //!   test harness.
 //!
 //! Key details:
