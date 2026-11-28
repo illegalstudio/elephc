@@ -386,6 +386,22 @@ fn test_preg_grep_nested_to_string_error_keeps_scanning() {
     assert_eq!(eval, "[{},\"x\"]\n4\n");
 }
 
+/// Legacy PCRE modifiers are accepted as no-ops through both eval pattern parsers.
+#[test]
+fn test_preg_eval_legacy_modifiers_are_noops() {
+    let source = opaque_eval(r#"
+        echo "eval|";
+        echo preg_match('/a/S', 'a'), preg_match('/a/X', 'a');
+        echo preg_match('/a/SXi', 'A'), preg_match('/a/SX', 'A'), "|";
+        echo json_encode(preg_grep('/a/SXi', ['A', 'b'])), "|";
+        echo preg_last_error();
+    "#);
+    assert_eq!(
+        compile_and_run_with_regex(&source),
+        "eval|1110|[\"A\"]|0"
+    );
+}
+
 /// A valid modifier eval does not implement stays eval's explicit runtime error for
 /// `preg_grep()`, like the other eval `preg_*` builtins, instead of PHP `false`.
 #[test]

@@ -166,10 +166,10 @@ fn eval_preg_callback_pattern_parts(
 
 /// Parses callback modifiers.
 ///
-/// Implemented modifiers build the flag word. Space, LF, and CR are ignored,
-/// matching PHP. Valid PHP modifiers this runtime does not map (`A`, `D`, `S`,
-/// `X`, `J`, and PHP 8.4 `n`) are an explicit error. Any other byte, including
-/// the removed `e`, is an invalid pattern.
+/// Implemented modifiers build the flag word. Space, LF, CR, and the legacy
+/// modifiers `S` and `X` are ignored, matching the compiled path. Valid PHP
+/// modifiers this runtime does not map (`A`, `D`, `J`, and PHP 8.4 `n`) are an
+/// explicit error. Any other byte, including the removed `e`, is invalid.
 fn eval_preg_callback_modifiers(
     modifiers: &[u8],
 ) -> Result<EvalPregModifiers, EvalPregCallbackPattern> {
@@ -183,8 +183,8 @@ fn eval_preg_callback_modifiers(
             b'U' => parsed.swap_greed = true,
             b'u' => parsed.unicode = true,
             b'x' => parsed.extended = true,
-            b' ' | b'\n' | b'\r' => {}
-            b'A' | b'D' | b'S' | b'X' | b'J' | b'n' => unsupported = true,
+            b'S' | b'X' | b' ' | b'\n' | b'\r' => {}
+            b'A' | b'D' | b'J' | b'n' => unsupported = true,
             _ => return Err(EvalPregCallbackPattern::Invalid),
         }
     }
@@ -196,8 +196,9 @@ fn eval_preg_callback_modifiers(
 
 /// Parses eval-supported PHP regex modifiers.
 ///
-/// Space, LF, and CR are ignored. `x` requests extended mode. Any other byte,
-/// including a valid modifier this runtime does not map, is a runtime fatal.
+/// Space, LF, CR, and the legacy modifiers `S` and `X` are ignored. `x`
+/// requests extended mode. Any other byte, including a valid modifier this
+/// runtime does not map, is a runtime fatal.
 pub(in crate::interpreter) fn eval_preg_modifiers(
     modifiers: &[u8],
 ) -> Result<EvalPregModifiers, EvalStatus> {
@@ -210,7 +211,7 @@ pub(in crate::interpreter) fn eval_preg_modifiers(
             b'U' => parsed.swap_greed = true,
             b'u' => parsed.unicode = true,
             b'x' => parsed.extended = true,
-            b' ' | b'\n' | b'\r' => {}
+            b'S' | b'X' | b' ' | b'\n' | b'\r' => {}
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }
