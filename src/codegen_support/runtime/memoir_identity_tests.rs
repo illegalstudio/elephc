@@ -43,7 +43,12 @@ fn memoir_identity_preserve_assembly() {
             let mut emitter = emit_identity(Target::parse(name).unwrap(), mode);
             let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();
             labels.sort();
-            let fixed = data::emit_runtime_data_fixed(262_144, Target::parse(name).unwrap(), PhpVersion::default());
+            let fixed = data::emit_runtime_data_fixed(
+                262_144,
+                Target::parse(name).unwrap(),
+                PhpVersion::default(),
+                crate::codegen_support::RuntimeFeatures::none(),
+            );
             let hash = format!("{:x}", Sha256::digest(format!("{}\n{labels:?}\n{fixed}", emitter.output())));
             actual.push(format!("{name} {mode} {hash}"));
         }
@@ -76,7 +81,12 @@ fn memoir_identity_assemble_on_all_supported_targets() {
             let emitter = emit_identity(Target::parse(name).unwrap(), mode);
             let syntax = if name == "linux-x86_64" { ".intel_syntax noprefix\n" } else { "" };
             let source = dir.0.join(format!("{name}-{mode}.s"));
-            let fixed = data::emit_runtime_data_fixed(262_144, Target::parse(name).unwrap(), PhpVersion::default());
+            let fixed = data::emit_runtime_data_fixed(
+                262_144,
+                Target::parse(name).unwrap(),
+                PhpVersion::default(),
+                crate::codegen_support::RuntimeFeatures::none(),
+            );
             fs::write(&source, format!("{syntax}.text\n{}\n{fixed}", emitter.output())).unwrap();
             let result = Command::new("clang").args(["-target", triple, "-c"]).arg(&source)
                 .arg("-o").arg(source.with_extension("o")).output().unwrap();

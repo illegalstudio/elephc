@@ -13,6 +13,7 @@
 //!   reported by `getStream*()`, plus the exact fopen mode for `stream_get_meta_data()`.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::buffers::stream_tables::{self, ZipMetadataString};
 
 /// Emits the helper for the active target.
 pub fn emit_zip_register_stream_meta(emitter: &mut Emitter) {
@@ -22,7 +23,6 @@ pub fn emit_zip_register_stream_meta(emitter: &mut Emitter) {
     }
     emit_aarch64(emitter);
 }
-
 /// AArch64 helper: x0 = handle slot, x1 = path pointer, x2 = path length,
 /// x3 = mode pointer, x4 = mode length.
 fn emit_aarch64(emitter: &mut Emitter) {
@@ -99,44 +99,59 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x21, #0");                                         // no entry component
 
     emitter.label("__rt_zrsm_store");
-    abi_symbol(emitter, "x9", "_zip_stream_kind");
-    emitter.instruction("strb w22, [x9, x19]");                                 // _zip_stream_kind[slot] = kind
-    abi_symbol(emitter, "x9", "_zip_stream_uri");
-    emitter.instruction("mov x10, x19");                                        // slot index
-    emitter.instruction("lsl x10, x10, #8");                                    // slot * 256
-    emitter.instruction("add x9, x9, x10");                                     // destination URI buffer
+    stream_tables::emit_store_zip_kind(emitter, "w22", "x19", "x9");          // publish the synthetic stream kind
+    stream_tables::emit_zip_string_slot_address(
+        emitter,
+        ZipMetadataString::Uri,
+        "x9",
+        "x19",
+        "x10",
+    );
     emitter.instruction("mov x10, #0");                                         // copied byte count
     emitter.label("__rt_zrsm_copy");
     emitter.instruction("cmp x10, x21");                                        // copied the whole URI?
     emitter.instruction("b.ge __rt_zrsm_copied");                               // copy finished
-    emitter.instruction("cmp x10, #255");                                       // stay inside the 256-byte slot?
+    emitter.instruction(&format!("cmp x10, #{}", ZipMetadataString::Uri.max_bytes())); // stay inside the URI slot?
     emitter.instruction("b.ge __rt_zrsm_copied");                               // URI is capped
     emitter.instruction("ldrb w11, [x20, x10]");                                // source byte
     emitter.instruction("strb w11, [x9, x10]");                                 // destination byte
     emitter.instruction("add x10, x10, #1");                                    // advance the copy
     emitter.instruction("b __rt_zrsm_copy");                                    // copy the next byte
     emitter.label("__rt_zrsm_copied");
-    abi_symbol(emitter, "x9", "_zip_stream_uri_len");
-    emitter.instruction("str x10, [x9, x19, lsl #3]");                          // _zip_stream_uri_len[slot] = copied
+    stream_tables::emit_store_zip_string_length(
+        emitter,
+        ZipMetadataString::Uri,
+        "x10",
+        "x19",
+        "x9",
+    );
     emitter.instruction("ldr x3, [sp, #32]");                                   // reload the fopen mode pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the fopen mode length
-    abi_symbol(emitter, "x9", "_zip_stream_mode");                              // mode buffer base
-    emitter.instruction("mov x10, x19");                                        // slot index
-    emitter.instruction("lsl x10, x10, #4");                                    // slot * 16
-    emitter.instruction("add x9, x9, x10");                                     // destination mode buffer
+    stream_tables::emit_zip_string_slot_address(
+        emitter,
+        ZipMetadataString::Mode,
+        "x9",
+        "x19",
+        "x10",
+    );
     emitter.instruction("mov x10, #0");                                         // copied byte count
     emitter.label("__rt_zrsm_mode_copy");
     emitter.instruction("cmp x10, x4");                                         // copied the whole mode?
     emitter.instruction("b.ge __rt_zrsm_mode_copied");                          // copy finished
-    emitter.instruction("cmp x10, #15");                                        // stay inside the 16-byte slot?
+    emitter.instruction(&format!("cmp x10, #{}", ZipMetadataString::Mode.max_bytes())); // stay inside the mode slot?
     emitter.instruction("b.ge __rt_zrsm_mode_copied");                          // mode is capped
     emitter.instruction("ldrb w11, [x3, x10]");                                 // source byte
     emitter.instruction("strb w11, [x9, x10]");                                 // destination byte
     emitter.instruction("add x10, x10, #1");                                    // advance the copy
     emitter.instruction("b __rt_zrsm_mode_copy");                               // copy the next byte
     emitter.label("__rt_zrsm_mode_copied");
-    abi_symbol(emitter, "x9", "_zip_stream_mode_len");                          // mode length table
-    emitter.instruction("str x10, [x9, x19, lsl #3]");                          // _zip_stream_mode_len[slot] = copied
+    stream_tables::emit_store_zip_string_length(
+        emitter,
+        ZipMetadataString::Mode,
+        "x10",
+        "x19",
+        "x9",
+    );
     emitter.instruction("mov x0, #0x4000");                                     // high half of USER_WRAPPER_FD_BASE
     emitter.instruction("lsl x0, x0, #16");                                     // form 0x40000000
     emitter.instruction("orr x0, x0, x19");                                     // synthetic fd = base | slot
@@ -221,43 +236,58 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r14d, r14d");                                      // no entry component
 
     emitter.label("__rt_zrsm_store_x86");
-    abi_symbol(emitter, "r9", "_zip_stream_kind");
-    emitter.instruction("mov BYTE PTR [r9 + r12], r15b");                       // _zip_stream_kind[slot] = kind
-    abi_symbol(emitter, "r9", "_zip_stream_uri");
-    emitter.instruction("mov r10, r12");                                        // slot index
-    emitter.instruction("shl r10, 8");                                          // slot * 256
-    emitter.instruction("add r9, r10");                                         // destination URI buffer
+    stream_tables::emit_store_zip_kind(emitter, "r15b", "r12", "r9");        // publish the synthetic stream kind
+    stream_tables::emit_zip_string_slot_address(
+        emitter,
+        ZipMetadataString::Uri,
+        "r9",
+        "r12",
+        "r10",
+    );
     emitter.instruction("xor ecx, ecx");                                        // copied byte count
     emitter.label("__rt_zrsm_copy_x86");
     emitter.instruction("cmp rcx, r14");                                        // copied the whole URI?
     emitter.instruction("jge __rt_zrsm_copied_x86");                            // copy finished
-    emitter.instruction("cmp rcx, 255");                                        // stay inside the 256-byte slot?
+    emitter.instruction(&format!("cmp rcx, {}", ZipMetadataString::Uri.max_bytes())); // stay inside the URI slot?
     emitter.instruction("jge __rt_zrsm_copied_x86");                            // URI is capped
     emitter.instruction("mov al, BYTE PTR [r13 + rcx]");                        // source byte
     emitter.instruction("mov BYTE PTR [r9 + rcx], al");                         // destination byte
     emitter.instruction("inc rcx");                                             // advance the copy
     emitter.instruction("jmp __rt_zrsm_copy_x86");                              // copy the next byte
     emitter.label("__rt_zrsm_copied_x86");
-    abi_symbol(emitter, "r9", "_zip_stream_uri_len");
-    emitter.instruction("mov QWORD PTR [r9 + r12 * 8], rcx");                   // _zip_stream_uri_len[slot] = copied
+    stream_tables::emit_store_zip_string_length(
+        emitter,
+        ZipMetadataString::Uri,
+        "rcx",
+        "r12",
+        "r9",
+    );
     emitter.instruction("mov r11, QWORD PTR [rsp]");                            // reload the fopen mode length
-    abi_symbol(emitter, "r10", "_zip_stream_mode");                             // mode buffer base
-    emitter.instruction("mov rax, r12");                                        // slot index
-    emitter.instruction("shl rax, 4");                                          // slot * 16
-    emitter.instruction("add r10, rax");                                        // destination mode buffer
+    stream_tables::emit_zip_string_slot_address(
+        emitter,
+        ZipMetadataString::Mode,
+        "r10",
+        "r12",
+        "rax",
+    );
     emitter.instruction("xor ecx, ecx");                                        // copied byte count
     emitter.label("__rt_zrsm_mode_copy_x86");
     emitter.instruction("cmp rcx, r11");                                        // copied the whole mode?
     emitter.instruction("jge __rt_zrsm_mode_copied_x86");                       // copy finished
-    emitter.instruction("cmp rcx, 15");                                         // stay inside the 16-byte slot?
+    emitter.instruction(&format!("cmp rcx, {}", ZipMetadataString::Mode.max_bytes())); // stay inside the mode slot?
     emitter.instruction("jge __rt_zrsm_mode_copied_x86");                       // mode is capped
     emitter.instruction("mov al, BYTE PTR [rbx + rcx]");                        // source byte
     emitter.instruction("mov BYTE PTR [r10 + rcx], al");                        // destination byte
     emitter.instruction("inc rcx");                                             // advance the copy
     emitter.instruction("jmp __rt_zrsm_mode_copy_x86");                         // copy the next byte
     emitter.label("__rt_zrsm_mode_copied_x86");
-    abi_symbol(emitter, "r9", "_zip_stream_mode_len");                          // mode length table
-    emitter.instruction("mov QWORD PTR [r9 + r12 * 8], rcx");                   // _zip_stream_mode_len[slot] = copied
+    stream_tables::emit_store_zip_string_length(
+        emitter,
+        ZipMetadataString::Mode,
+        "rcx",
+        "r12",
+        "r9",
+    );
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = base | slot
     emitter.instruction("add rsp, 8");                                          // undo the alignment padding
@@ -268,9 +298,4 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop r12");                                             // restore callee-saved r12
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the synthetic descriptor
-}
-
-/// Emits a symbol address through the target-aware ABI helper.
-fn abi_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
-    crate::codegen_support::abi::emit_symbol_address(emitter, reg, symbol);
 }

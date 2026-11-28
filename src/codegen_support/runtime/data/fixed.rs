@@ -1029,17 +1029,11 @@ pub(crate) fn emit_runtime_data_fixed(
     elephc_memoir::data::append_memory_counters(&mut out, &target);
 
     elephc_memoir::interop::cstr_scratch::append_data(&mut out, &target);
-    out.push_str(&comm_directive("_runtime_wrapper_class_buf", 1024, target));
-    // Synthetic user-wrapper stream metadata: 256 handles, one kind byte, a
-    // 256-byte URI buffer, and the exact fopen mode each. Kind 1 is a native
-    // zip:// open, kind 2 is the ZipArchive::getStream memory wrapper. A program
-    // that cannot register a user wrapper never references these tables.
+    elephc_memoir::buffers::io_scratch::RUNTIME_WRAPPER_CLASS.append(&mut out, &target);
+    // Synthetic user-wrapper stream metadata uses Memoir's per-handle geometry.
+    // A program that cannot register a user wrapper never references these tables.
     if features.user_stream_wrapper {
-        out.push_str(&comm_directive("_zip_stream_kind", 256, target));
-        out.push_str(&comm_directive("_zip_stream_uri_len", 2048, target));
-        out.push_str(&comm_directive("_zip_stream_uri", 65536, target));
-        out.push_str(&comm_directive("_zip_stream_mode_len", 2048, target));
-        out.push_str(&comm_directive("_zip_stream_mode", 4096, target));
+        elephc_memoir::buffers::stream_tables::append_zip_metadata(&mut out, &target);
     }
     elephc_memoir::buffers::stream_tables::EOF_FLAGS.append(&mut out, &target);
     elephc_memoir::buffers::stream_tables::POPEN_FILES.append(&mut out, &target);
@@ -2017,7 +2011,12 @@ mod tests {
     #[test]
     fn test_large_heap_uses_bounded_concat_reservation() {
         let target = Target::new(Platform::Linux, Arch::AArch64);
-        let asm = emit_runtime_data_fixed(1 << 31, target, PhpVersion::Php85);
+        let asm = emit_runtime_data_fixed(
+            1 << 31,
+            target,
+            PhpVersion::Php85,
+            crate::codegen_support::RuntimeFeatures::none(),
+        );
         assert!(asm.contains(&comm_directive("_concat_buf", 1 << 30, target)));
         assert!(asm.contains("_concat_capacity:\n    .quad 1073741824\n"));
     }

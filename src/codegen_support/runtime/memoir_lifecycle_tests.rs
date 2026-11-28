@@ -43,7 +43,12 @@ fn memoir_lifecycles_preserve_native_assembly() {
     let mut fingerprints = Vec::new();
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
-        let fixed = data::emit_runtime_data_fixed(262_144, target, PhpVersion::default());
+        let fixed = data::emit_runtime_data_fixed(
+            262_144,
+            target,
+            PhpVersion::default(),
+            crate::codegen_support::RuntimeFeatures::none(),
+        );
         let (_, output_storage) = fixed.split_once("_ob_level,").unwrap();
         let (output_storage, _) = output_storage.split_once("_ob_handler_stubs,").unwrap();
 

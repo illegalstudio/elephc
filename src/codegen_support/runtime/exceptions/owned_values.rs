@@ -10,7 +10,7 @@
 //! - Cleanup clears the transferred owner before invoking potentially reentrant destruction.
 //! - Failed construction marks the object so its destructor stays suppressed after escape.
 
-use crate::codegen_support::{abi, emit::Emitter};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_OWNER_OFFSET, TRY_HANDLER_SLOT_SIZE};
 use elephc_memoir::{FrameOffset, GuardLayout, RecordOffset};
 
@@ -44,17 +44,17 @@ pub(super) fn emit(emitter: &mut Emitter) {
 /// close the same descriptor twice.
 fn release_wrapper_fd_body(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("ldr x9, [sp, #224]");                               // recover the guard record passed as the C argument
-        emitter.instruction("ldr x0, [x9, #24]");                                // load the guarded synthetic descriptor
-        emitter.instruction("str xzr, [x9, #24]");                               // clear ownership before stream_close can throw
-        emitter.instruction("cbz x0, __rt_exception_release_wrapper_fd_skip");   // an already-cleared guard has nothing to close
+        emitter.instruction("ldr x9, [sp, #224]");                              // recover the guard record passed as the C argument
+        emitter.instruction("ldr x0, [x9, #24]");                               // load the guarded synthetic descriptor
+        emitter.instruction("str xzr, [x9, #24]");                              // clear ownership before stream_close can throw
+        emitter.instruction("cbz x0, __rt_exception_release_wrapper_fd_skip");  // an already-cleared guard has nothing to close
     } else {
-        emitter.instruction("mov r10, QWORD PTR [rsp + 224]");                    // recover the guard record passed as the C argument
-        emitter.instruction("mov rax, QWORD PTR [r10 + 24]");                     // load the guarded synthetic descriptor
-        emitter.instruction("mov QWORD PTR [r10 + 24], 0");                       // clear ownership before stream_close can throw
-        emitter.instruction("test rax, rax");                                     // has the guard already been consumed?
-        emitter.instruction("jz __rt_exception_release_wrapper_fd_skip");         // an already-cleared guard has nothing to close
-        emitter.instruction("mov rdi, rax");                                      // pass the synthetic descriptor to the close helper
+        emitter.instruction("mov r10, QWORD PTR [rsp + 224]");                  // recover the guard record passed as the C argument
+        emitter.instruction("mov rax, QWORD PTR [r10 + 24]");                   // load the guarded synthetic descriptor
+        emitter.instruction("mov QWORD PTR [r10 + 24], 0");                     // clear ownership before stream_close can throw
+        emitter.instruction("test rax, rax");                                   // has the guard already been consumed?
+        emitter.instruction("jz __rt_exception_release_wrapper_fd_skip");       // an already-cleared guard has nothing to close
+        emitter.instruction("mov rdi, rax");                                    // pass the synthetic descriptor to the close helper
     }
     abi::emit_call_label(emitter, "__rt_user_wrapper_fclose");
     emitter.label("__rt_exception_release_wrapper_fd_skip");

@@ -23,6 +23,8 @@ CENTRALIZED_MEMORY_SYMBOLS = {
     "_stream_context_options", "_stream_context_notification", "_stream_read_filters",
     "_stream_write_filters", "_glob_handles", "_user_filter_instances", "_ser_stream",
     "_class_name_count", "_class_name_entries", "_class_name_missing",
+    "_user_wrappers", "_runtime_wrapper_class_buf", "_zip_stream_kind",
+    "_zip_stream_uri_len", "_zip_stream_uri", "_zip_stream_mode_len", "_zip_stream_mode",
 }
 DIRECT_MEMORY_PRIMITIVES = (
     "emit_symbol_address(", "emit_load_symbol_to_reg(", "emit_store_reg_to_symbol(",
@@ -775,6 +777,40 @@ MIGRATED_SOURCE_CONTRACTS = {
             "emit_load_process_field(",
             "emit_store_process_field(",
         ),
+    },
+    "src/codegen_support/runtime/io/stream_wrapper_class.rs": {
+        "required": (
+            "emit_registration_entry_address(",
+            "emit_load_registration_field(",
+            "RUNTIME_WRAPPER_CLASS.emit_address(",
+            "RUNTIME_WRAPPER_CLASS_MAX_BYTES",
+        ),
+        "forbidden": ("cmp x21, #64", "cmp r14, 64", "#1023", "shl r11, 5"),
+    },
+    "src/codegen_support/runtime/io/zip_stream_meta.rs": {
+        "required": (
+            "emit_store_zip_kind(",
+            "emit_zip_string_slot_address(",
+            "emit_store_zip_string_length(",
+            "ZipMetadataString::Uri.max_bytes()",
+            "ZipMetadataString::Mode.max_bytes()",
+        ),
+        "forbidden": ("shl x10, x10, #8", "shl r10, 8", "shl rax, 4"),
+    },
+    "src/codegen_support/runtime/io/stream_get_meta_data.rs": {
+        "required": (
+            "emit_load_zip_kind(",
+            "emit_zip_string_slot_address(",
+            "emit_load_zip_string_length(",
+        ),
+        "forbidden": ("_zip_stream_kind\"", "_zip_stream_uri\"", "_zip_stream_mode\""),
+    },
+    "src/codegen_support/runtime/data/fixed.rs": {
+        "required": (
+            "RUNTIME_WRAPPER_CLASS.append(",
+            "append_zip_metadata(",
+        ),
+        "forbidden": ("comm_directive(\"_zip_stream_", "comm_directive(\"_runtime_wrapper_class_buf"),
     },
     "src/codegen_support/runtime/io/user_filter.rs": {
         "required": ("UserFilterVtableField::Filter", "UserFilterVtableField::BrigadeArity"),

@@ -7,7 +7,7 @@
 //! - The zip prelude's `extern "elephc_zip"` declaration.
 //!
 //! Key details:
-//! - Scans the same `_user_wrappers` table `stream_wrapper_register()` fills (64 slots).
+//! - Scans the same Memoir-owned wrapper registration table `stream_wrapper_register()` fills.
 //! - Copies the class name into a bounded process buffer and NUL-terminates it for the
 //!   compiler's extern string-return ABI. The buffer is process-global, but the CLI is
 //!   single-threaded and `--web` runs a prefork server, so no two threads can observe it;
@@ -15,6 +15,10 @@
 //!   not a Rust bridge C-ABI return buffer.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::buffers::{
+    io_scratch,
+    stream_tables::{self, RegistrationField},
+};
 
 /// Emits the wrapper-class lookup for the active target.
 pub fn emit_stream_wrapper_class(emitter: &mut Emitter) {
@@ -46,13 +50,18 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.label("elephc_runtime_swc_scan");
     emitter.instruction("mov x21, #0");                                         // wrapper slot index
     emitter.label("elephc_runtime_swc_slot");
-    emitter.instruction("cmp x21, #64");                                        // checked every registration slot?
+    emitter.instruction(&format!("cmp x21, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY)); // checked every registration slot?
     emitter.instruction("b.ge elephc_runtime_swc_miss");                        // no scheme matched
-    abi::emit_symbol_address(emitter, "x9", "_user_wrappers");                  // wrapper table base
-    emitter.instruction("add x10, x9, x21, lsl #5");                            // slot base
-    emitter.instruction("ldr x11, [x10]");                                      // protocol pointer
+    stream_tables::emit_registration_entry_address(
+        stream_tables::USER_WRAPPERS,
+        emitter,
+        "x10",
+        "x21",
+        "x9",
+    );
+    stream_tables::emit_load_registration_field(emitter, "x11", "x10", RegistrationField::NamePointer);
     emitter.instruction("cbz x11, elephc_runtime_swc_next");                    // empty slot
-    emitter.instruction("ldr x12, [x10, #8]");                                  // protocol length
+    stream_tables::emit_load_registration_field(emitter, "x12", "x10", RegistrationField::NameLength);
     emitter.instruction("cmp x12, x20");                                        // same scheme length?
     emitter.instruction("b.ne elephc_runtime_swc_next");                        // different scheme
     emitter.instruction("mov x13, #0");                                         // byte compare index
@@ -69,14 +78,14 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x21, x21, #1");                                    // advance the slot index
     emitter.instruction("b elephc_runtime_swc_slot");                           // try the next slot
     emitter.label("elephc_runtime_swc_found");
-    emitter.instruction("ldr x11, [x10, #16]");                                 // class-name pointer
-    emitter.instruction("ldr x12, [x10, #24]");                                 // class-name length
-    abi::emit_symbol_address(emitter, "x9", "_runtime_wrapper_class_buf");     // destination buffer
+    stream_tables::emit_load_registration_field(emitter, "x11", "x10", RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "x12", "x10", RegistrationField::ClassLength);
+    io_scratch::RUNTIME_WRAPPER_CLASS.emit_address(emitter, "x9");             // destination buffer
     emitter.instruction("mov x13, #0");                                         // copied byte count
     emitter.label("elephc_runtime_swc_copy");
     emitter.instruction("cmp x13, x12");                                        // copied the whole class name?
     emitter.instruction("b.ge elephc_runtime_swc_copy_done");                   // copy finished
-    emitter.instruction("cmp x13, #1023");                                      // stay inside the buffer?
+    emitter.instruction(&format!("cmp x13, #{}", io_scratch::RUNTIME_WRAPPER_CLASS_MAX_BYTES)); // stay inside the buffer?
     emitter.instruction("b.ge elephc_runtime_swc_copy_done");                   // buffer is full
     emitter.instruction("ldrb w14, [x11, x13]");                                // class-name byte
     emitter.instruction("strb w14, [x9, x13]");                                 // copy into the buffer
@@ -120,16 +129,19 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("elephc_runtime_swc_scan_x86");
     emitter.instruction("xor r14d, r14d");                                      // wrapper slot index
     emitter.label("elephc_runtime_swc_slot_x86");
-    emitter.instruction("cmp r14, 64");                                         // checked every registration slot?
+    emitter.instruction(&format!("cmp r14, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY)); // checked every registration slot?
     emitter.instruction("jge elephc_runtime_swc_miss_x86");                     // no scheme matched
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
-    emitter.instruction("mov r11, r14");                                        // copy the slot index
-    emitter.instruction("shl r11, 5");                                          // slot * 32
-    emitter.instruction("add r10, r11");                                        // slot base
-    emitter.instruction("mov r15, QWORD PTR [r10]");                            // protocol pointer
+    stream_tables::emit_registration_entry_address(
+        stream_tables::USER_WRAPPERS,
+        emitter,
+        "r10",
+        "r14",
+        "r11",
+    );
+    stream_tables::emit_load_registration_field(emitter, "r15", "r10", RegistrationField::NamePointer);
     emitter.instruction("test r15, r15");                                       // empty slot?
     emitter.instruction("jz elephc_runtime_swc_next_x86");                      // skip empty slots
-    emitter.instruction("mov rbx, QWORD PTR [r10 + 8]");                        // protocol length
+    stream_tables::emit_load_registration_field(emitter, "rbx", "r10", RegistrationField::NameLength);
     emitter.instruction("cmp rbx, r13");                                        // same scheme length?
     emitter.instruction("jne elephc_runtime_swc_next_x86");                     // different scheme
     emitter.instruction("xor ecx, ecx");                                        // byte compare index
@@ -145,14 +157,14 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r14");                                             // advance the slot index
     emitter.instruction("jmp elephc_runtime_swc_slot_x86");                     // try the next slot
     emitter.label("elephc_runtime_swc_found_x86");
-    emitter.instruction("mov r15, QWORD PTR [r10 + 16]");                       // class-name pointer
-    emitter.instruction("mov rbx, QWORD PTR [r10 + 24]");                       // class-name length
-    abi::emit_symbol_address(emitter, "r9", "_runtime_wrapper_class_buf");     // destination buffer
+    stream_tables::emit_load_registration_field(emitter, "r15", "r10", RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "rbx", "r10", RegistrationField::ClassLength);
+    io_scratch::RUNTIME_WRAPPER_CLASS.emit_address(emitter, "r9");             // destination buffer
     emitter.instruction("xor ecx, ecx");                                        // copied byte count
     emitter.label("elephc_runtime_swc_copy_x86");
     emitter.instruction("cmp rcx, rbx");                                        // copied the whole class name?
     emitter.instruction("jge elephc_runtime_swc_copy_done_x86");                // copy finished
-    emitter.instruction("cmp rcx, 1023");                                       // stay inside the buffer?
+    emitter.instruction(&format!("cmp rcx, {}", io_scratch::RUNTIME_WRAPPER_CLASS_MAX_BYTES)); // stay inside the buffer?
     emitter.instruction("jge elephc_runtime_swc_copy_done_x86");                // buffer is full
     emitter.instruction("mov al, BYTE PTR [r15 + rcx]");                        // class-name byte
     emitter.instruction("mov BYTE PTR [r9 + rcx], al");                         // copy into the buffer

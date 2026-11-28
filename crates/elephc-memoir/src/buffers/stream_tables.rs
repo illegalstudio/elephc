@@ -27,6 +27,17 @@ pub const REGISTRATION_BYTES: usize = 1 << REGISTRATION_SHIFT;
 
 const WORD: usize = 8;
 const HOST_PAIR_SHIFT: usize = 4;
+const ZIP_URI_SHIFT: usize = 8;
+const ZIP_MODE_SHIFT: usize = 4;
+
+/// Bytes reserved for one synthetic stream URI.
+pub const ZIP_URI_SLOT_BYTES: usize = 1 << ZIP_URI_SHIFT;
+/// Maximum stored URI bytes, leaving one byte of spare capacity.
+pub const ZIP_URI_MAX_BYTES: usize = ZIP_URI_SLOT_BYTES - 1;
+/// Bytes reserved for one synthetic stream fopen mode.
+pub const ZIP_MODE_SLOT_BYTES: usize = 1 << ZIP_MODE_SHIFT;
+/// Maximum stored mode bytes, leaving one byte of spare capacity.
+pub const ZIP_MODE_MAX_BYTES: usize = ZIP_MODE_SLOT_BYTES - 1;
 
 /// One per-class user-filter dispatch and storage descriptor.
 #[repr(C)]
@@ -120,6 +131,49 @@ impl RegistrationField {
     }
 }
 
+/// Selects one per-handle synthetic stream string field.
+#[derive(Clone, Copy)]
+pub enum ZipMetadataString {
+    /// Reported stream URI.
+    Uri,
+    /// Exact fopen mode.
+    Mode,
+}
+
+impl ZipMetadataString {
+    /// Returns the byte storage for this field.
+    const fn storage(self) -> StaticStorage {
+        match self {
+            Self::Uri => ZIP_STREAM_URIS,
+            Self::Mode => ZIP_STREAM_MODES,
+        }
+    }
+
+    /// Returns the parallel word table containing stored byte lengths.
+    const fn length_storage(self) -> StaticStorage {
+        match self {
+            Self::Uri => ZIP_STREAM_URI_LENGTHS,
+            Self::Mode => ZIP_STREAM_MODE_LENGTHS,
+        }
+    }
+
+    /// Returns the shift from a checked handle index to its byte window.
+    const fn shift(self) -> usize {
+        match self {
+            Self::Uri => ZIP_URI_SHIFT,
+            Self::Mode => ZIP_MODE_SHIFT,
+        }
+    }
+
+    /// Returns the maximum number of bytes stored in one window.
+    pub const fn max_bytes(self) -> usize {
+        match self {
+            Self::Uri => ZIP_URI_MAX_BYTES,
+            Self::Mode => ZIP_MODE_MAX_BYTES,
+        }
+    }
+}
+
 /// Defines the bytes reserved for one table from its number of rows and stride.
 const fn table(symbol: &'static str, count: usize, stride: usize) -> StaticStorage {
     StaticStorage { symbol, bytes: count * stride }
@@ -140,6 +194,88 @@ pub const WRITE_FILTERS: StaticStorage = table("_stream_write_filters", FD_CAPAC
 pub const EOF_FLAGS: StaticStorage = table("_eof_flags", FD_CAPACITY, 1);
 pub const CHUNK_SIZES: StaticStorage = table("_stream_chunk_size", FD_CAPACITY, WORD);
 pub const CONNECT_HOSTS: StaticStorage = table("_stream_connect_host", FD_CAPACITY, 1 << HOST_PAIR_SHIFT);
+pub const ZIP_STREAM_KINDS: StaticStorage = table("_zip_stream_kind", WRAPPER_HANDLE_CAPACITY, 1);
+pub const ZIP_STREAM_URI_LENGTHS: StaticStorage = table("_zip_stream_uri_len", WRAPPER_HANDLE_CAPACITY, WORD);
+pub const ZIP_STREAM_URIS: StaticStorage = table("_zip_stream_uri", WRAPPER_HANDLE_CAPACITY, ZIP_URI_SLOT_BYTES);
+pub const ZIP_STREAM_MODE_LENGTHS: StaticStorage = table("_zip_stream_mode_len", WRAPPER_HANDLE_CAPACITY, WORD);
+pub const ZIP_STREAM_MODES: StaticStorage = table("_zip_stream_mode", WRAPPER_HANDLE_CAPACITY, ZIP_MODE_SLOT_BYTES);
+
+/// Declares all per-handle synthetic stream metadata tables.
+pub fn append_zip_metadata(out: &mut String, target: &impl crate::data::DataTarget) {
+    for storage in [
+        ZIP_STREAM_KINDS,
+        ZIP_STREAM_URI_LENGTHS,
+        ZIP_STREAM_URIS,
+        ZIP_STREAM_MODE_LENGTHS,
+        ZIP_STREAM_MODES,
+    ] {
+        storage.append(out, target);
+    }
+}
+
+/// Loads one synthetic stream kind selected by a checked handle index.
+pub fn emit_load_zip_kind(
+    emitter: &mut impl Emitter,
+    destination: &str,
+    index: &str,
+    base: &str,
+) {
+    ZIP_STREAM_KINDS.emit_load_indexed_byte(emitter, destination, index, base);
+}
+
+/// Stores one synthetic stream kind selected by a checked handle index.
+pub fn emit_store_zip_kind(
+    emitter: &mut impl Emitter,
+    source: &str,
+    index: &str,
+    base: &str,
+) {
+    ZIP_STREAM_KINDS.emit_store_indexed_byte(emitter, source, index, base);
+}
+
+/// Addresses one synthetic stream string window selected by a checked handle index.
+pub fn emit_zip_string_slot_address(
+    emitter: &mut impl Emitter,
+    field: ZipMetadataString,
+    destination: &str,
+    index: &str,
+    scratch: &str,
+) {
+    field.storage().emit_address(emitter, destination);
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!(
+            "add {destination}, {destination}, {index}, lsl #{}",
+            field.shift()
+        )),
+        Arch::X86_64 => {
+            emitter.emit_reg_move(scratch, index);
+            emitter.instruction(&format!("shl {scratch}, {}", field.shift()));
+            emitter.instruction(&format!("add {destination}, {scratch}"));
+        }
+    }
+}
+
+/// Loads the stored length for one synthetic stream string.
+pub fn emit_load_zip_string_length(
+    emitter: &mut impl Emitter,
+    field: ZipMetadataString,
+    destination: &str,
+    index: &str,
+    base: &str,
+) {
+    field.length_storage().emit_load_indexed_word(emitter, destination, index, base);
+}
+
+/// Stores the copied length for one synthetic stream string.
+pub fn emit_store_zip_string_length(
+    emitter: &mut impl Emitter,
+    field: ZipMetadataString,
+    source: &str,
+    index: &str,
+    base: &str,
+) {
+    field.length_storage().emit_store_indexed_word(emitter, source, index, base);
+}
 
 /// Clears the request's stream side tables after request-owned resources have been closed.
 pub fn emit_request_clear(emitter: &mut impl Emitter) {

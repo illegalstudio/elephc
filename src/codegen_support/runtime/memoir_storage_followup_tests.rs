@@ -20,7 +20,12 @@ fn memoir_storage_followup_preserves_native_assembly() {
     let mut fingerprints = Vec::new();
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
-        let fixed = data::emit_runtime_data_fixed(262_144, target, PhpVersion::default());
+        let fixed = data::emit_runtime_data_fixed(
+            262_144,
+            target,
+            PhpVersion::default(),
+            crate::codegen_support::RuntimeFeatures::none(),
+        );
         let start = fixed.lines().position(|line| line.starts_with(".comm ") && line.contains("_cstr_buf,")).unwrap();
         let cstr_data = fixed.lines().skip(start).take_while(|line| !line.contains("_eof_flags")).collect::<Vec<_>>();
         assert!(cstr_data.iter().any(|line| line.contains("_cstr2_cap:")));

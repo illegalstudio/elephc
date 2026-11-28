@@ -44,7 +44,12 @@ fn memoir_owner_records_preserve_assembly() {
                 let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();
                 labels.sort();
                 let target = Target::parse(name).unwrap();
-                let mut fixed = data::emit_runtime_data_fixed(262_144, target, PhpVersion::default());
+                let mut fixed = data::emit_runtime_data_fixed(
+                    262_144,
+                    target,
+                    PhpVersion::default(),
+                    crate::codegen_support::RuntimeFeatures::none(),
+                );
                 fixed.push_str(&target.common("__memoir_static_binding_fixture", reference_cells::STATIC_BINDING_BYTES));
                 let hash = format!("{:x}", Sha256::digest(format!("{}\n{labels:?}\n{fixed}", emitter.output())));
                 actual.push(format!("{name} {mode} {native_validation} {hash}"));
@@ -81,7 +86,12 @@ fn memoir_owner_records_assemble_on_all_supported_targets() {
                 let syntax = if name == "linux-x86_64" { ".intel_syntax noprefix\n" } else { "" };
                 let source = dir.0.join(format!("{name}-{mode}-{native_validation}.s"));
                 let target = Target::parse(name).unwrap();
-                let mut fixed = data::emit_runtime_data_fixed(262_144, target, PhpVersion::default());
+                let mut fixed = data::emit_runtime_data_fixed(
+                    262_144,
+                    target,
+                    PhpVersion::default(),
+                    crate::codegen_support::RuntimeFeatures::none(),
+                );
                 fixed.push_str(&target.common("__memoir_static_binding_fixture", reference_cells::STATIC_BINDING_BYTES));
                 fs::write(&source, format!("{syntax}.text\n{}\n{fixed}", emitter.output())).unwrap();
                 let result = Command::new("clang").args(["-target", triple, "-c"]).arg(&source)

@@ -21,6 +21,9 @@ pub const PHAR_URL_POINTER: StaticStorage = StaticStorage { symbol: "_phar_write
 /// The fallback's URL length doubles as the dynamic-stream marker.
 pub const PHAR_URL_LENGTH: StaticStorage = StaticStorage { symbol: "_phar_write_url_len", bytes: 8 };
 pub const OPENED_PATH: StaticStorage = StaticStorage { symbol: "_stream_open_opened_path_scratch", bytes: 16 };
+pub const RUNTIME_WRAPPER_CLASS: StaticStorage = StaticStorage { symbol: "_runtime_wrapper_class_buf", bytes: 1_024 };
+/// Maximum class-name bytes copied before the terminating NUL.
+pub const RUNTIME_WRAPPER_CLASS_MAX_BYTES: usize = RUNTIME_WRAPPER_CLASS.bytes - 1;
 pub const WRAPPER_DRAIN: StaticStorage = StaticStorage { symbol: "_user_wrapper_drain_buf", bytes: 1_048_576 };
 pub const PROTOCOLS: StaticStorage = StaticStorage { symbol: "_protoent_buf", bytes: 32_768 };
 pub const SERVICES: StaticStorage = StaticStorage { symbol: "_servent_buf", bytes: 1_048_576 };

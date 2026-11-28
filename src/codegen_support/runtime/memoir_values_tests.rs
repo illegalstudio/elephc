@@ -26,7 +26,12 @@ fn memoir_values_and_memory_data_preserve_assembly() {
                 let mut emitter = emit_value_helpers(target, mode, expanded, heap);
                 let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();
                 labels.sort();
-                let fixed = data::emit_runtime_data_fixed(heap, target, PhpVersion::default());
+                let fixed = data::emit_runtime_data_fixed(
+                    heap,
+                    target,
+                    PhpVersion::default(),
+                    crate::codegen_support::RuntimeFeatures::none(),
+                );
                 let value = format!("{}\n{labels:?}\n{fixed}", emitter.output());
                 let hash = format!("{:x}", Sha256::digest(value));
                 actual.push(format!("{name} {mode} {expanded} {hash}"));
@@ -105,7 +110,12 @@ fn memoir_value_helpers_assemble_on_all_supported_targets() {
                 let target = Target::parse(name).unwrap();
                 let emitter = emit_value_helpers(target, mode, expanded, 262_144);
                 let prefix = if name == "linux-x86_64" { ".intel_syntax noprefix\n" } else { "" };
-                let fixed = data::emit_runtime_data_fixed(262_144, target, PhpVersion::default());
+                let fixed = data::emit_runtime_data_fixed(
+                    262_144,
+                    target,
+                    PhpVersion::default(),
+                    crate::codegen_support::RuntimeFeatures::none(),
+                );
                 let source = dir.0.join(format!("{name}-{mode}-{expanded}.s"));
                 fs::write(&source, format!("{prefix}.text\n{}\n.data\n{fixed}", emitter.output())).unwrap();
                 let result = Command::new("clang").args(["-target", triple, "-c"]).arg(&source)

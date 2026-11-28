@@ -304,6 +304,23 @@ class MigratedSourceContractTests(unittest.TestCase):
         source = 'assert!(assembly.contains("_ob_level")); // _ser_stream remains internal'
         self.assertEqual(audit_centralized_memory_access("consumer.rs", source), [])
 
+    def test_rebased_stream_storage_stays_behind_memoir(self):
+        """Reject direct access to synthetic stream metadata introduced by a later main."""
+        for symbol in (
+            "_user_wrappers",
+            "_runtime_wrapper_class_buf",
+            "_zip_stream_kind",
+            "_zip_stream_uri_len",
+            "_zip_stream_uri",
+            "_zip_stream_mode_len",
+            "_zip_stream_mode",
+        ):
+            with self.subTest(symbol=symbol):
+                source = f'abi::emit_symbol_address(emitter, "x9", "{symbol}");'
+                findings = audit_centralized_memory_access("consumer.rs", source)
+                self.assertEqual([finding.code for finding in findings],
+                                 ["physical-memory-access"])
+
     def test_class_name_table_base_requires_typed_row_projection(self):
         """Reject consumers that recover the table base but keep its row geometry locally."""
         source = (
@@ -350,6 +367,10 @@ class MigratedSourceContractTests(unittest.TestCase):
             "src/codegen_support/runtime/objects/new_by_name.rs",
             "src/codegen_support/runtime/exceptions/dynamic_instanceof.rs",
             "src/codegen_support/runtime/io/ob_process.rs",
+            "src/codegen_support/runtime/io/stream_wrapper_class.rs",
+            "src/codegen_support/runtime/io/zip_stream_meta.rs",
+            "src/codegen_support/runtime/io/stream_get_meta_data.rs",
+            "src/codegen_support/runtime/data/fixed.rs",
             "src/codegen_support/runtime/io/user_filter/attach.rs",
             "src/codegen_support/runtime/callables/is_callable.rs",
             "src/codegen/lower_inst/builtins/output_buffering.rs",
