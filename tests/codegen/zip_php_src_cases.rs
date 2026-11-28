@@ -9,12 +9,6 @@
 //! - Each test carries its PHP source and assertion inline. No `.phpt` file is
 //!   committed or parsed at run time; the generator downloads the tagged upstream
 //!   corpus when the tests are refreshed.
-//! - Upstream fixtures intentionally not ported:
-//! - `bug51353`: unconditional php-src SKIPIF (100,000-entry stress test).
-//! - `gh17319`: PHP expects false from its freed archive resource; elephc returns the safe entry name.
-//! - `gh23276`: untyped $GLOBALS resurrection is outside the static checker; stream lifetime covered by sibling fixtures.
-//! - `stream_fstat_unreadable_archive`: snapshot zip:// wrapper keeps fstat available after the archive file changes.
-
 use super::{assert_format, run_case};
 use crate::support::zip_native::skip_without_zip_native;
 
@@ -455,6 +449,47 @@ echo 'Done
 ';"#, &[(r#"date.timezone"#, r#"UTC"#)], &[]);
     assert_eq!(out, r#"string(6) "200607"
 Done"#);
+}
+/// Replays php-src `bug51353.phpt`.
+#[ignore = "upstream SKIPIF: 100,000-entry stress test"]
+#[test]
+fn test_php_src_zip_bug51353() {
+    if skip_without_zip_native("test_php_src_zip_bug51353") { return; }
+    let out = run_case(r#"<?php
+/* This test might get very long depending on the mashine it's running on. Therefore
+adding an explicit skip, remove it to run this test. */
+
+$base_path = __DIR__;
+
+/* Either we ship a file with 100000 entries which would be >12M big,
+    or create it dynamically. */
+$zip = new ZipArchive;
+$r = $zip->open("$base_path/51353.zip", ZIPARCHIVE::CREATE | ZIPARCHIVE::OVERWRITE);
+if ($r) {
+    for ($i = 0; $i < 100000; $i++) {
+        $zip->addFromString("$i.txt", '1');
+    }
+    $zip->close();
+} else {
+    exit(1);
+}
+
+$zip = new ZipArchive;
+$r = $zip->open("$base_path/51353.zip");
+if ($r) {
+    $zip->extractTo("$base_path/51353_unpack");
+    $zip->close();
+
+    $a = glob("$base_path/51353_unpack/*.txt");
+    echo count($a) . "\n";
+} else {
+    exit(1);
+}
+
+echo "OK";
+"#, &[], &[]);
+    assert_eq!(out, r#"100000
+OK"#);
 }
 /// Replays php-src `bug53579.phpt`.
 #[test]
@@ -1295,6 +1330,25 @@ bool(true)
 Invalid or uninitialized Zip object
 Done"#);
 }
+/// Replays php-src `gh17319.phpt`.
+#[test]
+fn test_php_src_zip_gh17319() {
+    if skip_without_zip_native("test_php_src_zip_gh17319") { return; }
+    let out = run_case(r#"<?php
+$zip = zip_open(__DIR__."/test_procedural.zip");
+if (!is_resource($zip)) exit(1);
+// no need to bother looping over, the entry name should point to a dangling address from the first iteration
+$entry = zip_read($zip);
+@zip_close($zip);
+var_dump(zip_entry_name($entry));
+"#, &[], &[]);
+    assert_format(&out, r#"Deprecated: Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead in %s on line %d
+
+Deprecated: Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead in %s on line %d
+
+Deprecated: Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead in %s on line %d
+bool(false)"#);
+}
 /// Replays php-src `gh17787.phpt`.
 #[test]
 fn test_php_src_zip_gh17787() {
@@ -1544,6 +1598,98 @@ bool(true)
 bool(true)
 string(15) "dir/entry2d.txt"
 string(15) "dir/entry3d.txt""#);
+}
+/// Replays php-src `gh23276.phpt`.
+#[test]
+fn test_php_src_zip_gh23276() {
+    if skip_without_zip_native("test_php_src_zip_gh23276") { return; }
+    let out = run_case(r#"<?php
+class Holder extends ZipArchive {
+    public $stream;
+    public $bag = [];
+}
+
+class ResurrectingHolder extends Holder {
+    public function __destruct() {
+        global $resurrected;
+        $resurrected = $this;
+    }
+}
+
+function getEntryStream(ZipArchive $zip) {
+    $stream = $zip->getStream('entry.txt'); if (!is_resource($stream)) { exit(1); }
+    if (!is_resource($stream)) {
+        throw new Exception('Failed to open entry stream');
+    }
+    return $stream;
+}
+
+$resurrected = null;
+$filename = __DIR__ . '/gh23276.zip';
+
+$zip = new Holder;
+$zip->open($filename, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+$zip->addFromString('entry.txt', 'contents');
+$zip->close();
+
+// An archive holding its own stream in a property must be destroyed.
+$zip->open($filename, ZipArchive::RDONLY);
+$zip->stream = getEntryStream($zip);
+$weakRef = WeakReference::create($zip);
+unset($zip);
+var_dump($weakRef->get());
+
+// Same through an indirect edge (property -> array -> resource).
+$zip = new Holder;
+$zip->open($filename, ZipArchive::RDONLY);
+$zip->bag[] = getEntryStream($zip);
+$weakRef = WeakReference::create($zip);
+unset($zip);
+var_dump($weakRef->get());
+
+// Two archives cross-holding each other's streams.
+$a = new Holder;
+$b = new Holder;
+$a->open($filename, ZipArchive::RDONLY);
+$b->open($filename, ZipArchive::RDONLY);
+$a->stream = getEntryStream($b);
+$b->stream = getEntryStream($a);
+$weakRef = WeakReference::create($a);
+unset($a, $b);
+var_dump($weakRef->get());
+
+// A resurrected object must retain a usable stream.
+$zip = new ResurrectingHolder;
+$zip->open($filename, ZipArchive::RDONLY);
+$zip->stream = getEntryStream($zip);
+unset($zip);
+var_dump($resurrected instanceof ResurrectingHolder);
+if ($resurrected instanceof ResurrectingHolder) {
+    var_dump(stream_get_contents($resurrected->stream));
+    fclose($resurrected->stream);
+}
+unset($resurrected);
+
+// Externally held streams no longer keep the object alive. Closing one stream
+// must not close the archive while another stream still uses it.
+$zip = new Holder;
+$zip->open($filename, ZipArchive::RDONLY);
+$stream1 = getEntryStream($zip);
+$stream2 = getEntryStream($zip);
+$weakRef = WeakReference::create($zip);
+unset($zip);
+var_dump($weakRef->get());
+fclose($stream1);
+var_dump(stream_get_contents($stream2));
+fclose($stream2);
+"#, &[], &[]);
+    assert_eq!(out, r#"NULL
+NULL
+NULL
+bool(true)
+string(8) "contents"
+NULL
+string(8) "contents""#);
 }
 /// Replays php-src `gh23276_cancel_callback.phpt`.
 #[test]
@@ -4353,6 +4499,35 @@ var_dump([$archive->lastId]);
   [0]=>
   int(-1)
 }"#);
+}
+/// Replays php-src `stream_fstat_unreadable_archive.phpt`.
+#[test]
+fn test_php_src_zip_stream_fstat_unreadable_archive() {
+    if skip_without_zip_native("test_php_src_zip_stream_fstat_unreadable_archive") { return; }
+    let out = run_case(r#"<?php
+$file = __DIR__ . '/stream_fstat_unreadable_archive.zip';
+
+@unlink($file);
+
+$zip = new ZipArchive;
+if (!$zip->open($file, ZipArchive::CREATE)) {
+    exit(1);
+}
+
+$zip->addFromString('entry.txt', 'entry');
+$zip->close();
+
+$fp = fopen('zip://' . $file . '#entry.txt', 'rb'); if (!is_resource($fp)) { exit(1); }
+var_dump($fp !== false);
+
+file_put_contents($file, 'this is not a zip archive');
+
+var_dump(fstat($fp));
+
+fclose($fp);
+"#, &[], &[]);
+    assert_eq!(out, r#"bool(true)
+bool(false)"#);
 }
 /// Replays php-src `stream_meta_data.phpt`.
 #[test]

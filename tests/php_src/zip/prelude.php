@@ -925,16 +925,33 @@ class ZipArchive implements \Countable {
         global $__elephc_zip_open_basedir;
         if ($__elephc_zip_open_basedir === '') { return true; }
         $allowed = (string) $__elephc_zip_open_basedir;
-        // php-src resolves the path before comparing it with open_basedir;
-        // rejecting every `..` would deny paths that stay inside the allowed
-        // roots. Relative paths resolve against the current directory, as
-        // expand_filepath() does.
+        // php-src resolves the path before comparing it with open_basedir: existing
+        // components go through realpath(), so `..` cannot step across a symlink
+        // that points outside the allowed roots. A missing final component is
+        // appended to its resolved parent.
         $original = $path;
-        if (!str_starts_with($path, '/')) {
-            $path = (string) getcwd() . '/' . $path;
+        $resolved = realpath($path);
+        if ($resolved === false) {
+            $tail = '';
+            $candidate = $path;
+            while (true) {
+                $parent = dirname($candidate);
+                if ($parent === $candidate) { break; }
+                $tail = '/' . basename($candidate) . $tail;
+                $candidate = $parent;
+                $resolved = realpath($candidate);
+                if ($resolved !== false) {
+                    $resolved = rtrim((string) $resolved, '/') . $tail;
+                    break;
+                }
+            }
+            if ($resolved === false) { $resolved = $path; }
+        }
+        if (!str_starts_with((string) $resolved, '/')) {
+            $resolved = (string) getcwd() . '/' . (string) $resolved;
         }
         $segments = [];
-        foreach (explode('/', $path) as $component) {
+        foreach (explode('/', (string) $resolved) as $component) {
             if ($component === '' || $component === '.') { continue; }
             if ($component === '..') {
                 if (count($segments) > 0) { array_pop($segments); }
@@ -945,6 +962,14 @@ class ZipArchive implements \Countable {
         $path = '/' . implode('/', $segments);
         foreach (explode(':', $allowed) as $root) {
             if ($root === '/') { return true; }
+            $real_root = realpath($root);
+            if ($real_root !== false) {
+                $root = (string) $real_root;
+            } else {
+                if (!str_starts_with($root, '/')) {
+                    $root = (string) getcwd() . '/' . $root;
+                }
+            }
             $root = rtrim($root, '/');
             if ($root !== '' && ($path === $root || str_starts_with($path, $root . '/'))) { return true; }
         }
@@ -1189,6 +1214,8 @@ final class __ElephcZipStreamWrapper {
     private int $__elephc_position = 0;
     private array $__elephc_stat = [];
     private bool $__elephc_seekable = true;
+    private string $__elephc_archive_name = '';
+    private string $__elephc_entry = '';
     public function stream_open(string $path, string $_mode, int $_options, &$opened_path): bool {
         if ($_mode === '' || $_mode[0] !== 'r') { return false; }
         $separator = strpos($path, '#');
@@ -1196,6 +1223,8 @@ final class __ElephcZipStreamWrapper {
         $archive_name = substr($path, 6, $separator - 6);
         if ($archive_name === '') { return false; }
         $entry = substr($path, $separator + 1);
+        $this->__elephc_archive_name = $archive_name;
+        $this->__elephc_entry = $entry;
         $archive = new ZipArchive();
         $opened = $archive->open($archive_name, ZipArchive::RDONLY);
         if ($opened !== true) { return false; }
@@ -1241,6 +1270,16 @@ final class __ElephcZipStreamWrapper {
         return true;
     }
     public function stream_stat(): array|false {
+        // php-src's zip stream stats by reopening the archive path, so replacing the
+        // backing file with a non-zip makes fstat() fail even though the descriptor
+        // still holds the entry snapshot.
+        $archive = new ZipArchive();
+        $opened = $archive->open($this->__elephc_archive_name, ZipArchive::RDONLY);
+        if ($opened !== true) { return false; }
+        $stat = $archive->statName($this->__elephc_entry, ZipArchive::FL_NOCASE);
+        $archive->close();
+        if ($stat === false) { return false; }
+        $this->__elephc_stat = (array) $stat;
         $size = (int) ($this->__elephc_stat['size'] ?? 0);
         $mtime = (int) ($this->__elephc_stat['mtime'] ?? time());
         $mode = 32768;
@@ -1253,7 +1292,7 @@ final class __ElephcZipStreamWrapper {
 }
 stream_wrapper_register('zip', '__ElephcZipStreamWrapper');
 function zip_open(string $filename) {
-    __elephc_builtin_deprecated('Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead' : 'Function zip_open() is deprecated');
     if ($filename === '') { throw new \ValueError('zip_open(): Argument #1 ($filename) must not be empty'); }
     // php-src's procedural zip_open() calls libzip directly with flags 0, unlike
     // ZipArchive::open(), which promotes a zero-byte file to ZIP_TRUNCATE. Opening
@@ -1273,7 +1312,7 @@ function zip_open(string $filename) {
     return $stream;
 }
 function zip_read($zip) {
-    __elephc_builtin_deprecated('Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead' : 'Function zip_read() is deprecated');
     $id = get_resource_id($zip);
     if (!isset(__ElephcZipProcedural::$state[$id])) { throw new \TypeError('zip_read(): supplied resource is not a valid Zip Directory resource'); }
     $state = __ElephcZipProcedural::$state[$id];
@@ -1287,7 +1326,7 @@ function zip_read($zip) {
     return $entry;
 }
 function zip_close($zip): void {
-    __elephc_builtin_deprecated('Function zip_close() is deprecated since 8.0, use ZipArchive::close() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_close() is deprecated since 8.0, use ZipArchive::close() instead' : 'Function zip_close() is deprecated');
     $id = get_resource_id($zip);
     if (!isset(__ElephcZipProcedural::$state[$id])) { throw new \TypeError('zip_close(): supplied resource is not a valid Zip Directory resource'); }
     $archive = __ElephcZipProcedural::$state[$id][0];
@@ -1296,7 +1335,7 @@ function zip_close($zip): void {
     $archive->close();
 }
 function zip_entry_open($zip_dp, $zip_entry, string $mode = 'rb'): bool {
-    __elephc_builtin_deprecated('Function zip_entry_open() is deprecated since 8.0');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_entry_open() is deprecated since 8.0' : 'Function zip_entry_open() is deprecated');
     $_unusedMode = $mode;
     $zip_id = get_resource_id($zip_dp);
     $entry_id = get_resource_id($zip_entry);
@@ -1305,7 +1344,7 @@ function zip_entry_open($zip_dp, $zip_entry, string $mode = 'rb'): bool {
     return true;
 }
 function zip_entry_close($zip_entry): bool {
-    __elephc_builtin_deprecated('Function zip_entry_close() is deprecated since 8.0');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_entry_close() is deprecated since 8.0' : 'Function zip_entry_close() is deprecated');
     $entry_id = get_resource_id($zip_entry);
     foreach (__ElephcZipProcedural::$state as $zip_id => $state) {
         $state = (array) $state;
@@ -1319,7 +1358,7 @@ function zip_entry_close($zip_entry): bool {
     throw new \TypeError('zip_entry_close(): supplied resource is not a valid Zip Entry resource');
 }
 function zip_entry_read($zip_entry, int $len = 1024): string|false {
-    __elephc_builtin_deprecated('Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead' : 'Function zip_entry_read() is deprecated');
     $entry_id = get_resource_id($zip_entry);
     foreach (__ElephcZipProcedural::$state as $_zip_id => $state) {
         $state = (array) $state;
@@ -1340,7 +1379,7 @@ function zip_entry_read($zip_entry, int $len = 1024): string|false {
     throw new \TypeError('zip_entry_read(): supplied resource is not a valid Zip Entry resource');
 }
 function zip_entry_name($zip_entry): string|false {
-    __elephc_builtin_deprecated('Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead' : 'Function zip_entry_name() is deprecated');
     $entry_id = get_resource_id($zip_entry);
     foreach (__ElephcZipProcedural::$state as $_zip_id => $state) {
         $state = (array) $state;
@@ -1353,7 +1392,7 @@ function zip_entry_name($zip_entry): string|false {
     return false;
 }
 function zip_entry_compressedsize($zip_entry): int|false {
-    __elephc_builtin_deprecated('Function zip_entry_compressedsize() is deprecated since 8.0, use ZipArchive::statIndex() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_entry_compressedsize() is deprecated since 8.0, use ZipArchive::statIndex() instead' : 'Function zip_entry_compressedsize() is deprecated');
     $entry_id = get_resource_id($zip_entry);
     foreach (__ElephcZipProcedural::$state as $_zip_id => $state) {
         $state = (array) $state;
@@ -1367,7 +1406,7 @@ function zip_entry_compressedsize($zip_entry): int|false {
     throw new \TypeError('zip_entry_compressedsize(): supplied resource is not a valid Zip Entry resource');
 }
 function zip_entry_filesize($zip_entry): int|false {
-    __elephc_builtin_deprecated('Function zip_entry_filesize() is deprecated since 8.0, use ZipArchive::statIndex() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_entry_filesize() is deprecated since 8.0, use ZipArchive::statIndex() instead' : 'Function zip_entry_filesize() is deprecated');
     $entry_id = get_resource_id($zip_entry);
     foreach (__ElephcZipProcedural::$state as $_zip_id => $state) {
         $state = (array) $state;
@@ -1381,7 +1420,7 @@ function zip_entry_filesize($zip_entry): int|false {
     throw new \TypeError('zip_entry_filesize(): supplied resource is not a valid Zip Entry resource');
 }
 function zip_entry_compressionmethod($zip_entry): string|false {
-    __elephc_builtin_deprecated('Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead');
+    __elephc_builtin_deprecated(PHP_VERSION_ID >= 80400 ? 'Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead' : 'Function zip_entry_compressionmethod() is deprecated');
     $names = [0 => 'stored', 1 => 'shrunk', 2 => 'reduced', 3 => 'reduced', 4 => 'reduced', 5 => 'reduced', 6 => 'imploded', 7 => 'tokenized', 8 => 'deflated', 9 => 'deflatedX', 10 => 'implodedX'];
     $entry_id = get_resource_id($zip_entry);
     foreach (__ElephcZipProcedural::$state as $_zip_id => $state) {

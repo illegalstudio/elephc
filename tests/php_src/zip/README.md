@@ -50,12 +50,16 @@ Compatibility edits applied by the generator:
 - `gh19688.phpt` uses its own `001.phpt` file as a glob target. The Rust port uses
   the committed `001.txt` asset instead, so no `.phpt` file remains in the tree.
 
-Four upstream fixtures are not ported. `bug51353` has an unconditional php-src
-`SKIPIF` for its 100,000-entry stress run. `gh17319` expects `false` because PHP's
-own test frees the archive resource before reading the entry name; elephc keeps the
-entry alive and safely returns `"foo"`. `gh23276` reads a typed property from an
-untyped `$GLOBALS` resurrection that the static checker cannot narrow; its stream
-lifetime behavior is exercised by the three sibling `gh23276_*` fixtures.
-`stream_fstat_unreadable_archive` expects `fstat()` to fail after the backing
-archive is replaced with a non-zip file; elephc's `zip://` wrapper snapshots the
-entry at open, so its metadata remains available.
+All 130 upstream fixtures are ported. `bug51353` is generated with `#[ignore]`
+because upstream skips its 100,000-entry stress run; `oo_addfile_proc` is compiled
+only on Linux. Three fixtures carry targeted compatibility edits:
+
+- `gh17319` closes the directory resource explicitly before reading the entry name,
+  because elephc cannot observe the original overwrite of the sole handle. The freed
+  directory still makes `zip_entry_name()` return `false`.
+- `gh23276` uses a global plus an explicit `instanceof` guard instead of reading a
+  typed property from an untyped `$GLOBALS` value the static checker cannot narrow;
+  the resurrection and stream-lifetime behavior are unchanged.
+- `stream_fstat_unreadable_archive` passes unchanged: the `zip://` wrapper reopens
+  the archive for `fstat()`, so replacing the backing file with a non-zip makes the
+  stat fail exactly as php-src does.

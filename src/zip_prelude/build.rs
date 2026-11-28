@@ -2302,21 +2302,62 @@ fn decl_class_ziparchive() -> Stmt {
                         None,
                     ),
                     s_assign("allowed", e_cast(CastType::String, e_var("__elephc_zip_open_basedir"))),
-                    // php-src resolves the path before comparing it with open_basedir;
-                    // rejecting every `..` would deny paths that stay inside the allowed
-                    // roots. Relative paths resolve against the current directory, as
-                    // expand_filepath() does.
+                    // php-src resolves the path before comparing it with open_basedir:
+                    // existing components go through realpath(), so `..` cannot step
+                    // across a symlink that points outside the allowed roots. A missing
+                    // final component is appended to its resolved parent.
                     s_assign("original", e_var("path")),
+                    s_assign("resolved", e_call("realpath", vec![e_var("path")])),
                     s_if(
-                        e_not(e_call("str_starts_with", vec![e_var("path"), e_str("/")])),
+                        e_binop(e_var("resolved"), BinOp::StrictEq, e_bool(false)),
                         vec![
-                            s_assign("path", e_binop(e_binop(e_cast(CastType::String, e_call("getcwd", vec![])), BinOp::Concat, e_str("/")), BinOp::Concat, e_var("path"))),
+                            s_assign("tail", e_str("")),
+                            s_assign("candidate", e_var("path")),
+                            s_while(e_bool(true), vec![
+                                s_assign("parent", e_call("dirname", vec![e_var("candidate")])),
+                                s_if(
+                                    e_binop(e_var("parent"), BinOp::StrictEq, e_var("candidate")),
+                                    vec![
+                                        s_break(1),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("tail", e_binop(e_binop(e_str("/"), BinOp::Concat, e_call("basename", vec![e_var("candidate")])), BinOp::Concat, e_var("tail"))),
+                                s_assign("candidate", e_var("parent")),
+                                s_assign("resolved", e_call("realpath", vec![e_var("candidate")])),
+                                s_if(
+                                    e_binop(e_var("resolved"), BinOp::StrictNotEq, e_bool(false)),
+                                    vec![
+                                        s_assign("resolved", e_binop(e_call("rtrim", vec![e_cast(CastType::String, e_var("resolved")), e_str("/")]), BinOp::Concat, e_var("tail"))),
+                                        s_break(1),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                            s_if(
+                                e_binop(e_var("resolved"), BinOp::StrictEq, e_bool(false)),
+                                vec![
+                                    s_assign("resolved", e_var("path")),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_call("str_starts_with", vec![e_cast(CastType::String, e_var("resolved")), e_str("/")])),
+                        vec![
+                            s_assign("resolved", e_binop(e_binop(e_cast(CastType::String, e_call("getcwd", vec![])), BinOp::Concat, e_str("/")), BinOp::Concat, e_cast(CastType::String, e_var("resolved")))),
                         ],
                         vec![],
                         None,
                     ),
                     s_assign("segments", e_array(vec![])),
-                    s_foreach(e_call("explode", vec![e_str("/"), e_var("path")]), None, "component", vec![
+                    s_foreach(e_call("explode", vec![e_str("/"), e_cast(CastType::String, e_var("resolved"))]), None, "component", vec![
                         s_if(
                             e_binop(e_binop(e_var("component"), BinOp::StrictEq, e_str("")), BinOp::Or, e_binop(e_var("component"), BinOp::StrictEq, e_str("."))),
                             vec![
@@ -2352,6 +2393,24 @@ fn decl_class_ziparchive() -> Stmt {
                             ],
                             vec![],
                             None,
+                        ),
+                        s_assign("real_root", e_call("realpath", vec![e_var("root")])),
+                        s_if(
+                            e_binop(e_var("real_root"), BinOp::StrictNotEq, e_bool(false)),
+                            vec![
+                                s_assign("root", e_cast(CastType::String, e_var("real_root"))),
+                            ],
+                            vec![],
+                            Some(vec![
+                                s_if(
+                                    e_not(e_call("str_starts_with", vec![e_var("root"), e_str("/")])),
+                                    vec![
+                                        s_assign("root", e_binop(e_binop(e_cast(CastType::String, e_call("getcwd", vec![])), BinOp::Concat, e_str("/")), BinOp::Concat, e_var("root"))),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
                         ),
                         s_assign("root", e_call("rtrim", vec![e_var("root"), e_str("/")])),
                         s_if(
@@ -3107,6 +3166,8 @@ fn decl_class_elephczipstreamwrapper() -> Stmt {
         .private_prop("__elephc_position", TypeExpr::Int, Some(e_int(0)))
         .private_prop("__elephc_stat", t_array(), Some(e_array(vec![])))
         .private_prop("__elephc_seekable", TypeExpr::Bool, Some(e_bool(true)))
+        .private_prop("__elephc_archive_name", TypeExpr::Str, Some(e_str("")))
+        .private_prop("__elephc_entry", TypeExpr::Str, Some(e_str("")))
         .method(
             method("stream_open")
                 .param("path", TypeExpr::Str)
@@ -3143,6 +3204,8 @@ fn decl_class_elephczipstreamwrapper() -> Stmt {
                         None,
                     ),
                     s_assign("entry", e_call("substr", vec![e_var("path"), e_binop(e_var("separator"), BinOp::Add, e_int(1))])),
+                    s_prop_assign(e_this(), "__elephc_archive_name", e_var("archive_name")),
+                    s_prop_assign(e_this(), "__elephc_entry", e_var("entry")),
                     s_assign("archive", e_new("ZipArchive", vec![])),
                     s_assign("opened", e_method_call(e_var("archive"), "open", vec![e_var("archive_name"), e_class_const("ZipArchive", "RDONLY")])),
                     s_if(
@@ -3259,6 +3322,30 @@ fn decl_class_elephczipstreamwrapper() -> Stmt {
             method("stream_stat")
                 .returns(t_union(vec![t_array(), TypeExpr::False]))
                 .body(vec![
+                    // php-src's zip stream stats by reopening the archive path, so
+                    // replacing the backing file with a non-zip makes fstat() fail
+                    // even though the descriptor still holds the entry snapshot.
+                    s_assign("archive", e_new("ZipArchive", vec![])),
+                    s_assign("opened", e_method_call(e_var("archive"), "open", vec![e_this_prop("__elephc_archive_name"), e_class_const("ZipArchive", "RDONLY")])),
+                    s_if(
+                        e_binop(e_var("opened"), BinOp::StrictNotEq, e_bool(true)),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("stat", e_method_call(e_var("archive"), "statName", vec![e_this_prop("__elephc_entry"), e_class_const("ZipArchive", "FL_NOCASE")])),
+                    s_expr(e_method_call(e_var("archive"), "close", vec![])),
+                    s_if(
+                        e_binop(e_var("stat"), BinOp::StrictEq, e_bool(false)),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "__elephc_stat", e_cast(CastType::Array, e_var("stat"))),
                     s_assign("size", e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("__elephc_stat"), e_str("size")), e_int(0)))),
                     s_assign("mtime", e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("__elephc_stat"), e_str("mtime")), e_call("time", vec![])))),
                     s_assign("mode", e_int(32768)),
@@ -3287,12 +3374,28 @@ fn decl_stmt_bootstrap_2() -> Stmt {
     s_expr(e_call("stream_wrapper_register", vec![e_str("zip"), e_str("__ElephcZipStreamWrapper")]))
 }
 
+/// Emits the procedural `zip_*` deprecation with the profile's text.
+///
+/// PHP 8.0–8.3 set `ZEND_ACC_DEPRECATED` through `ZEND_DEP_FE`, so they print the
+/// short message. PHP 8.4's `#[\Deprecated]` attribute adds the `since 8.0` and
+/// replacement text. The same prelude runs under every `--php-version` profile, so the
+/// message follows the profile's `PHP_VERSION_ID` constant.
+fn procedural_deprecation(modern: &str, legacy: &str) -> Stmt {
+    s_expr(e_call("__elephc_builtin_deprecated", vec![
+        e_ternary(
+            e_binop(e_const("PHP_VERSION_ID"), BinOp::GtEq, e_int(80400)),
+            e_str(modern),
+            e_str(legacy),
+        ),
+    ]))
+}
+
 /// `zip_open` — transcribed from the PHP form.
 fn decl_fn_zip_open() -> Stmt {
     function("zip_open")
         .param("filename", TypeExpr::Str)
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead")])),
+            procedural_deprecation("Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead", "Function zip_open() is deprecated"),
             s_if(
                 e_binop(e_var("filename"), BinOp::StrictEq, e_str("")),
                 vec![
@@ -3355,7 +3458,7 @@ fn decl_fn_zip_read() -> Stmt {
     function("zip_read")
         .param_untyped("zip")
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead")])),
+            procedural_deprecation("Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead", "Function zip_read() is deprecated"),
             s_assign("id", e_call("get_resource_id", vec![e_var("zip")])),
             s_if(
                 e_not(e_call("isset", vec![e_index(e_static_prop("__ElephcZipProcedural", "state"), e_var("id"))])),
@@ -3398,7 +3501,7 @@ fn decl_fn_zip_close() -> Stmt {
         .param_untyped("zip")
         .returns(TypeExpr::Void)
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_close() is deprecated since 8.0, use ZipArchive::close() instead")])),
+            procedural_deprecation("Function zip_close() is deprecated since 8.0, use ZipArchive::close() instead", "Function zip_close() is deprecated"),
             s_assign("id", e_call("get_resource_id", vec![e_var("zip")])),
             s_if(
                 e_not(e_call("isset", vec![e_index(e_static_prop("__ElephcZipProcedural", "state"), e_var("id"))])),
@@ -3424,7 +3527,7 @@ fn decl_fn_zip_entry_open() -> Stmt {
         .param_default("mode", TypeExpr::Str, e_str("rb"))
         .returns(TypeExpr::Bool)
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_entry_open() is deprecated since 8.0")])),
+            procedural_deprecation("Function zip_entry_open() is deprecated since 8.0", "Function zip_entry_open() is deprecated"),
             s_assign("_unusedMode", e_var("mode")),
             s_assign("zip_id", e_call("get_resource_id", vec![e_var("zip_dp")])),
             s_assign("entry_id", e_call("get_resource_id", vec![e_var("zip_entry")])),
@@ -3448,7 +3551,7 @@ fn decl_fn_zip_entry_close() -> Stmt {
         .param_untyped("zip_entry")
         .returns(TypeExpr::Bool)
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_entry_close() is deprecated since 8.0")])),
+            procedural_deprecation("Function zip_entry_close() is deprecated since 8.0", "Function zip_entry_close() is deprecated"),
             s_assign("entry_id", e_call("get_resource_id", vec![e_var("zip_entry")])),
             s_foreach(e_static_prop("__ElephcZipProcedural", "state"), Some("zip_id"), "state", vec![
                 s_assign("state", e_cast(CastType::Array, e_var("state"))),
@@ -3476,7 +3579,7 @@ fn decl_fn_zip_entry_read() -> Stmt {
         .param_default("len", TypeExpr::Int, e_int(1024))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead")])),
+            procedural_deprecation("Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead", "Function zip_entry_read() is deprecated"),
             s_assign("entry_id", e_call("get_resource_id", vec![e_var("zip_entry")])),
             s_foreach(e_static_prop("__ElephcZipProcedural", "state"), Some("_zip_id"), "state", vec![
                 s_assign("state", e_cast(CastType::Array, e_var("state"))),
@@ -3517,7 +3620,7 @@ fn decl_fn_zip_entry_name() -> Stmt {
         .param_untyped("zip_entry")
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead")])),
+            procedural_deprecation("Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead", "Function zip_entry_name() is deprecated"),
             s_assign("entry_id", e_call("get_resource_id", vec![e_var("zip_entry")])),
             s_foreach(e_static_prop("__ElephcZipProcedural", "state"), Some("_zip_id"), "state", vec![
                 s_assign("state", e_cast(CastType::Array, e_var("state"))),
@@ -3543,7 +3646,7 @@ fn decl_fn_zip_entry_compressedsize() -> Stmt {
         .param_untyped("zip_entry")
         .returns(t_union(vec![TypeExpr::Int, TypeExpr::False]))
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_entry_compressedsize() is deprecated since 8.0, use ZipArchive::statIndex() instead")])),
+            procedural_deprecation("Function zip_entry_compressedsize() is deprecated since 8.0, use ZipArchive::statIndex() instead", "Function zip_entry_compressedsize() is deprecated"),
             s_assign("entry_id", e_call("get_resource_id", vec![e_var("zip_entry")])),
             s_foreach(e_static_prop("__ElephcZipProcedural", "state"), Some("_zip_id"), "state", vec![
                 s_assign("state", e_cast(CastType::Array, e_var("state"))),
@@ -3570,7 +3673,7 @@ fn decl_fn_zip_entry_filesize() -> Stmt {
         .param_untyped("zip_entry")
         .returns(t_union(vec![TypeExpr::Int, TypeExpr::False]))
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_entry_filesize() is deprecated since 8.0, use ZipArchive::statIndex() instead")])),
+            procedural_deprecation("Function zip_entry_filesize() is deprecated since 8.0, use ZipArchive::statIndex() instead", "Function zip_entry_filesize() is deprecated"),
             s_assign("entry_id", e_call("get_resource_id", vec![e_var("zip_entry")])),
             s_foreach(e_static_prop("__ElephcZipProcedural", "state"), Some("_zip_id"), "state", vec![
                 s_assign("state", e_cast(CastType::Array, e_var("state"))),
@@ -3597,7 +3700,7 @@ fn decl_fn_zip_entry_compressionmethod() -> Stmt {
         .param_untyped("zip_entry")
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
-            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str("Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead")])),
+            procedural_deprecation("Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead", "Function zip_entry_compressionmethod() is deprecated"),
             s_assign("names", e_array_assoc(vec![(e_int(0), e_str("stored")), (e_int(1), e_str("shrunk")), (e_int(2), e_str("reduced")), (e_int(3), e_str("reduced")), (e_int(4), e_str("reduced")), (e_int(5), e_str("reduced")), (e_int(6), e_str("imploded")), (e_int(7), e_str("tokenized")), (e_int(8), e_str("deflated")), (e_int(9), e_str("deflatedX")), (e_int(10), e_str("implodedX"))])),
             s_assign("entry_id", e_call("get_resource_id", vec![e_var("zip_entry")])),
             s_foreach(e_static_prop("__ElephcZipProcedural", "state"), Some("_zip_id"), "state", vec![
