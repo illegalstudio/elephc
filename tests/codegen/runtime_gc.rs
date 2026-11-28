@@ -346,3 +346,5 @@ mod safe_point_budget;
 mod dynamic_first_class;
 #[path = "runtime_gc/closure_factory_storage.rs"]
 mod closure_factory_storage;
+#[path = "runtime_gc/consuming_reference_cow.rs"]
+mod consuming_reference_cow;

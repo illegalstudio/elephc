@@ -338,6 +338,9 @@ pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
         SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &elem_ty)?;
     let receiver_ty = ctx.value_php_type(array)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    // A reference-cell load borrows the stored array. Keep a separate helper owner so the
+    // consuming COW split and the subsequent store-back each retire their own reference.
+    receiver.prepare_ref_cell_consuming_split(ctx, array)?;
     ensure_unique_array_pop_source(ctx, array)?;
     receiver.store_back(ctx, array, &receiver_ty)?;
     lower_array_splice_call(ctx, array, offset, length, &elem_ty)?;
