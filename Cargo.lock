@@ -754,6 +754,7 @@ dependencies = [
  "elephc-image",
  "elephc-magician",
  "elephc-mbstring",
+ "elephc-memoir",
  "elephc-monitoring-contract",
  "elephc-pcntl",
  "elephc-pdo",
@@ -901,6 +902,7 @@ dependencies = [
  "elephc-generics",
  "elephc-iconv",
  "elephc-mbstring",
+ "elephc-memoir",
  "elephc-pcntl",
  "elephc-phar",
  "elephc-process-context",
@@ -922,6 +924,13 @@ dependencies = [
  "flate2",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "elephc-memoir"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

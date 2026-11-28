@@ -20,7 +20,12 @@
 //!   and invisible to Reflection even if a caller reached this code with no shape at all.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_mutable_runtime_owners, with_runtime_owners,
+};
+use elephc_memoir::runtime_owners::{
+    CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch,
+};
 
 /// Leaves Number scalar operands intact for its native internal string-or-integer adapter.
 /// Only this invocation's signature copy changes; reflection keeps the declared union.
@@ -125,16 +130,12 @@ pub(in crate::interpreter) fn release_native_bound_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let owners = args.iter().flat_map(|arg|
+    let owners = RuntimeOwnerBatch::new(args.iter().flat_map(|arg|
         arg.variadic_ref_targets.iter().map(|(key, _)| *key).chain(std::iter::once(arg.value)))
-        .map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    );
     with_runtime_owners(&owners, || {
-        let mut result = Ok(());
-        for owner in &owners {
-            let released = release_expr_result(owner.take(), context, values);
-            if result.is_ok() { result = released; }
-        }
-        result
+        owners.release(ReleaseOrder::Forward, CleanupErrorPolicy::First,
+            |owner| release_expr_result(owner, context, values))
     })
 }
 
@@ -189,7 +190,7 @@ fn write_back_native_ref_target(
     }
     let retained = values.retain(value)?;
     let replaced = set_owned_scope_cell(context, scope, name.clone(), retained, values)?;
-    for cell in replaced { eval_release_value(context, values, cell)?; }
+    super::super::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     Ok(())
 }
 
@@ -234,18 +235,21 @@ fn stage_hidden_collector_count(
     actual_count: usize,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let count = values.int(actual_count as i64)?;
-    let key = match values.int(0) {
-        Ok(key) => key,
-        Err(status) => {
-            let _ = values.release(count);
-            return Err(status);
-        }
-    };
-    // `bind_native_variadic_arg` releases the key itself when there is no writeback target.
-    let inserted = bind_native_variadic_arg(bound_args, variadic_index, key, count, None, values);
-    let released = values.release(count);
-    inserted.and(released)
+    let count = RuntimeOwnerSlot::new(values.int(actual_count as i64)?);
+    with_runtime_owners(&count, || {
+        let inserted = values.int(0).and_then(|key| {
+            bind_native_variadic_arg(
+                bound_args,
+                variadic_index,
+                key,
+                count.borrowed(),
+                None,
+                values,
+            )
+        });
+        let released = values.release(count.take());
+        inserted.and(released)
+    })
 }
 
 /// Binds native AOT callable args and fills omitted defaults from metadata.
@@ -266,7 +270,7 @@ pub(super) fn bind_native_signature_args(
     let mut next_positional = 0;
     let mut next_variadic_index = 0_i64;
 
-    let filled = (|| {
+    let filled = with_mutable_runtime_owners(&mut bound_args, |bound_args| (|| {
         if let Some(index) = variadic_index {
             let array = values.array_new(args.len())?;
             bound_args[index] = Some(BoundMethodArg {
@@ -277,7 +281,7 @@ pub(super) fn bind_native_signature_args(
             if collector_needs_count {
                 // The hidden collector's element 0 is the count; the surplus starts at 1, which
                 // is exactly what the rewritten `func_get_args()` body slices off.
-                stage_hidden_collector_count(&mut bound_args, variadic_index, actual_count, values)?;
+                stage_hidden_collector_count(bound_args, variadic_index, actual_count, values)?;
                 next_variadic_index = 1;
             }
         }
@@ -294,7 +298,7 @@ pub(super) fn bind_native_signature_args(
                 bind_native_named_signature_arg(
                     signature,
                     variadic_index,
-                    &mut bound_args,
+                    bound_args,
                     &name,
                     arg.value,
                     arg.ref_target,
@@ -305,7 +309,7 @@ pub(super) fn bind_native_signature_args(
             } else {
                 bind_native_positional_signature_arg(
                     signature,
-                    &mut bound_args,
+                    bound_args,
                     variadic_index,
                     regular_count,
                     &mut next_positional,
@@ -318,11 +322,11 @@ pub(super) fn bind_native_signature_args(
             }
         }
 
-        for (position, value) in bound_args.iter_mut().enumerate() {
+        for position in 0..bound_args.len() {
             if Some(position) == variadic_index {
                 continue;
             }
-            if value.is_some() {
+            if bound_args[position].is_some() {
                 continue;
             }
             if position >= regular_count {
@@ -342,7 +346,7 @@ pub(super) fn bind_native_signature_args(
                         .ok_or(EvalStatus::RuntimeFatal)?,
                 )?,
             };
-            *value = Some(BoundMethodArg {
+            bound_args[position] = Some(BoundMethodArg {
                 value: default_value,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -350,7 +354,7 @@ pub(super) fn bind_native_signature_args(
         }
 
         Ok(())
-    })();
+    })());
     let bound_args = bound_args.into_iter().flatten().collect::<Vec<_>>();
     if let Err(status) = filled {
         let _ = release_native_bound_args(&bound_args, context, values);
@@ -412,9 +416,20 @@ fn finish_native_argument_binding(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
-    let bound = apply_native_callable_bound_arg_types(signature, &mut args, callee, context, values)
-        .and_then(|()| copy_native_call_user_func_by_value_ref_args(signature, &mut args, by_ref_mode, values))
-        .and_then(|()| promote_native_mixed_reference_temporaries(signature, &mut args, context, values));
+    let bound = with_mutable_runtime_owners(&mut args, |args| {
+        apply_native_callable_bound_arg_types(signature, args, callee, context, values)
+            .and_then(|()| {
+                copy_native_call_user_func_by_value_ref_args(
+                    signature,
+                    args,
+                    by_ref_mode,
+                    values,
+                )
+            })
+            .and_then(|()| {
+                promote_native_mixed_reference_temporaries(signature, args, context, values)
+            })
+    });
     if let Err(status) = bound {
         let _ = release_native_bound_args(&args, context, values);
         return Err(status);
@@ -429,15 +444,16 @@ fn promote_native_mixed_reference_temporaries(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if !values.supports_persistent_references() { return Ok(()); }
-    for (index, arg) in args.iter_mut().enumerate() {
+    for index in 0..args.len() {
         if !signature.param_by_ref(index) || signature.param_variadic(index)
-            || arg.ref_target.is_some()
+            || args[index].ref_target.is_some()
         { continue; }
         let mixed = signature.param_type(index).is_none_or(|ty|
             !ty.is_intersection() && matches!(ty.variants(), [EvalParameterTypeVariant::Mixed]));
-        if !mixed || values.is_reference(arg.value)? { continue; }
-        let original = arg.value;
-        arg.value = values.reference_new(original)?;
+        if !mixed || values.is_reference(args[index].value)? { continue; }
+        let original = args[index].value;
+        let replacement = values.reference_new(original)?;
+        args[index].value = replacement;
         release_expr_result(original, context, values)?;
     }
     Ok(())
@@ -451,7 +467,7 @@ pub(super) fn apply_native_callable_bound_arg_types(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    for (position, bound_arg) in bound_args.iter_mut().enumerate() {
+    for position in 0..bound_args.len() {
         let Some(param_type) = signature.param_type(position) else {
             continue;
         };
@@ -460,12 +476,12 @@ pub(super) fn apply_native_callable_bound_arg_types(
                 callee,
                 position,
                 param_type,
-                bound_arg,
+                bound_args,
                 context,
                 values,
             )?;
         } else {
-            let original = bound_arg.value;
+            let original = bound_args[position].value;
             let coerced = match callee {
                 Some(callee) => eval_method_parameter_value_or_throw(
                     callee,
@@ -482,8 +498,8 @@ pub(super) fn apply_native_callable_bound_arg_types(
                 )?,
                 None => eval_method_parameter_value(param_type, original, context, values)?,
             };
-            bound_arg.value = coerced;
-            if bound_arg.value != original { release_expr_result(original, context, values)?; }
+            bound_args[position].value = coerced;
+            if coerced != original { release_expr_result(original, context, values)?; }
         }
     }
     Ok(())
@@ -494,39 +510,52 @@ pub(super) fn apply_native_callable_variadic_arg_type(
     callee: Option<&str>,
     variadic_index: usize,
     param_type: &EvalParameterType,
-    bound_arg: &mut BoundMethodArg,
+    bound_args: &mut [BoundMethodArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let len = values.array_len(bound_arg.value)?;
+    let len = values.array_len(bound_args[variadic_index].value)?;
     for element in 0..len {
-        let key = values.array_iter_key(bound_arg.value, element)?;
-        let updated = (|| {
-            let original = values.array_get(bound_arg.value, key)?;
+        let owners = StagedRuntimeOwners::default();
+        with_runtime_owners(&owners, || {
+            let operation = (|| {
+                let array = bound_args[variadic_index].value;
+                let key = owners.stage(values.array_iter_key(array, element)?);
+                let original = owners.stage(values.array_get(array, key.borrowed())?);
             // PHP omits the parameter name from a variadic argument TypeError.
-            let coerced = match callee {
-                Some(callee) => eval_method_parameter_value_or_throw(
-                    callee,
-                    variadic_index + 1 + element,
-                    None,
-                    param_type,
-                    original,
-                    context,
-                    values,
-                ),
-                None => eval_method_parameter_value(param_type, original, context, values),
-            };
-            let inserted = coerced.and_then(|value| {
-                let inserted = values.array_set(bound_arg.value, key, value);
-                if value != original { release_expr_result(value, context, values)?; }
-                inserted
-            });
-            let released = release_expr_result(original, context, values);
-            inserted.and_then(|array| released.map(|()| array))
-        })();
-        let released = release_expr_result(key, context, values);
-        bound_arg.value = updated?;
-        released?;
+                let coerced = match callee {
+                    Some(callee) => eval_method_parameter_value_or_throw(
+                        callee,
+                        variadic_index + 1 + element,
+                        None,
+                        param_type,
+                        original.borrowed(),
+                        context,
+                        values,
+                    )?,
+                    None => eval_method_parameter_value(
+                        param_type,
+                        original.borrowed(),
+                        context,
+                        values,
+                    )?,
+                };
+                if coerced != original { owners.stage(coerced); }
+                let updated = values.array_set(
+                    array,
+                    key.borrowed(),
+                    coerced.borrowed(),
+                )?;
+                bound_args[variadic_index].value = updated;
+                Ok(())
+            })();
+            let cleanup = owners.take_all().release(
+                ReleaseOrder::Reverse,
+                CleanupErrorPolicy::First,
+                |value| release_expr_result(value, context, values),
+            );
+            operation.and(cleanup)
+        })?;
     }
     Ok(())
 }
@@ -542,17 +571,18 @@ pub(super) fn copy_native_call_user_func_by_value_ref_args(
         return Ok(());
     }
     let variadic_index = native_callable_variadic_index(signature);
-    for (position, bound_arg) in bound_args.iter_mut().enumerate() {
+    for position in 0..bound_args.len() {
         let param_index = if variadic_index.is_some_and(|index| position >= index) {
             variadic_index.ok_or(EvalStatus::RuntimeFatal)?
         } else {
             position
         };
-        if !signature.param_by_ref(param_index) || bound_arg.ref_target.is_some() {
+        if !signature.param_by_ref(param_index) || bound_args[position].ref_target.is_some() {
             continue;
         }
-        let original = bound_arg.value;
-        bound_arg.value = copy_native_call_user_func_by_value_ref_arg(original, values)?;
+        let original = bound_args[position].value;
+        let replacement = copy_native_call_user_func_by_value_ref_arg(original, values)?;
+        bound_args[position].value = replacement;
         if !original.is_borrowed() { values.release(original)?; }
     }
     Ok(())
@@ -577,7 +607,13 @@ pub(super) fn copy_native_call_user_func_by_value_ref_arg(
         EVAL_TAG_OBJECT => {
             let word = values.raw_value_word(value)?;
             let retained = values.retain_raw_heap_word(word)?;
-            values.raw_heap_word_value(retained)
+            match values.raw_heap_word_value(retained) {
+                Ok(value) => Ok(value),
+                Err(status) => {
+                    let _ = values.release_raw_heap_word(retained);
+                    Err(status)
+                }
+            }
         }
         EVAL_TAG_NULL => values.null(),
         _ => Err(EvalStatus::RuntimeFatal),
@@ -751,13 +787,19 @@ pub(super) fn bind_native_variadic_arg(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
-    let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-    let inserted = values.array_set(bound.value, key, value);
-    if ref_target.is_none() || inserted.is_err() { values.release(key)?; }
-    let array = inserted?;
-    bound.value = array;
-    if let Some(ref_target) = ref_target {
-        bound.variadic_ref_targets.push((key, ref_target));
-    }
-    Ok(())
+    let array = bound_args[index].as_ref().ok_or(EvalStatus::RuntimeFatal)?.value;
+    let key = RuntimeOwnerSlot::new(key);
+    with_runtime_owners(&key, || {
+        let inserted = values.array_set(array, key.borrowed(), value);
+        if ref_target.is_none() || inserted.is_err() {
+            values.release(key.take())?;
+        }
+        let array = inserted?;
+        let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
+        bound.value = array;
+        if let Some(ref_target) = ref_target {
+            bound.variadic_ref_targets.push((key.take(), ref_target));
+        }
+        Ok(())
+    })
 }

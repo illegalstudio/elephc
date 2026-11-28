@@ -11,7 +11,10 @@
 
 use super::*;
 use crate::encoding::EncodingList;
-use crate::variables::{LiveFailure, VariablePlan, hash_child, host::{HostAdapter, HostError}};
+use crate::variables::{
+    LiveFailure, VariablePlan, elephc_mbstring_variable_initialize_reference_v1,
+    elephc_mbstring_variable_slot_value_v1, hash_child, read_native_cell, host::{HostAdapter, HostError},
+};
 use elephc_builtin_contract::mbstring_abi::variables::{MbInvokeHostV6, MbVariableHandleV1};
 
 unsafe extern "C" {
@@ -64,9 +67,9 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
     let supplied = unsafe { std::slice::from_raw_parts(args, 4) };
     let tail = supplied[3].cast::<u8>();
     if tail.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
-    let kind = unsafe { tail.sub(8).cast::<u64>().read_unaligned() } & 0xff;
+    let kind = unsafe { crate::variables::elephc_mbstring_variable_heap_shape_v1(tail) }.kind;
     if kind != 2 && kind != 3 { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
-    let length = unsafe { tail.cast::<u64>().read_unaligned() };
+    let length = unsafe { crate::variables::elephc_mbstring_variable_array_count_v1(tail) };
     let Ok(length) = usize::try_from(length) else { return RuntimeBuiltinStatus::RuntimeFatal as i32; };
     if kind == 2 {
         let Some(bytes) = length.checked_mul(8).and_then(|bytes| bytes.checked_add(24)) else {
@@ -85,16 +88,22 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
     expanded.extend_from_slice(&supplied[..3]);
     for index in 0..length {
         let (marker, tag, low, high) = if kind == 2 {
-            let marker = unsafe { tail.add(24 + index * 8).cast::<*const u64>().read_unaligned() };
+            let Some(Some(child)) = (unsafe { crate::variables::indexed_child(tail.cast_mut(), index) }) else {
+                return RuntimeBuiltinStatus::RuntimeFatal as i32;
+            };
+            let marker = unsafe { elephc_mbstring_variable_slot_value_v1(
+                child.words[0] as usize as *const u8, 0,
+            ) }.low as usize as *const u8;
             if marker.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
-            (marker, unsafe { marker.read_unaligned() }, unsafe { marker.add(1).read_unaligned() },
-                unsafe { marker.add(2).read_unaligned() })
+            let cell = unsafe { read_native_cell(marker) };
+            (marker, cell.tag, cell.low, cell.high)
         } else {
             let Some(Some(child)) = (unsafe { hash_child(tail.cast_mut(), index) }) else {
                 return RuntimeBuiltinStatus::RuntimeFatal as i32;
             };
-            let marker = child.words[0] as usize as *const u64;
-            (marker, child.words[2], unsafe { marker.read_unaligned() }, unsafe { marker.add(1).read_unaligned() })
+            let marker = child.words[0] as usize as *const u8;
+            let payload = unsafe { elephc_mbstring_variable_slot_value_v1(marker, 1) };
+            (marker, child.words[2], payload.low, payload.high)
         };
         if tag == 11 {
             let reference = low as usize as *const c_void;
@@ -107,21 +116,22 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
             continue;
         }
         if kind == 3 && tag == 7 {
-            let boxed = low as usize as *const u64;
+            let boxed = low as usize as *const u8;
             if boxed.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
-            if unsafe { boxed.read_unaligned() } == 11 {
-                let reference = unsafe { boxed.add(1).read_unaligned() } as usize as *const c_void;
+            let cell = unsafe { read_native_cell(boxed) };
+            if cell.tag == 11 {
+                let reference = cell.low as usize as *const c_void;
                 if reference.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
                 expanded.push(reference);
                 continue;
             }
-            if unsafe { boxed.read_unaligned() } == 7 && unsafe { boxed.add(2).read_unaligned() } == 1 {
+            if cell.tag == 7 && cell.high == 1 {
                 expanded.push(boxed.cast());
                 continue;
             }
         }
         let value = if kind == 2 || tag == 7 {
-            unsafe { elephc_mbstring_variable_clone_v1((if kind == 2 { marker } else { low as usize as *const u64 }).cast()) }
+            unsafe { elephc_mbstring_variable_clone_v1(if kind == 2 { marker } else { low as usize as *const u8 }) }
         } else {
             unsafe { elephc_mbstring_variable_box_v1(tag, low, high) }
         };
@@ -131,7 +141,7 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
             unsafe { elephc_mbstring_variable_release_v1(value); }
             return RuntimeBuiltinStatus::RuntimeFatal as i32;
         }
-        unsafe { reference.cast::<u64>().write_unaligned(value as usize as u64); }
+        unsafe { elephc_mbstring_variable_initialize_reference_v1(reference, value); }
         temporary.0.push(reference);
         expanded.push(reference.cast());
     }

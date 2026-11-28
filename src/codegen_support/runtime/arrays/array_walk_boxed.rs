@@ -14,13 +14,13 @@
 //! - Opaque descriptor kinds fail closed because their reference escapes cannot be audited.
 
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::codegen_support::{
     abi, arrays, callable_descriptor, emit::Emitter, platform::Arch, value_boxing,
 };
 use crate::types::PhpType;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
+use elephc_memoir::reference_cells::unmanaged_borrows;
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 96;
 const HANDLER: usize = FRAME - 16;
@@ -52,7 +52,6 @@ const VISIT_KEY_HI: usize = 64;
 const VISIT_OLD_CELL: usize = 72;
 const VISIT_CELL_VALUE: usize = 80;
 const VISIT_ARGUMENT_OWNER: usize = 88;
-const VISIT_BORROW_CELL: usize = 96;
 const VISIT_BORROW_PREVIOUS: usize = 104;
 const VISIT_INVOCATION_SCOPE: usize = 112;
 
@@ -81,8 +80,7 @@ fn emit_entry(emitter: &mut Emitter) {
     for offset in [SOURCE, PENDING, ARGUMENTS, CALLBACK_RESULT, BORROW_HEAD] {
         clear_slot(emitter, offset);
     }
-    abi::emit_load_symbol_to_reg(emitter, result, "_rt_unmanaged_ref_borrow_top", 0);
-    abi::store_at_offset(emitter, result, BORROW_HEAD);
+    unmanaged_borrows::emit_save_head(emitter, result, FrameOffset::new(BORROW_HEAD));
     install_boundary(emitter);
     reject_opaque_callback(emitter);
 
@@ -308,27 +306,20 @@ fn reject_opaque_callback(emitter: &mut Emitter) {
 
 /// Publishes this visitor's exact borrowed hash-entry slot for nested escape checks.
 fn install_visit_borrow(emitter: &mut Emitter) {
-    let scratch = scratch_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
-    abi::store_at_offset(emitter, scratch, VISIT_BORROW_PREVIOUS);
-    abi::load_at_offset(emitter, scratch, VISIT_ENTRY);
-    abi::store_at_offset(emitter, scratch, VISIT_BORROW_CELL);
-    abi::emit_frame_slot_address(emitter, scratch, VISIT_BORROW_PREVIOUS);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
+    unmanaged_borrows::emit_push(
+        emitter, scratch_reg(emitter), FrameOffset::new(VISIT_BORROW_PREVIOUS),
+        FrameOffset::new(VISIT_ENTRY),
+    );
 }
 
 /// Pops the current visitor node after a callback has returned normally.
 fn restore_visit_borrow(emitter: &mut Emitter) {
-    let scratch = scratch_reg(emitter);
-    abi::load_at_offset(emitter, scratch, VISIT_BORROW_PREVIOUS);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
+    unmanaged_borrows::emit_restore_head(emitter, scratch_reg(emitter), FrameOffset::new(VISIT_BORROW_PREVIOUS));
 }
 
 /// Restores the chain saved before this walk, including after a callback longjmp.
 fn restore_entry_borrow_head(emitter: &mut Emitter) {
-    let scratch = scratch_reg(emitter);
-    abi::load_at_offset(emitter, scratch, BORROW_HEAD);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
+    unmanaged_borrows::emit_restore_head(emitter, scratch_reg(emitter), FrameOffset::new(BORROW_HEAD));
 }
 
 /// Builds owned `(value-ref, key)` callback arguments under the outer unwind owner slot.
@@ -418,58 +409,26 @@ fn release_callback_result(emitter: &mut Emitter) {
 
 /// Installs a native handler before acquiring the source root or invoking callbacks.
 fn install_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_value", PREVIOUS),
-        ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        (
-            "_rt_diag_suppression",
-            HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
-        HANDLER - TRY_HANDLER_JMP_BUF_OFFSET,
+        FrameOffset::new(PREVIOUS),
+        "__rt_array_walk_boxed_caught",
     );
-    emitter.save_exception_handler();                                           // keep descriptor and source owners reachable across callback and cleanup throws
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_walk_boxed_caught");
 }
 
 /// Restores the caller's handler and diagnostic depth after ownership cleanup.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        (
-            "_rt_diag_suppression",
-            HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears an owner slot without clobbering the result register.
 fn clear_slot(emitter: &mut Emitter, offset: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, offset);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(offset));
 }
 
 /// Clears and releases one runtime owner so cleanup can safely resume after a destructor throw.
 fn release_slot(emitter: &mut Emitter, offset: usize, helper: &str) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-    clear_slot(emitter, offset);
-    abi::emit_call_label(emitter, helper);
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(offset), helper);
 }
 
 /// Returns the low payload register used by the retaining Mixed constructor.

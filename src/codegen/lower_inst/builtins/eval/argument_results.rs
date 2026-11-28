@@ -8,6 +8,7 @@
 //! - Scratch offsets, Mixed ownership, and target register ordering are unchanged.
 
 use super::*;
+pub(super) use elephc_memoir::owner_layout::EvalMethodArgPack;
 
 /// Returns the aligned scratch size for an eval-declared function call.
 pub(super) fn eval_function_call_stack_bytes(arg_count: usize) -> usize {
@@ -17,13 +18,7 @@ pub(super) fn eval_function_call_stack_bytes(arg_count: usize) -> usize {
 
 /// Returns the aligned scratch size for an eval dynamic method-call argument pack.
 pub(super) fn eval_method_call_stack_bytes(arg_count: usize) -> usize {
-    let bytes = EVAL_STACK_BYTES + 8 + arg_count * 8;
-    (bytes + 15) & !15
-}
-
-/// Returns the aligned scratch size for an eval dynamic static-method call.
-pub(super) fn eval_static_method_call_stack_bytes(arg_count: usize) -> usize {
-    let bytes = EVAL_STACK_BYTES + 8 + arg_count * 8;
+    let bytes = EVAL_STACK_BYTES + EvalMethodArgPack::bytes(arg_count);
     (bytes + 15) & !15
 }
 
@@ -59,19 +54,8 @@ pub(super) fn store_eval_method_call_arg_pack(
     inst: &Instruction,
     args_offset: usize,
 ) -> Result<()> {
-    let arg_count = inst.operands.len().saturating_sub(1);
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, arg_count as i64);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
-    for (index, operand) in inst.operands.iter().skip(1).enumerate() {
-        let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
-        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty);
-        }
-        let result_reg = abi::int_result_reg(ctx.emitter);
-        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + 8 + index * 8);
-    }
-    Ok(())
+    let operands = inst.operands.get(1..).unwrap_or_default();
+    store_eval_counted_argument_pack(ctx, operands, args_offset)
 }
 
 /// Stores all positional operands as a count-prefixed static-method argument pack.
@@ -80,18 +64,19 @@ pub(super) fn store_eval_static_method_call_arg_pack(
     inst: &Instruction,
     args_offset: usize,
 ) -> Result<()> {
+    store_eval_counted_argument_pack(ctx, &inst.operands, args_offset)
+}
+
+/// Writes a native argument count and the boxed cells following it.
+fn store_eval_counted_argument_pack(
+    ctx: &mut FunctionContext<'_>,
+    operands: &[ValueId],
+    args_offset: usize,
+) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, inst.operands.len() as i64);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, operands.len() as i64);
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
-    for (index, operand) in inst.operands.iter().enumerate() {
-        let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
-        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty);
-        }
-        let result_reg = abi::int_result_reg(ctx.emitter);
-        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + 8 + index * 8);
-    }
-    Ok(())
+    store_eval_function_call_operands(ctx, operands, args_offset + EvalMethodArgPack::HEADER)
 }
 
 /// Stores an object operand as a boxed Mixed cell in eval scratch storage.
@@ -129,16 +114,12 @@ pub(super) fn retire_eval_metadata_operand_boxes(
     ctx: &mut FunctionContext<'_>,
     operands: &[(ValueId, usize)],
 ) -> Result<()> {
-    let result = abi::int_result_reg(ctx.emitter);
     for &(value, offset) in operands {
         if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             continue;
         }
         ctx.emitter.comment("retire temporary eval metadata operand box");
-        abi::emit_push_reg(ctx.emitter, result);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result, offset + 16);
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-        abi::emit_pop_reg(ctx.emitter, result);
+        elephc_memoir::frame_owners::emit_release_stacked_mixed_preserving_result(ctx.emitter, offset);
     }
     Ok(())
 }

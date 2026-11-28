@@ -49,7 +49,6 @@ impl EvalStreamResources {
             ok = stream.finalize_on_close();
         }
         closed = closed
-            || self.user_wrapper_streams.remove(&id).is_some()
             || self.filter_resources.remove(&id)
             || self.socket_listeners.remove(&id).is_some();
         self.socket_names.remove(&id);
@@ -220,21 +219,20 @@ impl EvalStreamResources {
     pub(crate) fn stream_context_options(&self, id: i64) -> Option<RuntimeCellHandle> {
         self.stream_contexts
             .get(&id)
-            .and_then(|context| context.options)
-            .map(RuntimeCellHandle::borrowed)
+            .filter(|context| !context.options.is_empty())
+            .map(|context| context.options.borrowed())
     }
 
-    /// Replaces persisted options for a stream context resource.
-    pub(crate) fn set_stream_context_options(
+    /// Publishes already-owned options and returns the detached preceding owner.
+    pub(crate) fn replace_stream_context_options(
         &mut self,
         id: i64,
         options: Option<RuntimeCellHandle>,
-    ) -> bool {
+    ) -> Result<Option<RuntimeCellHandle>, Option<RuntimeCellHandle>> {
         let Some(context) = self.stream_contexts.get_mut(&id) else {
-            return false;
+            return Err(options);
         };
-        context.options = options;
-        true
+        Ok(context.options.replace(options))
     }
 
     /// Reads one stream line up to a limit, newline, or custom delimiter.
@@ -550,7 +548,9 @@ mod tests {
     #[test]
     fn a_stream_context_stays_live_because_nothing_closes_one() {
         let mut resources = EvalStreamResources::default();
-        let id = resources.insert_stream_context(EvalStreamContext { options: None });
+        let id = resources.insert_stream_context(EvalStreamContext {
+            options: RuntimeOwnerSlot::default(),
+        });
         assert!(resources.is_live(id));
     }
 }

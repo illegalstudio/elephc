@@ -54,7 +54,7 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
 
     // -- null exceptions never match any catch type --
     emitter.instruction("cbz x0, __rt_exception_matches_no");                   // null means there is no active exception object to test
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = runtime class_id stored in the thrown object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     emitter.instruction("cbnz x2, __rt_exception_matches_interface");           // x2 != 0 means this catch target is an interface, not a class
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // load page of the emitted class-count table
     emitter.instruction("ldr x10, [x10]");                                      // x10 = total number of emitted classes
@@ -124,7 +124,7 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rdi, rdi");                                       // null exceptions never match any catch target
     emitter.instruction("je __rt_exception_matches_no");                        // there is no active exception object to test
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // r8 = runtime class_id stored in the thrown object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rdi");
     emitter.instruction("test rdx, rdx");                                       // does the catch target describe an interface instead of a class?
     emitter.instruction("jne __rt_exception_matches_interface");                // interface catches use the class-to-interface metadata table instead of parent links
     abi::emit_load_symbol_to_reg(emitter, "r9", "_class_gc_desc_count", 0);     // r9 = total number of emitted class metadata slots

@@ -8,6 +8,7 @@
 //! - The bridge copies every path, argument, key, and value before `execve`.
 //! - Omitted environments inherit the process; explicit empty arrays clear it.
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use super::*;
 
 /// Releases an unconsumed native exec builder on early conversion failure.
@@ -76,22 +77,24 @@ fn eval_pcntl_exec_add_arguments(
         return Err(EvalStatus::RuntimeFatal);
     }
     for position in 0..values.array_len(arguments)? {
-        let key = values.array_iter_key(arguments, position)?;
-        let argument = values.array_get(arguments, key)?;
-        let bytes = eval_pcntl_exec_string_bytes(argument, context, values)?;
-        if bytes.contains(&0) {
-            let _: RuntimeCellHandle = eval_throw_builtin_value_error(
-                "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes",
-                context,
-                values,
-            )?;
-        }
-        if unsafe {
-            elephc_pcntl::elephc_pcntl_exec_add_arg(builder, bytes.as_ptr(), bytes.len())
-        } == 0
-        {
-            return Err(EvalStatus::RuntimeFatal);
-        }
+        with_collection_cells(values, |values, owners| {
+            let (_, argument) = stage_collection_entry(arguments, position, values, owners)?;
+            let bytes = eval_pcntl_exec_string_bytes(argument, context, values)?;
+            if bytes.contains(&0) {
+                let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+                    "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes",
+                    context,
+                    values,
+                )?;
+            }
+            if unsafe {
+                elephc_pcntl::elephc_pcntl_exec_add_arg(builder, bytes.as_ptr(), bytes.len())
+            } == 0
+            {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            Ok(())
+        })?;
     }
     Ok(())
 }
@@ -107,44 +110,46 @@ fn eval_pcntl_exec_add_environment(
         return Err(EvalStatus::RuntimeFatal);
     }
     for position in 0..values.array_len(environment)? {
-        let key = values.array_iter_key(environment, position)?;
-        let value = values.array_get(environment, key)?;
-        let value = eval_pcntl_exec_string_bytes(value, context, values)?;
-        if value.contains(&0) {
-            let _: RuntimeCellHandle = eval_throw_builtin_value_error(
-                "pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not contain null bytes",
-                context,
-                values,
-            )?;
-        }
-        let (key_low, key_high, key_bytes) = match values.type_tag(key)? {
-            EVAL_TAG_INT => (eval_int_value(key, values)? as u64, -1, None),
-            EVAL_TAG_STRING => {
-                let bytes = values.string_bytes(key)?;
-                if bytes.contains(&0) {
-                    let _: RuntimeCellHandle = eval_throw_builtin_value_error(
-                        "pcntl_exec(): Argument #3 ($env_vars) name for environment variable must not contain null bytes",
-                        context,
-                        values,
-                    )?;
-                }
-                (bytes.as_ptr() as u64, bytes.len() as i64, Some(bytes))
+        with_collection_cells(values, |values, owners| {
+            let (key, value) = stage_collection_entry(environment, position, values, owners)?;
+            let value = eval_pcntl_exec_string_bytes(value, context, values)?;
+            if value.contains(&0) {
+                let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+                    "pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not contain null bytes",
+                    context,
+                    values,
+                )?;
             }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        };
-        let success = unsafe {
-            elephc_pcntl::elephc_pcntl_exec_add_env(
-                builder,
-                key_low,
-                key_high,
-                value.as_ptr(),
-                value.len(),
-            )
-        };
-        drop(key_bytes);
-        if success == 0 {
-            return Err(EvalStatus::RuntimeFatal);
-        }
+            let (key_low, key_high, key_bytes) = match values.type_tag(key)? {
+                EVAL_TAG_INT => (eval_int_value(key, values)? as u64, -1, None),
+                EVAL_TAG_STRING => {
+                    let bytes = values.string_bytes(key)?;
+                    if bytes.contains(&0) {
+                        let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+                            "pcntl_exec(): Argument #3 ($env_vars) name for environment variable must not contain null bytes",
+                            context,
+                            values,
+                        )?;
+                    }
+                    (bytes.as_ptr() as u64, bytes.len() as i64, Some(bytes))
+                }
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            let success = unsafe {
+                elephc_pcntl::elephc_pcntl_exec_add_env(
+                    builder,
+                    key_low,
+                    key_high,
+                    value.as_ptr(),
+                    value.len(),
+                )
+            };
+            drop(key_bytes);
+            if success == 0 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            Ok(())
+        })?;
     }
     Ok(())
 }
@@ -159,6 +164,8 @@ fn eval_pcntl_exec_string_bytes(
         values.warning("Warning: Array to string conversion\n")?;
         return Ok(b"Array".to_vec());
     }
-    let value = eval_string_context_value(value, context, values)?;
-    values.string_bytes(value)
+    with_collection_cells(values, |values, owners| {
+        let value = owners.stage(eval_string_context_value(value, context, values)?);
+        values.string_bytes(value)
+    })
 }

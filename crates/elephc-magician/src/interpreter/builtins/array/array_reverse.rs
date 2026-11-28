@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the array-reverse hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{EvalArrayBuilder, with_collection_cells};
 
 eval_builtin! {
     contract: "array_reverse",
@@ -70,31 +71,38 @@ pub(in crate::interpreter) fn eval_array_reverse_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut keys = Vec::with_capacity(len);
-    let mut has_string_key = false;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        has_string_key |= values.type_tag(key)? == EVAL_TAG_STRING;
-        keys.push(key);
-    }
-
-    let mut result = if preserve_keys || has_string_key {
-        values.assoc_new(len)?
+    let has_string_key = if preserve_keys {
+        false
     } else {
-        values.array_new(len)?
+        with_collection_cells(values, |values, owners| {
+            for position in 0..len {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                if values.type_tag(key)? == EVAL_TAG_STRING {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })?
+    };
+    let mut result = if preserve_keys || has_string_key {
+        EvalArrayBuilder::assoc(values, len)?
+    } else {
+        EvalArrayBuilder::indexed(values, len)?
     };
     let mut next_numeric_key = 0_i64;
-
-    for key in keys.into_iter().rev() {
-        let value = values.array_get(array, key)?;
-        let target_key = if preserve_keys || values.type_tag(key)? == EVAL_TAG_STRING {
-            key
-        } else {
-            let key = values.int(next_numeric_key)?;
-            next_numeric_key += 1;
-            key
-        };
-        result = values.array_set(result, target_key, value)?;
+    for position in (0..len).rev() {
+        result.update(|values, owners, _| {
+            let key = owners.stage(values.array_iter_key(array, position)?);
+            let value = owners.stage(values.array_get(array, key)?);
+            let target_key = if preserve_keys || values.type_tag(key)? == EVAL_TAG_STRING {
+                key
+            } else {
+                let key = owners.stage(values.int(next_numeric_key)?);
+                next_numeric_key += 1;
+                key
+            };
+            Ok(Some((target_key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

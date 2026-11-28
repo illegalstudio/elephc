@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{EvalArrayBuilder, with_collection_cells};
 
 eval_builtin! {
     contract: "array_diff",
@@ -62,27 +63,30 @@ pub(in crate::interpreter) fn eval_array_value_set_result(
     let right_len = values.array_len(right)?;
     let mut right_values = Vec::with_capacity(right_len);
     for position in 0..right_len {
-        let key = values.array_iter_key(right, position)?;
-        let value = values.array_get(right, key)?;
-        right_values.push(values.string_bytes(value)?);
+        let comparable = with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.array_iter_key(right, position)?);
+            let value = owners.stage(values.array_get(right, key)?);
+            values.string_bytes(value)
+        })?;
+        right_values.push(comparable);
     }
 
-    let mut result = values.assoc_new(left_len)?;
+    let mut result = EvalArrayBuilder::assoc(values, left_len)?;
     for position in 0..left_len {
-        let key = values.array_iter_key(left, position)?;
-        let value = values.array_get(left, key)?;
-        let comparable = values.string_bytes(value)?;
-        let found = right_values
-            .iter()
-            .any(|right_value| right_value == &comparable);
-        let keep = match name {
-            "array_diff" => !found,
-            "array_intersect" => found,
-            _ => return Err(EvalStatus::UnsupportedConstruct),
-        };
-        if keep {
-            result = values.array_set(result, key, value)?;
-        }
+        result.update(|values, owners, _| {
+            let key = owners.stage(values.array_iter_key(left, position)?);
+            let value = owners.stage(values.array_get(left, key)?);
+            let comparable = values.string_bytes(value)?;
+            let found = right_values
+                .iter()
+                .any(|right_value| right_value == &comparable);
+            let keep = match name {
+                "array_diff" => !found,
+                "array_intersect" => found,
+                _ => return Err(EvalStatus::UnsupportedConstruct),
+            };
+            Ok(keep.then_some((key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

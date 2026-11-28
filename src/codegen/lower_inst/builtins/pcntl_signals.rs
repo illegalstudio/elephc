@@ -73,7 +73,7 @@ pub(super) fn lower_sigprocmask(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [x0]");                            // stage the selected signal count
-            ctx.emitter.instruction("add x10, x0, #24");                        // stage the indexed signal payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
             abi::emit_store_to_sp(ctx.emitter, "x9", MASK_COUNT_OFFSET);
             abi::emit_store_to_sp(ctx.emitter, "x10", MASK_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", MASK_MODE_OFFSET);
@@ -104,7 +104,7 @@ pub(super) fn lower_sigprocmask(
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // stage the selected signal count
-            ctx.emitter.instruction("lea r10, [rax + 24]");                     // stage the indexed signal payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r10", "rax");
             abi::emit_store_to_sp(ctx.emitter, "r9", MASK_COUNT_OFFSET);
             abi::emit_store_to_sp(ctx.emitter, "r10", MASK_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", MASK_MODE_OFFSET);
@@ -171,13 +171,13 @@ pub(super) fn lower_signal_wait(
     store_normalized_signal_array(ctx, normalized, WAIT_NORMALIZED_OFFSET);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("add x9, x0, #24");                         // preserve indexed signal payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("ldr x10, [x0]");                           // preserve selected signal count
             abi::emit_store_to_sp(ctx.emitter, "x9", WAIT_SIGNALS_OFFSET);
             abi::emit_store_to_sp(ctx.emitter, "x10", WAIT_COUNT_OFFSET);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("lea r9, [rax + 24]");                      // preserve indexed signal payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r9", "rax");
             ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // preserve selected signal count
             abi::emit_store_to_sp(ctx.emitter, "r9", WAIT_SIGNALS_OFFSET);
             abi::emit_store_to_sp(ctx.emitter, "r10", WAIT_COUNT_OFFSET);
@@ -466,7 +466,7 @@ fn emit_indexed_int_array_from_stack(
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", count_offset);
             abi::emit_temporary_stack_address(ctx.emitter, "x11", buffer_offset);
-            ctx.emitter.instruction("add x12, x0, #24");                        // destination array payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x12", "x0");
             ctx.emitter.instruction("mov x13, #0");                             // copy index
             ctx.emitter.label(&copy_loop);
             ctx.emitter.instruction("cmp x13, x10");                            // test whether every signal was copied
@@ -484,7 +484,7 @@ fn emit_indexed_int_array_from_stack(
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", count_offset);
             abi::emit_temporary_stack_address(ctx.emitter, "r11", buffer_offset);
-            ctx.emitter.instruction("lea r8, [rax + 24]");                      // destination array payload
+            elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r8", "rax");
             ctx.emitter.instruction("xor ecx, ecx");                            // copy index
             ctx.emitter.label(&copy_loop);
             ctx.emitter.instruction("cmp rcx, r10");                            // test whether every signal was copied

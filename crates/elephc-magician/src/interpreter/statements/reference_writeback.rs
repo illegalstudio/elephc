@@ -9,6 +9,9 @@
 //! - Array writeback clones preserve element aliases and cursors before replacing shared storage.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::interpreter::scope_cells::retire_replaced_scope_cells;
+use elephc_memoir::owner_layout::InvokerSlotWords;
 
 /// Returns the calling-scope class when PHP's private-method shadowing rule
 /// selects it as the dispatch scope: `$obj->m()` from class scope S calls S's
@@ -69,9 +72,10 @@ pub(in crate::interpreter) fn bind_method_scope_args(
             if bound_arg.ref_target.is_some() && values.supports_persistent_references() && !values.is_reference(bound_arg.value)? {
                 let reference = values.reference_new(bound_arg.value)?;
                 context.copy_array_metadata(bound_arg.value, reference);
-                for old in method_scope.set_respecting_references(name.clone(), reference, ScopeCellOwnership::Owned) {
-                    eval_release_value(context, values, old)?;
-                }
+                let replaced = method_scope.set_respecting_references(
+                    name.clone(), reference, ScopeCellOwnership::Owned,
+                );
+                retire_replaced_scope_cells(replaced, context, values)?;
             }
             if let Some(target) = bound_arg.ref_target.as_ref() {
                 if let Some(reference) = method_scope.visible_cell(name).filter(|_| values.supports_persistent_references()) {
@@ -115,7 +119,7 @@ pub(super) fn alias_duplicate_method_ref_args(
                     bound_args[previous_position].value,
                     ScopeCellOwnership::Borrowed,
                 );
-                for old in replaced { eval_release_value(context, values, old)?; }
+                retire_replaced_scope_cells(replaced, context, values)?;
             }
             break;
         }
@@ -282,12 +286,27 @@ pub(super) fn write_back_owned_variable_ref_target(
 ) -> Result<(), EvalStatus> {
     let retained = values.retain(value)?;
     let replaced = set_owned_scope_cell(context, scope, name.to_string(), retained, values)?;
-    let mut result = Ok(());
-    for replaced in replaced {
-        let released = eval_release_value(context, values, replaced);
-        if result.is_ok() { result = released; }
+    retire_replaced_scope_cells(replaced, context, values)
+}
+
+/// Transfers a staged box to variable storage, or lends it to a retaining container setter.
+pub(in crate::interpreter) fn write_back_owned_ref_target(
+    target: &EvalReferenceTarget,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let EvalReferenceTarget::Variable { scope, name } = target {
+        let Some(scope) = (unsafe { scope.as_mut() }) else {
+            let _ = eval_release_value(context, values, value);
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+        return retire_replaced_scope_cells(replaced, context, values);
     }
-    result
+    with_eval_value_lease(value, context, values, |value, context, values| {
+        write_back_method_ref_target(target, value.borrowed(), context, values)
+    })
 }
 
 /// Stores one by-reference result in the original caller-side target.
@@ -307,16 +326,15 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
                 return Ok(());
             }
             let value = values.retain(value)?;
-            for replaced in set_scope_cell(
+            let replaced = set_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 value,
                 ScopeCellOwnership::Owned,
                 values,
-            )? {
-                values.release(replaced)?;
-            }
+            )?;
+            retire_replaced_scope_cells(replaced, context, values)?;
             Ok(())
         }
         EvalReferenceTarget::ArrayElement {
@@ -375,7 +393,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             Ok(())
         },
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
-            write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)
+            write_back_invoker_slot_ref_target(*slot, *source_tag, value, context, values)
         }
     }
 }
@@ -388,9 +406,9 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match source_tag {
         EVAL_INVOKER_TAGGED_SCALAR_SOURCE => {
-            let words = unsafe { *(slot as *const [u64; 2]) };
-            match words[1] {
-                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words[0]),
+            let words = unsafe { InvokerSlotWords::read_at(slot) };
+            match words.high {
+                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words.word),
                 EVAL_TAG_NULL => values.null(),
                 _ => Err(EvalStatus::RuntimeFatal),
             }
@@ -400,8 +418,8 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
             values.raw_word_value(source_tag, word)
         }
         EVAL_TAG_STRING => {
-            let words = unsafe { *(slot as *const [u64; 2]) };
-            values.raw_string_value(words[0], words[1])
+            let words = unsafe { InvokerSlotWords::read_at(slot) };
+            values.raw_string_value(words.word, words.high)
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
             let word = unsafe { *(slot as *const u64) };
@@ -422,6 +440,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
     slot: usize,
     source_tag: u64,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match source_tag {
@@ -429,7 +448,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
             let tag = values.type_tag(value)?;
             if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_NULL) { return Err(EvalStatus::RuntimeFatal); }
             let word = values.raw_value_word(value)?;
-            unsafe { *(slot as *mut [u64; 2]) = [word, tag]; }
+            unsafe { InvokerSlotWords::new(word, tag).write_at(slot); }
             Ok(())
         }
         EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
@@ -449,7 +468,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
             });
             if values.is_reference(current)? {
                 let previous = values.reference_replace(current, value)?;
-                return values.release(previous);
+                return eval_release_value(context, values, previous);
             }
             let retained = values.retain(value)?;
             let replaced = unsafe {
@@ -458,7 +477,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
                 *slot = retained.as_ptr();
                 replaced
             };
-            values.release(replaced)
+            eval_release_value(context, values, replaced)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -476,13 +495,9 @@ pub(super) fn write_back_invoker_string_slot(
     let ptr = values.raw_value_word(value)?;
     let len = values.raw_value_high_word(value)?;
     let retained = values.retain_raw_string_words(ptr, len)?;
-    let replaced = unsafe {
-        let slot = slot as *mut [u64; 2];
-        let replaced = *slot;
-        *slot = [retained.0, retained.1];
-        replaced
-    };
-    values.release_raw_string_words(replaced[0], replaced[1])
+    let replacement = InvokerSlotWords::new(retained.0, retained.1);
+    let replaced = unsafe { replacement.replace_at(slot) };
+    values.release_raw_string_words(replaced.word, replaced.high)
 }
 
 /// Writes a boxed heap value back into a native descriptor-invoker raw heap slot.
@@ -516,7 +531,6 @@ pub(super) fn write_back_method_array_element_ref_target(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut ownership = ScopeCellOwnership::Owned;
     if let Some(current) = visible_scope_cell(context, scope, array_name) {
         for declared in generic_local_contracts(scope, array_name, context) {
             validate_generic_local_element(Some(&declared), current, index, value, context, values)?;
@@ -526,7 +540,6 @@ pub(super) fn write_back_method_array_element_ref_target(
         scope_entry(context, scope, array_name).filter(|entry| entry.flags().is_visible())
     {
         if values.is_array_like(existing.cell())? {
-            ownership = existing.flags().ownership;
             let array = values.array_clone_shallow(existing.cell())?;
             context.copy_array_metadata(existing.cell(), array);
             array
@@ -536,11 +549,14 @@ pub(super) fn write_back_method_array_element_ref_target(
     } else {
         eval_new_array_for_index(index, values)?
     };
-    let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, array_name.to_string(), array, ownership, values)? {
-        values.release(replaced)?;
-    }
-    Ok(())
+    let array = RuntimeOwnerSlot::new(array);
+    with_runtime_owners(&array, || {
+        let written = values.array_set(array.borrowed(), index, value);
+        let written = written.map(|updated| array.update_receiver(updated));
+        let updated = array.finish(written, |cell| eval_release_value(context, values, cell))?;
+        let replaced = set_owned_scope_cell(context, scope, array_name.to_string(), updated, values)?;
+        retire_replaced_scope_cells(replaced, context, values)
+    })
 }
 
 /// Stores one by-reference method result in an element of a nested caller-side array target.

@@ -63,8 +63,7 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
         let (result, matches_array) =
             eval_preg_match_capture_result(pattern.value, subject.value, flags, offset, values)?;
         outcome = Some(eval_preg_last_error_code());
-        eval_write_preg_matches_target(&target, matches_array, context, values)?;
-        Ok(result)
+        eval_write_preg_matches_target(&target, result, matches_array, context, values)
     });
     if let (Some(code), Ok(_)) = (outcome, &result) {
         eval_preg_set_last_error(code);
@@ -110,8 +109,7 @@ pub(in crate::interpreter) fn eval_preg_match_capture_result(
     let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
     let Some(start) = eval_preg_start_offset(offset, subject.len()) else {
         let matches = values.array_new(0)?;
-        let result = values.bool_value(false)?;
-        return Ok((result, matches));
+        return super::captures::eval_preg_finish_capture_result(matches, values, |values| values.bool_value(false));
     };
     if let Some(captures) = regex.captures_at(&subject, start) {
         let matches = eval_preg_capture_array(
@@ -121,14 +119,15 @@ pub(in crate::interpreter) fn eval_preg_match_capture_result(
             unmatched_as_null,
             values,
         )?;
-        let matched = values.int(1)?;
-        return Ok((matched, matches));
+        return super::captures::eval_preg_finish_capture_result(matches, values, |values| values.int(1));
     }
     let matches =
         eval_preg_capture_array(&subject, None, offset_capture, unmatched_as_null, values)?;
     // A match error (malformed UTF-8, exhausted limits) is PHP `false` with `[]`.
-    let matched = if eval_preg_failed() { values.bool_value(false)? } else { values.int(0)? };
-    Ok((matched, matches))
+    let failed = eval_preg_failed();
+    super::captures::eval_preg_finish_capture_result(matches, values, |values| {
+        if failed { values.bool_value(false) } else { values.int(0) }
+    })
 }
 
 /// Returns the `preg_match()` flags, raising PHP's `ValueError` for an order flag.
@@ -174,6 +173,5 @@ pub(in crate::interpreter) fn eval_preg_match_values_result(
     let offset = eval_preg_offset_value(rest.get(2).copied(), values)?;
     let (matched, matches) =
         eval_preg_match_capture_result(pattern, subject, flags, offset, values)?;
-    values.release(matches)?;
-    Ok(matched)
+    finish_eval_argument_values(Ok(matched), [matches], context, values)
 }

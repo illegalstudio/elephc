@@ -62,7 +62,7 @@ fn emit_php_uname_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_php_uname");
 
     // -- validate mode string and preserve the selected mode across libc uname() --
-    emitter.instruction("sub sp, sp, #1536");                                   // reserve stack storage for frame metadata and the largest supported utsname layout
+    emitter.instruction("sub sp, sp, #2832");                                   // reserve stack storage for frame metadata and the largest supported utsname layout
     emitter.instruction("stp x29, x30, [sp, #0]");                              // preserve the caller frame pointer and return address
     emitter.instruction("add x29, sp, #0");                                     // establish a stable frame pointer for this runtime helper
     emitter.instruction("cmp x2, #1");                                          // PHP requires php_uname($mode) to receive exactly one mode byte
@@ -76,11 +76,8 @@ fn emit_php_uname_aarch64(emitter: &mut Emitter) {
     emitter.bl_c("uname");                                                      // fill the stack-backed utsname buffer through libc
     emitter.instruction("ldr x8, [sp, #16]");                                   // reload the accepted mode byte after libc returns
 
-    // -- set up concat-backed transient string storage for the result --
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x7, [x6]");                                        // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
-    emitter.instruction("add x9, x9, x7");                                      // compute the destination cursor for the returned uname string
+    // -- stage the bounded rendering separately from final result storage --
+    emitter.instruction("add x9, sp, #1536");                                   // destination after the largest supported utsname frame
     emitter.instruction("mov x1, x9");                                          // remember the result start pointer for the string return value
     emitter.instruction("mov x2, #0");                                          // initialize the returned uname string length to zero bytes
 
@@ -194,15 +191,13 @@ fn emit_aarch64_copy_field(
 }
 
 /// Emits the epilogue for the ARM64 `__rt_php_uname` helper.
-/// Publishes the updated concat-buffer write offset, restores callee-saved registers,
+/// Copies the staged bytes into checked result storage, restores callee-saved registers,
 /// releases the stack frame, and returns with x1 = result ptr, x2 = result length.
 fn emit_aarch64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
-    emitter.instruction("ldr x7, [x6]");                                        // reload the concat-buffer write offset from before this result
-    emitter.instruction("add x7, x7, x2");                                      // advance the concat-buffer offset by the returned uname length
-    emitter.instruction("str x7, [x6]");                                        // publish the updated concat-buffer write offset
+    elephc_memoir::strings::staged_concat::emit_copy_staged_result(emitter, "__rt_php_uname_copied");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the caller frame pointer and return address
-    emitter.instruction("add sp, sp, #1536");                                   // release the stack-backed utsname storage
+    emitter.instruction("add sp, sp, #2832");                                   // release the stack-backed utsname storage
     emitter.instruction("ret");                                                 // return the selected uname string in x1/x2
 }
 
@@ -238,7 +233,7 @@ fn emit_php_uname_linux_x86_64(emitter: &mut Emitter) {
     // -- validate mode string and preserve the selected mode across libc uname() --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while php_uname uses stack storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for locals and struct utsname
-    emitter.instruction("sub rsp, 640");                                        // reserve aligned storage for mode metadata and Linux struct utsname
+    emitter.instruction("sub rsp, 896");                                        // reserve aligned storage for mode metadata and Linux struct utsname
     emitter.instruction("cmp rdx, 1");                                          // PHP requires php_uname($mode) to receive exactly one mode byte
     emitter.instruction("jne __rt_php_uname_mode_len_fail");                    // reject empty or multi-byte mode strings before reading the mode byte
     emitter.instruction("movzx r8d, BYTE PTR [rax]");                           // load the requested php_uname mode byte
@@ -250,11 +245,8 @@ fn emit_php_uname_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("uname");                                                      // fill the stack-backed utsname buffer through libc
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the accepted mode byte after libc returns
 
-    // -- set up concat-backed transient string storage for the result --
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
-    emitter.instruction("lea r9, [r9 + r11]");                                  // compute the destination cursor for the returned uname string
+    // -- stage the bounded rendering separately from final result storage --
+    emitter.instruction("lea r9, [rbp - 896]");                                 // destination below the utsname structure
     emitter.instruction("mov rax, r9");                                         // remember the result start pointer for the string return value
     emitter.instruction("xor edx, edx");                                        // initialize the returned uname string length to zero bytes
 
@@ -388,14 +380,12 @@ fn emit_x86_64_copy_field(
 }
 
 /// Emits the epilogue for the x86_64 `__rt_php_uname` helper.
-/// Publishes the updated concat-buffer write offset, releases the stack frame,
+/// Copies the staged bytes into checked result storage, releases the stack frame,
 /// restores rbp, and returns with rax = result ptr, rdx = result length.
 fn emit_x86_64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the concat-buffer write offset from before this result
-    emitter.instruction("add r11, rdx");                                        // advance the concat-buffer offset by the returned uname length
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the updated concat-buffer write offset
-    emitter.instruction("add rsp, 640");                                        // release the stack-backed utsname storage
+    elephc_memoir::strings::staged_concat::emit_copy_staged_result(emitter, "__rt_php_uname_copied");
+    emitter.instruction("add rsp, 896");                                        // release the stack-backed utsname storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the selected uname string in rax/rdx
 }

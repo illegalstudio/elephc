@@ -44,19 +44,19 @@ fn load_types(function: &Function, slot: LocalSlotId) -> Vec<PhpType> {
         .collect()
 }
 
-/// Counts the `release_local_slot` ops on `slot` that survived the untracked-slot prune.
+/// Counts standalone releases and replacing stores that survived final slot typing.
 fn surviving_slot_releases(function: &Function, slot: LocalSlotId) -> usize {
     function
         .instructions
         .iter()
         .filter(|inst| {
-            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot))
+            (inst.op == Op::ReleaseLocalSlot || inst.replaces_local_owner())
+                && inst.immediate == Some(Immediate::LocalSlot(slot))
         })
         .count()
 }
 
-/// Counts the `store_local`s of an int into `slot` with no surviving `release_local_slot` before
-/// them in the same block.
+/// Counts integer overwrites with no displaced-owner cleanup.
 ///
 /// In the fixture every int store overwrites an initialized slot (the local is `null` first),
 /// and the slot ends as boxed storage, so the backend boxes these stores and each one replaces a
@@ -76,7 +76,7 @@ fn unreleased_int_overwrites(function: &Function, slot: LocalSlotId) -> usize {
                     .first()
                     .and_then(|operand| function.value(*operand))
                     .is_some_and(|value| value.php_type == PhpType::Int);
-                if stores_int && !released {
+                if stores_int && !released && !inst.replaces_local_owner() {
                     unreleased += 1;
                 }
                 released = false;

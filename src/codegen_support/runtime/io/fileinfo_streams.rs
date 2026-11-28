@@ -10,6 +10,7 @@
 //! - Network failures retain their cause before descriptor cleanup and notifications.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::buffers::stream_tables;
 
 /// Emits C ABI entry points whose names follow the target's external symbol convention.
 pub(crate) fn emit_fileinfo_streams(emitter: &mut Emitter) {
@@ -109,12 +110,17 @@ fn emit_wrapper_query(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [sp, #16]");                           // load the current registration index
             emitter.instruction("cmp x9, #64");                                 // bound the scan by the registration table's capacity
             emitter.instruction("b.ge __rt_fileinfo_wrapper_missing");          // return false after inspecting every slot
-            abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
-            emitter.instruction("add x10, x10, x9, lsl #5");                    // locate the 32-byte registration record
-            emitter.instruction("ldr x1, [x10]");                               // load its retained protocol bytes
+            stream_tables::emit_registration_entry_address(
+                stream_tables::USER_WRAPPERS, emitter, "x10", "x9", "x10",
+            );
+            stream_tables::emit_load_registration_field(
+                emitter, "x1", "x10", stream_tables::RegistrationField::NamePointer,
+            );
             emitter.instruction("cbz x1, __rt_fileinfo_wrapper_next");          // skip empty registration slots
             emitter.instruction("ldr x2, [sp, #8]");                            // load the caller's scheme length
-            emitter.instruction("ldr x11, [x10, #8]");                          // load the registration's explicit byte length
+            stream_tables::emit_load_registration_field(
+                emitter, "x11", "x10", stream_tables::RegistrationField::NameLength,
+            );
             emitter.instruction("cmp x2, x11");                                 // compare lengths before reading either byte span
             emitter.instruction("b.ne __rt_fileinfo_wrapper_next");             // skip protocols with a different length
             emitter.instruction("ldr x0, [sp]");                                // pass the requested scheme to memcmp
@@ -145,14 +151,19 @@ fn emit_wrapper_query(emitter: &mut Emitter) {
             emitter.instruction("mov r9, QWORD PTR [rsp + 16]");                // load the current registration index
             emitter.instruction("cmp r9, 64");                                  // bound the scan by the registration table's capacity
             emitter.instruction("jge __rt_fileinfo_wrapper_missing");           // return false after inspecting every slot
-            abi::emit_symbol_address(emitter, "r10", "_user_wrappers");
-            emitter.instruction("shl r9, 5");                                   // scale the index by the 32-byte record size
-            emitter.instruction("add r10, r9");                                 // locate the current registration
-            emitter.instruction("mov rsi, QWORD PTR [r10]");                    // load its retained protocol bytes
+            stream_tables::emit_registration_entry_address(
+                stream_tables::USER_WRAPPERS, emitter, "r10", "r9", "r11",
+            );
+            stream_tables::emit_load_registration_field(
+                emitter, "rsi", "r10", stream_tables::RegistrationField::NamePointer,
+            );
             emitter.instruction("test rsi, rsi");                               // distinguish an occupied slot from a hole
             emitter.instruction("jz __rt_fileinfo_wrapper_next");               // skip empty registrations
             emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // load the requested scheme length
-            emitter.instruction("cmp rdx, QWORD PTR [r10 + 8]");                // require a matching registered length before reading bytes
+            stream_tables::emit_load_registration_field(
+                emitter, "r11", "r10", stream_tables::RegistrationField::NameLength,
+            );
+            emitter.instruction("cmp rdx, r11");                                // require a matching registered length before reading bytes
             emitter.instruction("jne __rt_fileinfo_wrapper_next");              // skip protocols with a different length
             emitter.instruction("mov rdi, QWORD PTR [rsp]");                    // pass the requested bytes to memcmp
             emitter.bl_c("memcmp");

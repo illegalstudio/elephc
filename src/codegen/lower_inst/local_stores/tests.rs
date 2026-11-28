@@ -9,8 +9,10 @@
 //! - Executable ownership coverage remains in the XML composed-helper heap regression.
 
 use crate::codegen::{generate_user_asm_from_ir, platform::Target};
-use crate::ir::{Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind,
-    Module, Op, Ownership, Terminator};
+use crate::ir::{
+    Builder, Effects, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module,
+    Op, Ownership, Terminator,
+};
 use crate::types::PhpType;
 
 /// A transferred increment retires the previous cell owner even when its pointer is unchanged.
@@ -25,6 +27,94 @@ fn merged_reference_increment_retires_previous_owner_on_every_target() {
         assert!(!body.contains("ref_cell_store_same_pointer"),
             "{name}: pointer equality must not suppress retirement of an acquired owner: {body}");
     }
+}
+
+/// An atomic scalar seed does not retire the frame-owned cell that it atomically replaces.
+#[test]
+fn atomic_numeric_seed_skips_frame_owned_displaced_cell_on_every_target() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = atomic_numeric_seed_assembly(Target::parse(name).unwrap());
+        let body = assembly
+            .split_once("@fn name=atomic_numeric_seed_fixture ")
+            .unwrap()
+            .1
+            .split_once("@endfn name=atomic_numeric_seed_fixture")
+            .unwrap()
+            .0;
+        assert_eq!(
+            body.matches("__rt_decref_mixed").count(),
+            0,
+            "{name}: the atomic seed must not retire its frame-owned displaced cell: {body}"
+        );
+    }
+}
+
+/// Builds a numeric local whose logical seed atomically replaces another frame-owned cell.
+fn atomic_numeric_seed_assembly(target: Target) -> String {
+    let mixed = IrType::Heap(IrHeapKind::Mixed);
+    let mut module = Module::new(target);
+    let mut function = Function::new(
+        "atomic_numeric_seed_fixture".to_string(),
+        IrType::I64,
+        PhpType::Int,
+    );
+    let slot = function.add_local(
+        Some("counter".to_string()),
+        mixed,
+        PhpType::Mixed,
+        LocalKind::PhpLocal,
+    );
+    let replacement;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let zero = builder.emit_const_i64(0);
+        builder.emit_store_local(slot, zero);
+        let one = builder.emit_const_i64(1);
+        let _checked = builder
+            .emit(
+                Op::ICheckedAdd,
+                vec![one, one],
+                None,
+                mixed,
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .unwrap();
+        replacement = builder.emit_const_i64(2);
+        builder.emit_store_local(slot, replacement);
+        let result = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+    }
+    function
+        .instructions
+        .iter_mut()
+        .find(|inst| inst.op == Op::StoreLocal && inst.operands == [replacement])
+        .expect("replacement seed store")
+        .effects = Effects::all();
+    module.add_function(function);
+    let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+    main.flags.is_main = true;
+    {
+        let mut builder = Builder::new(&mut main);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Return { value: None });
+    }
+    module.add_function(main);
+    crate::ir::validate_module(&module).expect("valid atomic numeric seed fixture");
+    generate_user_asm_from_ir(&module, false, false).expect("lower atomic numeric seed fixture")
 }
 
 /// Builds the branch-temporary shape used by dynamic internal-object arithmetic.

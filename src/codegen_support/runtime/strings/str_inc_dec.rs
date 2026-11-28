@@ -21,10 +21,8 @@
 //! - The carry stops at the first non-alphanumeric byte, so `"a-"++` is `"a-"` while
 //!   `"-a"++` is `"-b"`. Bytes are compared as raw ASCII: this is byte-oriented exactly
 //!   like php-src, so multi-byte characters are never carried into.
-//! - The carried result is built in the shared `_concat_buf` scratch (one spare byte in
-//!   front for the `z`→`aa` growth) and immediately handed to `__rt_mixed_from_value`,
-//!   which persists it into owned heap storage; the scratch offset is deliberately NOT
-//!   advanced because the bytes do not outlive that call.
+//! - The carry uses an unpublished Memoir reservation with one spare prefix byte.
+//!   Boxing owns the finished slice before the reservation is discarded.
 //! - The numeric classification is `__rt_php_num_scan`'s fully-numeric flag, so it matches
 //!   `is_numeric()` byte for byte (`" 5"` and `"5 "` are numeric, `"0x1A"` and `"1_0"` are
 //!   not, and therefore carry alphanumerically like PHP).
@@ -32,6 +30,7 @@
 //!   `--` on a non-numeric string. elephc has no runtime deprecation channel, so only the
 //!   resulting VALUE is reproduced here.
 
+use elephc_memoir::heap_kind::{HeapStart, emit_branch_outside_heap};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 
@@ -157,10 +156,9 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the delta to tell the two empty-string rules apart
     emitter.instruction("cmp x3, #0");                                          // is this a decrement of the empty string?
     emitter.instruction("b.lt __rt_sid_empty_dec");                             // decrementing the empty string yields PHP's int(-1)
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
-    emitter.instruction("mov w10, #49");                                        // ASCII '1' is the whole result of incrementing the empty string
-    emitter.instruction("strb w10, [x9]");                                      // materialize the one-byte result in the shared scratch buffer
-    emitter.instruction("mov x1, x9");                                          // pass the scratch pointer as the boxing helper's string payload
+    emitter.instruction("mov w10, #49");                                        // ASCII '1' is the whole result
+    emitter.instruction("strb w10, [sp, #40]");                                 // stage the byte in the current helper frame
+    emitter.instruction("add x1, sp, #40");                                     // pass the frame byte to the boxing helper
     emitter.instruction("mov x2, #1");                                          // the incremented empty string is exactly one byte long
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("bl __rt_mixed_from_value");                            // persist the one-byte result and box it for the caller
@@ -183,13 +181,12 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // persist the unchanged string and box it for the caller
     emitter.instruction("b __rt_sid_return");                                   // share the epilogue with every other result path
 
-    // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
+    // -- copy into an adoptable reservation, leaving one spare byte for 'z' -> 'aa' --
     emitter.label("__rt_sid_carry");
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load the current shared scratch write offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // compute the scratch cursor for this result
-    emitter.instruction("add x9, x9, #16");                                     // keep a header-sized gap so the heap-kind probe never reads before the buffer
+    elephc_memoir::strings::staged_concat::emit_reserve_with_prefix(
+        emitter, 8, 40, "__rt_sid_reserve_ready",
+    );
+    emitter.instruction("mov x9, x0");                                          // keep the reservation base for prefix insertion
     emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = source cursor over the operand string
     emitter.instruction("ldr x11, [sp, #8]");                                   // x11 = the operand string length
     emitter.instruction("add x12, x9, #1");                                     // x12 = destination cursor, one byte past the growth slot
@@ -203,7 +200,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
 
     // -- carry from the last byte towards the front, exactly like php-src --
     emitter.label("__rt_sid_copied");
-    emitter.instruction("add x12, x9, #1");                                     // x12 = base of the mutable copy inside scratch
+    emitter.instruction("add x12, x9, #1");                                     // x12 = first operand byte after the reserved prefix
     emitter.instruction("mov x13, x11");                                        // x13 = one past the byte position still to be processed
     emitter.label("__rt_sid_carry_loop");
     emitter.instruction("cbz x13, __rt_sid_carry_escaped");                     // a carry out of position zero grows the string by one byte
@@ -262,17 +259,15 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.label("__rt_sid_stop");
     emitter.instruction("add x1, x9, #1");                                      // the result starts at the copy, leaving the growth slot unused
     emitter.instruction("mov x2, x11");                                         // an absorbed carry keeps the original length
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value");                            // persist the carried result and box it for the caller
-    emitter.instruction("b __rt_sid_return");                                   // share the epilogue with every other result path
+    emitter.instruction("b __rt_sid_stop_box");                                 // share the boxing and reservation transfer
 
     emitter.label("__rt_sid_carry_escaped");
     emitter.instruction("ldr x15, [sp, #32]");                                  // reload the prefix byte chosen by the last wrap
     emitter.instruction("strb w15, [x9]");                                      // write the prefix into the reserved growth slot
     emitter.instruction("mov x1, x9");                                          // the grown result starts one byte earlier
     emitter.instruction("add x2, x11, #1");                                     // an escaped carry makes the result one byte longer
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value");                            // persist the grown result and box it for the caller
+    emitter.label("__rt_sid_stop_box");
+    elephc_memoir::strings::staged_concat::emit_box_reserved_slice(emitter, 40, "__rt_sid_box_ready");
 
     emitter.label("__rt_sid_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame pointer and return address
@@ -396,9 +391,8 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_empty_x86");
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is this a decrement of the empty string?
     emitter.instruction("jl __rt_sid_empty_dec_x86");                           // decrementing the empty string yields PHP's int(-1)
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
-    emitter.instruction("mov BYTE PTR [r8], 49");                               // ASCII '1' is the whole result of incrementing the empty string
-    emitter.instruction("mov rdi, r8");                                         // pass the scratch pointer as the boxing helper's string payload
+    emitter.instruction("mov BYTE PTR [rbp - 48], 49");                         // stage ASCII '1' in the helper frame
+    emitter.instruction("lea rdi, [rbp - 48]");                                 // pass the frame byte to the boxing helper
     emitter.instruction("mov rsi, 1");                                          // the incremented empty string is exactly one byte long
     emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // persist the one-byte result and box it for the caller
@@ -420,20 +414,19 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // persist the unchanged string and box it for the caller
     emitter.instruction("jmp __rt_sid_return_x86");                             // share the epilogue with every other result path
 
-    // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
+    // -- copy into an adoptable reservation, leaving one spare byte for 'z' -> 'aa' --
     emitter.label("__rt_sid_carry_x86");
-    abi::emit_symbol_address(emitter, "rcx", "_concat_off");
-    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the current shared scratch write offset
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
-    emitter.instruction("add r8, rcx");                                         // compute the scratch cursor for this result
-    emitter.instruction("add r8, 16");                                          // keep a header-sized gap so the heap-kind probe never reads before the buffer
+    elephc_memoir::strings::staged_concat::emit_reserve_with_prefix(
+        emitter, 16, 48, "__rt_sid_reserve_ready_x86",
+    );
+    emitter.instruction("mov r8, rax");                                         // keep the reservation base for prefix insertion
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // r9 = source cursor over the operand string
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // r10 = the operand string length
     emitter.instruction("lea r11, [r8 + 1]");                                   // r11 = destination cursor, one byte past the growth slot
     emitter.instruction("mov rcx, r10");                                        // rcx = remaining bytes to copy
     emitter.label("__rt_sid_copy_x86");
     emitter.instruction("test rcx, rcx");                                       // stop once the whole operand has been copied into scratch
-    emitter.instruction("jz __rt_sid_copied_x86");                              // the scratch copy is complete
+    emitter.instruction("jz __rt_sid_copied_x86");                              // the initial copy is complete
     emitter.instruction("mov al, BYTE PTR [r9]");                               // load one operand byte from the source cursor
     emitter.instruction("mov BYTE PTR [r11], al");                              // store the byte into the scratch copy
     emitter.instruction("add r9, 1");                                           // advance the source cursor
@@ -496,17 +489,15 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_stop_x86");
     emitter.instruction("lea rdi, [r8 + 1]");                                   // the result starts at the copy, leaving the growth slot unused
     emitter.instruction("mov rsi, r10");                                        // an absorbed carry keeps the original length
-    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
-    emitter.instruction("call __rt_mixed_from_value");                          // persist the carried result and box it for the caller
-    emitter.instruction("jmp __rt_sid_return_x86");                             // share the epilogue with every other result path
+    emitter.instruction("jmp __rt_sid_stop_x86_box");                           // share the boxing and reservation transfer
 
     emitter.label("__rt_sid_carry_escaped_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the prefix byte chosen by the last wrap
     emitter.instruction("mov BYTE PTR [r8], al");                               // write the prefix into the reserved growth slot
     emitter.instruction("mov rdi, r8");                                         // the grown result starts one byte earlier
     emitter.instruction("lea rsi, [r10 + 1]");                                  // an escaped carry makes the result one byte longer
-    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
-    emitter.instruction("call __rt_mixed_from_value");                          // persist the grown result and box it for the caller
+    emitter.label("__rt_sid_stop_x86_box");
+    elephc_memoir::strings::staged_concat::emit_box_reserved_slice(emitter, 48, "__rt_sid_box_ready_x86");
 
     emitter.label("__rt_sid_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release every helper-local slot
@@ -539,25 +530,12 @@ pub fn emit_mixed_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_mid_slow");                               // a null pointer needs the generic nullable path
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed cell's runtime tag
     emitter.instruction("cbnz x9, __rt_mid_slow");                              // only a concrete integer cell can update in place
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_buf");
-    emitter.instruction("add x10, x10, #16");                                   // first possible managed payload base
-    emitter.instruction("cmp x0, x10");                                         // is the cell below the managed heap window?
-    emitter.instruction("b.lo __rt_mid_slow");                                  // static and stack cells keep the generic path
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_off");
-    emitter.instruction("ldr x12, [x12]");                                      // load the live bump extent
-    emitter.instruction("add x12, x11, x12");                                   // derive the current heap end
-    emitter.instruction("cmp x0, x12");                                         // is the cell outside the live heap window?
-    emitter.instruction("b.hs __rt_mid_slow");                                  // foreign pointers keep the generic path
-    emitter.instruction("ldr w12, [x0, #-12]");                                 // load the heap block's reference count
-    emitter.instruction("cmp w12, #1");                                         // is this the sole owner of the cell?
-    emitter.instruction("b.ne __rt_mid_slow");                                  // shared cells must not be mutated through one alias
+    emit_branch_outside_heap(emitter, HeapStart::Payload, "__rt_mid_slow");
+    elephc_memoir::heap_refcount::emit_require_unique_cell(emitter, "__rt_mid_slow");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the integer payload
     emitter.instruction("adds x10, x9, x1");                                    // apply the +1/-1 delta with PHP's overflow check
     emitter.instruction("b.vs __rt_mid_slow");                                  // an overflowing integer promotes to float in the generic path
-    emitter.instruction("str x10, [x0, #8]");                                   // publish the incremented payload in place
-    emitter.instruction("add w12, w12, #1");                                    // retain one reference for the owned result
-    emitter.instruction("str w12, [x0, #-12]");                                 // record the retained result owner
+    elephc_memoir::heap_refcount::emit_commit_unique_integer(emitter);
     emitter.instruction("ret");                                                 // return the same cell as the owned result
 
     emitter.label("__rt_mid_slow");
@@ -611,24 +589,12 @@ fn emit_mixed_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the boxed cell's runtime tag
     emitter.instruction("test r10, r10");                                       // only a concrete integer cell can update in place
     emitter.instruction("jnz __rt_mid_slow_x86");                               // non-integer tags keep the generic dispatch
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
-    emitter.instruction("lea r8, [r11 + 16]");                                  // first possible managed payload base
-    emitter.instruction("cmp rax, r8");                                         // is the cell below the managed heap window?
-    emitter.instruction("jb __rt_mid_slow_x86");                                // static and stack cells keep the generic path
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the live bump extent
-    emitter.instruction("add r9, r11");                                         // derive the current heap end
-    emitter.instruction("cmp rax, r9");                                         // is the cell outside the live heap window?
-    emitter.instruction("jae __rt_mid_slow_x86");                               // foreign pointers keep the generic path
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the heap block's reference count
-    emitter.instruction("cmp r10d, 1");                                         // is this the sole owner of the cell?
-    emitter.instruction("jne __rt_mid_slow_x86");                               // shared cells must not be mutated through one alias
+    emit_branch_outside_heap(emitter, HeapStart::Payload, "__rt_mid_slow_x86");
+    elephc_memoir::heap_refcount::emit_require_unique_cell(emitter, "__rt_mid_slow_x86");
     emitter.instruction("mov r8, QWORD PTR [rax + 8]");                         // load the integer payload
     emitter.instruction("add r8, rdi");                                         // apply the +1/-1 delta with PHP's overflow check
     emitter.instruction("jo __rt_mid_slow_x86");                                // an overflowing integer promotes to float in the generic path
-    emitter.instruction("mov QWORD PTR [rax + 8], r8");                         // publish the incremented payload in place
-    emitter.instruction("add r10d, 1");                                         // retain one reference for the owned result
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // record the retained result owner
+    elephc_memoir::heap_refcount::emit_commit_unique_integer(emitter);
     emitter.instruction("ret");                                                 // return the same cell as the owned result
 
     emitter.label("__rt_mid_slow_x86");

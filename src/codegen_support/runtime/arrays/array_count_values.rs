@@ -20,6 +20,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// The `array_count_values()` warning text for a value PHP refuses to use as an array key.
 ///
@@ -131,7 +132,7 @@ fn emit_array_count_values_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #16]");                                  // x10 = current source index
     emitter.instruction("cmp x10, x9");                                         // has every source element been tallied?
     emitter.instruction("b.ge __rt_array_count_values_done");                   // yes - the destination hash is complete
-    emitter.instruction("add x11, x0, #24");                                    // x11 = source payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x0");
     emitter.instruction("ldr x12, [sp, #24]");                                  // x12 = compile-time element tag
     emitter.instruction("cmp x12, #1");                                         // element tag 1 = string payload
     emitter.instruction("b.eq __rt_array_count_values_str");                    // string elements live in 16-byte slots
@@ -211,7 +212,7 @@ fn emit_hash_count_values_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // set up the hash count-values frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the source hash across helper calls
 
-    emitter.instruction("ldr x0, [x0]");                                        // x0 = source entry count
+    hash_layout::emit_load_header_field(emitter, "x0", "x0", HeaderField::Count);
     emitter.instruction("lsl x0, x0, #1");                                      // double it so the destination has insertion headroom
     emitter.instruction("mov x9, #16");                                         // x9 = minimum destination bucket count
     emitter.instruction("cmp x0, x9");                                          // compare the derived capacity against the runtime minimum
@@ -346,7 +347,7 @@ fn emit_array_count_values_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // rcx = current source index
     emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // has every source element been tallied?
     emitter.instruction("jge __rt_array_count_values_done_x86");                // yes - the destination hash is complete
-    emitter.instruction("lea r11, [r10 + 24]");                                 // r11 = source payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r10");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // r10 = compile-time element tag
     emitter.instruction("cmp r10, 1");                                          // element tag 1 = string payload
     emitter.instruction("je __rt_array_count_values_str_x86");                  // string elements live in 16-byte slots
@@ -431,7 +432,7 @@ fn emit_hash_count_values_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the nested helper calls
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source hash across helper calls
 
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = source entry count
+    hash_layout::emit_load_header_field(emitter, "rax", "rdi", HeaderField::Count);
     emitter.instruction("shl rax, 1");                                          // double it so the destination has insertion headroom
     emitter.instruction("cmp rax, 16");                                         // compare the derived capacity against the runtime minimum
     emitter.instruction("jge __rt_hash_count_values_capacity_x86");             // keep the doubled count when it already meets the minimum

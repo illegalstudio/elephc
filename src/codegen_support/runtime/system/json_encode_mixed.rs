@@ -126,7 +126,7 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emit_branch_if_null_container(emitter, "x0", "x9", "__rt_json_encode_mixed_null");
     // stdClass instances do not have static property descriptors; encode them
     // through the assoc-array path using the dynamic-property hash at obj+8.
-    emitter.instruction("ldr x9, [x0]");                                        // load class_id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp x9, x10");                                         // is the receiver a stdClass instance?
@@ -246,7 +246,7 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emit_branch_if_null_container(emitter, "rax", "r10", "__rt_json_encode_mixed_null");
     // stdClass instances do not have static property descriptors; encode them
     // through the assoc-array path using the dynamic-property hash at obj+8.
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load class_id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rax");
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp r10, r11");                                        // is the receiver a stdClass instance?
     emitter.instruction("jne __rt_json_encode_mixed_object_regular");           // no → fall through to the standard property-walking encoder

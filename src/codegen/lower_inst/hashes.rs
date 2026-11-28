@@ -264,7 +264,7 @@ fn lower_hash_get_for_write_aarch64(
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction(&format!("cbz x0, {}", miss));                      // branch to the null fallback when the associative lookup misses
-    ctx.emitter.instruction("add x4, x4, #24");                                 // address the matching entry's value slot
+    elephc_memoir::hash_layout::emit_value_address_from_entry(ctx.emitter, "x4", "x4");
     abi::emit_push_reg(ctx.emitter, "x4");                                       // preserve the entry value-slot address across the copy-on-write helper call
     abi::emit_load_from_address(ctx.emitter, "x0", "x4", 0);
     abi::emit_call_label(ctx.emitter, helper);
@@ -312,7 +312,7 @@ fn lower_hash_get_for_write_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction("test rax, rax");                                   // check whether the associative lookup found a matching key
     ctx.emitter.instruction(&format!("jz {}", miss));                           // branch to the null fallback when the associative lookup misses
-    ctx.emitter.instruction("add r8, 24");                                      // address the matching entry's value slot
+    elephc_memoir::hash_layout::emit_value_address_from_entry(ctx.emitter, "r8", "r8");
     abi::emit_push_reg(ctx.emitter, "r8");                                       // preserve the entry value-slot address across the copy-on-write helper call
     abi::emit_load_from_address(ctx.emitter, "rdi", "r8", 0);
     abi::emit_call_label(ctx.emitter, helper);

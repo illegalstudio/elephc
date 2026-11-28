@@ -37,7 +37,7 @@ pub fn emit_array_reverse(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = source array length
     emitter.instruction("str x9, [sp, #8]");                                    // save length to stack
 
     // -- create new array with same capacity --
@@ -49,8 +49,8 @@ pub fn emit_array_reverse(emitter: &mut Emitter) {
     // -- set up copy loop: copy elements in reverse --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source array pointer
     emitter.instruction("ldr x9, [sp, #8]");                                    // x9 = length
-    emitter.instruction("add x2, x1, #24");                                     // x2 = source data base
-    emitter.instruction("add x3, x0, #24");                                     // x3 = dest data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("sub x4, x9, #1");                                      // x4 = src_index = length - 1 (start from end)
     emitter.instruction("mov x5, #0");                                          // x5 = dst_index = 0
 
@@ -68,7 +68,7 @@ pub fn emit_array_reverse(emitter: &mut Emitter) {
     emitter.label("__rt_array_reverse_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = new array pointer
     emitter.instruction("ldr x9, [sp, #8]");                                    // x9 = length
-    emitter.instruction("str x9, [x0]");                                        // set new array length = source length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x9"); // set new array length = source length
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -95,16 +95,16 @@ fn emit_array_reverse_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source indexed-array pointer, source length, and reversed result pointer
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the scalar reverse bookkeeping while keeping constructor calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across the reversed-array constructor call
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before constructing the reversed result array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the source indexed-array logical length before constructing the reversed result array
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the source indexed-array logical length across the constructor call and reverse-copy loop
     emitter.instruction("mov rdi, r10");                                        // pass the source indexed-array logical length as the reversed-array capacity to the shared constructor
     emitter.instruction("mov rsi, 8");                                          // request 8-byte scalar payload slots for the reversed indexed array
     emitter.instruction("call __rt_array_new");                                 // allocate the reversed indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the reversed indexed-array pointer across the scalar reverse-copy loop
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source indexed-array pointer after the constructor clobbered caller-saved registers
-    emitter.instruction("lea r8, [r8 + 24]");                                   // compute the first scalar payload slot address in the source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "r8");
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the reversed indexed-array pointer before seeding the reverse-copy loop
-    emitter.instruction("lea r9, [r9 + 24]");                                   // compute the first scalar payload slot address in the reversed indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "r9");
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the source indexed-array logical length after the constructor clobbered caller-saved registers
     emitter.instruction("xor ecx, ecx");                                        // initialize the reversed destination cursor at the front of the reversed indexed array
 
@@ -122,7 +122,7 @@ fn emit_array_reverse_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_reverse_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the reversed indexed-array pointer before publishing its logical length
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the source indexed-array logical length before storing it into the reversed array header
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the full source indexed-array logical length as the reversed array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "rax", "r10"); // store the full source indexed-array logical length as the reversed array length
     emitter.instruction("add rsp, 32");                                         // release the scalar reverse spill slots before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the scalar reverse helper completes
     emitter.instruction("ret");                                                 // return the reversed indexed-array pointer in rax

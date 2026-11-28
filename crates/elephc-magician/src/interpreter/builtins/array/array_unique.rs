@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the array-unique hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_unique",
@@ -56,16 +57,18 @@ pub(in crate::interpreter) fn eval_array_unique_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
     let mut seen = Vec::<Vec<u8>>::with_capacity(len);
-    let mut result = values.assoc_new(len)?;
+    let mut result = EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let unique_key = values.string_bytes(value)?;
-        if seen.iter().any(|seen_key| seen_key == &unique_key) {
-            continue;
-        }
-        seen.push(unique_key);
-        result = values.array_set(result, key, value)?;
+        result.update(|values, owners, _| {
+            let key = owners.stage(values.array_iter_key(array, position)?);
+            let value = owners.stage(values.array_get(array, key)?);
+            let unique_key = values.string_bytes(value)?;
+            if seen.iter().any(|seen_key| seen_key == &unique_key) {
+                return Ok(None);
+            }
+            seen.push(unique_key);
+            Ok(Some((key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

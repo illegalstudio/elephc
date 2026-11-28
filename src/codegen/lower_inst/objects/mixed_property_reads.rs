@@ -785,7 +785,7 @@ pub(super) fn emit_mixed_property_class_dispatch(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id for Mixed property dispatch
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x9", "x0");
             for (class_id, label) in class_ids.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", *class_id as i64);
                 ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this declared-property owner
@@ -795,7 +795,7 @@ pub(super) fn emit_mixed_property_class_dispatch(
             abi::emit_jump(ctx.emitter, miss_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the receiver class id for Mixed property dispatch
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r11", "rax");
             for (class_id, label) in class_ids.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", *class_id as i64);
                 ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this declared-property owner
@@ -985,19 +985,16 @@ pub(super) fn emit_undefined_property_warning_for_loaded_object(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the missing-property receiver class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
-            ctx.emitter.instruction("add x10, x10, x11");                       // address the receiver's class-name metadata
-            ctx.emitter.instruction("ldr x1, [x10]");                           // load the receiver class-name pointer
-            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the receiver class-name byte length
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x9", "x0");
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "x10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "x10", "x10", "x9", "x11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, "x1", "x2", "x10");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the missing-property receiver class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
-            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9]");           // load the receiver class-name pointer
-            ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r9 + 8]");       // load the receiver class-name byte length
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r9", "rax");
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "r10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "r10", "r10", "r9", "r11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, "rax", "rdx", "r10");
         }
     }
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);

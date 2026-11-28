@@ -985,13 +985,8 @@ fn emit_exit_strict_status_error(ctx: &mut FunctionContext<'_>, actual: &str) {
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
     let Some(status) = inst.operands.first().copied() else {
-        if ctx.shared.instrument.is_on() {
-            // Shutdown output handlers are PHP calls and must finish inside the
-            // still-open exact stack before the termination hook closes it.
-            abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
-            crate::codegen::frame::emit_instr_terminate(ctx);
-        }
-        abi::emit_exit(ctx.emitter, 0);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        emit_dynamic_exit(ctx);
         return Ok(());
     };
     let status_ty = ctx.value_php_type(status)?.codegen_repr();
@@ -1273,6 +1268,8 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
+            ctx.emitter.instruction("mov x0, #0");                              // request cleanup of every active PHP activation
+            ctx.emitter.instruction("bl __rt_exception_cleanup_frames");        // detach frames and retire their owners before process termination
             if ctx.emitter.exit_hook.is_some() {
                 ctx.emitter.instruction("mov x0, x19");                         // the exit hook is told the exit status
             }
@@ -1285,6 +1282,8 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
+            ctx.emitter.instruction("xor edi, edi");                            // request cleanup of every active PHP activation
+            ctx.emitter.instruction("call __rt_exception_cleanup_frames");      // detach frames and retire their owners before process termination
             if ctx.emitter.exit_hook.is_some() {
                 ctx.emitter.instruction("mov rdi, rbx");                        // the exit hook is told the exit status
             }
@@ -1344,11 +1343,12 @@ fn lower_putenv_unset(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.bl_c("unsetenv");
 
     // -- release the temporary copy on both success and failure --
-    abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    elephc_memoir::interop::c_strings::emit_release_call_scoped_c_strings(
+        ctx.emitter,
+        1,
+        16,
+        elephc_memoir::interop::c_strings::ForeignReturnShape::Scalar,
+    );
 }
 
 /// Emits AArch64 `putenv()`, using `unsetenv()` when the argument has no equals sign.
@@ -1374,22 +1374,7 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cset x0, eq");                                     // widen libc's zero status into PHP true
     ctx.emitter.instruction(&format!("b {}", done));                            // join the assignment and unset result paths
     ctx.emitter.label(&set_variable);
-    ctx.emitter.instruction("add x0, x2, #1");                                  // allocate space for the environment string plus trailing null
-    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across heap allocation
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length after heap allocation
-    ctx.emitter.instruction("mov x3, x0");                                      // keep the persistent destination buffer for copying and putenv()
-    ctx.emitter.instruction("mov x4, #0");                                      // start copying at byte offset zero
-    ctx.emitter.label(&copy_loop);
-    ctx.emitter.instruction("cmp x4, x2");                                      // compare the copied byte count with the source length
-    ctx.emitter.instruction(&format!("b.ge {}", copy_done));                    // finish once every source byte has been persisted
-    ctx.emitter.instruction("ldrb w5, [x1, x4]");                               // load one byte from the source environment assignment
-    ctx.emitter.instruction("strb w5, [x3, x4]");                               // copy the byte into the persistent putenv buffer
-    ctx.emitter.instruction("add x4, x4, #1");                                  // advance to the next source byte
-    ctx.emitter.instruction(&format!("b {}", copy_loop));                       // continue copying the environment assignment
-    ctx.emitter.label(&copy_done);
-    ctx.emitter.instruction("strb wzr, [x3, x4]");                              // append the C null terminator required by putenv()
-    ctx.emitter.instruction("mov x0, x3");                                      // pass the persistent environment buffer to putenv()
+    elephc_memoir::interop::c_strings::emit_environment_assignment(ctx.emitter, &copy_loop, &copy_done);
     ctx.emitter.bl_c("putenv");
     ctx.emitter.instruction("cmp x0, #0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("cset x0, eq");                                     // return true when putenv() accepted the assignment
@@ -1420,27 +1405,7 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
     ctx.emitter.instruction(&format!("jmp {}", done));                          // join the assignment and unset result paths
     ctx.emitter.label(&set_variable);
-    ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across heap allocation
-    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the source environment string pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the source environment string length
-    ctx.emitter.instruction("mov rax, rdx");                                    // seed the heap allocation size from the source length
-    ctx.emitter.instruction("add rax, 1");                                      // allocate space for the environment string plus trailing null
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp]");                        // restore the source environment string pointer
-    ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 8]");                     // restore the source environment string length
-    ctx.emitter.instruction("add rsp, 16");                                     // release the temporary source string spill space
-    ctx.emitter.instruction("mov r9, rax");                                     // keep the persistent destination buffer for copying and putenv()
-    ctx.emitter.instruction("mov r10, 0");                                      // start copying at byte offset zero
-    ctx.emitter.label(&copy_loop);
-    ctx.emitter.instruction("cmp r10, r8");                                     // compare the copied byte count with the source length
-    ctx.emitter.instruction(&format!("jae {}", copy_done));                     // finish once every source byte has been persisted
-    ctx.emitter.instruction("mov r11b, BYTE PTR [rcx + r10]");                  // load one byte from the source environment assignment
-    ctx.emitter.instruction("mov BYTE PTR [r9 + r10], r11b");                   // copy the byte into the persistent putenv buffer
-    ctx.emitter.instruction("add r10, 1");                                      // advance to the next source byte
-    ctx.emitter.instruction(&format!("jmp {}", copy_loop));                     // continue copying the environment assignment
-    ctx.emitter.label(&copy_done);
-    ctx.emitter.instruction("mov BYTE PTR [r9 + r10], 0");                      // append the C null terminator required by putenv()
-    ctx.emitter.instruction("mov rdi, r9");                                     // pass the persistent environment buffer to putenv()
+    elephc_memoir::interop::c_strings::emit_environment_assignment(ctx.emitter, &copy_loop, &copy_done);
     ctx.emitter.bl_c("putenv");
     ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment

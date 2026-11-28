@@ -41,9 +41,8 @@ use crate::codegen_support::sentinels::{
     emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-
-/// Byte width of one `_class_prop_desc_*` property row.
-const PROP_DESC_ROW_BYTES: u64 = 48;
+use elephc_memoir::hash_layout::{self, HeaderField};
+use elephc_memoir::values::property_descriptor::{self, Field};
 
 /// `__rt_obj_prop_count`: number of properties an object renders.
 ///
@@ -58,16 +57,16 @@ pub fn emit_obj_prop_count(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cbz x0, __rt_obj_prop_count_none");            // a non-object value has no properties
-            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("ldr x10, [x10]");                              // load the number of registered class ids
             emitter.instruction("cmp x9, x10");                                 // is the class id within the descriptor table?
             emitter.instruction("b.hs __rt_obj_prop_count_none");               // an unknown class renders no properties
             abi::emit_symbol_address(emitter, "x11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
             emitter.instruction("ldr x11, [x11, x9, lsl #3]");                  // load this class's property descriptor
-            emitter.instruction("ldr x12, [x11]");                              // the row count sits at descriptor offset 0
+            property_descriptor::emit_load_count(emitter, "x12", "x11");      // load the descriptor row count
             emit_load_dump_dyn_hash(emitter, "x0", "x9", "x13", "x10", "__rt_obj_prop_count_rows");
-            emitter.instruction("ldr x13, [x13]");                              // load the dynamic-property hash entry count
+            hash_layout::emit_load_header_field(emitter, "x13", "x13", HeaderField::Count);
             emitter.instruction("add x12, x12, x13");                           // dynamic properties follow the declared rows
             emitter.label("__rt_obj_prop_count_rows");
             emitter.instruction("mov x0, x12");                                 // return declared rows plus dynamic entries
@@ -79,16 +78,17 @@ pub fn emit_obj_prop_count(emitter: &mut Emitter) {
         Arch::X86_64 => {
             emitter.instruction("test rdi, rdi");                               // a non-object value has no properties
             emitter.instruction("jz __rt_obj_prop_count_none_x86");             // report zero renderable properties
-            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
             abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("mov r10, QWORD PTR [r10]");                    // load the number of registered class ids
             emitter.instruction("cmp r9, r10");                                 // is the class id within the descriptor table?
             emitter.instruction("jae __rt_obj_prop_count_none_x86");            // an unknown class renders no properties
             abi::emit_symbol_address(emitter, "r11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
             emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");           // load this class's property descriptor
-            emitter.instruction("mov rax, QWORD PTR [r11]");                    // the row count sits at descriptor offset 0
+            property_descriptor::emit_load_count(emitter, "rax", "r11");      // load the descriptor row count
             emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_obj_prop_count_rows_x86");
-            emitter.instruction("add rax, QWORD PTR [r10]");                    // dynamic properties follow the declared rows
+            hash_layout::emit_load_header_field(emitter, "r11", "r10", HeaderField::Count);
+            emitter.instruction("add rax, r11");                                // dynamic properties follow the declared rows
             emitter.label("__rt_obj_prop_count_rows_x86");
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_count_none_x86");
@@ -114,29 +114,26 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("cbz x0, __rt_obj_prop_name_none");             // a non-object value has no property names
             emitter.instruction("cmp x1, #0");                                  // reject a negative index before scaling it
             emitter.instruction("b.lt __rt_obj_prop_name_none");                // out-of-range indices yield the empty string
-            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("ldr x10, [x10]");                              // load the number of registered class ids
             emitter.instruction("cmp x9, x10");                                 // is the class id within the descriptor table?
             emitter.instruction("b.hs __rt_obj_prop_name_none");                // an unknown class has no property names
             abi::emit_symbol_address(emitter, "x11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
             emitter.instruction("ldr x11, [x11, x9, lsl #3]");                  // load this class's property descriptor
-            emitter.instruction("ldr x12, [x11]");                              // load the descriptor row count
+            property_descriptor::emit_load_count(emitter, "x12", "x11");      // load the descriptor row count
             emitter.instruction("cmp x1, x12");                                 // is the requested index within the row count?
             emitter.instruction("b.hs __rt_obj_prop_name_dyn");                 // past the declared rows → a dynamic property
-            emitter.instruction(&format!("mov x13, #{}", PROP_DESC_ROW_BYTES)); // each descriptor row occupies 48 bytes
-            emitter.instruction("mul x13, x1, x13");                            // byte offset of this property's row
-            emitter.instruction("add x13, x11, x13");                           // advance into the descriptor
-            emitter.instruction("add x13, x13, #8");                            // skip the leading row-count word
-            emitter.instruction("ldr x14, [x13, #16]");                         // load the property's byte offset within the object
-            emitter.instruction("add x14, x0, x14");                            // resolve the absolute property slot address
-            emitter.instruction("ldr x17, [x13, #24]");                         // read the logical tag and native storage flags
+            property_descriptor::emit_row_address(emitter, "x13", "x11", "x1", "x14"); // select this property's descriptor row
+            property_descriptor::emit_load_field(emitter, "x14", "x13", Field::ObjectOffset); // load the property's byte offset within the object
+            elephc_memoir::values::object_storage::emit_slot_address(emitter, "x14", "x0", "x14"); // resolve the absolute property slot address
+            property_descriptor::emit_load_field(emitter, "x17", "x13", Field::ValueTag); // read the logical tag and native storage flags
             crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x14", "x17", "x15", "__rt_obj_prop_name_slot");
             emit_uninit_sentinel_aarch64(emitter, "x16");                       // materialize the uninitialized-property marker
             emitter.instruction("cmp x15, x16");                                // is this property still uninitialized?
             emitter.instruction("b.eq __rt_obj_prop_name_none");                // PHP omits it from var_export output
-            emitter.instruction("ldr x2, [x13, #40]");                          // load the bare property-name length
-            emitter.instruction("ldr x1, [x13, #32]");                          // load the bare property-name pointer
+            property_descriptor::emit_load_field(emitter, "x2", "x13", Field::AuxiliaryLength); // load the bare property-name length
+            property_descriptor::emit_load_field(emitter, "x1", "x13", Field::Auxiliary); // load the bare property-name pointer
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_name_dyn");
             emitter.instruction("sub x1, x1, x12");                             // index past the declared rows = dynamic ordinal
@@ -149,7 +146,7 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("b.eq __rt_obj_prop_name_none");                // skip it rather than print a bogus name
             emitter.instruction("ret");                                         // return the borrowed dynamic-property name
             emitter.label("__rt_obj_prop_name_none");
-            abi::emit_symbol_address(emitter, "x1", "_class_name_missing");     // reuse the shared empty-name slot as the buffer
+            elephc_memoir::values::class_metadata::emit_missing_class_name_address(emitter, "x1"); // reuse the shared empty-name slot as the buffer
             emitter.instruction("mov x2, #0");                                  // a zero-length string means "no property here"
             emitter.instruction("ret");                                         // return to caller
         }
@@ -158,31 +155,27 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_obj_prop_name_none_x86");              // yield the empty string
             emitter.instruction("cmp rsi, 0");                                  // reject a negative index before scaling it
             emitter.instruction("jl __rt_obj_prop_name_none_x86");              // out-of-range indices yield the empty string
-            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
             abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("mov r10, QWORD PTR [r10]");                    // load the number of registered class ids
             emitter.instruction("cmp r9, r10");                                 // is the class id within the descriptor table?
             emitter.instruction("jae __rt_obj_prop_name_none_x86");             // an unknown class has no property names
             abi::emit_symbol_address(emitter, "r11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
             emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");           // load this class's property descriptor
-            emitter.instruction("mov r10, QWORD PTR [r11]");                    // load the descriptor row count
+            property_descriptor::emit_load_count(emitter, "r10", "r11");      // load the descriptor row count
             emitter.instruction("cmp rsi, r10");                                // is the requested index within the row count?
             emitter.instruction("jae __rt_obj_prop_name_dyn_x86");              // past the declared rows → a dynamic property
-            emitter.instruction("mov rax, rsi");                                // copy the index for row-offset scaling
-            let scale = format!("imul rax, rax, {}", PROP_DESC_ROW_BYTES);
-            emitter.instruction(&scale);                                        // each descriptor row occupies 48 bytes
-            emitter.instruction("add rax, r11");                                // advance into the descriptor
-            emitter.instruction("add rax, 8");                                  // skip the leading row-count word
-            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the property's byte offset within the object
-            emitter.instruction("add r10, rdi");                                // resolve the absolute property slot address
-            emitter.instruction("mov r9, QWORD PTR [rax + 24]");                // read the logical tag and native storage flags
+            property_descriptor::emit_row_address(emitter, "rax", "r11", "rsi", "r10"); // select this property's descriptor row
+            property_descriptor::emit_load_field(emitter, "r10", "rax", Field::ObjectOffset); // load the property's byte offset within the object
+            elephc_memoir::values::object_storage::emit_slot_address(emitter, "r10", "rdi", "r10"); // resolve the absolute property slot address
+            property_descriptor::emit_load_field(emitter, "r9", "rax", Field::ValueTag); // read the logical tag and native storage flags
             crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r9", "r11", "__rt_obj_prop_name_slot");
             emitter.instruction("mov r10, r11");                                // omit uninitialized reference payloads just like inline slots
             emitter.instruction("movabs r8, 0x7ffffffffffffffd");               // materialize the uninitialized-property marker
             emitter.instruction("cmp r10, r8");                                 // is this property still uninitialized?
             emitter.instruction("je __rt_obj_prop_name_none_x86");              // PHP omits it from var_export output
-            emitter.instruction("mov rdx, QWORD PTR [rax + 40]");               // load the bare property-name length
-            emitter.instruction("mov rax, QWORD PTR [rax + 32]");               // load the bare property-name pointer
+            property_descriptor::emit_load_field(emitter, "rdx", "rax", Field::AuxiliaryLength); // load the bare property-name length
+            property_descriptor::emit_load_field(emitter, "rax", "rax", Field::Auxiliary); // load the bare property-name pointer
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_name_dyn_x86");
             emitter.instruction("sub rsi, r10");                                // index past the declared rows = dynamic ordinal
@@ -197,7 +190,7 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("mov rax, rdi");                                // return the borrowed dynamic-property name
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_name_none_x86");
-            abi::emit_symbol_address(emitter, "rax", "_class_name_missing");    // reuse the shared empty-name slot as the buffer
+            elephc_memoir::values::class_metadata::emit_missing_class_name_address(emitter, "rax"); // reuse the shared empty-name slot as the buffer
             emitter.instruction("xor edx, edx");                                // a zero-length string means "no property here"
             emitter.instruction("ret");                                         // return to caller
         }
@@ -239,29 +232,26 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_obj_prop_value_null");                    // a non-object value has no properties
     emitter.instruction("cmp x1, #0");                                          // reject a negative index before scaling it
     emitter.instruction("b.lt __rt_obj_prop_value_null");                       // out-of-range indices box PHP null
-    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the descriptor table?
     emitter.instruction("b.hs __rt_obj_prop_value_null");                       // an unknown class has no readable properties
     abi::emit_symbol_address(emitter, "x11", "_class_prop_desc_ptrs");          // resolve the per-class descriptor pointer table
     emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // load this class's property descriptor
-    emitter.instruction("ldr x12, [x11]");                                      // load the descriptor row count
+    property_descriptor::emit_load_count(emitter, "x12", "x11");              // load the descriptor row count
     emitter.instruction("cmp x1, x12");                                         // is the requested index within the row count?
     emitter.instruction("b.hs __rt_obj_prop_value_dyn");                        // past the declared rows → a dynamic property
-    emitter.instruction(&format!("mov x13, #{}", PROP_DESC_ROW_BYTES));         // each descriptor row occupies 48 bytes
-    emitter.instruction("mul x13, x1, x13");                                    // byte offset of this property's row
-    emitter.instruction("add x13, x11, x13");                                   // advance into the descriptor
-    emitter.instruction("add x13, x13, #8");                                    // skip the leading row-count word
-    emitter.instruction("ldr x14, [x13, #16]");                                 // load the property's byte offset within the object
-    emitter.instruction("add x14, x0, x14");                                    // resolve the absolute property slot address
-    emitter.instruction("ldr x0, [x13, #24]");                                  // load the logical tag and native storage flags
+    property_descriptor::emit_row_address(emitter, "x13", "x11", "x1", "x14"); // select this property's descriptor row
+    property_descriptor::emit_load_field(emitter, "x14", "x13", Field::ObjectOffset); // load the property's byte offset within the object
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "x14", "x0", "x14"); // resolve the absolute property slot address
+    property_descriptor::emit_load_field(emitter, "x0", "x13", Field::ValueTag); // load the logical tag and native storage flags
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x14", "x0", "x2", "__rt_obj_prop_value_slot");
     emit_uninit_sentinel_aarch64(emitter, "x16");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x2, x16");                                         // is this property still uninitialized?
     emitter.instruction("b.eq __rt_obj_prop_value_null");                       // PHP omits it, so report PHP null
-    emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
-    emitter.instruction("ldr x2, [x14, #8]");                                   // read the initialized payload's high word
+    elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "x1", "x14"); // load the slot low word
+    elephc_memoir::values::object_storage::emit_load_slot_high(emitter, "x2", "x14"); // load the initialized payload's high word
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
 
     emitter.label("__rt_obj_prop_value_tagged");
@@ -312,29 +302,26 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_obj_prop_value_null_x86");                     // box PHP null
     emitter.instruction("cmp rsi, 0");                                          // reject a negative index before scaling it
     emitter.instruction("jl __rt_obj_prop_value_null_x86");                     // out-of-range indices box PHP null
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
     abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id within the descriptor table?
     emitter.instruction("jae __rt_obj_prop_value_null_x86");                    // an unknown class has no readable properties
     abi::emit_symbol_address(emitter, "r11", "_class_prop_desc_ptrs");          // resolve the per-class descriptor pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");                   // load this class's property descriptor
-    emitter.instruction("mov r10, QWORD PTR [r11]");                            // load the descriptor row count
+    property_descriptor::emit_load_count(emitter, "r10", "r11");              // load the descriptor row count
     emitter.instruction("cmp rsi, r10");                                        // is the requested index within the row count?
     emitter.instruction("jae __rt_obj_prop_value_dyn_x86");                     // past the declared rows → a dynamic property
-    emitter.instruction("mov rax, rsi");                                        // copy the index for row-offset scaling
-    emitter.instruction(&format!("imul rax, rax, {}", PROP_DESC_ROW_BYTES));    // each descriptor row occupies 48 bytes
-    emitter.instruction("add rax, r11");                                        // advance into the descriptor
-    emitter.instruction("add rax, 8");                                          // skip the leading row-count word
-    emitter.instruction("mov r10, QWORD PTR [rax + 16]");                       // load the property's byte offset within the object
-    emitter.instruction("add r10, rdi");                                        // resolve the absolute property slot address
-    emitter.instruction("mov r9, QWORD PTR [rax + 24]");                        // load the logical tag and native storage flags
+    property_descriptor::emit_row_address(emitter, "rax", "r11", "rsi", "r10"); // select this property's descriptor row
+    property_descriptor::emit_load_field(emitter, "r10", "rax", Field::ObjectOffset); // load the property's byte offset within the object
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "r10", "rdi", "r10"); // resolve the absolute property slot address
+    property_descriptor::emit_load_field(emitter, "r9", "rax", Field::ValueTag); // load the logical tag and native storage flags
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r9", "rsi", "__rt_obj_prop_value_slot");
     emitter.instruction("movabs r8, 0x7ffffffffffffffd");                       // materialize the uninitialized-property marker
     emitter.instruction("cmp rsi, r8");                                         // is this property still uninitialized?
     emitter.instruction("je __rt_obj_prop_value_null_x86");                     // PHP omits it, so report PHP null
-    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // read the initialized payload's high word
+    elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "rdi", "r10"); // load the slot low word
+    elephc_memoir::values::object_storage::emit_load_slot_high(emitter, "rsi", "r10"); // load the initialized payload's high word
     emitter.instruction("mov rax, r9");                                         // pass the logical tag after removing storage flags
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
 

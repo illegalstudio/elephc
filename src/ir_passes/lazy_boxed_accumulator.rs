@@ -86,21 +86,26 @@ impl IrPass for LazyBoxedAccumulator {
         for plan in &plans {
             let mut trial = function.clone();
             apply(&mut trial, plan);
-            slots.insert(plan.slot);
-            let results: Vec<ValueId> = plan
-                .sites
-                .iter()
-                .filter_map(|site| function.instruction(site.binop).and_then(|inst| inst.result))
-                .collect();
-            values.extend(results.iter().copied());
-            if cells.kept_by(&frame_cells(&trial, data), &slots, &values) {
+            let mut trial_slots = slots.clone();
+            let mut trial_values = values.clone();
+            trial_slots.insert(plan.slot);
+            // The rewrite relocates the arithmetic result, every transparent owner copy and
+            // the complete temporary publication scope. Those cells belong to this rewritten
+            // plan, so a later independent plan must not treat their relocation as collateral
+            // damage while it still protects every unrelated frame cell.
+            for member in plan.sites.iter().flat_map(|site| site.members.iter()) {
+                trial_slots.extend(slots_of(function, *member));
+                trial_values.extend(
+                    function
+                        .instruction(*member)
+                        .and_then(|instruction| instruction.result),
+                );
+            }
+            if cells.kept_by(&frame_cells(&trial, data), &trial_slots, &trial_values) {
                 *function = trial;
+                slots = trial_slots;
+                values = trial_values;
                 changed = true;
-            } else {
-                slots.remove(&plan.slot);
-                for value in results {
-                    values.remove(&value);
-                }
             }
         }
         changed
@@ -219,6 +224,7 @@ pub(super) fn slots_of(function: &Function, id: InstId) -> Vec<LocalSlotId> {
 /// Finds the locals worth rewriting.
 fn analyze(function: &Function) -> Vec<Plan> {
     let index = index(function);
+    let transient_owners = super::transient_owner_scopes::collect(function);
     let dominance = super::dominance::compute_dominance(function);
     let loops = compute_loops(function, &dominance);
     if loops.is_empty() {
@@ -242,7 +248,7 @@ fn analyze(function: &Function) -> Vec<Plan> {
         let mut sites = Vec::new();
         let mut modeled: HashSet<InstId> = HashSet::new();
         for id in &references[&slot] {
-            let Some(site) = match_site(function, &index, slot, *id) else {
+            let Some(site) = match_site(function, &index, &transient_owners, slot, *id) else {
                 continue;
             };
             modeled.insert(site.load);
@@ -293,7 +299,13 @@ fn analyze(function: &Function) -> Vec<Plan> {
 /// and clones of the result, a release of the slot, the store, and releases of the result. Everything
 /// from the arithmetic to the last of them sits in one block. Other instructions in that
 /// span may only be releases of unrelated values, which run after the update either way.
-fn match_site(function: &Function, index: &Index, slot: LocalSlotId, store: InstId) -> Option<Site> {
+fn match_site(
+    function: &Function,
+    index: &Index,
+    transient_owners: &[super::transient_owner_scopes::TransientOwnerScope],
+    slot: LocalSlotId,
+    store: InstId,
+) -> Option<Site> {
     let store_inst = function.instruction(store)?;
     if store_inst.op != Op::StoreLocal || store_inst.immediate != Some(Immediate::LocalSlot(slot)) {
         return None;
@@ -330,6 +342,14 @@ fn match_site(function: &Function, index: &Index, slot: LocalSlotId, store: Inst
     };
     let binop_inst = function.instruction(binop)?;
     let binop_at = index.position[&binop].1;
+    let binop_result = binop_inst.result?;
+    for scope in transient_owners.iter().filter(|scope| scope.block == block) {
+        let Some(owner_chain) = scope.forwarding_chain_to(function, binop_result) else {
+            continue;
+        };
+        members.extend(owner_chain);
+        members.extend(scope.operations());
+    }
     let is_local_load = |value: ValueId| local_load(function, slot, value);
     let (op, load, other, local_on_left) = match (binop_inst.op, &binop_inst.immediate) {
         (Op::StrIncDec, Some(Immediate::I64(step @ (1 | -1)))) => {

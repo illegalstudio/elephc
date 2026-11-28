@@ -77,24 +77,33 @@ impl ElephcRuntimeOps {
     /// Packs borrowed arguments, releasing temporary keys and unfinished arrays on failure.
     fn arg_array(&mut self, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
-        let mut arg_array = Self::handle(arg_array)?;
-        let populated = (|| {
-            for (index, value) in args.into_iter().enumerate() {
-                let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-                let key = Self::handle(unsafe { __elephc_eval_value_int(index) })?;
-                let inserted = Self::handle(unsafe {
-                    __elephc_eval_value_array_set(arg_array.as_ptr(), key.as_ptr(), value.as_ptr())
-                });
-                self.release_cells([key])?;
-                arg_array = inserted?;
-            }
-            Ok(())
-        })();
-        if let Err(status) = populated {
-            self.release_cells([arg_array])?;
-            return Err(status);
-        }
-        Ok(arg_array)
+        let arg_array = owner_frames::RuntimeOwnerSlot::new(Self::handle(arg_array)?);
+        owner_frames::with_runtime_owners(&arg_array, || {
+            let populated = (|| {
+                for (index, value) in args.into_iter().enumerate() {
+                    let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+                    let key = owner_frames::RuntimeOwnerSlot::new(Self::handle(unsafe {
+                        __elephc_eval_value_int(index)
+                    })?);
+                    owner_frames::with_runtime_owners(&key, || {
+                        let inserted = Self::handle(unsafe {
+                            __elephc_eval_value_array_set(
+                                arg_array.borrowed().as_ptr(),
+                                key.borrowed().as_ptr(),
+                                value.as_ptr(),
+                            )
+                        });
+                        let released = self.release_cells([key.take()]);
+                        let inserted = inserted?;
+                        released?;
+                        arg_array.update_receiver(inserted);
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            })();
+            arg_array.finish(populated, |array| self.release_cells([array]))
+        })
     }
 
     /// Returns the active eval class-scope bytes in the generated helper ABI shape.

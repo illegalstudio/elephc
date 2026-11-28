@@ -15,6 +15,8 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::with_collection_call;
+use elephc_memoir::runtime_owners::StagedRuntimeOwners;
 use super::super::super::*;
 
 /// Evaluates `stream_context_set_option($context, ...)`.
@@ -25,25 +27,36 @@ pub(in crate::interpreter) fn eval_stream_context_set_option_declared_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
-        [stream_context, options] => {
-            let stream_context = eval_expr(stream_context, context, scope, values)?;
-            let options = eval_expr(options, context, scope, values)?;
-            eval_stream_context_set_options_result(stream_context, options, context, values)
-        }
-        [stream_context, wrapper, option, value] => {
-            let stream_context = eval_expr(stream_context, context, scope, values)?;
-            let wrapper = eval_expr(wrapper, context, scope, values)?;
-            let option = eval_expr(option, context, scope, values)?;
-            let value = eval_expr(value, context, scope, values)?;
-            eval_stream_context_set_option_result(
-                stream_context,
-                wrapper,
-                option,
-                value,
-                context,
-                values,
-            )
-        }
+        [stream_context, options] => with_eval_operands(
+            &[stream_context, options],
+            context,
+            scope,
+            values,
+            |operands, context, _, values| {
+                eval_stream_context_set_options_result(
+                    operands[0].borrowed(),
+                    operands[1].borrowed(),
+                    context,
+                    values,
+                )
+            },
+        ),
+        [stream_context, wrapper, option, value] => with_eval_operands(
+            &[stream_context, wrapper, option, value],
+            context,
+            scope,
+            values,
+            |operands, context, _, values| {
+                eval_stream_context_set_option_result(
+                    operands[0].borrowed(),
+                    operands[1].borrowed(),
+                    operands[2].borrowed(),
+                    operands[3].borrowed(),
+                    context,
+                    values,
+                )
+            },
+        ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -79,11 +92,8 @@ pub(in crate::interpreter) fn eval_stream_context_set_options_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_context_resource_id(stream_context, values)?;
     let options = super::stream_context_create::eval_stream_context_options_arg(Some(options), values)?;
-    values.bool_value(
-        context
-            .stream_resources_mut()
-            .set_stream_context_options(id, options),
-    )
+    let stored = eval_replace_stream_context_options(id, options, context, values)?;
+    values.bool_value(stored)
 }
 
 /// Stores one nested `options[wrapper][option] = value` entry on a stream context.
@@ -96,20 +106,41 @@ pub(in crate::interpreter) fn eval_stream_context_set_option_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_context_resource_id(stream_context, values)?;
-    let wrapper = values.cast_string(wrapper)?;
-    let option = values.cast_string(option)?;
-    let options = match context.stream_resources().stream_context_options(id) {
-        Some(options) => options,
-        None => values.assoc_new(1)?,
+    with_collection_call(context, values, |context, values, owners, result| {
+        let wrapper = owners.stage(values.cast_string(wrapper)?);
+        let option = owners.stage(values.cast_string(option)?);
+        let options = match context.stream_resources().stream_context_options(id) {
+            Some(options) => owners.stage(values.retain(options)?),
+            None => owners.stage(values.assoc_new(1)?),
+        };
+        let wrapper_options = eval_stream_context_wrapper_options(options, wrapper, values, owners)?;
+        let wrapper_options = values.array_set(wrapper_options, option, value)?;
+        let options = values.array_set(options, wrapper, wrapper_options)?;
+        let options = values.retain(options.borrowed())?;
+        let stored = eval_replace_stream_context_options(id, Some(options), context, values)?;
+        result.replace(Some(values.bool_value(stored)?));
+        Ok(())
+    })
+}
+
+/// Publishes an independently owned option cell before releasing the detached predecessor.
+fn eval_replace_stream_context_options(
+    id: i64,
+    options: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let (stored, detached) = match context
+        .stream_resources_mut()
+        .replace_stream_context_options(id, options)
+    {
+        Ok(previous) => (true, previous),
+        Err(incoming) => (false, incoming),
     };
-    let wrapper_options = eval_stream_context_wrapper_options(options, wrapper, values)?;
-    let wrapper_options = values.array_set(wrapper_options, option, value)?;
-    let options = values.array_set(options, wrapper, wrapper_options)?;
-    values.bool_value(
-        context
-            .stream_resources_mut()
-            .set_stream_context_options(id, Some(options)),
-    )
+    if let Some(detached) = detached {
+        eval_release_value(context, values, detached)?;
+    }
+    Ok(stored)
 }
 
 /// Converts a runtime resource cell into eval's zero-based stream context id.
@@ -125,13 +156,14 @@ fn eval_stream_context_wrapper_options(
     options: RuntimeCellHandle,
     wrapper: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let exists = values.array_key_exists(wrapper, options)?;
+    let exists = owners.stage(values.array_key_exists(wrapper, options)?);
     if values.truthy(exists)? {
-        let wrapper_options = values.array_get(options, wrapper)?;
+        let wrapper_options = owners.stage(values.array_get(options, wrapper)?);
         if values.is_array_like(wrapper_options)? {
             return Ok(wrapper_options);
         }
     }
-    values.assoc_new(1)
+    Ok(owners.stage(values.assoc_new(1)?))
 }

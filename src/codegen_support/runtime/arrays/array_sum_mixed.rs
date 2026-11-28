@@ -32,7 +32,7 @@ pub fn emit_array_sum_mixed(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer above the local loop state
     emitter.instruction("str x0, [sp]");                                        // save the source indexed-array pointer for each loop iteration
     emitter.instruction("cbz x0, __rt_array_sum_mixed_zero");                   // treat a null-container pointer as an empty array
-    emitter.instruction("ldr x9, [x0]");                                        // load the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load the source indexed-array logical length
     emitter.instruction("str x9, [sp, #8]");                                    // preserve the logical length across mixed coercion calls
     emitter.instruction("str xzr, [sp, #16]");                                  // initialize the element cursor at index zero
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize the integer accumulator at zero
@@ -44,7 +44,7 @@ pub fn emit_array_sum_mixed(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // compare the current element cursor with the logical length
     emitter.instruction("b.ge __rt_array_sum_mixed_done");                      // finish after every boxed element has contributed
     emitter.instruction("ldr x10, [sp]");                                       // reload the source indexed-array pointer
-    emitter.instruction("add x10, x10, #24");                                   // advance from the array header to the boxed slot region
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the borrowed Mixed-cell pointer for the current element
     emitter.instruction("bl __rt_mixed_cast_int");                              // coerce the boxed element through PHP integer conversion rules
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the running integer accumulator
@@ -82,7 +82,7 @@ fn emit_array_sum_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source indexed-array pointer for each loop iteration
     emitter.instruction("test rdi, rdi");                                       // check whether the source is the null-container sentinel
     emitter.instruction("je __rt_array_sum_mixed_zero_x86");                    // treat a null-container pointer as an empty array
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rax", "rdi"); // load the source indexed-array logical length
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the logical length across mixed coercion calls
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the element cursor at index zero
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the integer accumulator at zero

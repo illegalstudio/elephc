@@ -177,10 +177,12 @@ pub(super) fn eval_pcntl_write_ref(
             Some(ScopeCellOwnership::Owned),
         );
     }
-    if mode == PcntlCallMode::Callable {
-        return values.warning(&format!(
-            "{function}(): Argument #{argument_number} (${parameter}) must be passed by reference, value given"
-        ));
-    }
-    Err(EvalStatus::RuntimeFatal)
+    with_eval_value_lease(value, context, values, |_, _, values| {
+        if mode == PcntlCallMode::Callable {
+            return values.warning(&format!(
+                "{function}(): Argument #{argument_number} (${parameter}) must be passed by reference, value given"
+            ));
+        }
+        Err(EvalStatus::RuntimeFatal)
+    })
 }

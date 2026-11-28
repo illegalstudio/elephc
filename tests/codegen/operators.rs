@@ -2152,3 +2152,20 @@ echo "\n";
         "1 false,false\n-1 true,true\n0 false,true\n-1 true,true\n-1 true,true\n0 false,true\n0 false,true\n-112\n-1|1|1|-1|0|0|2|\n"
     );
 }
+
+/// Incrementing a long alphanumeric operand reserves enough space for carry growth.
+#[test]
+fn test_string_increment_preserves_long_growing_and_interior_results() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+function show_increment(string $value): void {
+    ++$value;
+    echo strlen($value), ":", $value[0], ":", $value[strlen($value) - 1], "|";
+}
+show_increment(str_repeat("z", 80000));
+show_increment(str_repeat("z", 79999) . "a");
+"#,
+        524288,
+    );
+    assert_eq!(out, "80001:a:a|80000:z:b|");
+}

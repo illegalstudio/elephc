@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_combine",
@@ -61,14 +62,16 @@ pub(in crate::interpreter) fn eval_array_combine_result(
         return Err(EvalStatus::RuntimeFatal);
     }
 
-    let mut result = values.assoc_new(len)?;
+    let mut result = EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let source_key = values.array_iter_key(keys, position)?;
-        let target_key = values.array_get(keys, source_key)?;
-        let target_key = values.cast_string(target_key)?;
-        let value_key = values.array_iter_key(values_array, position)?;
-        let value = values.array_get(values_array, value_key)?;
-        result = values.array_set(result, target_key, value)?;
+        result.update(|values, owners, _| {
+            let source_key = owners.stage(values.array_iter_key(keys, position)?);
+            let target_key = owners.stage(values.array_get(keys, source_key)?);
+            let target_key = owners.stage(values.cast_string(target_key)?);
+            let value_key = owners.stage(values.array_iter_key(values_array, position)?);
+            let value = owners.stage(values.array_get(values_array, value_key)?);
+            Ok(Some((target_key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

@@ -140,16 +140,17 @@ pub(super) fn emit_borrowed_argument(
             emitter.instruction(&format!("b.ne {fail_label}"));                 // do not interpret hash or scalar payloads as indexed storage
             emitter.instruction("ldr x0, [x0, #8]");                            // borrow the indexed payload rooted by the argument box
             emit_branch_if_null_container(emitter, "x0", "x9", fail_label);
-            emitter.instruction("ldr x9, [x0, #-8]");                           // read the indexed element representation
-            emitter.instruction("ubfx x9, x9, #8, #7");                         // isolate the element value tag
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
+            elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x9", "x9");
             emitter.instruction("cmp x9, #7");                                  // a borrowed argument must already be a boxed Mixed cell
             emitter.instruction(&format!("b.ne {fail_label}"));                 // reject raw scalar element storage
             abi::emit_load_int_immediate(emitter, "x10", index as i64);
             emitter.instruction("ldr x9, [x0]");                                // read the number of bound arguments
             emitter.instruction("cmp x10, x9");                                 // check the requested argument before loading its slot
             emitter.instruction(&format!("b.hs {fail_label}"));                 // reject a missing argument without reading past the array
-            emitter.instruction("add x0, x0, #24");                             // address the packed Mixed pointer slots
-            emitter.instruction("ldr x0, [x0, x10, lsl #3]");                   // borrow the argument cell without incrementing its refcount
+            elephc_memoir::values::packed_slots::emit_load_indexed_word(
+                emitter, "x0", "x10", "x0", "x9",
+            );
             emitter.instruction(&format!("str x0, [x29, #-{result_frame_offset}]")); // keep the borrow available for coercion and reference writeback
         }
         Arch::X86_64 => {
@@ -160,15 +161,16 @@ pub(super) fn emit_borrowed_argument(
             emitter.instruction(&format!("jne {fail_label}"));                  // do not interpret hash or scalar payloads as indexed storage
             emitter.instruction("mov rax, QWORD PTR [rax + 8]");                // borrow the indexed payload rooted by the argument box
             emit_branch_if_null_container(emitter, "rax", "r10", fail_label);
-            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // read the indexed element representation
-            emitter.instruction("shr r10, 8");                                  // shift the element value tag to the low bits
-            emitter.instruction("and r10, 127");                                // discard heap flags outside the value tag
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
             emitter.instruction("cmp r10, 7");                                  // a borrowed argument must already be a boxed Mixed cell
             emitter.instruction(&format!("jne {fail_label}"));                  // reject raw scalar element storage
             abi::emit_load_int_immediate(emitter, "r11", index as i64);
             emitter.instruction("cmp r11, QWORD PTR [rax]");                    // check the argument index against the logical length
             emitter.instruction(&format!("jae {fail_label}"));                  // reject a missing argument without reading past the array
-            emitter.instruction("mov rax, QWORD PTR [rax + r11 * 8 + 24]");     // borrow the argument cell without incrementing its refcount
+            elephc_memoir::values::packed_slots::emit_load_indexed_word(
+                emitter, "rax", "r11", "rax", "r10",
+            );
             emitter.instruction(&format!("mov QWORD PTR [rbp - {result_frame_offset}], rax")); // preserve the borrow for coercion and reference writeback
         }
     }

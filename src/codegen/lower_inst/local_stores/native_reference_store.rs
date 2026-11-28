@@ -10,13 +10,14 @@
 //! - Extra source parking ends before publication, while the replacement still owns its payload.
 
 use super::*;
+use elephc_memoir::owner_layout::{NativeValidationContext, NativeValidationOutcome};
 
 const SCRATCH_BYTES: usize = 128;
 const WRAPPER: usize = 0;
 const CONTEXT: usize = 16;
-const PENDING: usize = CONTEXT + 8;
-const OUTCOME: usize = 32;
-const RHS: usize = 112;
+const PENDING: usize = CONTEXT + NativeValidationContext::PENDING_THROWABLE;
+const OUTCOME: usize = CONTEXT + NativeValidationContext::BYTES;
+const RHS: usize = OUTCOME + NativeValidationOutcome::BYTES + 8;
 
 /// Emits a canonical path and returns the join label to place after the unchanged raw fallback.
 pub(super) fn emit_if_canonical(

@@ -351,20 +351,24 @@ fn guard_dynamic_method_slot(
     } else {
         "_class_vtable_ptrs"
     };
-    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        ctx.emitter,
+        class_id_reg,
+        receiver_reg,
+    );
     abi::emit_symbol_address(ctx.emitter, table_reg, table);
     if arm {
-        ctx.emitter.instruction(&format!(                                        // load the receiving class's source vtable
+        ctx.emitter.instruction(&format!(                                       // load the receiving class's source vtable
             "ldr {table_reg}, [{table_reg}, {class_id_reg}, lsl #3]"
         ));
     } else {
-        ctx.emitter.instruction(&format!(                                        // load the receiving class's source vtable
+        ctx.emitter.instruction(&format!(                                       // load the receiving class's source vtable
             "mov {table_reg}, QWORD PTR [{table_reg} + {class_id_reg} * 8]"
         ));
     }
     abi::emit_load_from_address(ctx.emitter, table_reg, table_reg, slot * 8);
     if arm {
-        ctx.emitter.instruction(&format!("cbnz {table_reg}, {present}"));      // a populated slot keeps the normal dispatch
+        ctx.emitter.instruction(&format!("cbnz {table_reg}, {present}"));       // a populated slot keeps the normal dispatch
     } else {
         ctx.emitter.instruction(&format!("test {table_reg}, {table_reg}"));     // a populated slot keeps the normal dispatch
         ctx.emitter.instruction(&format!("jnz {present}"));                     // a populated slot keeps the normal dispatch
@@ -486,8 +490,11 @@ pub(super) fn emit_mixed_method_class_dispatch(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("ldr x9, [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                "x9",
+                receiver_reg,
+            );
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
                 ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this method candidate
@@ -495,8 +502,11 @@ pub(super) fn emit_mixed_method_class_dispatch(
             }
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                "r11",
+                receiver_reg,
+            );
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
                 ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this method candidate

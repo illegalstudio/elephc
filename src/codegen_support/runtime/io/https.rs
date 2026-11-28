@@ -18,10 +18,12 @@
 //!   elephc-tls symbol reference — only programs that actually open https URLs
 //!   pull in `-lelephc_tls` at link time.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Capacity of the `_https_resp_buf` response buffer, in bytes.
-const HTTPS_RESP_BUF_SIZE: i64 = 1048576;
+const HTTPS_RESP_BUF_SIZE: i64 = io_scratch::HTTPS_RESPONSE.bytes as i64;
 
 /// Emits the `__rt_https_open` runtime helper.
 /// Input:  AArch64 x0/x1 = host, x2 = port, x3/x4 = request.
@@ -182,7 +184,7 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // accumulated response length = 0
     emitter.label("__rt_https_open_read");
     emitter.instruction("ldr x0, [sp, #0]");                                    // TLS handle for the read
-    abi::emit_symbol_address(emitter, "x1", "_https_resp_buf");
+    io_scratch::HTTPS_RESPONSE.emit_address(emitter, "x1");
     emitter.instruction("ldr x9, [sp, #24]");                                   // response bytes already buffered
     emitter.instruction("add x1, x1, x9");                                      // read into the buffer past the buffered bytes
     emitter.instruction(&format!("mov x2, #{}", HTTPS_RESP_BUF_SIZE));          // response buffer capacity
@@ -207,7 +209,7 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("blr x9");                                              // shut the TLS session down cleanly
 
     // -- scan for the CRLFCRLF that separates headers from the body --
-    abi::emit_symbol_address(emitter, "x4", "_https_resp_buf");
+    io_scratch::HTTPS_RESPONSE.emit_address(emitter, "x4");
     emitter.instruction("ldr x5, [sp, #24]");                                   // response length
     emitter.instruction("str xzr, [sp, #32]");                                  // body start = 0 when no separator is found
     emitter.instruction("mov x6, #0");                                          // response scan index
@@ -245,7 +247,7 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #40]");                                   // save the temp-file descriptor
 
     // -- write(temp, body, body length) --
-    abi::emit_symbol_address(emitter, "x1", "_https_resp_buf");
+    io_scratch::HTTPS_RESPONSE.emit_address(emitter, "x1");
     emitter.instruction("ldr x9, [sp, #32]");                                   // body start offset
     emitter.instruction("add x1, x1, x9");                                      // body pointer = buffer + body start
     emitter.instruction("ldr x10, [sp, #24]");                                  // response length
@@ -430,7 +432,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // accumulated response length = 0
     emitter.label("__rt_https_open_read_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // TLS handle for the read
-    abi::emit_symbol_address(emitter, "rsi", "_https_resp_buf");                // response buffer base
+    io_scratch::HTTPS_RESPONSE.emit_address(emitter, "rsi");                // response buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 56]");                       // read past the bytes already buffered
     emitter.instruction(&format!("mov rdx, {}", HTTPS_RESP_BUF_SIZE));          // response buffer capacity
     emitter.instruction("sub rdx, QWORD PTR [rbp - 56]");                       // remaining buffer capacity
@@ -453,7 +455,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r9");                                             // shut the TLS session down cleanly
 
     // -- scan for the CRLFCRLF that separates headers from the body --
-    abi::emit_symbol_address(emitter, "r8", "_https_resp_buf");                 // response buffer base
+    io_scratch::HTTPS_RESPONSE.emit_address(emitter, "r8");                 // response buffer base
     emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // response length
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // body start = 0 when no separator is found
     emitter.instruction("xor rcx, rcx");                                        // response scan index
@@ -492,7 +494,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
 
     // -- write(temp, body, body length) --
     emitter.instruction("mov rdi, rax");                                        // temp-file descriptor for the write
-    abi::emit_symbol_address(emitter, "rsi", "_https_resp_buf");                // response buffer base
+    io_scratch::HTTPS_RESPONSE.emit_address(emitter, "rsi");                // response buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 64]");                       // body pointer = buffer + body start
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // response length
     emitter.instruction("sub rdx, QWORD PTR [rbp - 64]");                       // body length = response length - body start

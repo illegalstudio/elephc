@@ -19,6 +19,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates PHP `count_chars(...)` over one subject and its optional mode.
 pub(in crate::interpreter) fn eval_builtin_count_chars(
@@ -73,7 +74,7 @@ pub(in crate::interpreter) fn eval_count_chars_result(
     // Modes 1 and 2 emit a sparse subset of the byte values, so the tally is built as an
     // associative array: an indexed array would pad every skipped byte value with an empty
     // element. Mode 0 uses the same shape so all three tally modes read identically.
-    let mut result = values.assoc_new(256)?;
+    let mut result = EvalArrayBuilder::assoc(values, 256)?;
     for index in 0..256usize {
         let count = tally[index];
         let keep = match mode {
@@ -84,11 +85,9 @@ pub(in crate::interpreter) fn eval_count_chars_result(
         if !keep {
             continue;
         }
-        let key = values.int(index as i64)?;
-        let value = values.int(count)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.int(count))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Raises PHP's catchable `ValueError` for a `$mode` outside `0..=4`.
@@ -96,11 +95,10 @@ fn eval_count_chars_mode_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message =
-        values.string("count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)")?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception(
+        "ValueError",
+        "count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)",
+        context,
+        values,
+    )
 }

@@ -23,6 +23,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout::{self, HeaderField};
 
 /// Emits the inline "load this object's dumpable dynamic-property hash" sequence.
 ///
@@ -45,8 +46,9 @@ pub(crate) fn emit_load_dump_dyn_hash(
             emitter.instruction(&format!("cbz {scratch_reg}, {miss_label}"));   // no tail (or a __debugInfo projection) dumps nothing more
             abi::emit_symbol_address(emitter, scratch_reg, "_class_object_payload_sizes");
             emitter.instruction(&format!("ldr {scratch_reg}, [{scratch_reg}, {class_reg}, lsl #3]")); // load the class payload size
-            emitter.instruction(&format!("sub {scratch_reg}, {scratch_reg}, #8"));   // the dynamic hash is the last payload word
-            emitter.instruction(&format!("ldr {out_reg}, [{object_reg}, {scratch_reg}]")); // load the dynamic-property hash pointer
+            elephc_memoir::values::object_storage::emit_load_trailing_word(
+                emitter, object_reg, scratch_reg, out_reg,
+            );
             emitter.instruction(&format!("cbz {out_reg}, {miss_label}"));       // a never-written tail holds no hash yet
         }
         Arch::X86_64 => {
@@ -55,7 +57,9 @@ pub(crate) fn emit_load_dump_dyn_hash(
             emitter.instruction(&format!("je {miss_label}"));                   // no tail (or a __debugInfo projection) dumps nothing more
             abi::emit_symbol_address(emitter, scratch_reg, "_class_object_payload_sizes");
             emitter.instruction(&format!("mov {scratch_reg}, QWORD PTR [{scratch_reg} + {class_reg} * 8]")); // load the class payload size
-            emitter.instruction(&format!("mov {out_reg}, QWORD PTR [{object_reg} + {scratch_reg} - 8]")); // load the hash from the last payload word
+            elephc_memoir::values::object_storage::emit_load_trailing_word(
+                emitter, object_reg, scratch_reg, out_reg,
+            );
             emitter.instruction(&format!("test {out_reg}, {out_reg}"));         // was the tail ever allocated?
             emitter.instruction(&format!("jz {miss_label}"));                   // a never-written tail holds no hash yet
         }
@@ -75,7 +79,7 @@ pub(crate) fn emit_obj_dump_dyn_props(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cbz x0, __rt_obj_dump_dyn_props_none");        // a null instance has no dynamic properties
-            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("ldr x10, [x10]");                              // load the number of registered class ids
             emitter.instruction("cmp x9, x10");                                 // is the class id within the metadata tables?
@@ -89,7 +93,7 @@ pub(crate) fn emit_obj_dump_dyn_props(emitter: &mut Emitter) {
         Arch::X86_64 => {
             emitter.instruction("test rdi, rdi");                               // a null instance has no dynamic properties
             emitter.instruction("jz __rt_obj_dump_dyn_props_none_x86");         // report "no dynamic properties"
-            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
             abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("cmp r9, QWORD PTR [r10]");                     // is the class id within the metadata tables?
             emitter.instruction("jae __rt_obj_dump_dyn_props_none_x86");        // incomplete or unknown ids carry no dumpable tail
@@ -128,7 +132,7 @@ pub(crate) fn emit_obj_dyn_prop_at(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the requested ordinal
             emitter.instruction("cmp x9, #0");                                  // reject a negative ordinal
             emitter.instruction("b.lt __rt_obj_dyn_prop_at_none");              // negative ordinals name no entry
-            emitter.instruction("ldr x10, [x0]");                               // load the live entry count from the hash header
+            hash_layout::emit_load_header_field(emitter, "x10", "x0", HeaderField::Count);
             emitter.instruction("cmp x9, x10");                                 // is the ordinal within the entry count?
             emitter.instruction("b.hs __rt_obj_dyn_prop_at_none");              // past the last entry → not found
             emitter.instruction("str xzr, [sp, #8]");                           // iterator cursor = start of insertion order
@@ -165,7 +169,8 @@ pub(crate) fn emit_obj_dyn_prop_at(emitter: &mut Emitter) {
             emitter.instruction("mov r10, QWORD PTR [rbp - 24]");               // reload the requested ordinal
             emitter.instruction("cmp r10, 0");                                  // reject a negative ordinal
             emitter.instruction("jl __rt_obj_dyn_prop_at_none_x86");            // negative ordinals name no entry
-            emitter.instruction("cmp r10, QWORD PTR [rax]");                    // is the ordinal within the entry count?
+            hash_layout::emit_load_header_field(emitter, "r11", "rax", HeaderField::Count);
+            emitter.instruction("cmp r10, r11");                                // is the ordinal within the entry count?
             emitter.instruction("jae __rt_obj_dyn_prop_at_none_x86");           // past the last entry → not found
             emitter.instruction("mov QWORD PTR [rbp - 16], 0");                 // iterator cursor = start of insertion order
             emitter.label("__rt_obj_dyn_prop_at_loop_x86");

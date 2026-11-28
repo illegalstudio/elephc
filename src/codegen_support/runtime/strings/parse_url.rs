@@ -9,6 +9,8 @@
 //! - AArch64 and x86_64 mirror the Magician scanner and preserve missing versus present-empty components.
 //! - Component strings are copied before ASCII control bytes are replaced, so the input string is never mutated.
 
+use elephc_memoir::values::throwable_storage;
+use elephc_memoir::values::owned_payload::{StagedBox, render_staged_box};
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -33,16 +35,17 @@ pub fn emit_parse_url(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: parse_url ---");
     emitter.label_global("__rt_parse_url");
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.raw(include_str!("parse_url/aarch64.s")),
-        Arch::X86_64 => emitter.raw(&include_str!("parse_url/x86_64.s").replace(
-            "{{MIXED_HEAP_KIND}}",
-            &format!(
-                "0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(5)
-            ),
-        )),
-    }
+    let arch = emitter.target.arch;
+    let (template, hash_slot) = match arch {
+        Arch::AArch64 => (include_str!("parse_url/aarch64.s"), 184),
+        Arch::X86_64 => (include_str!("parse_url/x86_64.s"), 192),
+    };
+    let boxed_string = render_staged_box(arch, StagedBox::StringPair(176));
+    let boxed_hash = render_staged_box(
+        arch, StagedBox::Pointer { slot: hash_slot, tag: elephc_memoir::ValueTag::new(5) },
+    );
+    emitter.raw(&template.replace("{{OWNED_STRING_BOX}}", &boxed_string)
+        .replace("{{OWNED_HASH_BOX}}", &boxed_hash));
     emit_parse_url_key_address(emitter);
     emit_parse_url_throw_component(emitter);
 }
@@ -107,18 +110,14 @@ fn emit_parse_url_throw_component_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat");                                      // append the trailing ` given` text
     emitter.instruction("bl __rt_str_persist");                                 // give the exception object owned message storage
     emitter.instruction("stp x1, x2, [sp, #16]");                               // preserve message pointer and length during object allocation
-    emitter.instruction("mov x0, #56");                                         // request the standard Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the ValueError object
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies object payloads
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the ValueError allocation as an object
-    emitter.instruction("bl __rt_object_handle_acquire");                       // assign the object its PHP-visible handle
+    throwable_storage::emit_allocate(emitter);
     abi::emit_symbol_address(emitter, "x9", "_spl_value_error_class_id");
     emitter.instruction("ldr x9, [x9]");                                        // load the program-local ValueError class id
-    emitter.instruction("str x9, [x0]");                                        // install the ValueError class id
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
     emitter.instruction("ldp x10, x11, [sp, #16]");                             // reload the owned diagnostic message
-    emitter.instruction("stp x10, x11, [x0, #8]");                              // install message pointer and byte length
-    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous exception defaults to null
+    emitter.instruction(&format!("stp x10, x11, [x0, #{}]", throwable_storage::MESSAGE_POINTER)); // install message pointer and byte length
+    throwable_storage::emit_default_code(emitter, "x0");
+    throwable_storage::emit_empty_previous(emitter, "x0");
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active ValueError for the unwinder
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before unwinding
@@ -145,19 +144,15 @@ fn emit_parse_url_throw_component_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // give the exception object owned message storage
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve owned message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve owned message length
-    emitter.instruction("mov rax, 56");                                         // request the standard Throwable payload size
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the canonical object heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the ValueError allocation as an object
-    emitter.instruction("call __rt_object_handle_acquire");                     // assign the object its PHP-visible handle
+    throwable_storage::emit_allocate(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0);
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // install the ValueError class id
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload owned diagnostic message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // install diagnostic message pointer
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload diagnostic message byte length
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // install diagnostic message byte length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous exception defaults to null
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+    throwable_storage::emit_default_code(emitter, "rax");
+    throwable_storage::emit_empty_previous(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame before unwinding
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

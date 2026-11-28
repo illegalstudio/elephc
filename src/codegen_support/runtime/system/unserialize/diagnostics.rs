@@ -7,6 +7,9 @@
 //! Key details:
 //! - Helpers preserve PHP error types and unwind the active unserialize context exactly once.
 
+use crate::codegen_support::abi;
+use elephc_memoir::values::throwable_storage;
+use elephc_memoir::values::incomplete_object::CLASS_ID;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{
@@ -99,16 +102,16 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.label("__rt_unser_type_object");
             emitter.instruction("ldr x9, [sp, #8]");                            // rejected object payload
             emitter.instruction("cbz x9, __rt_unser_type_object_generic");      // null payload has no class metadata
-            emitter.instruction("ldr x10, [x9]");                               // object class id
-            crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", -2);
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x9");
+            crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", CLASS_ID);
             emitter.instruction("cmp x10, x11");                                // is this the undeclared-class synthetic id?
             emitter.instruction("b.eq __rt_unser_type_incomplete");             // PHP spells it __PHP_Incomplete_Class
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_class_name_count", 0);
+            elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x11");
             emitter.instruction("cmp x10, x11");                                // class id within the dense name table?
             emitter.instruction("b.hs __rt_unser_type_object_generic");         // out-of-range ids fall back to the object spelling
-            crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
-            emitter.instruction("add x11, x11, x10, lsl #4");                   // select the (ptr,len) class-name row
-            emitter.instruction("ldp x3, x4, [x11]");                           // use the concrete PHP class name
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x11");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x11", "x11", "x10", "x12");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x3", "x4", "x11");
             emitter.instruction("cbnz x4, __rt_unser_type_ready");              // empty metadata falls back to object
             emitter.label("__rt_unser_type_object_generic");
             crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_unser_type_object");
@@ -133,27 +136,19 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("bl __rt_concat");                              // append the caller's suffix
             emitter.instruction("bl __rt_str_persist");                         // give the Throwable stable message ownership
             emitter.instruction("stp x1, x2, [sp, #56]");                       // preserve message pointer/length across allocation
-            emitter.instruction("mov x0, #56");                                 // request the canonical Throwable payload size
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the TypeError object payload
-            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation as a runtime object
-            emitter.instruction("bl __rt_object_handle_acquire");               // bind the TypeError to its PHP object handle
+            throwable_storage::emit_allocate(emitter);
             crate::codegen_support::abi::emit_load_symbol_to_reg(
                 emitter,
                 "x9",
                 "_spl_type_error_class_id",
                 0,
             );
-            emitter.instruction("str x9, [x0]");                                // store the built-in TypeError class id
+            elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
             emitter.instruction("ldr x9, [sp, #56]");                           // recover the persisted TypeError message pointer
-            emitter.instruction("str x9, [x0, #8]");                            // store the dynamic TypeError message pointer
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             emitter.instruction("ldr x9, [sp, #64]");                           // recover the dynamic message byte length
-            emitter.instruction("str x9, [x0, #16]");                           // store the TypeError message byte length
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "x0",
-            );
-            emitter.instruction("str xzr, [x0, #40]");                          // previous Throwable defaults to null
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(emitter, "x0");
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
                 "x0",
@@ -242,17 +237,15 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                // rejected object payload
             emitter.instruction("test r8, r8");                                 // null payload has no class metadata
             emitter.instruction("jz __rt_unser_type_object_generic_x");         // fall back to the generic object spelling
-            emitter.instruction("mov r9, QWORD PTR [r8]");                      // object class id
-            emitter.instruction("cmp r9, -2");                                  // is this the undeclared-class synthetic id?
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r8");
+            emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                // is this the undeclared-class synthetic id?
             emitter.instruction("je __rt_unser_type_incomplete_x");             // PHP spells it __PHP_Incomplete_Class
-            emitter.instruction("mov r10, QWORD PTR [rip + _class_name_count]"); // dense class-name table bound
+            elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r10"); // dense class-name table bound
             emitter.instruction("cmp r9, r10");                                 // class id within the dense name table?
             emitter.instruction("jae __rt_unser_type_object_generic_x");        // out-of-range ids fall back to the object spelling
-            emitter.instruction("lea r10, [rip + _class_name_entries]");        // class-name metadata base
-            emitter.instruction("shl r9, 4");                                   // one pointer/length pair per class id
-            emitter.instruction("add r10, r9");                                 // select the (ptr,len) class-name row
-            emitter.instruction("mov rdi, QWORD PTR [r10]");                    // concrete class-name pointer
-            emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                // concrete class-name length
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r9", "r11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rdi", "rsi", "r10");
             emitter.instruction("test rsi, rsi");                               // empty metadata falls back to object
             emitter.instruction("jnz __rt_unser_type_ready_x");                 // use the concrete PHP class name
             emitter.label("__rt_unser_type_object_generic_x");
@@ -285,27 +278,19 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("call __rt_str_persist");                       // give the Throwable stable message ownership
             emitter.instruction("mov QWORD PTR [rbp - 40], rax");               // save persisted message pointer
             emitter.instruction("mov QWORD PTR [rbp - 48], rdx");               // save persisted message length
-            emitter.instruction("mov rax, 56");                                 // request the canonical Throwable payload size
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the TypeError object payload
-            emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the throwable heap-kind marker
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation as a runtime object
-            emitter.instruction("call __rt_object_handle_acquire");             // bind the TypeError to its PHP object handle
+            throwable_storage::emit_allocate(emitter);
             crate::codegen_support::abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
                 "_spl_type_error_class_id",
                 0,
             );
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the built-in TypeError class id
+            elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
             emitter.instruction("mov r10, QWORD PTR [rbp - 40]");               // persisted TypeError message pointer
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the dynamic TypeError message pointer
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             emitter.instruction("mov r10, QWORD PTR [rbp - 48]");               // dynamic TypeError message byte length
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the TypeError message byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "rax",
-            );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous Throwable defaults to null
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(emitter, "rax");
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
                 "rax",
@@ -333,13 +318,13 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("sub sp, sp, #64");                             // reserve class-name and message state
             emitter.instruction("stp x29, x30, [sp, #48]");                     // preserve the caller frame and return address
             emitter.instruction("add x29, sp, #48");                            // establish an aligned Error-construction frame
-            emitter.instruction("ldr x13, [x0]");                               // keep class id outside the symbol helper's x9 scratch register
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x13", "x0");
+            elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10");
             emitter.instruction("cmp x13, x10");                                // is the class id within the dense name table?
             emitter.instruction("b.hs __rt_unser_object_string_name_fallback"); // malformed ids use the generic object spelling
-            crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-            emitter.instruction("add x10, x10, x13, lsl #4");                   // select the static class-name row
-            emitter.instruction("ldp x11, x12, [x10]");                         // borrow the static class-name pointer and length
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x10", "x13", "x14");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x11", "x12", "x10");
             emitter.instruction("cbnz x12, __rt_unser_object_string_name_ready"); // non-empty metadata is safe after context cleanup
             emitter.label("__rt_unser_object_string_name_fallback");
             crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_unser_type_object");
@@ -357,18 +342,12 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("bl __rt_concat");                              // append PHP's conversion failure suffix
             emitter.instruction("bl __rt_str_persist");                         // give the Error stable message ownership
             emitter.instruction("stp x1, x2, [sp, #16]");                       // preserve message pair across object allocation
-            emitter.instruction("mov x0, #56");                                 // request the canonical Throwable payload size
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the Error object payload
-            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation as a runtime object
-            emitter.instruction("bl __rt_object_handle_acquire");               // bind the Error to its PHP object handle
+            throwable_storage::emit_allocate(emitter);
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
-            emitter.instruction("str x9, [x0]");                                // store the built-in Error class id
+            elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
             emitter.instruction("ldp x10, x11, [sp, #16]");                     // recover the persisted message pair
-            emitter.instruction("stp x10, x11, [x0, #8]");                      // store Error message pointer and length
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-            emitter.instruction("str xzr, [x0, #40]");                          // previous Throwable defaults to null
+            emitter.instruction(&format!("stp x10, x11, [x0, #{}]", throwable_storage::MESSAGE_POINTER)); // store Error message pointer and length
+            throwable_storage::emit_default_fields(emitter, "x0");
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("ldp x29, x30, [sp, #48]");                     // restore the caller frame before unwinding
             emitter.instruction("add sp, sp, #64");                             // release Error-construction state
@@ -381,16 +360,14 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("push rbp");                                    // preserve the caller frame while constructing the Error
             emitter.instruction("mov rbp, rsp");                                // establish an aligned construction frame
             emitter.instruction("sub rsp, 48");                                 // reserve class-name and message state
-            emitter.instruction("mov r8, QWORD PTR [rax]");                     // resolve class id while the borrowed object is live
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rax");
             emitter.instruction("test r8, r8");                                 // reject negative synthetic class ids before table indexing
             emitter.instruction("js __rt_unser_object_string_name_fallback_x"); // synthetic ids use the generic object spelling
-            emitter.instruction("cmp r8, QWORD PTR [rip + _class_name_count]"); // is the class id within the dense name table?
+            elephc_memoir::values::class_metadata::emit_cmp_class_id_to_name_count(emitter, "r8"); // is the class id within the dense name table?
             emitter.instruction("jae __rt_unser_object_string_name_fallback_x"); // malformed ids use the generic object spelling
-            emitter.instruction("lea r9, [rip + _class_name_entries]");         // class-name metadata base
-            emitter.instruction("shl r8, 4");                                   // scale id by the pointer/length row width
-            emitter.instruction("add r9, r8");                                  // select the static class-name row
-            emitter.instruction("mov r10, QWORD PTR [r9]");                     // borrow static class-name pointer
-            emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                 // borrow static class-name length
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r9");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r9", "r9", "r8", "rdx");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "r10", "r11", "r9");
             emitter.instruction("test r11, r11");                               // empty metadata falls back to object
             emitter.instruction("jnz __rt_unser_object_string_name_ready_x");   // non-empty metadata is safe after context cleanup
             emitter.label("__rt_unser_object_string_name_fallback_x");
@@ -412,20 +389,14 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("call __rt_str_persist");                       // give the Error stable message ownership
             emitter.instruction("mov QWORD PTR [rbp - 24], rax");               // preserve persisted message pointer
             emitter.instruction("mov QWORD PTR [rbp - 32], rdx");               // preserve persisted message length
-            emitter.instruction("mov rax, 56");                                 // request the canonical Throwable payload size
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the Error object payload
-            emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // throwable heap-kind marker
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation as a runtime object
-            emitter.instruction("call __rt_object_handle_acquire");             // bind the Error to its PHP object handle
+            throwable_storage::emit_allocate(emitter);
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the built-in Error class id
+            elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
             emitter.instruction("mov r10, QWORD PTR [rbp - 24]");               // recover persisted Error message pointer
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store message pointer
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             emitter.instruction("mov r10, QWORD PTR [rbp - 32]");               // recover persisted Error message length
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store message byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous Throwable defaults to null
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(emitter, "rax");
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("leave");                                       // restore the caller frame before unwinding
             emitter.instruction("jmp __rt_throw_current");                      // propagate through the catchable Throwable path
@@ -453,19 +424,14 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_link_offset)); // preserve the caller frame and return address
             emitter.instruction(&format!("add x29, sp, #{}", frame_link_offset)); // establish the protected invocation frame
             emitter.instruction(&format!("str x0, [sp, #{}]", object_offset));  // preserve the borrowed receiver across setjmp
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-            emitter.instruction("str x10, [sp]");                               // handler.next = previous exception-handler head
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-            emitter.instruction("str x10, [sp, #8]");                           // preserve the activation frame surviving this boundary
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+            elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "x10", 0);
             emitter.instruction("mov x10, sp");                                 // compute this invocation's handler record address
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
             emitter.save_exception_handler();                                   // catch Throwable control flow escaping __toString
             emitter.instruction("cbnz x0, __rt_unser_allowed_tostring_throw");  // longjmp resumes here for exact context cleanup
             emitter.instruction(&format!("ldr x0, [sp, #{}]", object_offset));  // reload borrowed receiver after setjmp
-            emitter.instruction("ldr x11, [x0]");                               // keep class id outside the symbol helper's x9 scratch register
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x0");
             emitter.instruction("tbnz x11, #63, __rt_unser_allowed_tostring_missing"); // synthetic negative ids cannot index metadata
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_class_tostring_count", 0);
             emitter.instruction("cmp x11, x10");                                // is the id within the dense __toString table?
@@ -501,7 +467,6 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             let previous_handler_offset = boundary_bytes;
-            let survivor_offset = previous_handler_offset - 8;
             emitter.blank();
             emitter.comment("--- runtime: bounded allowed-class object __toString ---");
             emitter.label_global("__rt_unser_allowed_object_to_string");
@@ -509,12 +474,7 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction("mov rbp, rsp");                                // establish a stable base for the handler record
             emitter.instruction(&format!("sub rsp, {}", boundary_bytes));       // reserve handler record plus receiver/result spills
             emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // preserve borrowed receiver across setjmp
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", previous_handler_offset)); // handler.next = previous head
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", survivor_offset)); // activation frame surviving this boundary
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression
+            elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", previous_handler_offset);
             emitter.instruction(&format!("lea r10, [rbp - {}]", previous_handler_offset)); // compute this handler record address
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!("lea rdi, [rbp - {}]", boundary_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass opaque jmp_buf to setjmp
@@ -522,7 +482,7 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction("test eax, eax");                               // did control return through longjmp?
             emitter.instruction("jnz __rt_unser_allowed_tostring_throw_x");     // clean runtime state before propagating
             emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload borrowed receiver after setjmp
-            emitter.instruction("mov r8, QWORD PTR [rdi]");                     // runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rdi");
             emitter.instruction("test r8, r8");                                 // reject negative synthetic class ids
             emitter.instruction("js __rt_unser_allowed_tostring_missing_x");    // synthetic ids cannot index metadata
             emitter.instruction("cmp r8, QWORD PTR [rip + _class_tostring_count]"); // is id within dense method table?

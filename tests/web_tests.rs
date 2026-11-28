@@ -1121,6 +1121,38 @@ if (($_SERVER["REQUEST_URI"] ?? "") === "/leave") {
     );
 }
 
+/// An abandoned eval handler releases its callable before the worker reuses the request heap.
+#[test]
+fn web_reset_retires_an_abandoned_eval_output_handler() {
+    let dir = make_test_dir("web_reset_eval_output_handler");
+    let src = r#"<?php
+class AbandonedOutputOwner {
+    public function __invoke(string $bytes, int $phase): string {
+        return strtoupper($bytes);
+    }
+    public function __destruct() {
+        file_put_contents(__DIR__ . "/released.txt", "retired");
+    }
+}
+function openEvalBuffer(string $source): void { eval($source); }
+if (($_SERVER["REQUEST_URI"] ?? "") === "/leave") {
+    openEvalBuffer('ob_start(new AbandonedOutputOwner());');
+    echo "ABANDONED";
+} else {
+    echo "level=", ob_get_level();
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let _ = http_get(&addr, "/leave");
+    let next = http_get(&addr, "/check");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(next.ends_with("level=0"), "next request: {next:?}");
+    assert_eq!(std::fs::read_to_string(dir.join("released.txt")).unwrap(), "retired");
+}
+
 /// Verifies the request-scoped stream context options are cleared between requests.
 /// `stream_context_create()` stores its options hash in a process-global slot; the
 /// hash is request memory, so leaving it published would let a later request read or

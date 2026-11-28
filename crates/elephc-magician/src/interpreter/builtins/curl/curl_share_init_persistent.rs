@@ -24,6 +24,7 @@
 //!   `CurlShareHandle` parameter type does (php-src does not make the persistent class a
 //!   subclass).
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
@@ -82,16 +83,18 @@ fn eval_curl_share_init_persistent_result(
     let mut csv = String::new();
     let len = values.array_len(share_options)?;
     for position in 0..len {
-        let key = values.array_iter_key(share_options, position)?;
-        let item = values.array_get(share_options, key)?;
-        let tag = values.type_tag(item)?;
-        if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT) {
+        let value = with_collection_cells(values, |values, owners| {
+            let (_, item) = stage_collection_entry(share_options, position, values, owners)?;
+            let tag = values.type_tag(item)?;
+            if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT) {
+                return Ok(None);
+            }
+            let value = eval_int_value(item, values)?;
+            Ok(matches!(value, 2 | 3 | 4 | 5 | 6).then_some(value))
+        })?;
+        let Some(value) = value else {
             return eval_curl_share_persistent_value_error(context, values);
-        }
-        let value = eval_int_value(item, values)?;
-        if !matches!(value, 2 | 3 | 4 | 5 | 6) {
-            return eval_curl_share_persistent_value_error(context, values);
-        }
+        };
         if !csv.is_empty() {
             csv.push(',');
         }

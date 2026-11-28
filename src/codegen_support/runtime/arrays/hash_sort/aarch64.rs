@@ -95,7 +95,7 @@ fn emit_sort_links(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x9", NULL_SENTINEL);
     emitter.instruction("cmp x0, x9");                                          // test the in-band null-container sentinel
     emitter.instruction("b.eq __rt_hsort_ret");                                 // sentinel-null tables have no header
-    emitter.instruction("ldr x9, [x0]");                                        // load the live entry count
+    hash_layout::emit_load_header_field(emitter, "x9", "x0", hash_layout::HeaderField::Count);
     emitter.instruction("cmp x9, #2");                                          // fewer than two entries are already ordered
     emitter.instruction("b.ge __rt_hsort_begin");                               // allocate a frame only when sorting is needed
     emitter.label("__rt_hsort_ret");
@@ -114,7 +114,7 @@ fn emit_sort_links(emitter: &mut Emitter) {
 
     emitter.label("__rt_hsort_pass");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the hash-table pointer
-    emitter.instruction("ldr x10, [x9, #24]");                                  // start the pass at the current list head
+    hash_layout::emit_load_header_field(emitter, "x10", "x9", hash_layout::HeaderField::Head);
     emitter.instruction("str x10, [sp, #32]");                                  // p = first left-run entry
     emitter.instruction("mov x10, #-1");                                        // initialize an empty output chain
     emitter.instruction("str x10, [sp, #64]");                                  // new head = none
@@ -140,8 +140,8 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("cmn x10, #1");                                         // did the source chain end inside the left run?
     emitter.instruction("b.eq __rt_hsort_split_done");                          // keep the shorter final run
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the entries-region base
-    emitter.instruction("add x12, x11, x10, lsl #6");                           // address the split-cursor entry
-    emitter.instruction("ldr x10, [x12, #56]");                                 // advance through the original next link
+    hash_layout::emit_entry_address_from_storage(emitter, "x12", "x11", "x10");
+    hash_layout::emit_load_entry_field(emitter, "x10", "x12", hash_layout::EntryField::Next);
     emitter.instruction("str x10, [sp, #40]");                                  // q = next entry
     emitter.instruction("add x9, x9, #1");                                      // include the traversed entry in the left run
     emitter.instruction("str x9, [sp, #48]");                                   // persist the left-run size
@@ -169,8 +169,8 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hsort_take_left");                           // a short final right run leaves the left entry
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the entries-region base
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the left entry index
-    emitter.instruction("add x0, x10, x9, lsl #6");                             // pass the left entry address
-    emitter.instruction("add x1, x10, x11, lsl #6");                            // pass the right entry address
+    hash_layout::emit_entry_address_from_storage(emitter, "x0", "x10", "x9");
+    hash_layout::emit_entry_address_from_storage(emitter, "x1", "x10", "x11");
     emitter.instruction("ldr x2, [sp, #16]");                                   // pass the comparison mode
     emitter.instruction("bl __rt_hash_sort_compare_entries");                   // compare the two run heads
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the direction bit after the call
@@ -186,8 +186,8 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #40]");                                   // select the current right-run entry
     emitter.instruction("str x9, [sp, #88]");                                   // save the selected entry index
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the entries-region base
-    emitter.instruction("add x11, x10, x9, lsl #6");                            // address the selected entry
-    emitter.instruction("ldr x12, [x11, #56]");                                 // read its original successor before relinking
+    hash_layout::emit_entry_address_from_storage(emitter, "x11", "x10", "x9");
+    hash_layout::emit_load_entry_field(emitter, "x12", "x11", hash_layout::EntryField::Next);
     emitter.instruction("str x12, [sp, #40]");                                  // advance the right-run cursor
     emitter.instruction("ldr x9, [sp, #56]");                                   // reload remaining right-run capacity
     emitter.instruction("sub x9, x9, #1");                                      // consume one right-run entry
@@ -198,8 +198,8 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #32]");                                   // select the current left-run entry
     emitter.instruction("str x9, [sp, #88]");                                   // save the selected entry index
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the entries-region base
-    emitter.instruction("add x11, x10, x9, lsl #6");                            // address the selected entry
-    emitter.instruction("ldr x12, [x11, #56]");                                 // read its original successor before relinking
+    hash_layout::emit_entry_address_from_storage(emitter, "x11", "x10", "x9");
+    hash_layout::emit_load_entry_field(emitter, "x12", "x11", hash_layout::EntryField::Next);
     emitter.instruction("str x12, [sp, #32]");                                  // advance the left-run cursor
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload remaining left-run entries
     emitter.instruction("sub x9, x9, #1");                                      // consume one left-run entry
@@ -208,13 +208,13 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.label("__rt_hsort_append");
     emitter.instruction("ldr x9, [sp, #88]");                                   // reload the selected entry index
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the entries-region base
-    emitter.instruction("add x11, x10, x9, lsl #6");                            // address the selected entry
+    hash_layout::emit_entry_address_from_storage(emitter, "x11", "x10", "x9");
     emitter.instruction("ldr x12, [sp, #72]");                                  // reload the output tail index
-    emitter.instruction("str x12, [x11, #48]");                                 // selected entry prev = old output tail
+    hash_layout::emit_store_entry_field(emitter, "x12", "x11", hash_layout::EntryField::Previous);
     emitter.instruction("cmn x12, #1");                                         // is this the first output entry of the pass?
     emitter.instruction("b.eq __rt_hsort_first");                               // publish it as the output head
-    emitter.instruction("add x13, x10, x12, lsl #6");                           // address the previous output tail
-    emitter.instruction("str x9, [x13, #56]");                                  // previous tail next = selected entry
+    hash_layout::emit_entry_address_from_storage(emitter, "x13", "x10", "x12");
+    hash_layout::emit_store_entry_field(emitter, "x9", "x13", hash_layout::EntryField::Next);
     emitter.instruction("b __rt_hsort_tail");                                   // retain the existing output head
     emitter.label("__rt_hsort_first");
     emitter.instruction("str x9, [sp, #64]");                                   // output head = first selected entry
@@ -230,14 +230,14 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.label("__rt_hsort_pass_done");
     emitter.instruction("ldr x9, [sp, #72]");                                   // reload the completed output tail
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the entries-region base
-    emitter.instruction("add x11, x10, x9, lsl #6");                            // address the completed output tail
+    hash_layout::emit_entry_address_from_storage(emitter, "x11", "x10", "x9");
     emitter.instruction("mov x12, #-1");                                        // materialize the end-of-chain sentinel
-    emitter.instruction("str x12, [x11, #56]");                                 // terminate the rebuilt forward chain
+    hash_layout::emit_store_entry_field(emitter, "x12", "x11", hash_layout::EntryField::Next);
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the hash-table pointer
     emitter.instruction("ldr x10, [sp, #64]");                                  // reload the completed output head
-    emitter.instruction("str x10, [x9, #24]");                                  // publish the pass head in the table header
+    hash_layout::emit_store_header_field(emitter, "x10", "x9", hash_layout::HeaderField::Head);
     emitter.instruction("ldr x10, [sp, #72]");                                  // reload the completed output tail
-    emitter.instruction("str x10, [x9, #32]");                                  // publish the pass tail in the table header
+    hash_layout::emit_store_header_field(emitter, "x10", "x9", hash_layout::HeaderField::Tail);
     emitter.instruction("ldr x10, [sp, #80]");                                  // reload the number of merged run pairs
     emitter.instruction("cmp x10, #1");                                         // one run means the list is fully sorted
     emitter.instruction("b.le __rt_hsort_finish");                              // finish after the converged pass
@@ -310,8 +310,8 @@ fn emit_sort_triple(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_sort_triple ---");
     emitter.label_global("__rt_hash_sort_triple");
     emitter.instruction("tbnz x1, #1, __rt_hsort_triple_value");                // select entry value for value sorts
-    emitter.instruction("ldr x2, [x0, #16]");                                   // load key length or integer-key sentinel
-    emitter.instruction("ldr x1, [x0, #8]");                                    // load key pointer or integer payload
+    hash_layout::emit_load_entry_field(emitter, "x2", "x0", hash_layout::EntryField::KeyHigh);
+    hash_layout::emit_load_entry_field(emitter, "x1", "x0", hash_layout::EntryField::KeyLow);
     emitter.instruction("cmn x2, #1");                                          // test for a normalized integer key
     emitter.instruction("b.ne __rt_hsort_triple_key_str");                      // string keys retain pointer and length
     emitter.instruction("mov x0, #0");                                          // runtime tag zero denotes an integer
@@ -321,9 +321,9 @@ fn emit_sort_triple(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // runtime tag one denotes a string
     emitter.instruction("ret");                                                 // return the borrowed string key triple
     emitter.label("__rt_hsort_triple_value");
-    emitter.instruction("ldr x3, [x0, #40]");                                   // load the per-entry value tag
-    emitter.instruction("ldr x1, [x0, #24]");                                   // load the low value payload word
-    emitter.instruction("ldr x2, [x0, #32]");                                   // load the high value payload word
+    hash_layout::emit_load_entry_field(emitter, "x3", "x0", hash_layout::EntryField::ValueTag);
+    hash_layout::emit_load_entry_field(emitter, "x1", "x0", hash_layout::EntryField::ValueLow);
+    hash_layout::emit_load_entry_field(emitter, "x2", "x0", hash_layout::EntryField::ValueHigh);
     emitter.instruction("cmp x3, #11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("b.ne __rt_hsort_triple_value_tagged");                 // ordinary entries already carry a value payload
     emitter.instruction("ldr x1, [x1]");                                        // sort the value the reference cell owns, not the cell

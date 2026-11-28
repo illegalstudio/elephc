@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the array-aggregate hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{with_collection_cells, with_collection_result};
 
 eval_builtin! {
     contract: "array_sum",
@@ -57,22 +58,30 @@ pub(in crate::interpreter) fn eval_array_aggregate_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = match name {
-        "array_sum" => values.int(0)?,
-        "array_product" => values.int(1)?,
-        _ => return Err(EvalStatus::UnsupportedConstruct),
-    };
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        // php-src's numeric aggregate uses `_IS_NUMBER` on internal value objects: GMP
-        // contributes `int` when it fits and `float` otherwise, not a GMP arithmetic result.
-        let value = values.number_value(value)?;
-        result = match name {
-            "array_sum" => values.add(result, value)?,
-            "array_product" => values.mul(result, value)?,
+    with_collection_result(values, |values, result| {
+        let identity = match name {
+            "array_sum" => 0,
+            "array_product" => 1,
             _ => return Err(EvalStatus::UnsupportedConstruct),
         };
-    }
-    Ok(result)
+        result.replace(Some(values.int(identity)?));
+        for position in 0..len {
+            with_collection_cells(values, |values, owners| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let element = owners.stage(values.array_get(array, key)?);
+                let number = owners.stage(values.number_value(element.borrowed())?);
+                let next = match name {
+                    "array_sum" => values.add(result.borrowed(), number)?,
+                    "array_product" => values.mul(result.borrowed(), number)?,
+                    _ => return Err(EvalStatus::UnsupportedConstruct),
+                };
+                let next = promote_borrowed_result(next, values)?;
+                if let Some(previous) = result.replace(Some(next)) {
+                    owners.stage(previous);
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    })
 }

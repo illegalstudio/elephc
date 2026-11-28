@@ -929,6 +929,11 @@ impl<'a> ConcatInertAnalysis<'a> {
             Op::ReleaseLocalSlot | Op::ReleaseLocalRefCell => {
                 return self.release_slot_is_concat_inert(inst);
             }
+            // Owner-replacing stores carry conservative all-effects metadata because
+            // retiring the displaced value can invoke user code. Consult the complete
+            // slot proof before the generic effect filter so a numeric-only frame slot
+            // does not become a false concat barrier.
+            Op::StoreLocal => return self.store_local_is_concat_inert(inst),
             Op::Cast => return self.cast_is_concat_inert(inst),
             Op::StrIncDec if super::numeric_domain::increment(inst) => {
                 return super::numeric_domain::inputs(self.function, &inst.operands);
@@ -1096,7 +1101,6 @@ impl<'a> ConcatInertAnalysis<'a> {
             // A packed field read or write is one load or store at a fixed record offset.
             Op::PropGet | Op::PropSet => self.function.is_packed_field_access(inst),
             Op::LoadLocal | Op::LoadRefCell => load_local_is_concat_inert(self.function, inst),
-            Op::StoreLocal => self.store_local_is_concat_inert(inst),
             Op::Acquire => true,
             Op::Release | Op::ReleaseUnlessAliases => self.release_is_concat_inert(inst),
             Op::IsTruthy => is_truthy_is_concat_inert(self.function, inst),
@@ -1114,16 +1118,16 @@ impl<'a> ConcatInertAnalysis<'a> {
         }
     }
 
-    /// Returns true when `Op::StoreLocal` cannot retire a previous ref-cell occupant or
-    /// invoke `reset_concat_to_frame_base` internally.
+    /// Returns true when `Op::StoreLocal` cannot retire a destructor-bearing previous
+    /// occupant or invoke `reset_concat_to_frame_base` internally.
     ///
     /// Codegen's `lower_store_local`:
     /// 1. Calls `reset_concat_to_frame_base` itself when `inst.span` has `line > 0` and the
     ///    stored value is `Acquire(StrConcat(...))`. Treating such a store as dirty ensures
     ///    Phase 2 never coalesces a preceding `ConcatReset` across the `StrConcat` that feeds it.
-    /// 2. Retires the previous payload when the target slot has `RefCell` or `Dynamic`
-    ///    representation (`store_value_to_ref_cell_local`), which can invoke a destructor if
-    ///    the slot is not statically destructor-free.
+    /// 2. An owner-replacing plain store retires its previous payload directly. Ref-cell and
+    ///    dynamic stores can also retire the previous cell payload. Both are inert only when
+    ///    every value admitted to the slot is statically destructor-free.
     fn store_local_is_concat_inert(&mut self, inst: &Instruction) -> bool {
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
             return false;
@@ -1134,7 +1138,7 @@ impl<'a> ConcatInertAnalysis<'a> {
         if value_is_acquire_of_str_concat(self.function, value) {
             return false;
         }
-        if self.slot_is_never_ref_cell(slot) {
+        if self.slot_is_never_ref_cell(slot) && !inst.replaces_local_owner() {
             return true;
         }
         self.slot_is_statically_destructor_free(slot)

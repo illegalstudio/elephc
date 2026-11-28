@@ -68,17 +68,13 @@
 //!   leaf helpers (`__rt_vd_seen_*`, `__rt_vd_obj_desc`, `__rt_vd_obj_count`)
 //!   make no calls at all and touch caller-saved scratch only.
 
+use elephc_memoir::values::incomplete_object::{CLASS_ID, PROPERTY_HASH};
 use super::super::objects::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-
-/// Capacity of the `_vd_seen` visited-object stack, in pointers. Kept in sync
-/// with the `.comm _vd_seen` reservation in `runtime::data::fixed`.
-const VD_SEEN_CAPACITY: u64 = 256;
-
-/// Byte width of one `_class_vd_desc_*` property row.
-const VD_DESC_ROW_BYTES: u64 = 48;
+use elephc_memoir::hash_layout::{self, HeaderField};
+use elephc_memoir::values::property_descriptor::{self, Field};
 
 /// Materializes the uninitialized-typed-property sentinel into an AArch64 register.
 ///
@@ -93,148 +89,7 @@ fn emit_uninit_sentinel_aarch64(emitter: &mut Emitter, reg: &str) {
     emitter.instruction(&format!("movk {}, #0x7fff, lsl #48", reg));            // top halfword of the uninitialized sentinel
 }
 
-/// `__rt_vd_seen_find`: report whether an object pointer is already being walked.
-///
-/// Input: AArch64 x0 / x86_64 rdi = object pointer.
-/// Output: AArch64 x0 / x86_64 rax = 1 when the pointer is on the visited stack
-/// OR the stack is full, 0 otherwise. Treating a full stack as a hit is what
-/// bounds the walk: the caller renders `*RECURSION*` and stops descending.
-pub fn emit_vd_seen_find(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_vd_seen_find_linux_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_find ---");
-    emitter.label_global("__rt_vd_seen_find");
-
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction(&format!("cmp x10, #{}", VD_SEEN_CAPACITY));            // is the visited stack already full?
-    emitter.instruction("b.ge __rt_vd_seen_find_hit");                          // a full stack reports a hit so the walk terminates
-    abi::emit_symbol_address(emitter, "x11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("mov x12, #0");                                         // start the scan at the bottom of the stack
-
-    emitter.label("__rt_vd_seen_find_loop");
-    emitter.instruction("cmp x12, x10");                                        // scanned every live entry?
-    emitter.instruction("b.ge __rt_vd_seen_find_miss");                         // the pointer is not currently being walked
-    emitter.instruction("ldr x13, [x11, x12, lsl #3]");                         // load the visited pointer at this depth
-    emitter.instruction("cmp x13, x0");                                         // does it match the candidate object?
-    emitter.instruction("b.eq __rt_vd_seen_find_hit");                          // already on the walk stack → recursion
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next visited entry
-    emitter.instruction("b __rt_vd_seen_find_loop");                            // continue scanning
-
-    emitter.label("__rt_vd_seen_find_hit");
-    emitter.instruction("mov x0, #1");                                          // report recursion (or exhausted guard capacity)
-    emitter.instruction("ret");                                                 // return to caller
-
-    emitter.label("__rt_vd_seen_find_miss");
-    emitter.instruction("mov x0, #0");                                          // the object is safe to descend into
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// Emits the Linux x86_64 visited-object lookup helper.
-fn emit_vd_seen_find_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_find ---");
-    emitter.label_global("__rt_vd_seen_find");
-
-    abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current visited-stack depth
-    emitter.instruction(&format!("cmp r10, {}", VD_SEEN_CAPACITY));             // is the visited stack already full?
-    emitter.instruction("jge __rt_vd_seen_find_hit_x86");                       // a full stack reports a hit so the walk terminates
-    abi::emit_symbol_address(emitter, "r11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("xor rcx, rcx");                                        // start the scan at the bottom of the stack
-
-    emitter.label("__rt_vd_seen_find_loop_x86");
-    emitter.instruction("cmp rcx, r10");                                        // scanned every live entry?
-    emitter.instruction("jge __rt_vd_seen_find_miss_x86");                      // the pointer is not currently being walked
-    emitter.instruction("mov rax, QWORD PTR [r11 + rcx * 8]");                  // load the visited pointer at this depth
-    emitter.instruction("cmp rax, rdi");                                        // does it match the candidate object?
-    emitter.instruction("je __rt_vd_seen_find_hit_x86");                        // already on the walk stack → recursion
-    emitter.instruction("add rcx, 1");                                          // advance to the next visited entry
-    emitter.instruction("jmp __rt_vd_seen_find_loop_x86");                      // continue scanning
-
-    emitter.label("__rt_vd_seen_find_hit_x86");
-    emitter.instruction("mov rax, 1");                                          // report recursion (or exhausted guard capacity)
-    emitter.instruction("ret");                                                 // return to caller
-
-    emitter.label("__rt_vd_seen_find_miss_x86");
-    emitter.instruction("xor rax, rax");                                        // the object is safe to descend into
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// `__rt_vd_seen_push`: record an object pointer as being walked.
-///
-/// Silently drops the entry when the stack is full — `__rt_vd_seen_find` already
-/// refuses to descend at that depth, so the pop below can never underflow.
-/// Input: AArch64 x0 / x86_64 rdi = object pointer.
-pub fn emit_vd_seen_push(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.blank();
-        emitter.comment("--- runtime: vd_seen_push ---");
-        emitter.label_global("__rt_vd_seen_push");
-        abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                  // resolve the visited-stack depth counter
-        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the current visited-stack depth
-        emitter.instruction(&format!("cmp r10, {}", VD_SEEN_CAPACITY));         // is there room for another entry?
-        emitter.instruction("jge __rt_vd_seen_push_done_x86");                  // a full stack is already refusing to descend
-        abi::emit_symbol_address(emitter, "r11", "_vd_seen");                   // resolve the visited-pointer stack base
-        emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdi");              // store the object pointer at the top of the stack
-        emitter.instruction("add r10, 1");                                      // grow the visited-stack depth
-        emitter.instruction("mov QWORD PTR [r9], r10");                         // publish the new depth
-        emitter.label("__rt_vd_seen_push_done_x86");
-        emitter.instruction("ret");                                             // return to caller
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_push ---");
-    emitter.label_global("__rt_vd_seen_push");
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction(&format!("cmp x10, #{}", VD_SEEN_CAPACITY));            // is there room for another entry?
-    emitter.instruction("b.ge __rt_vd_seen_push_done");                         // a full stack is already refusing to descend
-    abi::emit_symbol_address(emitter, "x11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // store the object pointer at the top of the stack
-    emitter.instruction("add x10, x10, #1");                                    // grow the visited-stack depth
-    emitter.instruction("str x10, [x9]");                                       // publish the new depth
-    emitter.label("__rt_vd_seen_push_done");
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// `__rt_vd_seen_pop`: drop the innermost visited-object entry. Takes no arguments.
-///
-/// Clamps at zero so an unbalanced pop can never make the depth negative and turn
-/// the next `__rt_vd_seen_find` scan into an out-of-bounds read.
-pub fn emit_vd_seen_pop(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.blank();
-        emitter.comment("--- runtime: vd_seen_pop ---");
-        emitter.label_global("__rt_vd_seen_pop");
-        abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                  // resolve the visited-stack depth counter
-        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the current visited-stack depth
-        emitter.instruction("cmp r10, 0");                                      // is the stack already empty?
-        emitter.instruction("jle __rt_vd_seen_pop_done_x86");                   // clamp at zero rather than underflow
-        emitter.instruction("sub r10, 1");                                      // leave the innermost object
-        emitter.instruction("mov QWORD PTR [r9], r10");                         // publish the new depth
-        emitter.label("__rt_vd_seen_pop_done_x86");
-        emitter.instruction("ret");                                             // return to caller
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_pop ---");
-    emitter.label_global("__rt_vd_seen_pop");
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction("cmp x10, #0");                                         // is the stack already empty?
-    emitter.instruction("b.le __rt_vd_seen_pop_done");                          // clamp at zero rather than underflow
-    emitter.instruction("sub x10, x10, #1");                                    // leave the innermost object
-    emitter.instruction("str x10, [x9]");                                       // publish the new depth
-    emitter.label("__rt_vd_seen_pop_done");
-    emitter.instruction("ret");                                                 // return to caller
-}
+pub use elephc_memoir::values::diagnostic_stack::{emit_vd_seen_find, emit_vd_seen_pop, emit_vd_seen_push};
 
 /// `__rt_vd_obj_desc`: resolve an object's var_dump property descriptor.
 ///
@@ -248,7 +103,7 @@ pub fn emit_vd_obj_desc(emitter: &mut Emitter) {
         emitter.blank();
         emitter.comment("--- runtime: vd_obj_desc ---");
         emitter.label_global("__rt_vd_obj_desc");
-        emitter.instruction("mov r9, QWORD PTR [rdi]");                         // load the runtime class id from the object header
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
         abi::emit_local_symbol_address(emitter, "r10", "_class_gc_desc_count");       // resolve the class-id table extent
         emitter.instruction("mov r10, QWORD PTR [r10]");                        // load the number of registered class ids
         emitter.instruction("cmp r9, r10");                                     // is the class id within the descriptor table?
@@ -267,7 +122,7 @@ pub fn emit_vd_obj_desc(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: vd_obj_desc ---");
     emitter.label_global("__rt_vd_obj_desc");
-    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_local_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the descriptor table?
@@ -304,8 +159,8 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.label_global("__rt_vd_obj_count");
 
     emitter.instruction("mov x1, x0");                                          // keep the object pointer for slot addressing
-    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_vd_obj_count_incomplete");                   // count the synthetic name plus opaque properties
     abi::emit_local_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
@@ -314,7 +169,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     abi::emit_local_symbol_address(emitter, "x11", "_class_vd_desc_ptrs");            // resolve the per-class descriptor pointer table
     emitter.instruction("ldr x2, [x11, x9, lsl #3]");                           // load this class's var_dump descriptor
     emitter.instruction("cbz x2, __rt_vd_obj_count_none");                      // a runtime class id may leave a null descriptor slot
-    emitter.instruction("ldr x3, [x2]");                                        // load the declared property count
+    property_descriptor::emit_load_count(emitter, "x3", "x2");                // load the declared property count
     emitter.instruction("mov x4, #0");                                          // property index = 0
     emitter.instruction("mov x5, #0");                                          // initialized property tally = 0
     emit_uninit_sentinel_aarch64(emitter, "x6");                                // materialize the uninitialized-property marker
@@ -322,13 +177,10 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.label("__rt_vd_obj_count_loop");
     emitter.instruction("cmp x4, x3");                                          // inspected every declared property?
     emitter.instruction("b.ge __rt_vd_obj_count_done");                         // tally complete
-    emitter.instruction(&format!("mov x7, #{}", VD_DESC_ROW_BYTES));            // each descriptor row occupies 48 bytes
-    emitter.instruction("mul x7, x4, x7");                                      // byte offset of this property's descriptor row
-    emitter.instruction("add x7, x2, x7");                                      // advance into the descriptor
-    emitter.instruction("add x7, x7, #8");                                      // skip the leading property-count word
-    emitter.instruction("ldr x8, [x7, #16]");                                   // load the property's byte offset within the object
-    emitter.instruction("add x8, x1, x8");                                      // resolve the absolute property slot address
-    emitter.instruction("ldr x10, [x7, #24]");                                  // load the descriptor's logical tag and native storage flags
+    property_descriptor::emit_row_address(emitter, "x7", "x2", "x4", "x10"); // select this property's descriptor row
+    property_descriptor::emit_load_field(emitter, "x8", "x7", Field::ObjectOffset); // load the property's byte offset within the object
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "x8", "x1", "x8"); // resolve the absolute property slot address
+    property_descriptor::emit_load_field(emitter, "x10", "x7", Field::ValueTag); // load the descriptor's logical tag and native storage flags
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x8", "x10", "x9", "__rt_vd_obj_count_slot");
     emitter.instruction("mov x8, x9");                                          // count using the marker selected by physical storage
     emitter.instruction("cmp x8, x6");                                          // is this property still uninitialized?
@@ -340,18 +192,18 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_count_done");
     // -- PHP's `(n)` also counts every dynamic property the body appends --
-    emitter.instruction("ldr x9, [x1]");                                        // reload the class id after marker probes reused its scratch register
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x1");
     emit_load_dump_dyn_hash(emitter, "x1", "x9", "x12", "x13", "__rt_vd_obj_count_ret");
-    emitter.instruction("ldr x12, [x12]");                                      // load the dynamic-property hash entry count
+    hash_layout::emit_load_header_field(emitter, "x12", "x12", HeaderField::Count);
     emitter.instruction("add x5, x5, x12");                                     // count every dynamic property too
     emitter.label("__rt_vd_obj_count_ret");
     emitter.instruction("mov x0, x5");                                          // return the initialized property count
     emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_vd_obj_count_incomplete");
-    emitter.instruction("ldr x9, [x1, #24]");                                   // opaque property hash
+    emitter.instruction(&format!("ldr x9, [x1, #{PROPERTY_HASH}]"));            // opaque property hash
     emitter.instruction("cbz x9, __rt_vd_obj_count_incomplete_one");            // no properties still has the synthetic name
-    emitter.instruction("ldr x0, [x9]");                                        // property hash entry count
+    hash_layout::emit_load_header_field(emitter, "x0", "x9", HeaderField::Count);
     emitter.instruction("add x0, x0, #1");                                      // plus __PHP_Incomplete_Class_Name
     emitter.instruction("ret");                                                 // return the complete count
     emitter.label("__rt_vd_obj_count_incomplete_one");
@@ -369,8 +221,8 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: vd_obj_count ---");
     emitter.label_global("__rt_vd_obj_count");
 
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_obj_count_incomplete_x86");                 // count the synthetic name plus opaque properties
     abi::emit_local_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
@@ -380,7 +232,7 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [r11 + r9 * 8]");                   // load this class's var_dump descriptor
     emitter.instruction("test rsi, rsi");                                       // a runtime class id may leave a null descriptor slot
     emitter.instruction("jz __rt_vd_obj_count_none_x86");                       // report an empty body instead of dereferencing null
-    emitter.instruction("mov rdx, QWORD PTR [rsi]");                            // load the declared property count
+    property_descriptor::emit_load_count(emitter, "rdx", "rsi");              // load the declared property count
     emitter.instruction("xor rcx, rcx");                                        // property index = 0
     emitter.instruction("xor rax, rax");                                        // initialized property tally = 0
     emitter.instruction("movabs r8, 0x7ffffffffffffffd");                       // materialize the uninitialized-property marker
@@ -388,13 +240,10 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_obj_count_loop_x86");
     emitter.instruction("cmp rcx, rdx");                                        // inspected every declared property?
     emitter.instruction("jge __rt_vd_obj_count_done_x86");                      // tally complete
-    emitter.instruction("mov r10, rcx");                                        // copy the index for row-offset scaling
-    emitter.instruction(&format!("imul r10, r10, {}", VD_DESC_ROW_BYTES));      // each descriptor row occupies 48 bytes
-    emitter.instruction("add r10, rsi");                                        // advance into the descriptor
-    emitter.instruction("add r10, 8");                                          // skip the leading property-count word
-    emitter.instruction("mov r11, QWORD PTR [r10 + 24]");                       // load the descriptor's logical tag and native storage flags
-    emitter.instruction("mov r10, QWORD PTR [r10 + 16]");                       // load the property's byte offset within the object
-    emitter.instruction("add r10, rdi");                                        // resolve the absolute property slot address
+    property_descriptor::emit_row_address(emitter, "r10", "rsi", "rcx", "r11"); // select this property's descriptor row
+    property_descriptor::emit_load_field(emitter, "r11", "r10", Field::ValueTag); // load the descriptor's logical tag and native storage flags
+    property_descriptor::emit_load_field(emitter, "r10", "r10", Field::ObjectOffset); // load the property's byte offset within the object
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "r10", "rdi", "r10"); // resolve the absolute property slot address
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r11", "r9", "__rt_vd_obj_count_slot");
     emitter.instruction("mov r10, r9");                                         // count using the marker selected by physical storage
     emitter.instruction("cmp r10, r8");                                         // is this property still uninitialized?
@@ -406,17 +255,18 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_count_done_x86");
     // -- PHP's `(n)` also counts every dynamic property the body appends --
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // reload the class id after marker probes reused its scratch register
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
     emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_vd_obj_count_ret_x86");
-    emitter.instruction("add rax, QWORD PTR [r10]");                            // count every dynamic property too
+    hash_layout::emit_load_header_field(emitter, "r11", "r10", HeaderField::Count);
+    emitter.instruction("add rax, r11");                                        // count every dynamic property too
     emitter.label("__rt_vd_obj_count_ret_x86");
     emitter.instruction("ret");                                                 // return the initialized property count in rax
 
     emitter.label("__rt_vd_obj_count_incomplete_x86");
-    emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                       // opaque property hash
+    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {PROPERTY_HASH}]")); // opaque property hash
     emitter.instruction("test rax, rax");                                       // no properties?
     emitter.instruction("jz __rt_vd_obj_count_incomplete_one_x86");             // the synthetic name row still exists
-    emitter.instruction("mov rax, QWORD PTR [rax]");                            // property hash entry count
+    hash_layout::emit_load_header_field(emitter, "rax", "rax", HeaderField::Count);
     emitter.instruction("add rax, 1");                                          // plus __PHP_Incomplete_Class_Name
     emitter.instruction("ret");                                                 // return the complete count
     emitter.label("__rt_vd_obj_count_incomplete_one_x86");
@@ -476,20 +326,18 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
 
     // -- class name from the shared class-id → (name ptr, name len) table --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("ldr x9, [x9]");                                        // load the runtime class id from the object header
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_vd_open_obj_incomplete");                    // render the synthetic internal class name
-    abi::emit_local_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
-    emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
+    elephc_memoir::values::class_metadata::emit_load_local_class_name_count(emitter, "x10"); // load the number of named class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the name table?
     emitter.instruction("b.hs __rt_vd_open_obj_anon");                          // an unknown class id writes no name
-    abi::emit_local_symbol_address(emitter, "x11", "_class_name_entries");            // resolve the class-name entry table
-    emitter.instruction("add x11, x11, x9, lsl #4");                            // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("ldr x1, [x11]");                                       // load the class-name pointer
-    emitter.instruction("ldr x2, [x11, #8]");                                   // load the class-name length
+    elephc_memoir::values::class_metadata::emit_local_class_name_table_address(emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x11", "x11", "x9", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x1", "x2", "x11");
     emitter.instruction("b __rt_vd_open_obj_name");                             // write the resolved name
     emitter.label("__rt_vd_open_obj_anon");
-    abi::emit_local_symbol_address(emitter, "x1", "_class_name_missing");             // fall back to the empty class-name slot
+    elephc_memoir::values::class_metadata::emit_local_missing_class_name_address(emitter, "x1"); // fall back to the empty class-name slot
     emitter.instruction("mov x2, #0");                                          // a zero-length write emits nothing
     emitter.instruction("b __rt_vd_open_obj_name");                             // write the empty name slot
     emitter.label("__rt_vd_open_obj_incomplete");
@@ -560,21 +408,18 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_vd_write");                                  // write `object(`
 
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the object pointer
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the runtime class id from the object header
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r9");
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_open_obj_incomplete_x86");                  // render the synthetic internal class name
-    abi::emit_local_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
+    elephc_memoir::values::class_metadata::emit_load_local_class_name_count(emitter, "r10"); // load the number of named class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id within the name table?
     emitter.instruction("jae __rt_vd_open_obj_anon_x86");                       // an unknown class id writes no name
-    abi::emit_local_symbol_address(emitter, "r11", "_class_name_entries");            // resolve the class-name entry table
-    emitter.instruction("imul r9, r9, 16");                                     // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("add r11, r9");                                         // advance to this class's entry
-    emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the class-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the class-name length
+    elephc_memoir::values::class_metadata::emit_local_class_name_table_address(emitter, "r11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r11", "r11", "r9", "r10");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rsi", "rdx", "r11");
     emitter.instruction("jmp __rt_vd_open_obj_name_x86");                       // write the resolved name
     emitter.label("__rt_vd_open_obj_anon_x86");
-    abi::emit_local_symbol_address(emitter, "rsi", "_class_name_missing");            // fall back to the empty class-name slot
+    elephc_memoir::values::class_metadata::emit_local_missing_class_name_address(emitter, "rsi"); // fall back to the empty class-name slot
     emitter.instruction("xor rdx, rdx");                                        // a zero-length write emits nothing
     emitter.instruction("jmp __rt_vd_open_obj_name_x86");                       // write the empty name slot
     emitter.label("__rt_vd_open_obj_incomplete_x86");
@@ -808,12 +653,12 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // establish the object-walk frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
     emitter.instruction("str xzr, [sp, #48]");                                  // dynamic-properties-first flag not yet emitted
-    emitter.instruction("ldr x9, [x0]");                                        // object header class id
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_vd_obj_incomplete");                         // dump the projected name and properties
 
     // -- classes whose contract projects after the dynamic tail (GMP) dump it first --
-    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_local_symbol_address(emitter, "x10", "_class_dump_dyn_first");          // resolve the dynamic-first flag table
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // read this class's ordering flag
     emitter.instruction("cbz x10, __rt_vd_obj_after_dyn_first");                // ordinary classes keep declared-then-dynamic order
@@ -829,7 +674,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the object pointer after the dynamic walk
     emitter.instruction("bl __rt_vd_obj_desc");                                 // x0 = this class's var_dump descriptor
     emitter.instruction("str x0, [sp, #8]");                                    // save the descriptor pointer
-    emitter.instruction("ldr x9, [x0]");                                        // load the declared property count
+    property_descriptor::emit_load_count(emitter, "x9", "x0");                // load the declared property count
     emitter.instruction("str x9, [sp, #24]");                                   // save the property count for the loop guard
     emitter.instruction("str xzr, [sp, #16]");                                  // property index = 0
 
@@ -841,35 +686,32 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
 
     // -- resolve this property's 48-byte descriptor row --
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the descriptor pointer
-    emitter.instruction(&format!("mov x12, #{}", VD_DESC_ROW_BYTES));           // each descriptor row occupies 48 bytes
-    emitter.instruction("mul x12, x9, x12");                                    // byte offset of this property's row
-    emitter.instruction("add x11, x11, x12");                                   // advance into the descriptor
-    emitter.instruction("add x11, x11, #8");                                    // skip the leading property-count word
+    property_descriptor::emit_row_address(emitter, "x11", "x11", "x9", "x12"); // select this property's descriptor row
     emitter.instruction("str x11, [sp, #32]");                                  // save the row pointer across the calls
 
     // -- resolve this property's 16-byte slot inside the instance --
-    emitter.instruction("ldr x13, [x11, #16]");                                 // load the property's byte offset within the object
+    property_descriptor::emit_load_field(emitter, "x13", "x11", Field::ObjectOffset); // load the property's byte offset within the object
     emitter.instruction("ldr x14, [sp, #0]");                                   // reload the object pointer
-    emitter.instruction("add x13, x14, x13");                                   // resolve the absolute property slot address
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "x13", "x14", "x13"); // resolve the absolute property slot address
     emitter.instruction("str x13, [sp, #40]");                                  // save the slot pointer across the calls
 
     // -- emit `<indent>[KEY]=>\n` --
-    emitter.instruction("ldr x1, [x11]");                                       // load the pre-rendered key pointer
-    emitter.instruction("ldr x2, [x11, #8]");                                   // load the pre-rendered key length
+    property_descriptor::emit_load_field(emitter, "x1", "x11", Field::Key);   // load the pre-rendered key pointer
+    property_descriptor::emit_load_field(emitter, "x2", "x11", Field::KeyLength); // load the pre-rendered key length
     emitter.instruction("bl __rt_var_dump_emit_object_key");                    // emit `<indent>[KEY]=>\n`
 
     // -- an uninitialized typed property renders `uninitialized(TYPE)` --
     emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot pointer
     emitter.instruction("ldr x11, [sp, #32]");                                  // recover the physical property's descriptor
-    emitter.instruction("ldr x0, [x11, #24]");                                  // load the logical tag and native storage flags
+    property_descriptor::emit_load_field(emitter, "x0", "x11", Field::ValueTag); // load the logical tag and native storage flags
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_vd_obj_marker");
     emit_uninit_sentinel_aarch64(emitter, "x15");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x14, x15");                                        // is this property still uninitialized?
     emitter.instruction("b.ne __rt_vd_obj_value");                              // initialized properties render their value
 
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
-    emitter.instruction("ldr x1, [x11, #32]");                                  // load the declared type-name pointer
-    emitter.instruction("ldr x2, [x11, #40]");                                  // load the declared type-name length
+    property_descriptor::emit_load_field(emitter, "x1", "x11", Field::Auxiliary); // load the declared type-name pointer
+    property_descriptor::emit_load_field(emitter, "x2", "x11", Field::AuxiliaryLength); // load the declared type-name length
     emitter.instruction("bl __rt_var_dump_emit_uninit_line");                   // emit `<indent>uninitialized(TYPE)\n`
     emitter.instruction("b __rt_vd_obj_next");                                  // continue with the next property
 
@@ -878,10 +720,10 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     //    and recurses into nested arrays/hashes/objects (tags 4/5/6) on its own --
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
     emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot pointer
-    emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
+    property_descriptor::emit_load_field(emitter, "x0", "x11", Field::ValueTag); // property value tag to value renderer
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_vd_obj_payload");
-    emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
-    emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "x1", "x13"); // slot low word to value renderer
+    elephc_memoir::values::object_storage::emit_load_slot_high(emitter, "x2", "x13"); // slot high word to value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_var_dump_value");                              // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 
@@ -931,12 +773,12 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // allocate the object-walk frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // dynamic-properties-first flag not yet emitted
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // object header class id
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_obj_incomplete_x86");                       // dump the projected name and properties
 
     // -- classes whose contract projects after the dynamic tail (GMP) dump it first --
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
     abi::emit_local_symbol_address(emitter, "r10", "_class_dump_dyn_first");          // resolve the dynamic-first flag table
     emitter.instruction("cmp QWORD PTR [r10 + r9 * 8], 0");                     // does this class dump dynamic properties first?
     emitter.instruction("je __rt_vd_obj_after_dyn_first_x86");                  // ordinary classes keep declared-then-dynamic order
@@ -953,7 +795,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the object pointer after the dynamic walk
     emitter.instruction("call __rt_vd_obj_desc");                               // rax = this class's var_dump descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the descriptor pointer
-    emitter.instruction("mov r9, QWORD PTR [rax]");                             // load the declared property count
+    property_descriptor::emit_load_count(emitter, "r9", "rax");               // load the declared property count
     emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // save the property count for the loop guard
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // property index = 0
 
@@ -964,22 +806,21 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_vd_obj_done_x86");                            // walk complete
 
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the descriptor pointer
-    emitter.instruction(&format!("imul r9, r9, {}", VD_DESC_ROW_BYTES));        // each descriptor row occupies 48 bytes
-    emitter.instruction("add r11, r9");                                         // advance into the descriptor
-    emitter.instruction("add r11, 8");                                          // skip the leading property-count word
+    property_descriptor::emit_row_address(emitter, "r11", "r11", "r9", "r10"); // select this property's descriptor row
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the row pointer across the calls
 
-    emitter.instruction("mov r10, QWORD PTR [r11 + 16]");                       // load the property's byte offset within the object
-    emitter.instruction("add r10, QWORD PTR [rbp - 8]");                        // resolve the absolute property slot address
+    property_descriptor::emit_load_field(emitter, "r10", "r11", Field::ObjectOffset); // load the property's byte offset within the object
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer for slot addressing
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "r10", "rax", "r10"); // resolve the absolute property slot address
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the slot pointer across the calls
 
-    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the pre-rendered key pointer
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // load the pre-rendered key length
+    property_descriptor::emit_load_field(emitter, "rdi", "r11", Field::Key);  // load the pre-rendered key pointer
+    property_descriptor::emit_load_field(emitter, "rsi", "r11", Field::KeyLength); // load the pre-rendered key length
     emitter.instruction("call __rt_var_dump_emit_object_key");                  // emit `<indent>[KEY]=>\n`
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // recover the physical property's descriptor
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // load the logical tag and native storage flags
+    property_descriptor::emit_load_field(emitter, "rcx", "r11", Field::ValueTag); // load the logical tag and native storage flags
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rcx", "rax", "__rt_vd_obj_marker");
     emitter.instruction("mov r10, rax");                                        // compare the marker selected by physical storage
     emitter.instruction("movabs r11, 0x7ffffffffffffffd");                      // materialize the uninitialized-property marker
@@ -987,18 +828,18 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_vd_obj_value_x86");                           // initialized properties render their value
 
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 32]");                       // load the declared type-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 40]");                       // load the declared type-name length
+    property_descriptor::emit_load_field(emitter, "rdi", "r11", Field::Auxiliary); // load the declared type-name pointer
+    property_descriptor::emit_load_field(emitter, "rsi", "r11", Field::AuxiliaryLength); // load the declared type-name length
     emitter.instruction("call __rt_var_dump_emit_uninit_line");                 // emit `<indent>uninitialized(TYPE)\n`
     emitter.instruction("jmp __rt_vd_obj_next_x86");                            // continue with the next property
 
     emitter.label("__rt_vd_obj_value_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
+    property_descriptor::emit_load_field(emitter, "rdi", "r11", Field::ValueTag); // property value tag to value renderer
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rdi", "r8", "__rt_vd_obj_payload");
-    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "rsi", "r10"); // slot low word to value renderer
+    elephc_memoir::values::object_storage::emit_load_slot_high(emitter, "rdx", "r10"); // slot high word to value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_var_dump_value");                            // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 

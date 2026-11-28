@@ -8,6 +8,7 @@
 //! - Wrapper order and SysV C ABI labels match the bridge contract.
 
 use super::*;
+use elephc_memoir::values::class_metadata::{self, ClassLookupField};
 
 /// Emits x86_64 scalar, object, and class-query eval wrappers.
 pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
@@ -64,9 +65,7 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the allocated object for Rust
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the boxed Mixed while consuming the raw object owner
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the raw object owner created by the allocator
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the raw object refcount after Mixed boxing retained it
-    emitter.instruction("sub r10d, 1");                                         // consume the allocator-owned object reference locally
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // leave the boxed Mixed as the sole object owner
+    elephc_memoir::heap_refcount::emit_drop_after_boxing(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the boxed object Mixed as the Rust return value
     emitter.instruction("jmp __elephc_eval_value_new_object_done_x86");         // skip the null boxing path after successful allocation
     emitter.label("__elephc_eval_value_new_object_null_x86");
@@ -101,20 +100,20 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, r10");                                        // have all class-name entries been scanned?
     emitter.instruction("jae __elephc_eval_class_exists_miss_x86");             // no class matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name table entry
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    class_metadata::emit_load_class_lookup_field(emitter, "rcx", "r10", ClassLookupField::NameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
     emitter.instruction("jne __elephc_eval_class_exists_skip_x86");             // length mismatch means this entry cannot match
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the table index across the string compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    class_metadata::emit_load_class_lookup_field(emitter, "rdx", "r10", ClassLookupField::Name);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // restore the table index after the string compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this entry?
     emitter.instruction("je __elephc_eval_class_exists_hit_x86");               // report true on a class-name match
     emitter.label("__elephc_eval_class_exists_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name table entry
-    emitter.instruction("add r10, 32");                                         // advance to the next class-name table entry
+    class_metadata::emit_advance_class_lookup_row(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the advanced table cursor
     emitter.instruction("inc r11");                                             // advance the table index
     emitter.instruction("jmp __elephc_eval_class_exists_loop_x86");             // continue scanning the class-name table
@@ -211,7 +210,7 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_is_a_match_x86");               // is_a() allows exact class matches
     emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // is the target a concrete class rather than an interface?
     emitter.instruction("jne __elephc_eval_value_is_a_match_x86");              // interface targets cannot be exact concrete-class self matches
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the object's concrete runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r8");
     emitter.instruction("cmp r9, QWORD PTR [rbp - 24]");                        // compare object and target class ids for subclass self exclusion
     emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // is_subclass_of() excludes the object's exact class
     emitter.label("__elephc_eval_value_is_a_match_x86");
@@ -245,15 +244,13 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_object_class_name_miss_x86",
     );
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the object's runtime class id
-    abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "r10");
+    class_metadata::emit_load_class_name_count(emitter, "rdx");
     emitter.instruction("cmp r11, rdx");                                        // check whether the class id is in table bounds
     emitter.instruction("jae __elephc_eval_value_object_class_name_miss_x86");  // reject missing or out-of-range class ids
-    abi::emit_symbol_address(emitter, "rdx", "_class_name_entries");
-    emitter.instruction("shl r11, 4");                                          // convert class id to a 16-byte table-entry offset
-    emitter.instruction("add rdx, r11");                                        // address the class-name entry for this class id
-    emitter.instruction("mov rdi, QWORD PTR [rdx]");                            // load the class-name string pointer
-    emitter.instruction("mov rsi, QWORD PTR [rdx + 8]");                        // load the class-name string length
+    class_metadata::emit_class_name_table_address(emitter, "rdx");
+    class_metadata::emit_class_name_row_address(emitter, "rdx", "rdx", "r11", "r10");
+    class_metadata::emit_load_class_name_pair(emitter, "rdi", "rsi", "rdx");
     emitter.instruction("test rsi, rsi");                                       // table holes use a zero-length name
     emitter.instruction("jz __elephc_eval_value_object_class_name_miss_x86");   // reject table holes with empty names
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
@@ -276,7 +273,7 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_parent_class_name_object_x86");
     emitter.instruction("test rdi, rdi");                                       // check the unboxed object pointer before reading its header
     emitter.instruction("jz __elephc_eval_value_parent_class_name_empty_x86");  // malformed object payloads have no parent class
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     emitter.instruction("jmp __elephc_eval_value_parent_class_name_from_id_x86"); // convert the class id to its parent class name
     emitter.label("__elephc_eval_value_parent_class_name_string_x86");
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
@@ -294,42 +291,40 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, r10");                                        // have all generated class names been checked?
     emitter.instruction("jae __elephc_eval_value_parent_class_name_empty_x86"); // no generated class matched the requested string
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name metadata entry
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    class_metadata::emit_load_class_lookup_field(emitter, "rcx", "r10", ClassLookupField::NameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested name lengths first
     emitter.instruction("jne __elephc_eval_value_parent_class_name_skip_x86");  // length mismatch means this class entry cannot match
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // preserve the scan index across the string compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the generated class-name pointer
+    class_metadata::emit_load_class_lookup_field(emitter, "rdx", "r10", ClassLookupField::Name);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // restore the scan index after the string compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this entry?
     emitter.instruction("je __elephc_eval_value_parent_class_name_hit_x86");    // resolve the matched class entry to its parent id
     emitter.label("__elephc_eval_value_parent_class_name_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name table entry
-    emitter.instruction("add r10, 32");                                         // advance to the next class-name table entry
+    class_metadata::emit_advance_class_lookup_row(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the advanced table cursor
     emitter.instruction("inc r11");                                             // advance the class-name scan index
     emitter.instruction("jmp __elephc_eval_value_parent_class_name_loop_x86");  // continue scanning generated class names
     emitter.label("__elephc_eval_value_parent_class_name_hit_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the matched class-name table entry
-    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the matched runtime class id
+    class_metadata::emit_load_class_lookup_field(emitter, "r11", "r10", ClassLookupField::ClassId);
     emitter.label("__elephc_eval_value_parent_class_name_from_id_x86");
-    abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
+    class_metadata::emit_load_class_name_count(emitter, "rdx");
     emitter.instruction("cmp r11, rdx");                                        // check that the class id can index parent metadata
     emitter.instruction("jae __elephc_eval_value_parent_class_name_empty_x86"); // unknown class ids have no parent class name
     abi::emit_symbol_address(emitter, "rdx", "_class_parent_ids");
     emitter.instruction("mov r11, QWORD PTR [rdx + r11 * 8]");                  // load the parent runtime class id
     emitter.instruction("cmp r11, -1");                                         // check whether the runtime class has no parent
     emitter.instruction("je __elephc_eval_value_parent_class_name_empty_x86");  // parentless runtime classes produce an empty string
-    abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
+    class_metadata::emit_load_class_name_count(emitter, "rdx");
     emitter.instruction("cmp r11, rdx");                                        // check that the parent class id can index name metadata
     emitter.instruction("jae __elephc_eval_value_parent_class_name_empty_x86"); // invalid parent ids produce an empty string
-    abi::emit_symbol_address(emitter, "rdx", "_class_name_entries");
-    emitter.instruction("shl r11, 4");                                          // convert parent id to a 16-byte name-entry offset
-    emitter.instruction("add rdx, r11");                                        // address the parent class-name metadata row
-    emitter.instruction("mov rdi, QWORD PTR [rdx]");                            // load the parent class-name string pointer
-    emitter.instruction("mov rsi, QWORD PTR [rdx + 8]");                        // load the parent class-name string length
+    class_metadata::emit_class_name_table_address(emitter, "rdx");
+    class_metadata::emit_class_name_row_address(emitter, "rdx", "rdx", "r11", "r10");
+    class_metadata::emit_load_class_name_pair(emitter, "rdi", "rsi", "rdx");
     emitter.instruction("test rsi, rsi");                                       // table holes represent missing parent names
     emitter.instruction("jz __elephc_eval_value_parent_class_name_empty_x86");  // missing parent names produce an empty string
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string

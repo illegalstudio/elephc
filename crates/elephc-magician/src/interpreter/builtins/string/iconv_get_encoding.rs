@@ -15,6 +15,7 @@ eval_builtin! {
     values: Iconv,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 
 use elephc_iconv::EncodingKind;
@@ -29,13 +30,11 @@ pub(in crate::interpreter) fn eval_iconv_get_encoding_result(
         _ => b"all".to_vec(),
     };
     if requested.eq_ignore_ascii_case(b"all") {
-        let mut result = values.assoc_new(3)?;
+        let mut result = EvalArrayBuilder::assoc(values, 3)?;
         for kind in EncodingKind::all() {
-            let key = values.string(kind.key())?;
-            let value = values.string(&elephc_iconv::get(kind))?;
-            result = values.array_set(result, key, value)?;
+            result.string(kind.key(), |values| values.string(&elephc_iconv::get(kind)))?;
         }
-        return Ok(result);
+        return Ok(result.finish());
     }
     match EncodingKind::parse(&requested) {
         Some(kind) => values.string(&elephc_iconv::get(kind)),

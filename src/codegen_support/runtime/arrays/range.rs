@@ -77,7 +77,7 @@ pub fn emit_range(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #24]");                                   // save new array pointer
 
     // -- fill array with values from start, stepping by the signed traversal step --
-    emitter.instruction("add x3, x0, #24");                                     // x3 = data base of new array
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("ldr x4, [sp, #0]");                                    // x4 = current value = start
     emitter.instruction("ldr x5, [sp, #16]");                                   // x5 = count
     emitter.instruction("ldr x7, [sp, #8]");                                    // x7 = signed traversal step
@@ -95,7 +95,7 @@ pub fn emit_range(emitter: &mut Emitter) {
     emitter.label("__rt_range_done");
     emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = new array pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // x9 = count
-    emitter.instruction("str x9, [x0]");                                        // set array length = count
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x9"); // set array length = count
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -160,7 +160,7 @@ fn emit_range_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because the range helper produces an indexed array of integers
     emitter.instruction("call __rt_array_new");                                 // allocate the destination integer range array through the shared x86_64 indexed-array constructor
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the destination integer range array pointer while the fill loop writes payload slots
-    emitter.instruction("lea r8, [rax + 24]");                                  // compute the destination integer range payload base address once before entering the fill loop
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "rax");
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the current integer value from the inclusive range start before entering the fill loop
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the final integer range element count before entering the fill loop
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the signed traversal step before entering the fill loop

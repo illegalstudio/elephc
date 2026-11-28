@@ -6,13 +6,10 @@ extern unsigned char elephc_state_begin[], elephc_state_end[];
 extern unsigned char elephc_state_zero_begin[], elephc_state_zero_end[];
 extern const uintptr_t ep_class_name_count __asm__("_class_name_count");
 extern const uintptr_t ep_class_name_entries[] __asm__("_class_name_entries");
-extern uintptr_t ep_native_stack_limit __asm__("_stack_limit");
-extern uintptr_t ep_native_stack_limit_main __asm__("_stack_limit_main");
+extern void elephc_phpext_native_set_stack_floor(uintptr_t floor);
 extern uintptr_t ep_boundary_status __asm__("_elephc_boundary_status");
-extern uintptr_t ep_replacement_owner_count
-    __asm__("_elephc_phpext_replacement_owner_count");
-extern const uintptr_t *ep_replacement_owners[]
-    __asm__("_elephc_phpext_replacement_owners");
+extern uint32_t elephc_phpext_native_owner_count(const uintptr_t *object);
+extern size_t elephc_phpext_native_replacement_pin_count(const uintptr_t *object);
 
 typedef void (*ep_native_function)(const zval *const *);
 static pthread_mutex_t ep_native_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -372,26 +369,6 @@ static const char *ep_infrastructure_error(uintptr_t status)
     }
 }
 
-/* Read the compact runtime refcount without depending on its private allocation header type. */
-static uint32_t ep_native_refcount(const uintptr_t *object)
-{
-    uint32_t refcount;
-    memcpy(&refcount, (const unsigned char *)object - 12, sizeof(refcount));
-    return refcount & UINT32_C(0x7fffffff);
-}
-
-/* Count every adapter pin for one native identity across the synchronous export stack. */
-static size_t ep_replacement_pin_count(const uintptr_t *object)
-{
-    size_t count = ep_replacement_owner_count;
-    if (count > EP_HOST_PREDECESSOR_LIMIT) { count = EP_HOST_PREDECESSOR_LIMIT; }
-    size_t pins = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (ep_replacement_owners[i] == object) { pins++; }
-    }
-    return pins;
-}
-
 /* Repeated replacement events for one live native object share one non-reusable identity. */
 static uint64_t ep_root_identity(ep_call *call, const uintptr_t *object)
 {
@@ -484,7 +461,7 @@ const uintptr_t *elephc_php_stale_finally_replacement(
         for (size_t j = base; j < count; j++) {
             if (owners[j] == root) { pins++; }
         }
-        if (ep_native_refcount(root) != pins) { continue; }
+        if (elephc_phpext_native_owner_count(root) != pins) { continue; }
 
         ep_retired_host_exception *retired[EP_HOST_PREDECESSOR_LIMIT];
         size_t retired_count = 0;
@@ -713,7 +690,7 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     /* The module-local normal mutex remains initialized for every active request. */
     pthread_mutex_lock(&ep_native_lock);
     ep_state_restore(call->snapshot);
-    ep_native_stack_limit = ep_native_stack_limit_main = call->stack_floor;
+    elephc_phpext_native_set_stack_floor(call->stack_floor);
     ep_current = call;
 #ifdef ELEPHC_PHPEXT_OBJECTS
     if (!call->host_bailout && !call->error && !EP_GLOBAL(broken)) {
@@ -767,9 +744,9 @@ void elephc_php_discard_exception(const uintptr_t *object)
         ep_defer_host_exception_discard(call);
         return;
     }
-    size_t pins = ep_replacement_pin_count(object);
+    size_t pins = elephc_phpext_native_replacement_pin_count(object);
     bool transient = call->discard_chain_transient
-        && ep_native_refcount(object) == pins + 1;
+        && elephc_phpext_native_owner_count(object) == pins + 1;
     call->discard_chain_transient = transient;
     for (size_t i = 0; i < call->host_predecessor_count; i++) {
         ep_host_predecessor *predecessor = &call->host_predecessors[i];
@@ -926,11 +903,23 @@ void elephc_php_unsupported_result(void)
     }
 }
 
+typedef struct {
+    uintptr_t class_id;
+    const char *message;
+    size_t message_len;
+    zend_long code;
+} ep_native_throwable_fields;
+
+extern void elephc_phpext_native_throwable_fields(
+    const uintptr_t *object, ep_native_throwable_fields *fields);
+
 /* Copy compact native Throwable fields while their owned message remains live. */
 static int ep_copy_exception(ep_call *call, const uintptr_t *object, char **name,
     size_t *name_len, char **message, size_t *message_len, zend_long *code)
 {
-    uintptr_t id = object[0];
+    ep_native_throwable_fields fields;
+    elephc_phpext_native_throwable_fields(object, &fields);
+    uintptr_t id = fields.class_id;
     if (id < ep_class_name_count) {
         *name_len = ep_class_name_entries[id * 2 + 1];
         *name = ep_alloc(call, *name_len + 1);
@@ -938,12 +927,12 @@ static int ep_copy_exception(ep_call *call, const uintptr_t *object, char **name
             memcpy(*name, (void *)ep_class_name_entries[id * 2], *name_len);
         }
     }
-    *message_len = object[2];
+    *message_len = fields.message_len;
     *message = ep_alloc(call, *message_len + 1);
     if (*message) {
-        memcpy(*message, (void *)object[1], *message_len);
+        memcpy(*message, fields.message, *message_len);
     }
-    *code = (zend_long)object[3];
+    *code = fields.code;
     return call->error != NULL;
 }
 

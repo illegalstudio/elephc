@@ -53,19 +53,9 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     let scratch = abi::temp_int_reg(ctx.emitter.target);
 
     ctx.emitter.comment("push EIR exception handler");
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_handler_top", 0);
-    abi::store_at_offset(ctx.emitter, scratch, handler_offset);
-    // The catch resumes in this activation; only younger frames may be abandoned.
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
-    abi::store_at_offset(ctx.emitter, scratch, handler_offset - 8);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_suppression", 0);
-    abi::store_at_offset(
-        ctx.emitter,
-        scratch,
-        handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-    );
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(ctx.emitter, scratch, handler_offset);
     abi::emit_frame_slot_address(ctx.emitter, scratch, handler_offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(ctx.emitter, scratch);
     abi::emit_frame_slot_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 0),
@@ -130,21 +120,18 @@ pub(super) fn lower_guard_owned(ctx: &mut FunctionContext<'_>, inst: &Instructio
         (Arch::AArch64, _) => "x0",
         (Arch::X86_64, _) => "rax",
     };
-    abi::store_at_offset(ctx.emitter, owner,
-        offset - crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
     let cleanup = if matches!(ty, PhpType::Callable { .. }) {
         "__rt_exception_release_callable"
     } else {
         "__rt_exception_release_owned"
     };
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_symbol_address(ctx.emitter, scratch, cleanup);
-    abi::store_at_offset(ctx.emitter, scratch, offset - 8);
+    let record = elephc_memoir::FrameOffset::new(offset);
+    elephc_memoir::guarded_owners::emit_prepare_anchored(ctx.emitter, record, owner, cleanup, scratch);
     let anchor = expect_operand(inst, 1)?;
     ctx.load_value_to_result(anchor)?;
     abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), abi::int_result_reg(ctx.emitter));
-    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
-    abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
+    elephc_memoir::guarded_owners::emit_link_anchored(ctx.emitter, record);
     store_if_result(ctx, inst)
 }
 
@@ -152,7 +139,7 @@ pub(super) fn lower_guard_owned(ctx: &mut FunctionContext<'_>, inst: &Instructio
 pub(super) fn lower_unguard_owned(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let token = expect_operand(inst, 0)?;
     load_value_to_first_int_arg(ctx, token)?;
-    abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
+    elephc_memoir::guarded_owners::emit_detach_addressed(ctx.emitter);
     Ok(())
 }
 
@@ -163,7 +150,6 @@ pub(super) fn lower_update_array_guard(ctx: &mut FunctionContext<'_>, inst: &Ins
     let register = match ctx.emitter.target.arch { Arch::AArch64 => "x10", Arch::X86_64 => "r10" };
     ctx.load_value_to_reg(token, register)?;
     ctx.load_value_to_result(array)?;
-    abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), register,
-        crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
+    elephc_memoir::activation_records::emit_update_guard_owner(ctx.emitter, register, abi::int_result_reg(ctx.emitter));
     Ok(())
 }

@@ -192,16 +192,10 @@ macro_rules! impl_numeric_string_ops {
         let mut ptr = std::ptr::null();
         let mut len = 0;
         let ok = unsafe { __elephc_eval_value_string_bytes(value.as_ptr(), &mut ptr, &mut len) };
-        if ok == 0 || (len > 0 && ptr.is_null()) {
+        if ok == 0 {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let len = usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let bytes = if len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(ptr, len) }
-        };
-        Ok(bytes.to_vec())
+        unsafe { elephc_memoir::runtime_bytes::copy_borrowed(ptr, len) }.ok_or(EvalStatus::RuntimeFatal)
     }
 
     /// Converts one boxed Mixed cell to PHP truthiness through the generated runtime wrapper.
@@ -232,19 +226,11 @@ macro_rules! impl_numeric_string_ops {
         if request.result == 0 {
             return Ok(None);
         }
-        let ptr = request.bytes;
-        let len = request.length;
-        if len > 0 && ptr.is_null() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let len = usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let bytes = if len == 0 {
-            Vec::new()
-        } else {
-            unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
-        };
-        unsafe { __elephc_eval_ob_release_string(ptr) };
-        Ok(Some(bytes))
+        unsafe {
+            elephc_memoir::runtime_bytes::copy_owned(request.bytes, request.length, |pointer| {
+                __elephc_eval_ob_release_string(pointer);
+            })
+        }.map(Some).ok_or(EvalStatus::RuntimeFatal)
     }
 
     /// Reads one buffer's chunk/flags/user/started metadata through the ob bridge.
@@ -268,16 +254,8 @@ macro_rules! impl_numeric_string_ops {
         if ok == 0 {
             return Ok(None);
         }
-        if len > 0 && ptr.is_null() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let len = usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let bytes = if len == 0 {
-            Vec::new()
-        } else {
-            unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
-        };
-        Ok(Some(bytes))
+        unsafe { elephc_memoir::runtime_bytes::copy_borrowed(ptr, len) }
+            .map(Some).ok_or(EvalStatus::RuntimeFatal)
     }
 
     /// Reads the runtime output-buffer nesting depth through the generated ob bridge.
@@ -299,16 +277,8 @@ macro_rules! impl_numeric_string_ops {
         if ok == 0 {
             return Ok(None);
         }
-        if len > 0 && ptr.is_null() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let len = usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let bytes = if len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(ptr, len) }
-        };
-        Ok(Some(bytes.to_vec()))
+        unsafe { elephc_memoir::runtime_bytes::copy_borrowed(ptr, len) }
+            .map(Some).ok_or(EvalStatus::RuntimeFatal)
     }
 
     /// Truncates the top runtime output buffer through the generated ob bridge.

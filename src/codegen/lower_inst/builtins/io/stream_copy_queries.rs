@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use elephc_memoir::buffers::stream_tables;
 
 /// Lowers `stream_copy_to_stream(from, to, length?, offset?)` through wrapper-aware read/write loops.
 pub(crate) fn lower_stream_copy_to_stream(
@@ -123,7 +124,11 @@ pub(crate) fn lower_stream_get_wrappers(
             "compress.zlib", "compress.bzip2", "phar", "glob",
         ],
     );
-    append_registrations(ctx, "_user_wrappers", 64);
+    append_registrations(
+        ctx,
+        stream_tables::USER_WRAPPERS,
+        stream_tables::WRAPPER_REGISTRATION_CAPACITY,
+    );
     store_if_result(ctx, inst)
 }
 
@@ -168,12 +173,20 @@ pub(crate) fn lower_stream_get_filters(
             "bzip2.decompress",
         ],
     );
-    append_registrations(ctx, "_user_filter_registry", 128);
+    append_registrations(
+        ctx,
+        stream_tables::USER_FILTER_REGISTRY,
+        stream_tables::FILTER_REGISTRATION_CAPACITY,
+    );
     store_if_result(ctx, inst)
 }
 
 /// Copies live registration names into the fresh array, preserving it across growth and calls.
-fn append_registrations(ctx: &mut FunctionContext<'_>, table: &str, capacity: usize) {
+fn append_registrations(
+    ctx: &mut FunctionContext<'_>,
+    table: elephc_memoir::data::StaticStorage,
+    capacity: usize,
+) {
     let scan = ctx.next_label("stream_wrappers_scan");
     let next = ctx.next_label("stream_wrappers_next");
     let done = ctx.next_label("stream_wrappers_done");
@@ -186,11 +199,16 @@ fn append_registrations(ctx: &mut FunctionContext<'_>, table: &str, capacity: us
             ctx.emitter.instruction("ldr x9, [sp, #8]");                        // reload the cursor after any allocating append
             ctx.emitter.instruction(&format!("cmp x9, #{capacity}"));           // bound the scan by the registration table capacity
             ctx.emitter.instruction(&format!("b.hs {done}"));                   // finish after inspecting every slot
-            abi::emit_symbol_address(ctx.emitter, "x10", table);
-            ctx.emitter.instruction("add x10, x10, x9, lsl #5");                // select one four-word protocol/class registration
-            ctx.emitter.instruction("ldr x1, [x10]");                           // borrow the registered name bytes
+            stream_tables::emit_registration_entry_address(
+                table, ctx.emitter, "x10", "x9", "x10",
+            );
+            stream_tables::emit_load_registration_field(
+                ctx.emitter, "x1", "x10", stream_tables::RegistrationField::NamePointer,
+            );
             ctx.emitter.instruction(&format!("cbz x1, {next}"));                // empty slots contribute no name
-            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the registration name byte length
+            stream_tables::emit_load_registration_field(
+                ctx.emitter, "x2", "x10", stream_tables::RegistrationField::NameLength,
+            );
             ctx.emitter.instruction("ldr x0, [sp]");                            // pass the current growable result array
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
             ctx.emitter.instruction("str x0, [sp]");                            // preserve the possibly relocated result
@@ -211,13 +229,17 @@ fn append_registrations(ctx: &mut FunctionContext<'_>, table: &str, capacity: us
             ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // reload the cursor after an allocating append
             ctx.emitter.instruction(&format!("cmp r9, {capacity}"));            // bound the scan by the registration table capacity
             ctx.emitter.instruction(&format!("jae {done}"));                    // finish after inspecting every slot
-            abi::emit_symbol_address(ctx.emitter, "r10", table);
-            ctx.emitter.instruction("shl r9, 5");                               // scale the index by the four-word registration size
-            ctx.emitter.instruction("add r10, r9");                             // address the selected registration
-            ctx.emitter.instruction("mov rsi, QWORD PTR [r10]");                // borrow the registered name bytes
+            stream_tables::emit_registration_entry_address(
+                table, ctx.emitter, "r10", "r9", "r11",
+            );
+            stream_tables::emit_load_registration_field(
+                ctx.emitter, "rsi", "r10", stream_tables::RegistrationField::NamePointer,
+            );
             ctx.emitter.instruction("test rsi, rsi");                           // test whether this registration slot is occupied
             ctx.emitter.instruction(&format!("jz {next}"));                     // empty slots contribute no name
-            ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");            // pass the registration name byte length
+            stream_tables::emit_load_registration_field(
+                ctx.emitter, "rdx", "r10", stream_tables::RegistrationField::NameLength,
+            );
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // pass the current growable result array
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve the possibly relocated result

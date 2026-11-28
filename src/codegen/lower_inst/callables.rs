@@ -52,18 +52,9 @@ pub(in crate::codegen) use scope_probe::emit_scope_is_callable_probe;
 pub(in crate::codegen) use shared_selector::{emit_pending_callable_selectors, SharedCallableSelectorKey};
 use shared_selector::SelectorPolicy;
 
-const MIXED_METHOD_TAG_OFFSET: usize = 0;
-const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
-const MIXED_RECEIVER_TAG_OFFSET: usize = 32;
-const MIXED_RECEIVER_PAYLOAD_OFFSET: usize = 48;
-const MIXED_SELECTOR_BYTES: usize = 64;
-const MIXED_VALUE_PAYLOAD_OFFSET: usize = 16;
-const MIXED_VALUE_BYTES: usize = 32;
+use elephc_memoir::callables::storage::{MIXED_METHOD_TAG_OFFSET, MIXED_METHOD_PAYLOAD_OFFSET, MIXED_RECEIVER_TAG_OFFSET, MIXED_RECEIVER_PAYLOAD_OFFSET, MIXED_SELECTOR_BYTES, MIXED_VALUE_BYTES, MIXED_VALUE_PAYLOAD_OFFSET, STRING_CLASS_OFFSET, STRING_METHOD_OFFSET, STRING_SELECTOR_BYTES};
 const MIXED_TAG_STRING: i64 = 1;
 const MIXED_TAG_OBJECT: i64 = 6;
-const STRING_METHOD_OFFSET: usize = 0;
-const STRING_CLASS_OFFSET: usize = 16;
-const STRING_SELECTOR_BYTES: usize = 32;
 const MIXED_TAG_CALLABLE: i64 = 10;
 /// Runtime Mixed tag for a boxed indexed (list) array; payload-low holds the array pointer.
 const MIXED_TAG_INDEXED_ARRAY: i64 = 4;
@@ -516,29 +507,8 @@ pub(super) fn emit_factory_callable_descriptor(
 /// conversion, so the factory surfaces copy that header into an owned allocation with its own
 /// object handle, like `name(...)` does.
 fn emit_fresh_closure_from_persistent_descriptor(ctx: &mut FunctionContext<'_>) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
-    let source_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        result_reg,
-        callable_descriptor::CALLABLE_DESC_STATIC_SIZE as i64,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);   // the conversion result is a Closure object with its own handle
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg));       // keep the new closure descriptor while copying the persistent header
-    abi::emit_pop_reg(ctx.emitter, source_reg);
-    callable_descriptor::emit_copy_descriptor_header_to_runtime(
-        ctx.emitter,
-        descriptor_reg,
-        source_reg,
-    );
-    if descriptor_reg != result_reg {
-        ctx.emitter
-            .instruction(&format!("mov {}, {}", result_reg, descriptor_reg));   // return the new closure descriptor
-    }
+    let descriptor = abi::nested_call_reg(ctx.emitter);
+    elephc_memoir::callables::storage::emit_new_from_result(ctx.emitter, descriptor);
 }
 
 /// Materializes a descriptor pointer for any callable shape boxed in `Mixed`.
@@ -2483,20 +2453,19 @@ fn emit_boxed_callable_array_selector_slots(
     let string_label = ctx.next_label("boxed_callable_array_string_slots");
     let done_label = ctx.next_label("boxed_callable_array_slots_done");
     emit_load_callable_array_base(ctx, source, array_reg)?;
+    elephc_memoir::values::array_header::emit_load_value_type_tag(
+        ctx.emitter,
+        array_reg,
+        stamp_reg,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}, #-8]", stamp_reg, array_reg)); // load the indexed-array packed value-type stamp
-            ctx.emitter.instruction(&format!("lsr {}, {}, #8", stamp_reg, stamp_reg)); // move the value-type byte into the low bits
-            ctx.emitter.instruction(&format!("and {}, {}, #0x7f", stamp_reg, stamp_reg)); // isolate the callable-array slot representation
             ctx.emitter.instruction(&format!("cmp {}, #7", stamp_reg));         // do the array slots contain boxed Mixed cells?
             ctx.emitter.instruction(&format!("b.eq {}", mixed_label));          // decode each selector through __rt_mixed_unbox
             ctx.emitter.instruction(&format!("cmp {}, #1", stamp_reg));         // do the array slots contain string pointer/length pairs?
             ctx.emitter.instruction(&format!("b.eq {}", string_label));         // synthesize string-tagged selectors from typed slots
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", stamp_reg, array_reg)); // load the indexed-array packed value-type stamp
-            ctx.emitter.instruction(&format!("shr {}, 8", stamp_reg));          // move the value-type byte into the low bits
-            ctx.emitter.instruction(&format!("and {}, 0x7f", stamp_reg));       // isolate the callable-array slot representation
             ctx.emitter.instruction(&format!("cmp {}, 7", stamp_reg));          // do the array slots contain boxed Mixed cells?
             ctx.emitter.instruction(&format!("je {}", mixed_label));            // decode each selector through __rt_mixed_unbox
             ctx.emitter.instruction(&format!("cmp {}, 1", stamp_reg));          // do the array slots contain string pointer/length pairs?
@@ -2528,10 +2497,10 @@ fn emit_push_boxed_string_callable_array_slot(
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let tag_reg = abi::int_result_reg(ctx.emitter);
-    let offset = 24 + slot * 16;
     emit_load_callable_array_base(ctx, source, array_reg)?;
-    abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, offset);
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, offset + 8);
+    elephc_memoir::values::packed_slots::emit_load_packed_pair(
+        ctx.emitter, ptr_reg, len_reg, array_reg, slot,
+    );
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     abi::emit_load_int_immediate(ctx.emitter, tag_reg, MIXED_TAG_STRING);
     abi::emit_push_reg(ctx.emitter, tag_reg);
@@ -2564,10 +2533,10 @@ fn emit_push_string_callable_array_slot(
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    let offset = 24 + slot * 16;
     ctx.load_value_to_reg(callable, array_reg)?;
-    abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, offset);
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, offset + 8);
+    elephc_memoir::values::packed_slots::emit_load_packed_pair(
+        ctx.emitter, ptr_reg, len_reg, array_reg, slot,
+    );
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     Ok(())
 }
@@ -2601,16 +2570,9 @@ fn emit_unbox_mixed_callable_array_slot(
     slot: usize,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let offset = 24 + slot * 8;
     emit_load_callable_array_base(ctx, source, array_reg)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", array_reg, offset)); // load the boxed callable-array selector slot
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {}]", array_reg, offset)); // load the boxed callable-array selector slot
-        }
-    }
+    let result = abi::int_result_reg(ctx.emitter);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(ctx.emitter, result, array_reg, slot);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     Ok(())
 }
@@ -2828,7 +2790,7 @@ fn emit_branch_if_saved_receiver_class_id_mismatch(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", receiver_payload_offset);
             ctx.emitter.instruction(&format!("cbz x9, {}", next_label));        // reject null callable-array receivers before reading class id
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the callable-array receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // compare the receiver class id against this target
             ctx.emitter.instruction(&format!("b.ne {}", next_label));           // try the next callable-array target when the class differs
@@ -2837,7 +2799,7 @@ fn emit_branch_if_saved_receiver_class_id_mismatch(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", receiver_payload_offset);
             ctx.emitter.instruction("test r10, r10");                           // reject null callable-array receivers before reading class id
             ctx.emitter.instruction(&format!("je {}", next_label));             // try the next callable-array target when the receiver is null
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the callable-array receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r11", "r10");
             abi::emit_load_int_immediate(ctx.emitter, "r10", class_id as i64);
             ctx.emitter.instruction("cmp r11, r10");                            // compare the receiver class id against this target
             ctx.emitter.instruction(&format!("jne {}", next_label));            // try the next callable-array target when the class differs
@@ -3078,17 +3040,17 @@ fn emit_runtime_receiver_descriptor(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, receiver_payload_offset);
     abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    if closure {
-        crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
-    }
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the receiver-bound descriptor while copying its static header
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+    let handle = if closure {
+        elephc_memoir::callables::storage::ObjectHandle::Public
+    } else {
+        elephc_memoir::callables::storage::ObjectHandle::Internal
+    };
+    elephc_memoir::callables::storage::emit_new_from_static(
         ctx.emitter,
+        total_bytes,
         descriptor_reg,
         descriptor_label,
+        handle,
     );
     abi::emit_pop_reg(ctx.emitter, result_reg);
     callable_descriptor::emit_store_current_result_to_runtime_capture(

@@ -11,9 +11,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::sentinels::{
-    emit_branch_if_null_container, x86_64_heap_kind_word, CONCAT_TEMP_HEAP_KIND,
-};
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 const PROBE_FRAME: usize = 64;
 const WRITE_FRAME: usize = 96;
@@ -43,9 +41,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction(&format!("jnz {fallback}"));                            // only the top-level container owns the exact result buffer
 
     // -- keep provably bounded direct integer arrays on the existing one-pass encoder --
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed array value type from the heap header
-    emitter.instruction("shr r10, 8");                                          // move the value type into the low bits
-    emitter.instruction("and r10, 0x7f");                                       // discard copy-on-write and other header flags
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
     emitter.instruction("test r10, r10");                                       // direct integer slots use value type zero
     emitter.instruction(&format!("jnz {attempt}"));                             // nested and boxed layouts still need the complete proof
     abi::emit_load_int_immediate(emitter, "r11", max_scratch_integer_slots as i64);
@@ -130,12 +127,12 @@ fn emit_probe(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_depth_limit", 0);
     emitter.instruction("cmp rsi, r10");                                        // would this container exceed the PHP depth budget?
     emitter.instruction("jg __rt_json_integer_tree_probe_unsupported_x86");     // let the general encoder publish the depth error
-    emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // load packed heap kind and indexed-array value type
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r9", "rdi");
     emitter.instruction("mov r10, r9");                                         // copy the packed metadata for kind isolation
     emitter.instruction("and r10, 0xff");                                       // isolate the uniform top-level heap kind
     emitter.instruction("cmp r10, 2");                                          // kind 2 identifies indexed-array storage
     emitter.instruction("jne __rt_json_integer_tree_probe_unsupported_x86");    // hashes and other containers need the general encoder
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the logical array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the logical array length
     emitter.instruction("test r10, r10");                                       // reject invalid negative metadata defensively
     emitter.instruction("js __rt_json_integer_tree_probe_unsupported_x86");     // negative lengths indicate invalid metadata
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // retain the length for the element loop
@@ -144,8 +141,7 @@ fn emit_probe(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_json_integer_tree_probe_success_x86");         // every valid empty indexed array serializes as []
     emitter.instruction("cmp QWORD PTR [rdi + 16], 8");                         // accepted payload families occupy one machine word per slot
     emitter.instruction("jne __rt_json_integer_tree_probe_unsupported_x86");    // wider layouts belong to the general encoder
-    emitter.instruction("shr r9, 8");                                           // move the packed value type into the low bits
-    emitter.instruction("and r9, 0x7f");                                        // discard copy-on-write and other header flags
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r9", "r9");
     emitter.instruction("cmp r9, 0");                                           // direct integer slots are eligible
     emitter.instruction("je __rt_json_integer_tree_probe_type_ok_x86");         // accept direct integer storage without a per-slot tag
     emitter.instruction("cmp r9, 4");                                           // direct indexed-array slots are eligible
@@ -171,7 +167,7 @@ fn emit_probe(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_integer_tree_probe_value_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the array base
-    emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8 + 24]");              // load the one-word element payload
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "r8", "r11");
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the packed array value type
     emitter.instruction("test r9, r9");                                         // direct integer slots need only decimal width
     emitter.instruction("jz __rt_json_integer_tree_probe_int_x86");             // direct integer slots need only decimal width
@@ -179,7 +175,7 @@ fn emit_probe(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_integer_tree_probe_array_x86");           // direct nested arrays recurse without boxing
 
     emit_branch_if_null_container(emitter, "r8", "r11", "__rt_json_integer_tree_probe_unsupported_x86");
-    emitter.instruction("mov r11, QWORD PTR [r8 - 8]");                         // load the boxed-cell heap kind
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "r8");
     emitter.instruction("and r11, 0xff");                                       // isolate the uniform kind byte
     emitter.instruction("cmp r11, 5");                                          // accepted boxed elements must be real Mixed cells
     emitter.instruction("jne __rt_json_integer_tree_probe_unsupported_x86");    // reference cells and other owners keep general semantics
@@ -243,11 +239,10 @@ fn emit_writer(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [rsi], 91");                              // write ASCII '['
     emitter.instruction("add rsi, 1");                                          // advance the output cursor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // persist the advanced cursor
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the source array length
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it for the element loop
-    emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // load packed indexed-array metadata
-    emitter.instruction("shr r9, 8");                                           // move the value type into the low bits
-    emitter.instruction("and r9, 0x7f");                                        // isolate the stable value type
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r9", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r9", "r9");
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the value type for dispatch
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the element index
 
@@ -265,7 +260,7 @@ fn emit_writer(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_integer_tree_write_value_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the source array pointer
-    emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8 + 24]");              // load the one-word element payload
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "r8", "r11");
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the array value type
     emitter.instruction("test r9, r9");                                         // direct integer slots format in place
     emitter.instruction("jz __rt_json_integer_tree_write_int_x86");             // direct integer slots format in place
@@ -330,12 +325,7 @@ fn emit_try(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // zero means the existing encoder must handle this value
     emitter.instruction("jz __rt_json_integer_tree_try_unsupported_x86");       // allocate only after the entire tree is admitted
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the exact byte count across allocation and writing
-    emitter.instruction("call __rt_heap_alloc");                                // allocate one exact output payload
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)
-    ));                                                                         // materialize the transient string kind with the allocator marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // publish the transient string heap kind
+    elephc_memoir::strings::concat_scratch::emit_allocate_transient_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the output base across the recursive writer
     emitter.instruction("mov rsi, rax");                                        // pass the exact output base as the initial cursor
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the admitted root array

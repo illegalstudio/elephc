@@ -9,6 +9,10 @@
 
 use super::*;
 use crate::errors::EvalStatus;
+use elephc_memoir::runtime_owners::{
+    RuntimeOwnerHistory, RuntimeOwnerMap, RuntimeOwnerRecordMap, RuntimeOwnerSlot,
+};
+use elephc_memoir::runtime_leases::RuntimeLeaseCounter;
 
 /// One installed eval user error handler and its accepted level mask.
 #[derive(Clone, Copy)]
@@ -33,7 +37,7 @@ pub enum EvalPcntlSignalHandler {
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
-    pub(super) abi_owner_count: usize,
+    pub(super) abi_owners: RuntimeLeaseCounter,
     pub(super) teardown_active: bool,
     pub(super) native_catalog_generation: u64,
     pub(super) native_catalog_ready: bool,
@@ -51,9 +55,9 @@ pub struct ElephcEvalContext {
     pub(super) declared_trait_names: SharedNative<Vec<String>>,
     pub(super) enums: HashMap<String, EvalEnum>,
     pub(super) declared_enum_names: Vec<String>,
-    pub(super) enum_cases: HashMap<(String, String), RuntimeCellHandle>,
-    pub(super) enum_case_values: HashMap<(String, String), RuntimeCellHandle>,
-    pub(super) constants: HashMap<String, RuntimeCellHandle>,
+    pub(super) enum_cases: RuntimeOwnerMap<(String, String)>,
+    pub(super) enum_case_values: RuntimeOwnerMap<(String, String)>,
+    pub(super) constants: RuntimeOwnerMap<String>,
     /// Original spelling of each eval-defined constant, keyed by its folded lookup key.
     pub(super) constant_names: HashMap<String, String>,
     pub(super) native_global_constants: SharedNative<HashMap<String, EvalNativeGlobalConstant>>,
@@ -82,23 +86,21 @@ pub struct ElephcEvalContext {
     pub(super) native_property_default_errors: SharedNative<HashMap<(String, String), String>>,
     pub(super) native_class_default_errors: SharedNative<HashMap<String, String>>,
     pub(super) native_property_attributes: SharedNative<HashMap<(String, String), Vec<EvalAttribute>>>,
-    pub(super) static_locals: HashMap<(String, String), RuntimeCellHandle>,
-    pub(super) static_properties: HashMap<(String, String), RuntimeCellHandle>,
+    pub(super) static_locals: RuntimeOwnerMap<(String, String)>,
+    pub(super) static_properties: RuntimeOwnerMap<(String, String)>,
     pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
-    pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,
+    pub(super) class_constants: RuntimeOwnerMap<(String, String)>,
     /// Instance property defaults each eval class evaluated when it was initialized, by
     /// (class, property storage name); a new object copies them.
-    pub(super) instance_defaults: HashMap<(String, String), RuntimeCellHandle>,
+    pub(super) instance_defaults: RuntimeOwnerMap<(String, String)>,
     pub(super) included_files: HashSet<String>,
     pub(super) included_file_order: Vec<String>,
     pub(super) included_main_file: Option<String>,
     /// `declare(strict_types=...)` for the eval fragment currently executing.
     pub(super) strict_types: bool,
     pub(super) error_reporting: i64,
-    pub(super) error_handler: Option<EvalErrorHandlerState>,
-    pub(super) error_handler_stack: Vec<Option<EvalErrorHandlerState>>,
-    pub(super) exception_handler: Option<RuntimeCellHandle>,
-    pub(super) exception_handler_stack: Vec<Option<RuntimeCellHandle>>,
+    pub(super) error_handlers: RuntimeOwnerHistory<EvalErrorHandlerState>,
+    pub(super) exception_handlers: RuntimeOwnerHistory<RuntimeCellHandle>,
     pub(super) dynamic_objects: HashMap<u64, String>,
     pub(super) dynamic_destructing_objects: HashSet<u64>,
     pub(super) dynamic_destructed_objects: HashSet<u64>,
@@ -106,11 +108,9 @@ pub struct ElephcEvalContext {
     pub(super) dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
     pub(super) array_element_aliases: HashMap<usize, EvalArrayReferenceAliases>,
     pub(super) array_reference_retirements: crate::ffi::array_references::ArrayReferenceRetirements,
-    pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
-    pub(super) pcntl_foreign_callables: HashMap<
-        usize,
-        (RuntimeCellHandle, pcntl_runtime::EvalPcntlContextLease),
-    >,
+    pub(super) array_cursors: elephc_memoir::cell_retirement::WeakCellMetadata<EvalArrayCursor>,
+    pub(super) pcntl_foreign_callables:
+        RuntimeOwnerRecordMap<usize, pcntl_runtime::EvalPcntlContextLease>,
     /// Sticky capability: foreign callable metadata has entered this context.
     pub(super) may_have_foreign_pcntl_callables: bool,
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
@@ -131,7 +131,7 @@ pub struct ElephcEvalContext {
     pub(super) class_stack: Vec<String>,
     pub(super) called_class_stack: Vec<String>,
     pub(super) magic_stack: Vec<EvalMagicScope>,
-    pub(super) pending_throw: Option<RuntimeCellHandle>,
+    pub(super) pending_throw: RuntimeOwnerSlot,
     pub(super) spl_autoload_extensions: String,
     pub(super) streams: EvalStreamResources,
     pub(super) json_last_error: i64,
@@ -156,7 +156,7 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
-            abi_owner_count: 1,
+            abi_owners: RuntimeLeaseCounter::new(1),
             teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
@@ -172,9 +172,9 @@ impl ElephcEvalContext {
             declared_trait_names: SharedNative::default(),
             enums: HashMap::new(),
             declared_enum_names: Vec::new(),
-            enum_cases: HashMap::new(),
-            enum_case_values: HashMap::new(),
-            constants: HashMap::new(),
+            enum_cases: RuntimeOwnerMap::default(),
+            enum_case_values: RuntimeOwnerMap::default(),
+            constants: RuntimeOwnerMap::default(),
             constant_names: HashMap::new(),
             native_global_constants: SharedNative::default(),
             native_user_constants: SharedNative::default(),
@@ -202,20 +202,18 @@ impl ElephcEvalContext {
             native_property_default_errors: SharedNative::default(),
             native_class_default_errors: SharedNative::default(),
             native_property_attributes: SharedNative::default(),
-            static_locals: HashMap::new(),
-            static_properties: HashMap::new(),
+            static_locals: RuntimeOwnerMap::default(),
+            static_properties: RuntimeOwnerMap::default(),
             static_property_aliases: HashMap::new(),
-            class_constants: HashMap::new(),
-            instance_defaults: HashMap::new(),
+            class_constants: RuntimeOwnerMap::default(),
+            instance_defaults: RuntimeOwnerMap::default(),
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
             strict_types: false,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
-            error_handler: None,
-            error_handler_stack: Vec::new(),
-            exception_handler: None,
-            exception_handler_stack: Vec::new(),
+            error_handlers: RuntimeOwnerHistory::default(),
+            exception_handlers: RuntimeOwnerHistory::default(),
             dynamic_objects: HashMap::new(),
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
@@ -223,8 +221,8 @@ impl ElephcEvalContext {
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_reference_retirements: Default::default(),
-            array_cursors: HashMap::new(),
-            pcntl_foreign_callables: HashMap::new(),
+            array_cursors: elephc_memoir::cell_retirement::WeakCellMetadata::default(),
+            pcntl_foreign_callables: RuntimeOwnerRecordMap::default(),
             may_have_foreign_pcntl_callables: false,
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
@@ -244,7 +242,7 @@ impl ElephcEvalContext {
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
-            pending_throw: None,
+            pending_throw: RuntimeOwnerSlot::default(),
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
             json_last_error: 0,
@@ -265,7 +263,7 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
-            abi_owner_count: 1,
+            abi_owners: RuntimeLeaseCounter::new(1),
             teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
@@ -281,9 +279,9 @@ impl ElephcEvalContext {
             declared_trait_names: SharedNative::default(),
             enums: HashMap::new(),
             declared_enum_names: Vec::new(),
-            enum_cases: HashMap::new(),
-            enum_case_values: HashMap::new(),
-            constants: HashMap::new(),
+            enum_cases: RuntimeOwnerMap::default(),
+            enum_case_values: RuntimeOwnerMap::default(),
+            constants: RuntimeOwnerMap::default(),
             constant_names: HashMap::new(),
             native_global_constants: SharedNative::default(),
             native_user_constants: SharedNative::default(),
@@ -311,20 +309,18 @@ impl ElephcEvalContext {
             native_property_default_errors: SharedNative::default(),
             native_class_default_errors: SharedNative::default(),
             native_property_attributes: SharedNative::default(),
-            static_locals: HashMap::new(),
-            static_properties: HashMap::new(),
+            static_locals: RuntimeOwnerMap::default(),
+            static_properties: RuntimeOwnerMap::default(),
             static_property_aliases: HashMap::new(),
-            class_constants: HashMap::new(),
-            instance_defaults: HashMap::new(),
+            class_constants: RuntimeOwnerMap::default(),
+            instance_defaults: RuntimeOwnerMap::default(),
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
             strict_types: false,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
-            error_handler: None,
-            error_handler_stack: Vec::new(),
-            exception_handler: None,
-            exception_handler_stack: Vec::new(),
+            error_handlers: RuntimeOwnerHistory::default(),
+            exception_handlers: RuntimeOwnerHistory::default(),
             dynamic_objects: HashMap::new(),
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
@@ -332,8 +328,8 @@ impl ElephcEvalContext {
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_reference_retirements: Default::default(),
-            array_cursors: HashMap::new(),
-            pcntl_foreign_callables: HashMap::new(),
+            array_cursors: elephc_memoir::cell_retirement::WeakCellMetadata::default(),
+            pcntl_foreign_callables: RuntimeOwnerRecordMap::default(),
             may_have_foreign_pcntl_callables: false,
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
@@ -353,7 +349,7 @@ impl ElephcEvalContext {
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
-            pending_throw: None,
+            pending_throw: RuntimeOwnerSlot::default(),
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
             json_last_error: 0,
@@ -376,25 +372,17 @@ impl ElephcEvalContext {
 
     /// Adds one opaque ABI owner that can keep this heap context alive past its frame.
     pub(crate) fn retain_abi_owner(&mut self) -> Result<(), EvalStatus> {
-        self.abi_owner_count = self
-            .abi_owner_count
-            .checked_add(1)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        Ok(())
+        self.abi_owners.try_retain().then_some(()).ok_or(EvalStatus::RuntimeFatal)
     }
 
     /// Reports whether a deferred context acquired a new opaque ABI callback owner.
     pub(crate) fn has_abi_owners(&self) -> bool {
-        self.abi_owner_count != 0
+        self.abi_owners.has_owners()
     }
 
     /// Drops one opaque ABI owner and reports whether the heap context can be destroyed.
     pub(crate) fn release_abi_owner(&mut self) -> bool {
-        if self.abi_owner_count == 0 {
-            return false;
-        }
-        self.abi_owner_count -= 1;
-        self.abi_owner_count == 0
+        self.abi_owners.release()
     }
 
     /// Returns the strict-types mode of the eval fragment currently executing.

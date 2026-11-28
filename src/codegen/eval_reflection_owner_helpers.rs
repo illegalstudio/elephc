@@ -14,6 +14,7 @@
 //!   unset and reference overwrite cannot invalidate private metadata slots.
 //! - The helper retains supplied array payloads for object ownership.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -477,6 +478,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x8, [sp, #56]");                                   // save boxed ReflectionClassConstant value
     emitter.instruction("ldr x8, [sp, #216]");                                  // load boxed ReflectionEnumBackedCase backing value from the eighth stack argument
     emitter.instruction("str x8, [sp, #64]");                                   // save boxed ReflectionEnumBackedCase backing value
+    elephc_memoir::values::object_storage::emit_begin_object_construction(emitter, 112);
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
     emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
@@ -626,9 +628,14 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Reflection owner object for eval
-    retire_reflection_owner_allocation_after_boxing(emitter, 112);
+    elephc_memoir::values::object_storage::emit_commit_object_construction(emitter, 112);
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
+    elephc_memoir::values::object_storage::emit_rollback_object_construction(
+        emitter,
+        112,
+        "__elephc_eval_reflection_owner_new_rollback_done",
+    );
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #144]");                            // restore the Rust caller frame
@@ -683,6 +690,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save boxed ReflectionClassConstant value
     emitter.instruction("mov rax, QWORD PTR [rbp + 88]");                       // load boxed ReflectionEnumBackedCase backing value from the tenth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save boxed ReflectionEnumBackedCase backing value
+    elephc_memoir::values::object_storage::emit_begin_object_construction(emitter, 40);
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
     emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
@@ -832,24 +840,19 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("call __rt_mixed_from_value");                          // box the Reflection owner object for eval
-    retire_reflection_owner_allocation_after_boxing(emitter, 40);
+    elephc_memoir::values::object_storage::emit_commit_object_construction(emitter, 40);
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
+    elephc_memoir::values::object_storage::emit_rollback_object_construction(
+        emitter,
+        40,
+        "__elephc_eval_reflection_owner_new_rollback_done_x",
+    );
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
-}
-
-/// Transfers the factory's raw allocation owner into the retaining Mixed result cell.
-/// The boxed return stays stable while the original object reference is retired.
-pub(super) fn retire_reflection_owner_allocation_after_boxing(emitter: &mut Emitter, object_offset: usize) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_push_reg(emitter, result);
-    abi::load_at_offset(emitter, result, object_offset);
-    abi::emit_call_label(emitter, "__rt_decref_object");
-    abi::emit_pop_reg(emitter, result);
 }
 
 /// Emits one ARM64 owner-kind allocation and slot-population body.
@@ -864,7 +867,7 @@ fn emit_aarch64_owner_kind_body(
 ) {
     emitter.label(label);
     emit_alloc_reflection_owner_object_aarch64(emitter, layout);
-    emitter.instruction("str x0, [sp, #32]");                                   // save the unboxed Reflection owner object pointer
+    elephc_memoir::values::object_storage::emit_record_object_construction(emitter, 112);
     if set_name {
         emit_set_owner_name_property_aarch64(emitter, layout);
     }
@@ -900,7 +903,7 @@ fn emit_x86_64_owner_kind_body(
 ) {
     emitter.label(label);
     emit_alloc_reflection_owner_object_x86_64(emitter, layout);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the unboxed Reflection owner object pointer
+    elephc_memoir::values::object_storage::emit_record_object_construction(emitter, 40);
     if set_name {
         emit_set_owner_name_property_x86_64(emitter, layout);
     }
@@ -929,19 +932,12 @@ fn emit_alloc_reflection_owner_object_aarch64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     emitter.instruction(&format!("mov x0, #{}", payload_size));                 // request Reflection owner object payload storage
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 marks the payload as an object
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the object heap header before the payload
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the Reflection owner class id
-    emitter.instruction("str x10, [x0]");                                       // store the class id at object payload offset zero
-    for index in 0..layout.property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(emitter, "x0", offset);
-        abi::emit_store_zero_to_address(emitter, "x0", offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x10", "x0");
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(emitter, "x0", layout.property_count);
 }
 
 /// Allocates a zero-initialized x86_64 Reflection owner object payload.
@@ -949,20 +945,12 @@ fn emit_alloc_reflection_owner_object_x86_64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request Reflection owner object payload storage
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let heap_kind_word = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
-    emitter.instruction(&format!("mov r10, 0x{:x}", heap_kind_word));           // stamp the allocated payload as an object
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
-    for index in 0..layout.property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(emitter, "rax", offset);
-        abi::emit_store_zero_to_address(emitter, "rax", offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(emitter, "rax", layout.property_count);
 }
 
 /// Stores the incoming ARM64 reflected class name into ReflectionClass.
@@ -973,17 +961,13 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
     let Some(name_hi) = layout.name_hi else {
         return;
     };
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the reflected-name pointer for persistence
-    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the reflected-name length for persistence
-    emitter.instruction("bl __rt_str_persist");                                 // copy the eval-owned name bytes for object ownership
+    elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 8);
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", name_hi);
     if let Some(public_name_lo) = layout.public_name_lo {
-        emitter.instruction("ldr x1, [sp, #8]");                                // reload the original name pointer for the public mirror copy
-        emitter.instruction("ldr x2, [sp, #16]");                               // reload the original name length for the public mirror copy
-        emitter.instruction("bl __rt_str_persist");                             // give the mutable public mirror independent string storage
-        super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 8);
+        elephc_memoir::reference_cells::property::emit_store_owned_string_property(
             emitter,
             "x9",
             public_name_lo,
@@ -1077,17 +1061,13 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     let Some(name_hi) = layout.name_hi else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the reflected-name pointer for persistence
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the reflected-name length for persistence
-    emitter.instruction("call __rt_str_persist");                               // copy the eval-owned name bytes for object ownership
+    elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 16);
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
     if let Some(public_name_lo) = layout.public_name_lo {
-        emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // reload the original name pointer for the public mirror copy
-        emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                   // reload the original name length for the public mirror copy
-        emitter.instruction("call __rt_str_persist");                           // give the mutable public mirror independent string storage
-        super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 16);
+        elephc_memoir::reference_cells::property::emit_store_owned_string_property(
             emitter,
             "r10",
             public_name_lo,
@@ -2383,7 +2363,7 @@ fn emit_set_owner_parent_class_property_aarch64(
     emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means string
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed declaring-class metadata
     emitter.instruction("bl __rt_str_persist");                                 // give the mutable public class mirror independent storage
-    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+    elephc_memoir::reference_cells::property::emit_store_owned_string_property(
         emitter,
         "x9",
         public_low,
@@ -2424,7 +2404,7 @@ fn emit_set_owner_parent_class_property_x86_64(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed declaring-class metadata
     emitter.instruction("mov rax, rdi");                                        // pass the declaring-class name pointer for an independent copy
     emitter.instruction("call __rt_str_persist");                               // give the mutable public class mirror independent storage
-    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+    elephc_memoir::reference_cells::property::emit_store_owned_string_property(
         emitter,
         "r10",
         public_low,

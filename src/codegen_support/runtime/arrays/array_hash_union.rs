@@ -8,6 +8,10 @@
 //! Key details:
 //! - PHP array union uses one shared int/string key space; left indexed keys `0..len-1` must block matching right hash integer keys.
 
+use elephc_memoir::values::packed_slots;
+
+use elephc_memoir::values::hash_payload;
+use elephc_memoir::hash_layout::{self, HeaderField};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -37,8 +41,8 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #112");                                   // establish a stable frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the left indexed-array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the right associative-array pointer
-    emitter.instruction("ldr x9, [x0]");                                        // load the left indexed-array length
-    emitter.instruction("ldr x10, [x1]");                                       // load the right associative-array entry count
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load the left indexed-array length
+    hash_layout::emit_load_header_field(emitter, "x10", "x1", HeaderField::Count);
     emitter.instruction("str x9, [sp, #32]");                                   // save the left indexed-array length for the numeric-key loop
     emitter.instruction("add x11, x9, x10");                                    // estimate result entry count before applying duplicate-key filtering
     emitter.instruction("lsl x11, x11, #1");                                    // double the estimate to keep hash load factor below the growth threshold
@@ -49,7 +53,7 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_new");                                    // allocate the result associative-array hash table
     emitter.instruction("str x0, [sp, #16]");                                   // save the evolving result hash pointer
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the left indexed-array pointer
-    emitter.instruction("ldr x10, [x9, #-8]");                                  // load the packed left indexed-array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x9");
     emitter.instruction("lsr x10, x10, #8");                                    // move the left value_type tag into the low bits
     emitter.instruction("and x10, x10, #0x7f");                                 // isolate the left value_type tag without the persistent COW flag
     emitter.instruction("str x10, [sp, #40]");                                  // save the left value_type tag for copy dispatch
@@ -65,7 +69,7 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, #1");                                         // is the left indexed array storing string slots?
     emitter.instruction("b.eq __rt_array_hash_union_left_string");              // strings need persistence before hash insertion
     emitter.instruction("ldr x11, [sp, #0]");                                   // reload the left indexed-array pointer
-    emitter.instruction("add x11, x11, #24");                                   // move to the left indexed-array payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x3, [x11, x9, lsl #3]");                           // load the scalar or pointer payload for this numeric key
     emitter.instruction("str x3, [sp, #48]");                                   // save the copied low payload word across optional retain calls
     emitter.instruction("str x12, [sp, #64]");                                  // save the runtime value tag for hash insertion
@@ -73,11 +77,7 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_array_hash_union_left_scalar");              // scalar payloads can be copied directly
     emitter.instruction("cmp x12, #7");                                         // is the left payload still a supported refcounted value?
     emitter.instruction("b.hi __rt_array_hash_union_left_scalar");              // unknown high tags fall back to scalar copying
-    emitter.instruction("mov x0, x3");                                          // move the borrowed left heap payload into the retain helper
-    emitter.instruction("bl __rt_incref");                                      // retain the left heap payload for the result hash owner
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the retained payload low word
-    emitter.instruction("mov x4, xzr");                                         // refcounted values use only the low payload word
-    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the runtime value tag
+    hash_payload::emit_retain_indexed_pointer_for_insert(emitter, 48, 64);
     emitter.instruction("b __rt_array_hash_union_left_insert");                 // insert the retained left payload
 
     emitter.label("__rt_array_hash_union_left_scalar");
@@ -90,12 +90,8 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #0]");                                   // reload the left indexed-array pointer
     emitter.instruction("lsl x13, x9, #4");                                     // compute the byte offset for a 16-byte string slot
     emitter.instruction("add x11, x11, x13");                                   // advance to the selected string slot
-    emitter.instruction("add x11, x11, #24");                                   // skip the indexed-array header
-    emitter.instruction("ldp x1, x2, [x11]");                                   // load the borrowed left string pointer and length
-    emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for the result hash owner
-    emitter.instruction("mov x3, x1");                                          // move the owned string pointer into the hash value low word
-    emitter.instruction("mov x4, x2");                                          // move the owned string length into the hash value high word
-    emitter.instruction("mov x5, #1");                                          // value_tag 1 = string
+    packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
+    hash_payload::emit_persist_indexed_pair_for_insert(emitter);
 
     emitter.label("__rt_array_hash_union_left_insert");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current result hash pointer
@@ -135,20 +131,11 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_array_hash_union_right_scalar");             // scalar payloads can be copied directly
     emitter.instruction("cmp x5, #7");                                          // is the right value still a supported refcounted value?
     emitter.instruction("b.hi __rt_array_hash_union_right_scalar");             // unknown high tags fall back to scalar copying
-    emitter.instruction("ldr x0, [sp, #88]");                                   // load the borrowed right heap payload
-    emitter.instruction("bl __rt_incref");                                      // retain the right heap payload for the result hash owner
-    emitter.instruction("ldr x3, [sp, #88]");                                   // reload the retained right value low word
-    emitter.instruction("ldr x4, [sp, #96]");                                   // reload the right value high word
-    emitter.instruction("ldr x5, [sp, #104]");                                  // reload the right value runtime tag
+    hash_payload::HashPayloadSlots { low: 88, reload_later: false }.emit_retain_preserving_words(emitter);
     emitter.instruction("b __rt_array_hash_union_right_insert");                // insert the retained right payload
 
     emitter.label("__rt_array_hash_union_right_string");
-    emitter.instruction("ldr x1, [sp, #88]");                                   // load the borrowed right string pointer
-    emitter.instruction("ldr x2, [sp, #96]");                                   // load the borrowed right string length
-    emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for the result hash owner
-    emitter.instruction("mov x3, x1");                                          // move the owned string pointer into the hash value low word
-    emitter.instruction("mov x4, x2");                                          // move the owned string length into the hash value high word
-    emitter.instruction("ldr x5, [sp, #104]");                                  // reload the string runtime tag
+    hash_payload::emit_persist_staged_string_for_insert(emitter, 88);
     emitter.instruction("b __rt_array_hash_union_right_insert");                // insert the owned right string payload
 
     emitter.label("__rt_array_hash_union_right_scalar");
@@ -184,8 +171,8 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 112");                                        // reserve local storage while keeping nested calls aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the left indexed-array pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the right associative-array pointer
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the left indexed-array length
-    emitter.instruction("mov r11, QWORD PTR [rsi]");                            // load the right associative-array entry count
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the left indexed-array length
+    hash_layout::emit_load_header_field(emitter, "r11", "rsi", HeaderField::Count);
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the left indexed-array length for the numeric-key loop
     emitter.instruction("lea rdi, [r10 + r11]");                                // estimate result entry count before duplicate-key filtering
     emitter.instruction("shl rdi, 1");                                          // double the estimate to keep hash load factor below the growth threshold
@@ -197,9 +184,8 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_new");                                  // allocate the result associative-array hash table
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the evolving result hash pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the left indexed-array pointer
-    emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // load the packed left indexed-array kind word
-    emitter.instruction("shr r11, 8");                                          // move the left value_type tag into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the left value_type tag without the persistent COW flag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "r10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the left value_type tag for copy dispatch
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the left indexed-array numeric key cursor
 
@@ -211,17 +197,13 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 1");                                          // is the left indexed array storing string slots?
     emitter.instruction("je __rt_array_hash_union_x86_left_string");            // strings need persistence before hash insertion
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left indexed-array pointer
-    emitter.instruction("mov rcx, QWORD PTR [rax + 24 + r10 * 8]");             // load the scalar or pointer payload for this numeric key
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "rax", "r10", "rcx", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the copied low payload word across optional retain calls
     emitter.instruction("cmp r11, 4");                                          // is the left payload in the refcounted range?
     emitter.instruction("jb __rt_array_hash_union_x86_left_scalar");            // scalar payloads can be copied directly
     emitter.instruction("cmp r11, 7");                                          // is the left payload still a supported refcounted value?
     emitter.instruction("ja __rt_array_hash_union_x86_left_scalar");            // unknown high tags fall back to scalar copying
-    emitter.instruction("mov rax, rcx");                                        // move the borrowed left heap payload into the retain helper
-    emitter.instruction("call __rt_incref");                                    // retain the left heap payload for the result hash owner
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the retained payload low word
-    emitter.instruction("xor r8d, r8d");                                        // refcounted values use only the low payload word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the runtime value tag
+    hash_payload::emit_retain_indexed_pointer_for_insert(emitter, 56, 48);
     emitter.instruction("jmp __rt_array_hash_union_x86_left_insert");           // insert the retained left payload
 
     emitter.label("__rt_array_hash_union_x86_left_scalar");
@@ -234,13 +216,8 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left indexed-array pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current left numeric key
     emitter.instruction("shl r10, 4");                                          // compute the byte offset for a 16-byte string slot
-    emitter.instruction("lea r11, [rax + r10 + 24]");                           // address the selected left string slot
-    emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the borrowed left string pointer
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the borrowed left string length
-    emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for the result hash owner
-    emitter.instruction("mov rcx, rax");                                        // move the owned string pointer into the hash value low word
-    emitter.instruction("mov r8, rdx");                                         // move the owned string length into the hash value high word
-    emitter.instruction("mov r9, 1");                                           // value_tag 1 = string
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "r11", "rax", "r10");
+    hash_payload::emit_persist_indexed_pair_for_insert(emitter);
 
     emitter.label("__rt_array_hash_union_x86_left_insert");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current result hash pointer
@@ -279,20 +256,11 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_array_hash_union_x86_right_scalar");           // scalar payloads can be copied directly
     emitter.instruction("cmp r10, 7");                                          // is the right value still a supported refcounted value?
     emitter.instruction("ja __rt_array_hash_union_x86_right_scalar");           // unknown high tags fall back to scalar copying
-    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // load the borrowed right heap payload
-    emitter.instruction("call __rt_incref");                                    // retain the right heap payload for the result hash owner
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 88]");                       // reload the retained right value low word
-    emitter.instruction("mov r8, QWORD PTR [rbp - 96]");                        // reload the right value high word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the right value runtime tag
+    hash_payload::HashPayloadSlots { low: 88, reload_later: false }.emit_retain_preserving_words(emitter);
     emitter.instruction("jmp __rt_array_hash_union_x86_right_insert");          // insert the retained right payload
 
     emitter.label("__rt_array_hash_union_x86_right_string");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // load the borrowed right string pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // load the borrowed right string length
-    emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for the result hash owner
-    emitter.instruction("mov rcx, rax");                                        // move the owned string pointer into the hash value low word
-    emitter.instruction("mov r8, rdx");                                         // move the owned string length into the hash value high word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the string runtime tag
+    hash_payload::emit_persist_staged_string_for_insert(emitter, 88);
     emitter.instruction("jmp __rt_array_hash_union_x86_right_insert");          // insert the owned right string payload
 
     emitter.label("__rt_array_hash_union_x86_right_scalar");

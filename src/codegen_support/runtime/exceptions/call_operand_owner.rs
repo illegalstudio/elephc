@@ -9,29 +9,10 @@
 //! - Clearing the slot prevents later PHP-frame cleanup from releasing the owner twice.
 //! - Destructor exceptions are chained without escaping the cleanup walker.
 
-use crate::codegen_support::{abi, emit::Emitter};
+pub use elephc_memoir::temporary_owners::emit_cleanup_call_operand_owner;
 
-/// Emits the non-escaping unary callback for a temporary owner slot on every native ABI.
-pub fn emit_cleanup_call_operand_owner(emitter: &mut Emitter) {
-    emit_owner_cleanup_entry(emitter, "__rt_cleanup_call_operand_owner", "__rt_decref_any");
-    emit_owner_cleanup_entry(emitter, "__rt_cleanup_call_operand_descriptor", "__rt_callable_descriptor_release");
-    emit_owner_cleanup_entry(emitter, "__rt_cleanup_call_reference_argument", "__rt_decref_any");
-}
-
-/// Emits one bounded cleanup entry with the release discipline of its owning slot.
-fn emit_owner_cleanup_entry(emitter: &mut Emitter, label: &str, release: &str) {
-    emitter.blank();
-    emitter.label_global(label);
-    abi::emit_frame_prologue(emitter, 16);
-    let address = abi::secondary_scratch_reg(emitter);
-    let result = abi::int_result_reg(emitter);
-    abi::emit_reg_move(emitter, address, abi::int_arg_reg_name(emitter.target, 0));
-    abi::emit_load_from_address(emitter, result, address, 0);
-    abi::emit_store_zero_to_address(emitter, address, 0);
-    abi::emit_unary_cleanup_preserving_exception(emitter, release, result);
-    abi::emit_frame_restore(emitter, 16);
-    abi::emit_return(emitter);
-}
+#[cfg(test)]
+use crate::codegen_support::emit::Emitter;
 
 #[cfg(test)]
 mod tests {

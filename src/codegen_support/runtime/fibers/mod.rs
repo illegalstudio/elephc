@@ -51,48 +51,24 @@ pub(crate) use entry::emit_fiber_entry;
 pub(crate) use switch::emit_fiber_switch;
 
 // ── Fiber object field offsets ───────────────────────────────────────
-/// Byte offset of the `state` field (0=NotStarted 1=Running 2=Suspended 3=Terminated).
-pub(crate) const FIBER_STATE_OFFSET: i32 = 8;
-/// Byte offset of the `stack_base` field (low address of the fiber stack region, includes guard page).
-pub(crate) const FIBER_STACK_BASE_OFFSET: i32 = 16;
-/// Byte offset of the `stack_top` field (high address; initial SP for a fresh fiber, 16-aligned).
-pub(crate) const FIBER_STACK_TOP_OFFSET: i32 = 24;
-/// Byte offset of the `stack_size` field (total bytes of the mmap'd stack region, required by munmap).
-pub(crate) const FIBER_STACK_SIZE_OFFSET: i32 = 32;
-/// Byte offset of the `saved_sp` field (SP saved when this fiber is not running; entry point for first switch).
-pub(crate) const FIBER_SAVED_SP_OFFSET: i32 = 40;
-/// Byte offset of the `callable` field (closure/function pointer supplied to the Fiber constructor).
-pub(crate) const FIBER_CALLABLE_OFFSET: i32 = 48;
-/// Byte offset of the `callable_wrapper` field (generated ABI adapter that runs the Fiber body on first switch).
-pub(crate) const FIBER_CALLABLE_WRAPPER_OFFSET: i32 = 56;
-/// Byte offset of the `caller` field (Fiber* of the resumer, NULL when the fiber has not been started).
-pub(crate) const FIBER_CALLER_OFFSET: i32 = 64;
-/// Byte offset of the low word of `transfer_value` (Mixed cell holding the value in transit between fibers).
-pub(crate) const FIBER_TRANSFER_VALUE_OFFSET: i32 = 72;
-/// Byte offset of the `pending_throw` field (Throwable* scheduled by Fiber::throw; cleared before re-raising).
-pub(crate) const FIBER_PENDING_THROW_OFFSET: i32 = 88;
-/// Byte offset of `own_exc_head` (saved _exc_handler_top for this fiber's exception handler chain).
-pub(crate) const FIBER_OWN_EXC_HEAD_OFFSET: i32 = 96;
-/// Byte offset of `own_call_frame` (saved _exc_call_frame_top for this fiber's cleanup chain).
-pub(crate) const FIBER_OWN_CALL_FRAME_OFFSET: i32 = 104;
-/// Byte offset of the saved runtime-name `__set` reentrancy chain for this fiber.
-pub(crate) const FIBER_OWN_MAGIC_SET_GUARD_OFFSET: i32 = 232;
-/// Byte offset of the saved deep-release GC suppression for this execution context.
-pub(crate) const FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET: i32 = 240;
-/// Byte offset of the first `start_args` slot (up to 7 Mixed pointers passed to Fiber::start; parallels AArch64 int arg regs).
-pub(crate) const FIBER_START_ARGS_OFFSET: i32 = 112;
-/// Maximum number of `start_args` slots (one per AArch64 integer argument register minus `$this`).
-pub(crate) const FIBER_START_ARGS_MAX: i32 = 7;
-/// Byte offset of `user_arg_max` (controls how many start_args slots start() may write).
-pub(crate) const FIBER_USER_ARG_MAX_OFFSET: i32 = 168;
-/// Byte offset storing how many start_args slots were supplied by the most recent start() call.
-pub(crate) const FIBER_START_ARG_COUNT_OFFSET: i32 = 176;
-/// Byte offset of the first reserved legacy float slot.
-pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 184;
-/// Maximum number of reserved legacy float slots.
-pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
-/// Total size of the Fiber object payload in bytes (heap-allocated; class_id at offset 0, followed by all runtime-managed fields).
-pub(crate) const FIBER_OBJECT_SIZE: i32 = 248;
+pub(crate) use elephc_memoir::coroutine_storage::{
+    FIBER_STATE_OFFSET,
+    FIBER_STACK_BASE_OFFSET,
+    FIBER_STACK_TOP_OFFSET,
+    FIBER_STACK_SIZE_OFFSET,
+    FIBER_SAVED_SP_OFFSET,
+    FIBER_CALLABLE_OFFSET,
+    FIBER_CALLABLE_WRAPPER_OFFSET,
+    FIBER_CALLER_OFFSET,
+    FIBER_TRANSFER_VALUE_OFFSET,
+    FIBER_PENDING_THROW_OFFSET,
+    FIBER_OWN_CALL_FRAME_OFFSET,
+    FIBER_START_ARGS_OFFSET,
+    FIBER_START_ARGS_MAX,
+    FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_START_ARG_COUNT_OFFSET,
+    FIBER_OBJECT_SIZE,
+};
 
 // ── Lifecycle states (stored in FIBER_STATE_OFFSET) ──────────────────
 // Phase 3 (suspend) will introduce the first user of FIBER_STATE_SUSPENDED.

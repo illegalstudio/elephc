@@ -119,7 +119,10 @@ pub(super) fn fetch(
         jump(ctx, missing);
         ctx.builder.position_at_end(shared);
         ctx.restore_initialized_slots(shared_initial);
-        let opaque = PhpType::Object(String::new());
+        // The exact-class guards above exclude Closure descriptors. Use a named internal view
+        // so codegen extracts one raw object pointer instead of preserving generic `object`'s
+        // boxed tag, while keeping the class-neutral hash protocol shared across all arms.
+        let opaque = PhpType::Object(crate::ir::RUNTIME_OBJECT_VIEW_CLASS.into());
         let receiver = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             ctx.emit_value(Op::MixedUnbox, vec![object.value], None, opaque.clone(),
                 Op::mixed_unbox_effects(&opaque), Some(span))

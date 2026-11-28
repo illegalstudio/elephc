@@ -111,17 +111,19 @@ pub(in crate::interpreter) fn eval_builtin_function_exists(
     let [value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_owned_expr(value, context, scope, values)?;
-    let result = eval_function_exists_result(value, context, values);
-    let cleanup = eval_release_value(context, values, value);
-    match (result, cleanup) {
-        (Ok(result), Ok(())) => Ok(result),
-        (Err(status), _) => Err(status),
-        (Ok(result), Err(status)) => {
-            let _ = eval_release_value(context, values, result);
-            Err(status)
-        }
-    }
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+
+    let value = RuntimeOwnerSlot::new(eval_owned_expr(value, context, scope, values)?);
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&value, &result), || {
+        let operation = eval_function_exists_result(value.borrowed(), context, values).map(|cell| {
+            result.replace(Some(cell));
+        });
+        let cleanup = eval_release_value(context, values, value.take());
+        result.finish(operation.and(cleanup), |result| {
+            eval_release_value(context, values, result)
+        })
+    })
 }
 
 /// Evaluates `function_exists()` from one materialized function-name argument.

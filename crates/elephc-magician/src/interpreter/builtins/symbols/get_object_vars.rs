@@ -16,7 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
-use super::super::collection_builder::EvalArrayBuilder;
+use super::super::collection_builder::{EvalArrayBuilder, with_collection_cells};
 use super::super::{
     eval_object_class_metadata_name, eval_owned_runtime_string_array_to_vec,
     eval_runtime_property_access_metadata,
@@ -335,12 +335,13 @@ fn eval_public_object_vars_result(
     let property_count = values.object_property_len(object)?;
     let mut result = EvalArrayBuilder::assoc(values, property_count)?;
     for position in 0..property_count {
-        let key = result
-            .values()
-            .object_property_iter_key(object, position)?;
-        let key_bytes = result.values().string_bytes(key);
-        result.values().release(key)?;
-        let key_name = String::from_utf8(key_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key_bytes = result.with_values(|values| {
+            with_collection_cells(values, |values, owners| {
+                let key = owners.stage(values.object_property_iter_key(object, position)?);
+                values.string_bytes(key.borrowed())
+            })
+        })?;
+        let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         result.string(&key_name, |values| {
             values.property_get(object, &key_name)
         })?;
@@ -356,10 +357,11 @@ pub(in crate::interpreter) fn eval_object_public_property_exists(
 ) -> Result<bool, EvalStatus> {
     let property_count = values.object_property_len(object)?;
     for position in 0..property_count {
-        let key = values.object_property_iter_key(object, position)?;
-        let key_bytes = values.string_bytes(key);
-        values.release(key)?;
-        if key_bytes? == property_name.as_bytes() {
+        let key_bytes = with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.object_property_iter_key(object, position)?);
+            values.string_bytes(key.borrowed())
+        })?;
+        if key_bytes == property_name.as_bytes() {
             return Ok(true);
         }
     }

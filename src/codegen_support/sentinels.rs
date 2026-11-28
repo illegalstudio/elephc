@@ -65,7 +65,7 @@ pub(crate) fn null_repr_is_tagged() -> bool {
 }
 
 /// In-band null marker for unboxed scalar slots: `0x7fff_ffff_ffff_fffe` (= `PHP_INT_MAX - 1`).
-pub(crate) const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
+pub(crate) use elephc_memoir::layout::NULL_SENTINEL;
 
 /// Marker stored in a typed property's metadata word while the property is uninitialized:
 /// `0x7fff_ffff_ffff_fffd` (= `PHP_INT_MAX - 2`).
@@ -80,8 +80,7 @@ pub(crate) const TAGGED_SCALAR_TAG_INT: i64 = 0;
 pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 
 /// Indexed-array header value_type for inline `{payload, tag}` tagged-scalar slots.
-/// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
-pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
+pub(crate) use elephc_memoir::layout::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
 
 /// Runtime value tag of a raw `?ptr<T>` word stored in an array or hash.
 ///
@@ -89,7 +88,7 @@ pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 /// tag, so readers that see only the container (`json_encode`, `var_dump`, mixed reads) show a 0
 /// word as PHP null and any other word as its integer address. Boxing normalizes it, so a mixed
 /// cell never carries it; typed pointer reads ignore it and load the raw word.
-pub(crate) const POINTER_ARRAY_VALUE_TYPE: i64 = 13;
+pub(crate) use elephc_memoir::layout::POINTER_ARRAY_VALUE_TYPE;
 
 /// Rewrites a `POINTER_ARRAY_VALUE_TYPE` tag in `tag_reg` to the PHP value its word stands for.
 ///
@@ -150,16 +149,16 @@ pub(crate) const SERPROP_FALSE_ONLY_BIT: u64 = 1 << 11;
 ///
 /// These values describe top-level managed allocations. They are unrelated to Mixed runtime
 /// tags, indexed-array value types and resource subtypes, which use separate namespaces.
-pub(crate) const STRING_HEAP_KIND: u32 = 1;
-pub(crate) const ARRAY_HEAP_KIND: u32 = 2;
-pub(crate) const HASH_HEAP_KIND: u32 = 3;
-pub(crate) const OBJECT_HEAP_KIND: u32 = 4;
-pub(crate) const MIXED_HEAP_KIND: u32 = 5;
-pub(crate) const THROWABLE_HEAP_KIND: u32 = 6;
+pub(crate) use elephc_memoir::layout::STRING_HEAP_KIND;
+pub(crate) use elephc_memoir::layout::ARRAY_HEAP_KIND;
+pub(crate) use elephc_memoir::layout::HASH_HEAP_KIND;
+pub(crate) use elephc_memoir::layout::OBJECT_HEAP_KIND;
+pub(crate) use elephc_memoir::layout::MIXED_HEAP_KIND;
+pub(crate) use elephc_memoir::layout::THROWABLE_HEAP_KIND;
 /// Heap-backed `.` result that remains transient until `__rt_str_persist` adopts it.
-pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
+pub(crate) use elephc_memoir::layout::CONCAT_TEMP_HEAP_KIND;
 /// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
-pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
+pub(crate) use elephc_memoir::layout::REFERENCE_CELL_HEAP_KIND;
 
 /// Property descriptor rows preserve the payload tag and mark a native reference-cell slot.
 pub(crate) const SERPROP_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
@@ -173,15 +172,8 @@ pub(crate) const JSON_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
 /// JSON omits declared properties whose native initialization marker is still unset.
 pub(crate) const JSON_DECLARED_PROPERTY_FLAG: u64 = 1 << 9;
 
-/// Heap-header flag marking a string whose native identity is registered with mbstring.
-///
-/// Heap identity registration hooks (bind, copy, fresh, and persist) set this bit.
-/// Collector passes preserve it on non-graph string headers, and `__rt_heap_free()` uses it
-/// to skip the full bridge callback for strings without native identity metadata.
-pub(crate) const MBSTRING_IDENTITY_TRACKED: u32 = 1 << 24;
-
 /// Heap-owned callable descriptor with typed capture metadata.
-pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;
+pub(crate) use elephc_memoir::layout::CALLABLE_HEAP_KIND;
 
 /// The complete registered top-level heap-kind namespace.
 const MANAGED_HEAP_KINDS: [u32; 9] = [
@@ -255,28 +247,7 @@ pub(crate) fn emit_tagged_scalar_from_int_result(emitter: &mut Emitter) {
 /// either a zero pointer or the in-band `NULL_SENTINEL` that missed reads of refcounted
 /// slots materialize. Clobbers `scratch_reg` with the sentinel bit pattern. Used to keep
 /// container reads from dereferencing a null/sentinel receiver (issue #526).
-pub(crate) fn emit_branch_if_null_container(
-    emitter: &mut Emitter,
-    value_reg: &str,
-    scratch_reg: &str,
-    label: &str,
-) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", value_reg, label));      // zero container pointers take the caller's null path
-            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
-            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
-            emitter.instruction(&format!("b.eq {}", label));                    // sentinel-null containers take the caller's null path
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", value_reg, value_reg)); // is the container pointer zero (PHP null)?
-            emitter.instruction(&format!("jz {}", label));                      // zero container pointers take the caller's null path
-            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
-            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
-            emitter.instruction(&format!("je {}", label));                      // sentinel-null containers take the caller's null path
-        }
-    }
-}
+pub(crate) use elephc_memoir::layout::emit_branch_if_null_container;
 
 /// Replaces the in-band `NULL_SENTINEL` in `value_reg` with a zero pointer, leaving any
 /// other value untouched. Clobbers `scratch_reg` with the sentinel bit pattern. Used where
@@ -396,15 +367,6 @@ pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
     }
 }
 
-/// High 32 bits of the x86_64 uniform heap-header kind word (`"ELPH"` in ASCII bytes
-/// `0x45 0x4C 0x50 0x48`). Every x86_64 allocation is stamped with this marker; the
-/// refcount and free helpers ignore pointers whose header does not carry it, so an
-/// emitter that stamps a different value silently opts its objects out of refcounting.
-///
-/// Checkers must compare against this constant. Stampers must build the full kind word
-/// through [`x86_64_heap_kind_word`] instead of hand-typing the concatenated immediate.
-pub(crate) const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
-
 /// Builds the full x86_64 heap-header kind word: magic in the high 32 bits and `low_bits`
 /// in the low 32 bits. `low_bits` is the packed kind/COW/value_type field (plain kinds such
 /// as `1`/`4`/`5`/`6`, or wider encodings such as `0x8003` / `0x80ff` / `0x8702`). Pass `0`
@@ -412,9 +374,8 @@ pub(crate) const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 /// caller fills the kind). Emitters must use this instead of a hand-typed literal — a
 /// transposed magic assembles fine but makes every refcount operation on the stamped object
 /// a silent no-op (issue #482).
-pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
-    (X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(low_bits)
-}
+#[cfg(test)]
+pub(crate) use elephc_memoir::layout::x86_64_heap_kind_word;
 
 /// Byte offset of the creation line inside the 56-byte compact Throwable payload.
 ///
@@ -428,7 +389,7 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
 /// know the line write `0`, which the readers treat as "origin unknown" and omit.
 ///
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
-pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
+pub(crate) use elephc_memoir::values::throwable_storage::CREATION_LINE_OFFSET as THROWABLE_CREATION_LINE_OFFSET;
 
 /// Marks a creation line as belonging to tokenizer input with an explicitly empty filename.
 /// Normal source spans are u32, so their creation-line values never set this bit.
@@ -442,18 +403,7 @@ pub(crate) const THROWABLE_SCANNED_LOCATION_FLAG: u64 = 1 << 63;
 /// check — there is no source line to record, and PHP would report the internal call site rather
 /// than anything these emitters know. Writing zero says "unknown" explicitly; leaving the slot
 /// untouched would let recycled heap bytes read back as a plausible-looking line number.
-pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payload_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!(
-            "str xzr, [{}, #{}]",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
-        Arch::X86_64 => emitter.instruction(&format!(
-            "mov QWORD PTR [{} + {}], 0",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
-    }
-}
+pub(crate) use elephc_memoir::values::throwable_storage::emit_throwable_creation_line_unknown;
 
 #[cfg(test)]
 mod tests {
@@ -518,14 +468,17 @@ mod tests {
         );
     }
 
-    /// Repo lint: the canonical heap magic lives only in this module — no local copies,
+    /// Repo lint: the canonical heap magic lives only in Memoir layout, with no local copies,
     /// and no hand-typed canonical-magic immediates outside documentation comments.
     #[test]
-    fn test_heap_magic_only_defined_in_sentinels() {
+    fn test_heap_magic_only_defined_in_memoir_layout() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut local_consts = Vec::new();
         let mut hardcoded_immediates = Vec::new();
         scan_heap_magic_policy(&src, &mut local_consts, &mut hardcoded_immediates);
+        let memoir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/elephc-memoir/src");
+        scan_heap_magic_policy(&memoir, &mut local_consts, &mut hardcoded_immediates);
         assert!(
             local_consts.is_empty(),
             "local X86_64_HEAP_MAGIC_HI32 copies found in: {local_consts:?}"
@@ -536,11 +489,14 @@ mod tests {
         );
     }
 
-    /// Walks `src/` looking for a normalized hex needle; returns matching file paths.
+    /// Searches compiler and Memoir sources for a normalized heap-header needle.
     fn scan_src_for_normalized_needle(needle: &str) -> Vec<String> {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut hits = Vec::new();
         scan_normalized(&src, needle, &mut hits);
+        let memoir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/elephc-memoir/src");
+        scan_normalized(&memoir, needle, &mut hits);
         hits
     }
 
@@ -575,7 +531,9 @@ mod tests {
             if !path.extension().is_some_and(|e| e == "rs") {
                 continue;
             }
-            if path.ends_with("codegen_support/sentinels.rs") {
+            if path.ends_with("codegen_support/sentinels.rs")
+                || path.ends_with("crates/elephc-memoir/src/layout.rs")
+            {
                 continue;
             }
             let body = std::fs::read_to_string(&path).expect("readable source");

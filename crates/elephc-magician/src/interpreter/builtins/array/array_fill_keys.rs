@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_fill_keys",
@@ -57,11 +58,13 @@ pub(in crate::interpreter) fn eval_array_fill_keys_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(keys)?;
-    let mut result = values.assoc_new(len)?;
+    let mut result = EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let source_key = values.array_iter_key(keys, position)?;
-        let target_key = values.array_get(keys, source_key)?;
-        result = values.array_set(result, target_key, value)?;
+        result.update(|values, owners, _| {
+            let source_key = owners.stage(values.array_iter_key(keys, position)?);
+            let target_key = owners.stage(values.array_get(keys, source_key)?);
+            Ok(Some((target_key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

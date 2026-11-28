@@ -11,6 +11,7 @@
 //!   The bucket-replacing setter detaches such an entry instead of writing through it, which is
 //!   what keeps `array_replace_recursive` from mutating its own input.
 
+use elephc_memoir::values::hash_payload;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -81,15 +82,10 @@ pub fn emit_array_replace_recursive(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_array_replace_recursive_insert");            // scalar values need no retain
     emitter.instruction("cmp x9, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_array_replace_recursive_insert");            // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #48]");                                   // load the heap-backed value low word
-    emitter.instruction("bl __rt_incref");                                      // retain the heap-backed value for the result hash owner
+    hash_payload::emit_retain_staged_pointer(emitter, 48);
     emitter.instruction("b __rt_array_replace_recursive_insert");               // continue to the insertion
     emitter.label("__rt_array_replace_recursive_persist");
-    emitter.instruction("ldr x1, [sp, #48]");                                   // string pointer to persist
-    emitter.instruction("ldr x2, [sp, #56]");                                   // string length to persist
-    emitter.instruction("bl __rt_str_persist");                                 // copy the string into an independent heap block, x1 = new pointer
-    emitter.instruction("str x1, [sp, #48]");                                   // store the persisted string pointer
-    emitter.instruction("str x2, [sp, #56]");                                   // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 48, hash_payload::StringSlotStore::Separate);
     emitter.label("__rt_array_replace_recursive_insert");
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = result hash pointer
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload key pointer
@@ -165,15 +161,10 @@ fn emit_array_replace_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_replace_recursive_insert");              // scalar values need no retain
     emitter.instruction("cmp r10, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_array_replace_recursive_insert");              // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the heap-backed value into the incref input register
-    emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result hash owner
+    hash_payload::emit_retain_staged_pointer(emitter, 56);
     emitter.instruction("jmp __rt_array_replace_recursive_insert");             // continue to the insertion
     emitter.label("__rt_array_replace_recursive_persist");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // string pointer to persist
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // string length to persist
-    emitter.instruction("call __rt_str_persist");                               // copy the string into an independent heap block, rax = new pointer
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store the persisted string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 56, hash_payload::StringSlotStore::Separate);
     emitter.label("__rt_array_replace_recursive_insert");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // rdi = result hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload key pointer

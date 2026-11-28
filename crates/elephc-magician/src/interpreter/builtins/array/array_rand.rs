@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the array-rand hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_rand",
@@ -97,17 +98,12 @@ pub(in crate::interpreter) fn eval_array_rand_result(
                     failures = 0;
                 }
             }
-            let mut result = values.array_new(num as usize)?;
-            let mut output = 0i64;
-            for position in 0..len {
-                if selected[position] != negative {
-                    let value = values.array_iter_key(array, position)?;
-                    let key = values.int(output)?;
-                    result = values.array_set(result, key, value)?;
-                    output += 1;
-                }
+            let mut result = EvalArrayBuilder::indexed(values, num as usize)?;
+            let positions = selected.iter().enumerate().filter(|&(_, flag)| *flag != negative);
+            for (output, (position, _)) in positions.enumerate() {
+                result.index(output, |values| values.array_iter_key(array, position))?;
             }
-            Ok(result)
+            Ok(result.finish())
         }
         Some(_) => Err(EvalStatus::RuntimeFatal),
     }

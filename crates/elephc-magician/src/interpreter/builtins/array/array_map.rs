@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_map",
@@ -83,18 +84,22 @@ fn eval_array_map_result_from_scope(
     };
     with_optional_evaluated_callable(callback, context, values, |callback, context, values| {
         let len = values.array_len(*array)?;
-        let mut result = values.assoc_new(len)?;
+        let mut result = EvalArrayBuilder::assoc(values, len)?;
         for position in 0..len {
-            let key = values.array_iter_key(*array, position)?;
-            let value = values.array_get(*array, key)?;
-            let mapped = if let Some(callback) = callback.as_ref() {
-                eval_evaluated_callable_with_values(callback, vec![value], context, values)?
-            } else {
-                value
-            };
-            result = values.array_set(result, key, mapped)?;
+            result.update(|values, owners, _| {
+                let key = owners.stage(values.array_iter_key(*array, position)?);
+                let value = owners.stage(values.array_get(*array, key)?);
+                let mapped = if let Some(callback) = callback.as_ref() {
+                    owners.stage(eval_evaluated_callable_with_values(
+                        callback, vec![value.borrowed()], context, values,
+                    )?)
+                } else {
+                    value
+                };
+                Ok(Some((key, mapped)))
+            })?;
         }
-        Ok(result)
+        Ok(result.finish())
     })
 }
 
@@ -128,27 +133,31 @@ fn eval_array_map_variadic_result_from_scope(
             lengths.push(len);
         }
 
-        let mut result = values.array_new(max_len)?;
+        let mut result = EvalArrayBuilder::indexed(values, max_len)?;
         for position in 0..max_len {
-            let mut callback_args = Vec::with_capacity(arrays.len());
-            for (array, len) in arrays.iter().zip(lengths.iter()) {
-                let value = if position < *len {
-                    let key = values.array_iter_key(*array, position)?;
-                    values.array_get(*array, key)?
+            result.update(|values, owners, _| {
+                let mut callback_args = Vec::with_capacity(arrays.len());
+                for (array, len) in arrays.iter().zip(lengths.iter()) {
+                    let value = if position < *len {
+                        let key = owners.stage(values.array_iter_key(*array, position)?);
+                        values.array_get(*array, key)?
+                    } else {
+                        values.null()?
+                    };
+                    callback_args.push(owners.stage(value).borrowed());
+                }
+                let mapped = if let Some(callback) = callback.as_ref() {
+                    eval_evaluated_callable_with_values(callback, callback_args, context, values)?
                 } else {
-                    values.null()?
+                    eval_array_map_zipped_row(callback_args, values)?
                 };
-                callback_args.push(value);
-            }
-            let mapped = if let Some(callback) = callback.as_ref() {
-                eval_evaluated_callable_with_values(callback, callback_args, context, values)?
-            } else {
-                eval_array_map_zipped_row(callback_args, values)?
-            };
-            let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-            result = values.array_set(result, key, mapped)?;
+                let mapped = owners.stage(mapped);
+                let index = i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?;
+                let key = owners.stage(values.int(index)?);
+                Ok(Some((key, mapped)))
+            })?;
         }
-        Ok(result)
+        Ok(result.finish())
     })
 }
 
@@ -157,10 +166,9 @@ pub(in crate::interpreter) fn eval_array_map_zipped_row(
     values_row: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut row = values.array_new(values_row.len())?;
+    let mut row = EvalArrayBuilder::indexed(values, values_row.len())?;
     for (index, value) in values_row.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        row = values.array_set(row, key, value)?;
+        row.index(index, |_| Ok(value.borrowed()))?;
     }
-    Ok(row)
+    Ok(row.finish())
 }

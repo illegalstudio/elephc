@@ -163,8 +163,12 @@ fn dispatch(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: native, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(native);
-    let needs_box = singular_object_class(&ty).is_some_and(|(class, _)|
-        !crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
+    // Only raw named-class storage needs a Mixed wrapper for the native adapter. Generic
+    // `object` already uses tagged Mixed storage so it can retain Closure descriptors; boxing
+    // that box again loses its runtime object tag and gives the temporary a second owner.
+    let needs_box = matches!(ty.codegen_repr(), PhpType::Object(_))
+        && singular_object_class(&ty).is_some_and(|(class, _)|
+            !crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
     let (object, boxed_owner) = if needs_box {
         let boxed = ctx.emit_owned_value(Op::MixedBox, vec![object.value], None, PhpType::Mixed,
             Op::MixedBox.default_effects(), Some(arg.span));

@@ -178,7 +178,14 @@ impl ElephcEvalContext {
 
     /// Records the default a `ReflectionParameter` object (`identity`) reflects.
     pub(crate) fn register_reflected_parameter_default(&mut self, identity: u64, default: EvalReflectedParameterDefault) {
+        self.clear_eval_reflection_identity(identity);
         self.deprecation_notices.reflected_parameter_defaults.insert(identity, default);
+        self.own_eval_reflection_identity(identity);
+    }
+
+    /// Detaches the default expression when its synthetic reflector is retired.
+    pub(super) fn forget_reflected_parameter_default(&mut self, identity: u64) {
+        self.deprecation_notices.reflected_parameter_defaults.remove(&identity);
     }
 
     /// Returns the default a `ReflectionParameter` object (`identity`) reflects, if recorded.

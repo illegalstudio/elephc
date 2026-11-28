@@ -14,6 +14,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use super::super::super::*;
 use super::*;
 
@@ -98,9 +99,10 @@ fn eval_format_csv_record(
         if position > 0 {
             output.push(separator);
         }
-        let key = values.array_iter_key(fields, position)?;
-        let value = values.array_get(fields, key)?;
-        let bytes = values.string_bytes(value)?;
+        let bytes = with_collection_cells(values, |values, owners| {
+            let (_, value) = stage_collection_entry(fields, position, values, owners)?;
+            values.string_bytes(value)
+        })?;
         eval_append_csv_field(&mut output, &bytes, separator, enclosure);
     }
     output.push(b'\n');

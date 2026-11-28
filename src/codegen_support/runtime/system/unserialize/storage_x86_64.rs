@@ -9,6 +9,11 @@
 //! - Every store writes the slot's high word (the string length, or zero), which clears the
 //!   uninitialized marker a typed property without a default starts with.
 
+use elephc_memoir::values::object_storage;
+use elephc_memoir::values::property_descriptor::{
+    self, HydrationField, SerializedField,
+};
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::UNSER_PROPERTY_ASSIGN_PREFIX;
 use crate::codegen_support::sentinels::{
@@ -27,13 +32,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the value box
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // class id from the object header
+    object_storage::emit_load_class_id(emitter, "rax", "rdi");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_class_serprop_ptrs");
     emitter.instruction("shl rax, 3");                                          // class_id * 8 (pointer stride)
     emitter.instruction("add r10, rax");                                        // slot = base + class_id*8
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // property-info table for this class
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the property-info table
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // property count
+    property_descriptor::emit_load_count(emitter, "rax", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the property count
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // row index = 0
     emitter.label("__rt_obj_store_prop_loop");
@@ -41,12 +46,20 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 48]");                       // scanned every row?
     emitter.instruction("jge __rt_obj_store_prop_done");                        // unknown key is ignored
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // property-info table
-    emitter.instruction("shl rax, 5");                                          // index * 32 (row stride)
-    emitter.instruction("add rax, r10");                                        // table + index*32
-    emitter.instruction("add rax, 8");                                          // skip the count word to the row
+    property_descriptor::emit_serialized_row_address(emitter, "rax", "r10", "rax", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the row pointer
-    emitter.instruction("mov r9, QWORD PTR [rax]");                             // row mangled key pointer
-    emitter.instruction("mov rdx, QWORD PTR [rax + 8]");                        // row mangled key length
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r9",
+        "rax",
+        SerializedField::Key,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "rdx",
+        "rax",
+        SerializedField::KeyLength,
+    );
     emitter.instruction("cmp rdx, QWORD PTR [rbp - 24]");                       // same length as the parsed key?
     emitter.instruction("jne __rt_obj_store_prop_next");                        // lengths differ, skip
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // parsed key pointer
@@ -63,12 +76,16 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.label("__rt_obj_store_prop_match");
     // -- reject a hydrated value whose boxed tag the declared property type does not accept --
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // row index
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // class id from the object header
+    object_storage::emit_load_class_id(emitter, "r9", "rdi");
     emitter.instruction("lea r10, [rip + _class_serpdiag_ptrs]");               // diagnostic pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // diagnostic rows for this class
-    emitter.instruction("imul rax, rax, 32");                                   // diagnostic row stride
-    emitter.instruction("add r10, rax");                                        // diagnostic row = base + index*32
-    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // accepted boxed value tags
+    property_descriptor::emit_hydration_row_address(emitter, "r10", "r10", "rax", "r11");
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "r11",
+        "r10",
+        HydrationField::AcceptedTags,
+    );
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // boxed value
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // boxed value tag
     emitter.instruction("mov rcx, rax");                                        // variable shift count = boxed tag
@@ -84,7 +101,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_obj_store_prop_type_error");                  // `true` is not a `false`
     emitter.label("__rt_obj_store_prop_accepted");
     // -- PHP widens an accepted int into a `float`/`?float` slot; retag the owned box --
-    emitter.instruction("cmp QWORD PTR [r10 + 24], 0");                         // widen-int-to-float flag
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "r8",
+        "r10",
+        HydrationField::WidenIntToFloat,
+    );
+    emitter.instruction("test r8, r8");                                         // widen-int-to-float flag
     emitter.instruction("je __rt_obj_store_prop_no_widen");                     // most slots keep the parsed type
     emitter.instruction("test rax, rax");                                       // is the boxed value an int?
     emitter.instruction("jnz __rt_obj_store_prop_no_widen");                    // only an int widens
@@ -95,10 +118,20 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], 2");                               // retag the owned box as a float
     emitter.label("__rt_obj_store_prop_no_widen");
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the row pointer
-    emitter.instruction("mov r8, QWORD PTR [rax + 16]");                        // property byte offset
-    emitter.instruction("mov r9, QWORD PTR [rax + 24]");                        // property value tag
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r8",
+        "rax",
+        SerializedField::ObjectOffset,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r9",
+        "rax",
+        SerializedField::ValueTag,
+    );
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
-    emitter.instruction("add r10, r8");                                         // address of the property slot
+    object_storage::emit_slot_address(emitter, "r10", "r10", "r8");
     emitter.instruction(&format!("test r9, {SERPROP_REFERENCE_PROPERTY_FLAG}")); // select inline storage or the object's native cell
     emitter.instruction("jz __rt_obj_store_prop_inline_slot");                  // inline properties already point at their payload
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // preserve the object slot and hydrate its native cell
@@ -229,7 +262,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.label("__rt_obj_store_prop_type_error");
     // Preserve diagnostic provenance while the decoder cleanup record owns the object.
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // keep the class id until message construction
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // rejected value box
     emitter.instruction("mov rdi, QWORD PTR [r9 + 8]");                         // rejected value payload (object class resolution)
@@ -238,10 +271,19 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // row index
     emitter.instruction("lea r11, [rip + _class_serpdiag_ptrs]");               // diagnostic pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // diagnostic rows for this class
-    emitter.instruction("imul r9, r9, 32");                                     // diagnostic row stride
-    emitter.instruction("add r11, r9");                                         // diagnostic row for this property
-    emitter.instruction("mov r8, QWORD PTR [r11]");                             // message suffix pointer
-    emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // message suffix byte length
+    property_descriptor::emit_hydration_row_address(emitter, "r11", "r11", "r9", "r8");
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "r8",
+        "r11",
+        HydrationField::Suffix,
+    );
+    property_descriptor::emit_load_hydration_field(
+        emitter,
+        "r9",
+        "r11",
+        HydrationField::SuffixLength,
+    );
     emitter.instruction("lea rsi, [rip + _unser_property_assign_prefix]");      // "Cannot assign " prefix
     emitter.instruction(&format!("mov rdx, {}", UNSER_PROPERTY_ASSIGN_PREFIX.len())); // prefix byte length
     emitter.instruction("mov r10, 1");                                          // spell a bool value as true/false

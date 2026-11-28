@@ -838,3 +838,50 @@ echo coercionCaller($argc);
             "{target}: every temporary owner must already be published before the call");
     }
 }
+
+/// Consuming SPL offset helpers receive an independent Mixed owner on every supported ABI.
+#[test]
+fn consuming_spl_offsets_retain_borrowed_boxes_on_all_targets() {
+    let source = r#"<?php
+function readFixedOffset(SplFixedArray $array, mixed $offset): mixed {
+    return $array[$offset];
+}
+function readFixedLiteral(SplFixedArray $array): mixed {
+    return $array[0];
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = asm.split_once("@fn name=readFixedOffset ").unwrap().1
+            .split_once("@endfn name=readFixedOffset").unwrap().0;
+        let (before, _) = body.split_once("__rt_spl_fixed_offset_get").unwrap_or_else(|| {
+            panic!("{target}: missing direct SplFixedArray offset helper in {body}")
+        });
+        let retain = before.rfind("retain boxed argument consumed by intrinsic")
+            .unwrap_or_else(|| panic!("{target}: consuming offset has no independent owner in {body}"));
+        let incref = before[retain..].find("__rt_incref")
+            .unwrap_or_else(|| panic!("{target}: consumed offset owner is not retained in {body}"));
+        assert!(incref > 0, "{target}: retain call must follow its ownership marker");
+        if target == "linux-x86_64" {
+            let retain_body = &before[retain..];
+            let preserved = retain_body.find("mov QWORD PTR [rsp], rcx")
+                .unwrap_or_else(|| panic!("{target}: retain does not preserve the fourth outgoing argument in {body}"));
+            let restored = retain_body.find("mov rcx, QWORD PTR [rsp]")
+                .unwrap_or_else(|| panic!("{target}: retain does not restore the fourth outgoing argument in {body}"));
+            assert!(preserved < incref && incref < restored,
+                "{target}: rcx must surround the nested retain call");
+        }
+        let literal_body = asm.split_once("@fn name=readFixedLiteral ").unwrap().1
+            .split_once("@endfn name=readFixedLiteral").unwrap().0;
+        let (literal_before, _) = literal_body.split_once("__rt_spl_fixed_offset_get")
+            .unwrap_or_else(|| {
+                panic!("{target}: missing literal SplFixedArray offset helper in {literal_body}")
+            });
+        assert!(!literal_before.contains("retain boxed argument consumed by intrinsic"),
+            "{target}: an already-owned literal offset must transfer without a second retain in {literal_body}");
+    }
+}

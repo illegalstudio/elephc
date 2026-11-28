@@ -16,6 +16,8 @@
 //!   eval's own calls on the same reflector are intercepted by identity and never read them.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
 
 /// Materializes one Reflection owner object and transfers its temporary metadata cells.
 ///
@@ -124,10 +126,7 @@ fn eval_reflection_clear_lazy(
             | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
             | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
     ) {
-        let class_name = values.object_class_name(object)?;
-        let bytes = values.string_bytes(class_name);
-        values.release(class_name)?;
-        String::from_utf8_lossy(&bytes?).into_owned()
+        runtime_object_class_name(object, values)?
     } else {
         return Ok(());
     };
@@ -208,10 +207,7 @@ fn eval_reflection_lazy_source(
     if evaluated {
         return Ok(None);
     }
-    let class_name = values.object_class_name(object)?;
-    let bytes = values.string_bytes(class_name);
-    values.release(class_name)?;
-    let reflector_class = String::from_utf8_lossy(&bytes?).into_owned();
+    let reflector_class = runtime_object_class_name(object, values)?;
     let source = format!(
         "return static function (string $m) {{ $r = new \\{reflector_class}({quoted_holder}, {quoted_name}); \
          return $m === 'getBackingValue' ? $r->getBackingValue() : $r->getValue(); }};"
@@ -239,10 +235,18 @@ fn eval_reflection_attach_lazy(
     if let Some(target) = target {
         closure_scope.set("__target", target, crate::scope::ScopeCellOwnership::Borrowed);
     }
-    let closure = eval_expr(expr, context, &mut closure_scope, values)?;
-    let stored = crate::interpreter::statements::eval_set_reflector_slots(object, scope, &[(slot, closure)], context, values);
-    let released = if closure.is_borrowed() { Ok(()) } else { values.release(closure) };
-    stored.and(released)
+    let closure = RuntimeOwnerSlot::new(eval_expr(expr, context, &mut closure_scope, values)?);
+    with_runtime_owners(&closure, || {
+        let stored = crate::interpreter::statements::eval_set_reflector_slots(
+            object,
+            scope,
+            &[(slot, closure.borrowed())],
+            context,
+            values,
+        );
+        let released = release_expr_result(closure.take(), context, values);
+        stored.and(released)
+    })
 }
 
 /// Builds the owner object for [`eval_reflection_owner_object`] inside its silent evaluation.
@@ -268,255 +272,238 @@ fn eval_reflection_owner_object_silently(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = eval_reflection_attribute_array_result(
-        attributes,
-        eval_reflection_attribute_target(owner_kind),
-        context,
-        values,
-    )?;
-    let interface_names_array = eval_reflection_string_array_result(interface_names, values)?;
-    let trait_names_array = eval_reflection_string_array_result(trait_names, values)?;
-    let method_names_array = eval_reflection_string_array_result(method_names, values)?;
-    let property_names_array = eval_reflection_string_array_result(property_names, values)?;
-    let class_metadata_owner = eval_reflection_owner_uses_class_metadata(owner_kind);
-    let is_eval_class = class_metadata_owner
-        && eval_reflection_class_like_exists(reflected_name, context);
-    let method_objects = if class_metadata_owner {
-        if is_eval_class {
-            eval_reflection_member_object_array_result(
-                EVAL_REFLECTION_OWNER_METHOD,
-                reflected_name,
-                method_names,
-                None,
-                context,
-                values,
-            )?
-        } else {
-            eval_reflection_aot_member_object_array_result(
-                EVAL_REFLECTION_OWNER_METHOD,
-                reflected_name,
-                method_names,
-                None,
-                context,
-                values,
-            )?
-        }
-    } else if matches!(
-        owner_kind,
-        EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
-    ) {
-        eval_reflection_parameter_object_array_result(parameter_metadata, context, values)?
-    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
-        match type_metadata {
-            Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
-            None => values.null()?,
-        }
-    } else {
-        values.array_new(0)?
-    };
-    let property_objects = if class_metadata_owner {
-        if is_eval_class {
-            eval_reflection_member_object_array_result(
-                EVAL_REFLECTION_OWNER_PROPERTY,
-                reflected_name,
-                property_names,
-                None,
-                context,
-                values,
-            )?
-        } else {
-            eval_reflection_aot_member_object_array_result(
-                EVAL_REFLECTION_OWNER_PROPERTY,
-                reflected_name,
-                property_names,
-                None,
-                context,
-                values,
-            )?
-        }
-    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
-        // A default that needs a value php-src has not evaluated yet (or throws) is stored as
-        // null; `getDefaultValue()` evaluates it (`eval_reflection_evaluating_getter_result`, or the
-        // `__lazy` closure from compiled code).
-        let preview = match default_value {
-            Some(default) => crate::interpreter::statements::eval_preview_outcome(
-                eval_reflection_class_like_default_value(
-                    parent_class_name,
-                    default_value_trait_origin,
-                    default,
+    let object = with_reflection_staging(values, |temporaries, output, values| {
+        // The caller transfers any owned preview cells, even if another field fails first.
+        if let Some(value) = constant_value { temporaries.stage(value); }
+        if let Some(value) = backing_value { temporaries.stage(value); }
+        let attrs = temporaries.stage(eval_reflection_attribute_array_result(
+            attributes,
+            eval_reflection_attribute_target(owner_kind),
+            context,
+            values,
+        )?);
+        let interface_names_array = temporaries.stage(eval_reflection_string_array_result(interface_names, values)?);
+        let trait_names_array = temporaries.stage(eval_reflection_string_array_result(trait_names, values)?);
+        let method_names_array = temporaries.stage(eval_reflection_string_array_result(method_names, values)?);
+        let property_names_array = temporaries.stage(eval_reflection_string_array_result(property_names, values)?);
+        let class_metadata_owner = eval_reflection_owner_uses_class_metadata(owner_kind);
+        let is_eval_class = class_metadata_owner
+            && eval_reflection_class_like_exists(reflected_name, context);
+        let method_objects = if class_metadata_owner {
+            if is_eval_class {
+                eval_reflection_member_object_array_result(
+                    EVAL_REFLECTION_OWNER_METHOD,
+                    reflected_name,
+                    method_names,
+                    None,
                     context,
                     values,
-                ),
-                context,
-                values,
-            )?,
-            None => None,
-        };
-        match preview {
-            Some(value) => value,
-            None => values.null()?,
-        }
-    } else {
-        values.array_new(0)?
-    };
-    let parent_class =
-        eval_reflection_related_class_result(owner_kind, parent_class_name, context, values)?;
-    let constructor =
-        eval_reflection_constructor_object_result(owner_kind, reflected_name, context, values)?;
-    let (constant_value_cell, release_constant_value) = if owner_kind
-        == EVAL_REFLECTION_OWNER_PROPERTY
-    {
-        match settable_type_metadata {
-            Some(type_metadata) => (
-                eval_reflection_type_object_result(type_metadata, values)?,
-                true,
-            ),
-            None => (values.null()?, true),
-        }
-    } else {
-        // The factory retains the cell it stores. A borrowed handle is the context's own
-        // constant or case cell and stays with the context; an owned one (a fresh cell from the
-        // native catalog) has no other owner left once stored, so it is released below.
-        match constant_value {
-            Some(value) => (value, !value.is_borrowed()),
-            None => (values.null()?, true),
-        }
-    };
-    let (backing_value_cell, release_backing_value) = match backing_value {
-        Some(value) => (value, !value.is_borrowed()),
-        None => (values.null()?, true),
-    };
-    let object = values.reflection_owner_new(
-        owner_kind,
-        reflected_name,
-        attrs,
-        interface_names_array,
-        trait_names_array,
-        method_names_array,
-        property_names_array,
-        method_objects,
-        property_objects,
-        parent_class,
-        flags,
-        modifiers,
-        method_modifiers,
-        constant_value_cell,
-        backing_value_cell,
-        constructor,
-    )?;
-    if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
-        let has_type = values.bool_value(type_metadata.is_some())?;
-        let type_value = match type_metadata {
-            Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
-            None => values.null()?,
-        };
-        let stored = eval_reflection_with_declaring_class_scope(
-            "ReflectionClassConstant",
-            context,
-            |_| -> Result<(), EvalStatus> {
-                values.property_set(object, "__has_type", has_type)?;
-                values.property_set(object, "__type", type_value)
-            },
-        );
-        let has_type_released = values.release(has_type);
-        let type_value_released = values.release(type_value);
-        if let Err(status) = stored.and(has_type_released).and(type_value_released) {
-            let _ = eval_release_value(context, values, object);
-            return Err(status);
-        }
-    }
-    if class_metadata_owner {
-        let stored =
-            eval_reflection_store_class_constants(object, owner_kind, reflected_name, context, values)
-                .and_then(|()| {
-                    eval_reflection_store_class_defaults(object, owner_kind, reflected_name, context, values)
-                });
-        if let Err(status) = stored {
-            let _ = eval_release_value(context, values, object);
-            return Err(status);
-        }
-    }
-    if owner_kind == EVAL_REFLECTION_OWNER_ENUM {
-        if let Err(status) = eval_reflection_store_enum_backing(object, reflected_name, context, values) {
-            let _ = eval_release_value(context, values, object);
-            return Err(status);
-        }
-    }
-    if matches!(
-        owner_kind,
-        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT | EVAL_REFLECTION_OWNER_ENUM
-    ) {
-        let identity = values.object_identity(object)?;
-        context.register_eval_reflection_class(identity, reflected_name);
-    } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-        if let Some(declaring_class) = parent_class_name {
-            let identity = values.object_identity(object)?;
-            context.register_eval_reflection_method(identity, declaring_class, reflected_name);
-        }
-    } else if owner_kind == EVAL_REFLECTION_OWNER_FUNCTION {
-        let identity = values.object_identity(object)?;
-        context.register_eval_reflection_function(identity, reflected_name);
-    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
-        if let Some(declaring_class) = parent_class_name {
-            if flags & EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC != 0 {
-                let identity = values.object_identity(object)?;
-                context.register_eval_dynamic_reflection_property(
-                    identity,
-                    declaring_class,
-                    reflected_name,
-                );
+                )?
             } else {
+                eval_reflection_aot_member_object_array_result(
+                    EVAL_REFLECTION_OWNER_METHOD,
+                    reflected_name,
+                    method_names,
+                    None,
+                    context,
+                    values,
+                )?
+            }
+        } else if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
+        ) {
+            eval_reflection_parameter_object_array_result(parameter_metadata, context, values)?
+        } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+            match type_metadata {
+                Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
+                None => values.null()?,
+            }
+        } else {
+            values.array_new(0)?
+        };
+        let method_objects = temporaries.stage(method_objects);
+        let property_objects = if class_metadata_owner {
+            if is_eval_class {
+                eval_reflection_member_object_array_result(
+                    EVAL_REFLECTION_OWNER_PROPERTY,
+                    reflected_name,
+                    property_names,
+                    None,
+                    context,
+                    values,
+                )?
+            } else {
+                eval_reflection_aot_member_object_array_result(
+                    EVAL_REFLECTION_OWNER_PROPERTY,
+                    reflected_name,
+                    property_names,
+                    None,
+                    context,
+                    values,
+                )?
+            }
+        } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+            // A default that needs a value php-src has not evaluated yet (or throws) is stored as
+            // null; `getDefaultValue()` evaluates it (`eval_reflection_evaluating_getter_result`, or the
+            // `__lazy` closure from compiled code).
+            let preview = match default_value {
+                Some(default) => crate::interpreter::statements::eval_preview_outcome(
+                    eval_reflection_class_like_default_value(
+                        parent_class_name,
+                        default_value_trait_origin,
+                        default,
+                        context,
+                        values,
+                    ),
+                    context,
+                    values,
+                )?,
+                None => None,
+            };
+            match preview {
+                Some(value) => value,
+                None => values.null()?,
+            }
+        } else {
+            values.array_new(0)?
+        };
+        let property_objects = temporaries.stage(property_objects);
+        let parent_class = temporaries.stage(
+            eval_reflection_related_class_result(owner_kind, parent_class_name, context, values)?,
+        );
+        let constructor = temporaries.stage(
+            eval_reflection_constructor_object_result(owner_kind, reflected_name, context, values)?,
+        );
+        let constant_value_cell = if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+            temporaries.stage(match settable_type_metadata {
+                Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
+                None => values.null()?,
+            })
+        } else {
+            match constant_value {
+                Some(value) => value,
+                None => temporaries.stage(values.null()?),
+            }
+        };
+        let backing_value_cell = match backing_value {
+            Some(value) => value,
+            None => temporaries.stage(values.null()?),
+        };
+        let object = values.reflection_owner_new(
+            owner_kind,
+            reflected_name,
+            attrs,
+            interface_names_array,
+            trait_names_array,
+            method_names_array,
+            property_names_array,
+            method_objects,
+            property_objects,
+            parent_class,
+            flags,
+            modifiers,
+            method_modifiers,
+            constant_value_cell,
+            backing_value_cell,
+            constructor,
+        )?;
+        output.replace(Some(object));
+        if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
+            let has_type = temporaries.stage(values.bool_value(type_metadata.is_some())?);
+            let type_value = match type_metadata {
+                Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
+                None => values.null()?,
+            };
+            let type_value = temporaries.stage(type_value);
+            eval_reflection_with_declaring_class_scope(
+                "ReflectionClassConstant",
+                context,
+                |_| -> Result<(), EvalStatus> {
+                    values.property_set(object, "__has_type", has_type)?;
+                    values.property_set(object, "__type", type_value)
+                },
+            )?;
+        }
+        if class_metadata_owner {
+            let stored =
+                eval_reflection_store_class_constants(object, owner_kind, reflected_name, context, values)
+                    .and_then(|()| {
+                        eval_reflection_store_class_defaults(object, owner_kind, reflected_name, context, values)
+                    });
+            stored?;
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_ENUM {
+            eval_reflection_store_enum_backing(object, reflected_name, context, values)?;
+        }
+        if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT | EVAL_REFLECTION_OWNER_ENUM
+        ) {
+            let identity = values.object_identity(object)?;
+            context.register_eval_reflection_class(identity, reflected_name);
+        } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            if let Some(declaring_class) = parent_class_name {
                 let identity = values.object_identity(object)?;
-                context.register_eval_reflection_property(
+                context.register_eval_reflection_method(identity, declaring_class, reflected_name);
+            }
+        } else if owner_kind == EVAL_REFLECTION_OWNER_FUNCTION {
+            let identity = values.object_identity(object)?;
+            context.register_eval_reflection_function(identity, reflected_name);
+        } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+            if let Some(declaring_class) = parent_class_name {
+                if flags & EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC != 0 {
+                    let identity = values.object_identity(object)?;
+                    context.register_eval_dynamic_reflection_property(
+                        identity,
+                        declaring_class,
+                        reflected_name,
+                    );
+                } else {
+                    let identity = values.object_identity(object)?;
+                    context.register_eval_reflection_property(
+                        identity,
+                        declaring_class,
+                        reflected_name,
+                    );
+                }
+            }
+        } else if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_CLASS_CONSTANT
+                | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+                | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+        ) {
+            if let Some(declaring_class) = parent_class_name {
+                let identity = values.object_identity(object)?;
+                context.register_eval_reflection_class_constant(
                     identity,
                     declaring_class,
                     reflected_name,
+                    owner_kind,
                 );
             }
         }
-    } else if matches!(
-        owner_kind,
-        EVAL_REFLECTION_OWNER_CLASS_CONSTANT
-            | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
-            | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
-    ) {
-        if let Some(declaring_class) = parent_class_name {
+        Ok(())
+    })?;
+    let rendered = with_runtime_owners(&object, || {
+        if matches!(owner_kind, EVAL_REFLECTION_OWNER_FUNCTION | EVAL_REFLECTION_OWNER_METHOD) {
             let identity = values.object_identity(object)?;
-            context.register_eval_reflection_class_constant(
-                identity,
-                declaring_class,
-                reflected_name,
-                owner_kind,
-            );
-        }
-    }
-    values.release(attrs)?;
-    values.release(interface_names_array)?;
-    values.release(trait_names_array)?;
-    values.release(method_names_array)?;
-    values.release(property_names_array)?;
-    values.release(method_objects)?;
-    values.release(property_objects)?;
-    values.release(parent_class)?;
-    values.release(constructor)?;
-    if release_constant_value {
-        values.release(constant_value_cell)?;
-    }
-    if release_backing_value {
-        values.release(backing_value_cell)?;
-    }
-    if matches!(owner_kind, EVAL_REFLECTION_OWNER_FUNCTION | EVAL_REFLECTION_OWNER_METHOD) {
-        let identity = values.object_identity(object)?;
-        if let Some(target) = eval_reflection_function_method_target(identity, context, values)? {
-            let rendered = eval_reflection_function_method_to_string(&target);
-            let owner = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-                "ReflectionMethod"
-            } else { "ReflectionFunction" };
-            if let Err(status) = eval_reflection_store_dump(object, owner, &rendered, context, values) {
-                let _ = eval_release_value(context, values, object);
-                return Err(status);
+            if let Some(target) = eval_reflection_function_method_target(identity, context, values)? {
+                let rendered = eval_reflection_function_method_to_string(&target);
+                let owner = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+                    "ReflectionMethod"
+                } else {
+                    "ReflectionFunction"
+                };
+                eval_reflection_store_dump(object, owner, &rendered, context, values)?;
             }
         }
+        Ok(())
+    });
+    if let Err(status) = rendered {
+        let _ = eval_release_value(context, values, object);
+        return Err(status);
     }
     Ok(object)
 }
@@ -548,11 +535,11 @@ fn eval_reflection_store_class_constants(
 ) -> Result<(), EvalStatus> {
     let constants = eval_reflection_constants_map(reflected_name, None, context, values)?;
     let scope = eval_reflection_class_owner_scope(owner_kind);
-    let stored = eval_reflection_with_declaring_class_scope(scope, context, |_| {
-        values.property_set(object, "__constants", constants)
-    });
-    let released = eval_release_value(context, values, constants);
-    stored.and(released)
+    with_eval_value_lease(constants, context, values, |constants, context, values| {
+        eval_reflection_with_declaring_class_scope(scope, context, |_| {
+            values.property_set(object, "__constants", constants)
+        })
+    })
 }
 
 /// Stores what the compiled `getDefaultProperties()` getter reads from a class reflector: the
@@ -584,19 +571,19 @@ fn eval_reflection_store_class_defaults(
     };
     match defaults {
         EvalReflectionDefaultProperties::Values(defaults) => {
-            let stored = eval_reflection_with_declaring_class_scope(scope, context, |_| {
-                values.property_set(object, "__default_properties", defaults)
-            });
-            let released = eval_release_value(context, values, defaults);
-            stored.and(released)
+            with_eval_value_lease(defaults, context, values, |defaults, context, values| {
+                eval_reflection_with_declaring_class_scope(scope, context, |_| {
+                    values.property_set(object, "__default_properties", defaults)
+                })
+            })
         }
         EvalReflectionDefaultProperties::DeferredError(message) => {
             let text = values.string(&message)?;
-            let stored = eval_reflection_with_declaring_class_scope(scope, context, |_| {
-                values.property_set(object, "__default_error", text)
-            });
-            let released = values.release(text);
-            stored.and(released)
+            with_eval_value_lease(text, context, values, |text, context, values| {
+                eval_reflection_with_declaring_class_scope(scope, context, |_| {
+                    values.property_set(object, "__default_error", text)
+                })
+            })
         }
     }
 }
@@ -616,22 +603,24 @@ fn eval_reflection_store_enum_backing(
     else {
         return Ok(());
     };
-    let is_backed = values.bool_value(true)?;
+    let is_backed = RuntimeOwnerSlot::new(values.bool_value(true)?);
     let metadata = eval_reflection_enum_backing_type_metadata(backing_type);
     let type_object = match eval_reflection_type_object_result(&metadata, values) {
-        Ok(type_object) => type_object,
+        Ok(type_object) => RuntimeOwnerSlot::new(type_object),
         Err(status) => {
-            let _ = values.release(is_backed);
+            let _ = values.release(is_backed.take());
             return Err(status);
         }
     };
-    let stored = eval_reflection_with_declaring_class_scope("ReflectionEnum", context, |_| {
-        values.property_set(object, "__is_backed", is_backed)?;
-        values.property_set(object, "__backing_type", type_object)
-    });
-    let is_backed_released = values.release(is_backed);
-    let type_object_released = values.release(type_object);
-    stored.and(is_backed_released).and(type_object_released)
+    with_runtime_owners(&(&is_backed, &type_object), || {
+        let stored = eval_reflection_with_declaring_class_scope("ReflectionEnum", context, |_| {
+            values.property_set(object, "__is_backed", is_backed.borrowed())?;
+            values.property_set(object, "__backing_type", type_object.borrowed())
+        });
+        let is_backed_released = values.release(is_backed.take());
+        let type_object_released = values.release(type_object.take());
+        stored.and(is_backed_released).and(type_object_released)
+    })
 }
 
 /// Stores a dump in the slot read by native casts, releasing the temporary on both paths.
@@ -639,12 +628,14 @@ fn eval_reflection_store_dump(
     object: RuntimeCellHandle, owner: &str, rendered: &str,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let text = values.string(rendered)?;
-    let result = eval_reflection_with_declaring_class_scope(owner, context, |_| {
-        values.property_set(object, "__string", text)
-    });
-    let released = values.release(text);
-    result.and(released)
+    let text = RuntimeOwnerSlot::new(values.string(rendered)?);
+    with_runtime_owners(&text, || {
+        let result = eval_reflection_with_declaring_class_scope(owner, context, |_| {
+            values.property_set(object, "__string", text.borrowed())
+        });
+        let released = values.release(text.take());
+        result.and(released)
+    })
 }
 
 /// Builds the value stored in a class's parent slot or a member's declaring-class slot.
@@ -832,11 +823,14 @@ pub(super) fn eval_reflection_string_array_result(
     names: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.string_array_new(names.len())?;
-    for name in names {
-        result = values.string_array_push(result, name)?;
-    }
-    Ok(result)
+    with_reflection_staging(values, |_, output, values| {
+        output.replace(Some(values.string_array_new(names.len())?));
+        for name in names {
+            let updated = values.string_array_push(output.borrowed(), name)?;
+            output.update_receiver(updated);
+        }
+        Ok(())
+    })
 }
 
 /// Builds a string-keyed PHP associative array from owned string pairs.
@@ -844,13 +838,11 @@ pub(super) fn eval_reflection_string_assoc_result(
     pairs: Vec<(String, String)>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(pairs.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, pairs.len())?;
     for (key, value) in pairs {
-        let key = values.string(&key)?;
-        let value = values.string(&value)?;
-        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
+        result.string(&key, |values| values.string(&value))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds a name-keyed PHP array of full ReflectionClass objects.
@@ -859,13 +851,11 @@ pub(super) fn eval_reflection_class_object_map_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(names.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, names.len())?;
     for name in names {
-        let key = values.string(name)?;
-        let object = eval_reflection_full_class_object_result(name, context, values)?;
-        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, object)?;
+        result.string(name, |values| eval_reflection_full_class_object_result(name, context, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Maps a synthetic reflection owner kind to PHP's `Attribute::TARGET_*` bitmask.
@@ -898,12 +888,11 @@ pub(super) fn eval_reflection_parameter_object_array_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.object_array_new(parameters.len())?;
+    let mut result = EvalArrayBuilder::objects(values, parameters.len())?;
     for parameter in parameters {
-        let parameter_object = eval_reflection_parameter_object_result(parameter, context, values)?;
-        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, parameter_object)?;
+        result.object(|values| eval_reflection_parameter_object_result(parameter, context, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Materializes one ReflectionParameter object through the shared reflection helper.
@@ -912,91 +901,82 @@ pub(super) fn eval_reflection_parameter_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = eval_reflection_attribute_array_result(
-        &parameter.attributes,
-        EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER,
-        context,
-        values,
-    )?;
-    let declaring_function = match parameter.declaring_function.as_ref() {
-        Some(metadata) => {
-            eval_reflection_declaring_function_object_result(metadata, context, values)?
-        }
-        None => values.null()?,
-    };
-    let trait_names = values.array_new(0)?;
-    let method_names = values.array_new(0)?;
-    let property_names = values.array_new(0)?;
-    let method_objects = values.array_new(0)?;
-    let parent_class = match parameter.declaring_class_name.as_deref() {
-        Some(declaring_class_name) => {
-            eval_reflection_lazy_class_name_result(declaring_class_name, context, values)?
-        }
-        None => values.null()?,
-    };
-    let type_value = match parameter.type_metadata.as_ref() {
-        Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
-        None => values.null()?,
-    };
-    let class_value = eval_reflection_parameter_class_value(parameter, context, values)?;
-    // Materializing the reflector is not a PHP evaluation; `getDefaultValue()` raises the
-    // default's notices on each call (`eval_reflection_evaluating_getter_result`). A default
-    // that constructs an object is not previewed at all: that would run its constructor, and
-    // both getters evaluate it themselves (eval directly, compiled code through
-    // `__default_factory`).
-    let constructs = parameter
-        .default_value
-        .as_ref()
-        .is_some_and(crate::interpreter::statements::eval_expr_constructs_object);
-    context.begin_deprecation_silence();
-    let default_value = if constructs {
-        values.null()
-    } else {
-        eval_reflection_parameter_default_value(parameter, context, values)
-    };
-    context.end_deprecation_silence();
-    // A default that needs a value php-src has not evaluated yet (or throws) is stored as null;
-    // eval's `getDefaultValue()` evaluates it on the call.
-    let default_value = match crate::interpreter::statements::eval_preview_outcome(default_value, context, values)? {
-        Some(value) => value,
-        None => values.null()?,
-    };
-    let default_value_constant_name = match parameter.default_value_constant_name.as_deref() {
-        Some(name) => values.string(name)?,
-        None => values.null()?,
-    };
-    let constructor = values.null()?;
-    let flags = eval_reflection_parameter_flags(parameter);
-    let object = values.reflection_owner_new(
-        EVAL_REFLECTION_OWNER_PARAMETER,
-        &parameter.name,
-        attrs,
-        declaring_function,
-        trait_names,
-        method_names,
-        property_names,
-        type_value,
-        default_value,
-        parent_class,
-        flags,
-        parameter.position as u64,
-        0,
-        default_value_constant_name,
-        class_value,
-        constructor,
-    )?;
-    values.release(attrs)?;
-    values.release(declaring_function)?;
-    values.release(trait_names)?;
-    values.release(method_names)?;
-    values.release(property_names)?;
-    values.release(method_objects)?;
-    values.release(type_value)?;
-    values.release(default_value)?;
-    values.release(parent_class)?;
-    values.release(default_value_constant_name)?;
-    values.release(class_value)?;
-    values.release(constructor)?;
+    let object = with_reflection_staging(values, |temporaries, output, values| {
+        let attrs = temporaries.stage(eval_reflection_attribute_array_result(
+            &parameter.attributes,
+            EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER,
+            context,
+            values,
+        )?);
+        let declaring_function = temporaries.stage(match parameter.declaring_function.as_ref() {
+            Some(metadata) => {
+                eval_reflection_declaring_function_object_result(metadata, context, values)?
+            }
+            None => values.null()?,
+        });
+        let trait_names = temporaries.stage(values.array_new(0)?);
+        let method_names = temporaries.stage(values.array_new(0)?);
+        let property_names = temporaries.stage(values.array_new(0)?);
+        let parent_class = temporaries.stage(match parameter.declaring_class_name.as_deref() {
+            Some(declaring_class_name) => {
+                eval_reflection_lazy_class_name_result(declaring_class_name, context, values)?
+            }
+            None => values.null()?,
+        });
+        let type_value = temporaries.stage(match parameter.type_metadata.as_ref() {
+            Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
+            None => values.null()?,
+        });
+        let class_value = temporaries.stage(eval_reflection_parameter_class_value(parameter, context, values)?);
+        // Materializing the reflector is not a PHP evaluation; `getDefaultValue()` raises the
+        // default's notices on each call (`eval_reflection_evaluating_getter_result`). A default
+        // that constructs an object is not previewed at all: that would run its constructor, and
+        // both getters evaluate it themselves (eval directly, compiled code through
+        // `__default_factory`).
+        let constructs = parameter
+            .default_value
+            .as_ref()
+            .is_some_and(crate::interpreter::statements::eval_expr_constructs_object);
+        context.begin_deprecation_silence();
+        let default_value = if constructs {
+            values.null()
+        } else {
+            eval_reflection_parameter_default_value(parameter, context, values)
+        };
+        context.end_deprecation_silence();
+        // A default that needs a value php-src has not evaluated yet (or throws) is stored as null;
+        // eval's `getDefaultValue()` evaluates it on the call.
+        let default_value = temporaries.stage(match crate::interpreter::statements::eval_preview_outcome(default_value, context, values)? {
+            Some(value) => value,
+            None => values.null()?,
+        });
+        let default_value_constant_name = temporaries.stage(match parameter.default_value_constant_name.as_deref() {
+            Some(name) => values.string(name)?,
+            None => values.null()?,
+        });
+        let constructor = temporaries.stage(values.null()?);
+        let flags = eval_reflection_parameter_flags(parameter);
+        let object = values.reflection_owner_new(
+            EVAL_REFLECTION_OWNER_PARAMETER,
+            &parameter.name,
+            attrs,
+            declaring_function,
+            trait_names,
+            method_names,
+            property_names,
+            type_value,
+            default_value,
+            parent_class,
+            flags,
+            parameter.position as u64,
+            0,
+            default_value_constant_name,
+            class_value,
+            constructor,
+        )?;
+        output.replace(Some(object));
+        Ok(())
+    })?;
     if let Err(status) = attach_parameter_default_factory(object, parameter, context, values)
         .and_then(|()| eval_reflection_attach_parameter_lazy_default(object, parameter, context, values))
     {
@@ -1201,46 +1181,10 @@ pub(super) fn eval_reflection_named_type_object_result(
     type_metadata: &EvalReflectionNamedTypeMetadata,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = values.array_new(0)?;
-    let interface_names = values.array_new(0)?;
-    let trait_names = values.array_new(0)?;
-    let method_names = values.array_new(0)?;
-    let property_names = values.array_new(0)?;
-    let method_objects = values.array_new(0)?;
-    let property_objects = values.array_new(0)?;
-    let parent_class = values.bool_value(false)?;
-    let constant_value = values.null()?;
-    let backing_value = values.null()?;
-    let flags = eval_reflection_named_type_flags(type_metadata);
-    let object = values.reflection_owner_new(
-        EVAL_REFLECTION_OWNER_NAMED_TYPE,
-        &type_metadata.name,
-        attrs,
-        interface_names,
-        trait_names,
-        method_names,
-        property_names,
-        method_objects,
-        property_objects,
-        parent_class,
-        flags,
-        0,
-        0,
-        constant_value,
-        backing_value,
-        constant_value,
-    )?;
-    values.release(attrs)?;
-    values.release(interface_names)?;
-    values.release(trait_names)?;
-    values.release(method_names)?;
-    values.release(property_names)?;
-    values.release(method_objects)?;
-    values.release(property_objects)?;
-    values.release(parent_class)?;
-    values.release(constant_value)?;
-    values.release(backing_value)?;
-    Ok(object)
+    eval_reflection_type_owner(
+        EVAL_REFLECTION_OWNER_NAMED_TYPE, &type_metadata.name,
+        eval_reflection_named_type_flags(type_metadata), None, values,
+    )
 }
 
 /// Materializes one ReflectionUnionType object through the shared reflection helper.
@@ -1248,46 +1192,10 @@ pub(super) fn eval_reflection_union_type_object_result(
     type_metadata: &EvalReflectionUnionTypeMetadata,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = values.array_new(0)?;
-    let interface_names = values.array_new(0)?;
-    let trait_names = values.array_new(0)?;
-    let method_names = values.array_new(0)?;
-    let property_names = values.array_new(0)?;
-    let types = eval_reflection_named_type_object_array_result(&type_metadata.types, values)?;
-    let property_objects = values.array_new(0)?;
-    let parent_class = values.bool_value(false)?;
-    let constant_value = values.null()?;
-    let backing_value = values.null()?;
-    let flags = eval_reflection_union_type_flags(type_metadata);
-    let object = values.reflection_owner_new(
-        EVAL_REFLECTION_OWNER_UNION_TYPE,
-        "",
-        attrs,
-        interface_names,
-        trait_names,
-        method_names,
-        property_names,
-        types,
-        property_objects,
-        parent_class,
-        flags,
-        0,
-        0,
-        constant_value,
-        backing_value,
-        constant_value,
-    )?;
-    values.release(attrs)?;
-    values.release(interface_names)?;
-    values.release(trait_names)?;
-    values.release(method_names)?;
-    values.release(property_names)?;
-    values.release(types)?;
-    values.release(property_objects)?;
-    values.release(parent_class)?;
-    values.release(constant_value)?;
-    values.release(backing_value)?;
-    Ok(object)
+    eval_reflection_type_owner(
+        EVAL_REFLECTION_OWNER_UNION_TYPE, "", eval_reflection_union_type_flags(type_metadata),
+        Some(&type_metadata.types), values,
+    )
 }
 
 /// Materializes one ReflectionIntersectionType object through the shared reflection helper.
@@ -1295,45 +1203,54 @@ pub(super) fn eval_reflection_intersection_type_object_result(
     type_metadata: &EvalReflectionIntersectionTypeMetadata,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = values.array_new(0)?;
-    let interface_names = values.array_new(0)?;
-    let trait_names = values.array_new(0)?;
-    let method_names = values.array_new(0)?;
-    let property_names = values.array_new(0)?;
-    let types = eval_reflection_named_type_object_array_result(&type_metadata.types, values)?;
-    let property_objects = values.array_new(0)?;
-    let parent_class = values.bool_value(false)?;
-    let constant_value = values.null()?;
-    let backing_value = values.null()?;
-    let object = values.reflection_owner_new(
-        EVAL_REFLECTION_OWNER_INTERSECTION_TYPE,
-        "",
-        attrs,
-        interface_names,
-        trait_names,
-        method_names,
-        property_names,
-        types,
-        property_objects,
-        parent_class,
-        0,
-        0,
-        0,
-        constant_value,
-        backing_value,
-        constant_value,
-    )?;
-    values.release(attrs)?;
-    values.release(interface_names)?;
-    values.release(trait_names)?;
-    values.release(method_names)?;
-    values.release(property_names)?;
-    values.release(types)?;
-    values.release(property_objects)?;
-    values.release(parent_class)?;
-    values.release(constant_value)?;
-    values.release(backing_value)?;
-    Ok(object)
+    eval_reflection_type_owner(
+        EVAL_REFLECTION_OWNER_INTERSECTION_TYPE, "", 0, Some(&type_metadata.types), values,
+    )
+}
+
+/// Stages the fields shared by named and composite Reflection type objects.
+fn eval_reflection_type_owner(
+    kind: u64,
+    name: &str,
+    flags: u64,
+    types: Option<&[EvalReflectionNamedTypeMetadata]>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_reflection_staging(values, |temporaries, output, values| {
+        let attrs = temporaries.stage(values.array_new(0)?);
+        let interface_names = temporaries.stage(values.array_new(0)?);
+        let trait_names = temporaries.stage(values.array_new(0)?);
+        let method_names = temporaries.stage(values.array_new(0)?);
+        let property_names = temporaries.stage(values.array_new(0)?);
+        let types = temporaries.stage(match types {
+            Some(types) => eval_reflection_named_type_object_array_result(types, values)?,
+            None => values.array_new(0)?,
+        });
+        let property_objects = temporaries.stage(values.array_new(0)?);
+        let parent_class = temporaries.stage(values.bool_value(false)?);
+        let constant_value = temporaries.stage(values.null()?);
+        let backing_value = temporaries.stage(values.null()?);
+        let object = values.reflection_owner_new(
+            kind, name, attrs, interface_names, trait_names, method_names, property_names,
+            types, property_objects, parent_class, flags, 0, 0, constant_value,
+            backing_value, constant_value,
+        )?;
+        output.replace(Some(object));
+        Ok(())
+    })
+}
+
+/// Exposes staged metadata and an unpublished reflector to native cleanup and collection.
+fn with_reflection_staging<V: RuntimeValueOps>(
+    values: &mut V,
+    construct: impl FnOnce(&StagedRuntimeOwners, &RuntimeOwnerSlot, &mut V) -> Result<(), EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let temporaries = StagedRuntimeOwners::default();
+    let output = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&temporaries, &output), || {
+        let result = construct(&temporaries, &output, values);
+        temporaries.finish(result, &output, |value| values.release(value))
+    })
 }
 
 /// Builds a direct object array of populated ReflectionNamedType objects.
@@ -1341,12 +1258,11 @@ pub(super) fn eval_reflection_named_type_object_array_result(
     types: &[EvalReflectionNamedTypeMetadata],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.object_array_new(types.len())?;
+    let mut result = EvalArrayBuilder::objects(values, types.len())?;
     for type_metadata in types {
-        let type_object = eval_reflection_named_type_object_result(type_metadata, values)?;
-        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, type_object)?;
+        result.object(|values| eval_reflection_named_type_object_result(type_metadata, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds the `ReflectionMethod|null` value stored in ReflectionClass::__constructor.
@@ -1473,7 +1389,7 @@ pub(super) fn eval_reflection_member_object_array_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.object_array_new(names.len())?;
+    let mut result = EvalArrayBuilder::objects(values, names.len())?;
     for name in names {
         let Some(member) = eval_reflection_member_metadata(owner_kind, class_name, name, context)
         else {
@@ -1482,11 +1398,9 @@ pub(super) fn eval_reflection_member_object_array_result(
         if !eval_reflection_member_matches_filter(&member, filter) {
             continue;
         }
-        let member_object =
-            eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
-        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, member_object)?;
+        result.object(|values| eval_reflection_member_object_result(owner_kind, name, &member, context, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds a direct object array of AOT ReflectionMethod or ReflectionProperty objects for a
@@ -1499,11 +1413,11 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.object_array_new(names.len())?;
+    let mut result = EvalArrayBuilder::objects(values, names.len())?;
     for name in names {
         let member = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
             eval_reflection_aot_method_metadata_with_signature_if_exists(
-                class_name, name, context, values,
+                class_name, name, context, result.values(),
             )?
         } else {
             eval_reflection_native_interface_property_requirement(class_name, name, context)
@@ -1511,7 +1425,7 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
                     eval_reflection_interface_property_metadata(declaring_class, &property)
                 })
                 .or(eval_reflection_aot_property_metadata_if_exists(
-                    class_name, name, context, values,
+                    class_name, name, context, result.values(),
                 )?)
         };
         let Some(member) = member else {
@@ -1525,9 +1439,7 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         // answer `match` for a method written `Match`, disagreeing with the same program's AOT
         // reflection and with PHP (issue #571). Property names were never keyed
         // case-insensitively, so they were already passed through.
-        let member_object =
-            eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
-        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, member_object)?;
+        result.object(|values| eval_reflection_member_object_result(owner_kind, name, &member, context, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

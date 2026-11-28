@@ -11,7 +11,8 @@
 //!   the next `readdir`/`closedir` call.
 //! - A null pointer result marks end-of-directory and is boxed as PHP `false`.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::{buffers::stream_tables, interop::glob_storage};
 
 /// readdir: read the next directory entry name.
 /// Input:  AArch64 x0 = directory descriptor / x86_64 rdi = directory descriptor
@@ -34,18 +35,9 @@ pub fn emit_readdir(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
-    abi::emit_symbol_address(emitter, "x9", "_glob_handles");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // glob_state* = _glob_handles[fd]
+    stream_tables::GLOB_HANDLES.emit_load_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("cbz x10, __rt_readdir_libc");                          // no glob handle: fall through to libc readdir
-    // glob_state layout: [0)=gl_pathv, [8)=gl_pathc, [16)=index.
-    emitter.instruction("ldr x11, [x10, #8]");                                  // load gl_pathc (match count)
-    emitter.instruction("ldr x12, [x10, #16]");                                 // load current iteration index
-    emitter.instruction("cmp x12, x11");                                        // exhausted the match list?
-    emitter.instruction("b.hs __rt_readdir_end");                               // yes: report end of directory
-    emitter.instruction("ldr x13, [x10, #0]");                                  // load gl_pathv (char**)
-    emitter.instruction("ldr x1, [x13, x12, lsl #3]");                          // path pointer = pathv[index]
-    emitter.instruction("add x12, x12, #1");                                    // advance the iterator
-    emitter.instruction("str x12, [x10, #16]");                                 // persist the new index
+    glob_storage::emit_next_path(emitter, "__rt_readdir_end");
     emitter.instruction("mov x2, #0");                                          // length counter for the strlen scan
     emitter.label("__rt_readdir_glob_strlen");
     emitter.instruction("ldrb w9, [x1, x2]");                                   // load the next path byte
@@ -58,8 +50,7 @@ pub fn emit_readdir(emitter: &mut Emitter) {
 
     emitter.label("__rt_readdir_libc");
     // -- look up the DIR* recorded for this descriptor --
-    abi::emit_symbol_address(emitter, "x9", "_dir_handles");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // DIR* = _dir_handles[fd]
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.emit_load_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("cbz x10, __rt_readdir_end");                           // no handle recorded: report end of directory
     emitter.instruction("mov x0, x10");                                         // DIR* argument for readdir
     emitter.bl_c("readdir");
@@ -101,19 +92,10 @@ fn emit_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
-    abi::emit_symbol_address(emitter, "r9", "_glob_handles");                   // base of the fd → glob_state pointer table
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // glob_state* = _glob_handles[fd]
+    stream_tables::GLOB_HANDLES.emit_load_indexed_word(emitter, "r10", "rdi", "r9");
     emitter.instruction("test r10, r10");                                       // glob handle present?
     emitter.instruction("jz __rt_readdir_libc_x86");                            // no glob handle: fall through to libc readdir
-    // glob_state layout: [0)=gl_pathv, [8)=gl_pathc, [16)=index.
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load gl_pathc (match count)
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // load current iteration index
-    emitter.instruction("cmp rdx, r11");                                        // exhausted the match list?
-    emitter.instruction("jae __rt_readdir_end_x86");                            // yes: report end of directory
-    emitter.instruction("mov r8, QWORD PTR [r10 + 0]");                         // load gl_pathv (char**)
-    emitter.instruction("mov rsi, QWORD PTR [r8 + rdx * 8]");                   // path pointer = pathv[index]
-    emitter.instruction("add rdx, 1");                                          // advance the iterator
-    emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // persist the new index
+    glob_storage::emit_next_path(emitter, "__rt_readdir_end_x86");
     emitter.instruction("xor rdx, rdx");                                        // length counter for the strlen scan
     emitter.label("__rt_readdir_glob_strlen_x86");
     emitter.instruction("mov r8b, BYTE PTR [rsi + rdx]");                       // load the next path byte
@@ -128,8 +110,7 @@ fn emit_readdir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_readdir_libc_x86");
     // -- look up the DIR* recorded for this descriptor --
-    abi::emit_symbol_address(emitter, "r9", "_dir_handles");                    // base of the fd->DIR* table
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // DIR* = _dir_handles[fd]
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.emit_load_indexed_word(emitter, "r10", "rdi", "r9");
     emitter.instruction("test r10, r10");                                       // was a DIR* recorded for this descriptor?
     emitter.instruction("jz __rt_readdir_end_x86");                             // no handle recorded: report end of directory
     emitter.instruction("mov rdi, r10");                                        // DIR* argument for readdir

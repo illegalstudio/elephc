@@ -12,6 +12,7 @@
 //!   heap storage instead of running past the 64 KiB concat scratch into the stream-handle,
 //!   exception and heap globals that follow it in BSS.
 
+use elephc_memoir::buffers::{stream_scratch, stream_tables};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
@@ -65,14 +66,27 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- reserve a destination sized for the whole requested read --
     emitter.instruction("cmp x1, #1");                                          // does the caller actually request at least one byte?
     emitter.instruction("b.lt __rt_fread_dest_scratch");                        // non-positive requests write nothing, so keep the current scratch tail
-    emitter.instruction("mov x0, x1");                                          // request storage for the full requested read length
+    emitter.instruction("cmp x0, #256");                                        // only registered descriptors can carry a read filter
+    emitter.instruction("b.hs __rt_fread_size_ready");                          // invalid or untracked descriptors use the raw read length
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "w9", "x0", "x9");
+    emitter.instruction("cmp w9, #6");                                          // is this the Base64 expansion filter?
+    emitter.instruction("b.eq __rt_fread_expand_size");                         // reserve additional space for padded output
+    emitter.instruction("cmp w9, #8");                                          // is this the quoted-printable expansion filter?
+    emitter.instruction("b.ne __rt_fread_size_ready");                          // other builtins never grow the caller's read window
+    emitter.label("__rt_fread_expand_size");
+    emitter.instruction("mov x0, x1");                                          // pass the original read count to the capacity planner
+    stream_scratch::emit_growing_read_capacity(emitter, "__rt_fread_expand");
+    emitter.instruction("b __rt_fread_reserve");                                // use the larger of the read and transformed lengths
+    emitter.label("__rt_fread_size_ready");
+    emitter.instruction("mov x0, x1");                                          // reserve exactly the caller's requested read size
+    emitter.label("__rt_fread_reserve");
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the incoming bytes
     emitter.instruction("mov x12, x0");                                         // destination pointer for the read
     emitter.instruction("b __rt_fread_dest_ready");                             // the destination window is reserved
     emitter.label("__rt_fread_dest_scratch");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // compute write pointer: buf + offset
     emitter.label("__rt_fread_dest_ready");
     emitter.instruction("str x12, [sp, #16]");                                  // save start pointer for return value
@@ -125,9 +139,8 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_fread_done");                            // if bytes > 0, skip eof flag
     emitter.label("__rt_fread_mark_eof");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "w10", "x0", "x9");
 
     emitter.label("__rt_fread_would_block");
     emitter.instruction("str xzr, [sp, #24]");                                  // return an empty read without setting EOF for EAGAIN/EWOULDBLOCK
@@ -140,8 +153,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- apply an attached read filter to the bytes just read --
     emitter.instruction("cbz x2, __rt_fread_ret");                              // EOF and transient empty reads have no bucket to filter
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
-    emitter.instruction("ldrb w3, [x9, x0]");                                   // read filter id for this descriptor
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "w3", "x0", "x9");
     emitter.instruction("cbz w3, __rt_fread_ret");                              // skip when no read filter is attached
     emitter.instruction("cmp w3, #128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
     emitter.instruction("b.lt __rt_fread_builtin_filter");                      // built-in filter: in-place transform
@@ -150,6 +162,10 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fread_ret");                                    // common epilogue
     emitter.label("__rt_fread_builtin_filter");
     emitter.instruction("bl __rt_apply_stream_filter");                         // transform the read bytes in place; x2 = (possibly compacted) length on return
+    emitter.instruction("ldr x9, [sp, #24]");                                   // recover the original number of bytes read
+    emitter.instruction("cmp x2, x9");                                          // did the filter extend the published range?
+    emitter.instruction("b.ls __rt_fread_ret");                                 // preserve historical cursor placement for shrinking results
+    emitter.instruction("bl __rt_concat_publish");                              // protect every byte of the length-growing result
 
     // -- restore frame and return --
     emitter.label("__rt_fread_ret");
@@ -184,13 +200,26 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested byte count across the concat-buffer address computation and libc read() call
     emitter.instruction("cmp rsi, 1");                                          // does the caller actually request at least one byte?
     emitter.instruction("jl __rt_fread_dest_scratch_x86");                      // non-positive requests write nothing, so keep the current scratch tail
-    emitter.instruction("mov rax, rsi");                                        // request storage for the full requested read length
+    emitter.instruction("cmp rdi, 256");                                        // only registered descriptors can carry a read filter
+    emitter.instruction("jae __rt_fread_size_ready_x86");                       // invalid or untracked descriptors use the raw read length
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "ecx", "rdi", "r10");
+    emitter.instruction("cmp ecx, 6");                                          // is this the Base64 expansion filter?
+    emitter.instruction("je __rt_fread_expand_size_x86");                       // reserve additional space for padded output
+    emitter.instruction("cmp ecx, 8");                                          // is this the quoted-printable expansion filter?
+    emitter.instruction("jne __rt_fread_size_ready_x86");                       // other builtins never grow the caller's read window
+    emitter.label("__rt_fread_expand_size_x86");
+    emitter.instruction("mov rax, rsi");                                        // pass the original read count to the capacity planner
+    stream_scratch::emit_growing_read_capacity(emitter, "__rt_fread_expand_x86");
+    emitter.instruction("jmp __rt_fread_reserve_x86");                          // use the larger of the read and transformed lengths
+    emitter.label("__rt_fread_size_ready_x86");
+    emitter.instruction("mov rax, rsi");                                        // reserve exactly the caller's requested read size
+    emitter.label("__rt_fread_reserve_x86");
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the incoming bytes
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the reserved destination pointer for the final elephc string result
     emitter.instruction("jmp __rt_fread_dest_ready_x86");                       // the destination window is reserved
     emitter.label("__rt_fread_dest_scratch_x86");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the fread() result
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address once for the x86_64 fread() helper
+    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");             // load the current concat-buffer absolute offset before appending the fread() result
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r11");                    // materialize the concat-buffer base address once for the x86_64 fread() helper
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
     emitter.label("__rt_fread_dest_ready_x86");
@@ -221,12 +250,12 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fread_eof_x86");                              // zero-byte read means real EOF
 
     emitter.label("__rt_fread_read_ok_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the original read count across filtering
     emitter.instruction("mov rdx, rax");                                        // return the successful byte count in the x86_64 elephc string-length result register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the reserved start pointer in the x86_64 elephc string-pointer result register
     emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed reads
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
-    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
-    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor
+    stream_tables::READ_FILTERS.emit_load_indexed_byte(emitter, "ecx", "r10", "r11");
     emitter.instruction("test rcx, rcx");                                       // is a read filter attached to this stream?
     emitter.instruction("jz __rt_fread_ret_x86");                               // skip when no read filter is attached
     emitter.instruction("cmp rcx, 128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
@@ -239,6 +268,9 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fread_ret_x86");                              // common epilogue
     emitter.label("__rt_fread_builtin_filter_x86");
     emitter.instruction("call __rt_apply_stream_filter");                       // transform the read bytes in place; rdx = (possibly compacted) length on return
+    emitter.instruction("cmp rdx, QWORD PTR [rbp - 32]");                       // did the filter extend the published range?
+    emitter.instruction("jbe __rt_fread_ret_x86");                              // preserve historical cursor placement for shrinking results
+    emitter.instruction("call __rt_concat_publish");                            // protect every byte of the length-growing result
     emitter.label("__rt_fread_ret_x86");
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path
@@ -260,11 +292,35 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fread_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
-    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "1", "r10", "r11");
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when libc read() reports EOF or failure
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty-string result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the EOF/error fread() path
     emitter.instruction("ret");                                                 // return the empty string result for the exhausted or failed stream read
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// A growing filter has a checked destination before read and publishes the expanded output.
+    #[test]
+    fn fread_bounded_expansion_covers_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_fread(&mut emitter);
+            let asm = emitter.output();
+            let capacity = asm.find(if name == "linux-x86_64" {
+                "__rt_fread_expand_x86_bounded:"
+            } else {
+                "__rt_fread_expand_bounded:"
+            }).unwrap();
+            let reserve = asm.find("__rt_concat_reserve").unwrap();
+            let filtered = asm.find("__rt_apply_stream_filter").unwrap();
+            let publish = asm.rfind("__rt_concat_publish").unwrap();
+            assert!(capacity < reserve && reserve < filtered && filtered < publish, "{name}: {asm}");
+        }
+    }
 }

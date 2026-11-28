@@ -38,7 +38,7 @@ pub fn emit_array_chunk_to_hash(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // set up the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the source indexed array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested chunk size
-    emitter.instruction("ldr x2, [x0]");                                        // load the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x2", "x0"); // load the source indexed-array logical length
     emitter.instruction("sub x3, x1, #1");                                      // bias the numerator by chunk_size - 1
     emitter.instruction("add x2, x2, x3");                                      // length + chunk_size - 1 for ceiling division
     emitter.instruction("udiv x2, x2, x1");                                     // number of chunks = ceil(length / chunk_size)
@@ -85,7 +85,7 @@ fn emit_array_chunk_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve local slots for the chunking loop state
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source indexed array pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested chunk size
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rax", "rdi"); // load the source indexed-array logical length
     emitter.instruction("mov rcx, rsi");                                        // copy the chunk size before biasing the numerator
     emitter.instruction("sub rcx, 1");                                          // bias the numerator by chunk_size - 1
     emitter.instruction("add rax, rcx");                                        // length + chunk_size - 1 for ceiling division

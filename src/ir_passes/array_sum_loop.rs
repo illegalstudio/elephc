@@ -9,8 +9,10 @@
 //! - The matched loop is `while (i < count($data)) { $sum += $data[$i]; $i += 1; }`
 //!   where the array is a private, dense `array<int>` and `count` was hoisted.
 //! - The body must be exactly the load/unchecked-read/add/acquire/release/store
-//!   scaffold plus the unit latch; any other instruction or observation rejects
-//!   the rewrite.
+//!   scaffold plus the unit latch. A complete block-local owner publication for
+//!   the arithmetic result is part of that scaffold; any other instruction or
+//!   observation rejects the rewrite. The destination may be explicitly released
+//!   first or replaced directly by `store_local`, whose backend owns that release.
 //! - `__rt_array_sum_int` reproduces PHP's left-to-right addition with int-to-float
 //!   promotion, so the loop's value semantics, seed, empty range and overflow are
 //!   unchanged. The induction value must not be observed after the loop.
@@ -200,8 +202,46 @@ fn reduction_plan(
     if *then_target != body || !else_args.is_empty() || !function.block(*else_target)?.params.is_empty() {
         return None;
     }
+    let binop = block
+        .instructions
+        .iter()
+        .copied()
+        .filter(|id| function.instruction(*id).is_some_and(|inst| inst.op == Op::MixedNumericBinop))
+        .collect::<Vec<_>>();
+    let [binop] = binop.as_slice() else {
+        return None;
+    };
+    let binop_result = function.instruction(*binop)?.result?;
+    let mut transient_members = std::collections::HashSet::new();
+    for scope in super::transient_owner_scopes::collect(function)
+        .into_iter()
+        .filter(|scope| scope.block == body)
+    {
+        let Some(chain) = scope.forwarding_chain_to(function, binop_result) else {
+            continue;
+        };
+        let operations: std::collections::HashSet<_> = scope.operations().collect();
+        let forwarding: std::collections::HashSet<_> = chain.iter().copied().collect();
+        transient_members.extend(operations.iter().copied());
+        // Only the private prefix belongs exclusively to the transient publication.
+        // A shared clone also feeds the ordinary destination and remains part of the
+        // reduction scaffold that is validated below.
+        for owner in chain {
+            let Some(result) = function.instruction(owner)?.result else {
+                return None;
+            };
+            let private = function.instructions.iter().enumerate().all(|(index, inst)| {
+                !inst.operands.contains(&result)
+                    || operations.contains(&InstId::from_raw(index as u32))
+                    || forwarding.contains(&InstId::from_raw(index as u32))
+            });
+            if !private {
+                break;
+            }
+            transient_members.insert(owner);
+        }
+    }
     let mut get = None;
-    let mut binop = None;
     let mut clone = None;
     let mut acquire = None;
     let mut release_slot = None;
@@ -210,6 +250,9 @@ fn reduction_plan(
     let mut add = None;
     let mut loads = Vec::new();
     for &id in &block.instructions {
+        if transient_members.contains(&id) {
+            continue;
+        }
         let inst = function.instruction(id)?;
         match inst.op {
             Op::Nop | Op::ConcatReset => {}
@@ -220,7 +263,7 @@ fn reduction_plan(
                 }
             }
             Op::MixedNumericBinop => {
-                if binop.replace(id).is_some() {
+                if id != *binop {
                     return None;
                 }
             }
@@ -253,8 +296,7 @@ fn reduction_plan(
             _ => return None,
         }
     }
-    let (get, binop, acquire, release_slot, store, add) =
-        (get?, binop?, acquire?, release_slot?, store?, add?);
+    let (get, acquire, store, add) = (get?, acquire?, store?, add?);
     if add != induction.latch {
         return None;
     }
@@ -270,7 +312,7 @@ fn reduction_plan(
         return None;
     }
     let get_result = get_inst.result?;
-    let binop_inst = function.instruction(binop)?;
+    let binop_inst = function.instruction(*binop)?;
     if !matches!(binop_inst.immediate, Some(Immediate::MixedNumericOp(MixedNumericOp::Add)))
         || binop_inst.operands.len() != 2
     {
@@ -298,7 +340,6 @@ fn reduction_plan(
     {
         return None;
     }
-    let binop_result = binop_inst.result?;
     let clone_result = match clone {
         Some(clone) => {
             let clone_inst = function.instruction(clone)?;
@@ -320,7 +361,11 @@ fn reduction_plan(
     let stored = *function.instruction(store)?.operands.first()?;
     if stored != expected
         || function.instruction(store)?.immediate != Some(Immediate::LocalSlot(sum_slot))
-        || function.instruction(release_slot)?.immediate != Some(Immediate::LocalSlot(sum_slot))
+        || release_slot.is_some_and(|release| {
+            function.instruction(release).is_none_or(|instruction| {
+                instruction.immediate != Some(Immediate::LocalSlot(sum_slot))
+            })
+        })
     {
         return None;
     }

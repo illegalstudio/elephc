@@ -10,6 +10,7 @@
 
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout::{EntryField, HeaderField};
 
 /// hash_may_have_cyclic_values: detect whether any entry can participate in a cycle.
 /// Input:  x0 = hash table pointer
@@ -26,18 +27,17 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
         emitter.instruction("push r15");                                        // preserve the callee-saved register used by the nested mixed unwrapping loop
         emitter.instruction("test rax, rax");                                   // null hashes are never cycle roots
         emitter.instruction("jz __rt_hash_may_have_cyclic_values_no");          // skip the slot walk entirely for null hash pointers
-        emitter.instruction("mov r9, QWORD PTR [rax + 8]");                     // load the table capacity from the hash header
+        hash_layout::emit_load_header_field(emitter, "r9", "rax", HeaderField::Capacity);
         emitter.instruction("xor r10, r10");                                    // start scanning slots from index zero
 
         emitter.label("__rt_hash_may_have_cyclic_values_loop");
         emitter.instruction("cmp r10, r9");                                     // have all hash slots been scanned already?
         emitter.instruction("jae __rt_hash_may_have_cyclic_values_no");         // yes — no cyclic-capable payloads were found
-        emitter.instruction("mov r11, 64");                                     // hash entries are 64 bytes wide in the runtime layout
-    hash_layout::emit_entry_address(emitter, "r12", "rax", "r10");
-        emitter.instruction("mov r13, QWORD PTR [r12]");                        // load the occupied flag for the current hash slot
+        hash_layout::emit_entry_address(emitter, "r12", "rax", "r10");
+        hash_layout::emit_load_entry_field(emitter, "r13", "r12", EntryField::Occupied);
         emitter.instruction("cmp r13, 1");                                      // is this slot currently occupied by a live hash entry?
         emitter.instruction("jne __rt_hash_may_have_cyclic_values_next");       // skip empty and tombstone slots during the cycle-capability scan
-        emitter.instruction("mov r14, QWORD PTR [r12 + 40]");                   // load the runtime value tag for this hash entry payload
+        hash_layout::emit_load_entry_field(emitter, "r14", "r12", EntryField::ValueTag);
         emitter.instruction("cmp r14, 4");                                      // does the entry hold an indexed array directly?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // indexed arrays can participate in reference cycles
         emitter.instruction("cmp r14, 5");                                      // does the entry hold an associative array directly?
@@ -46,7 +46,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // objects can participate in reference cycles
         emitter.instruction("cmp r14, 7");                                      // does the entry hold a boxed mixed value?
         emitter.instruction("jne __rt_hash_may_have_cyclic_values_next");       // scalars and strings cannot form cycles through this helper
-        emitter.instruction("mov r15, QWORD PTR [r12 + 24]");                   // load the boxed mixed pointer from the entry value_lo field
+        hash_layout::emit_load_entry_field(emitter, "r15", "r12", EntryField::ValueLow);
         emitter.instruction("test r15, r15");                                   // does the mixed entry actually carry a boxed payload?
         emitter.instruction("jz __rt_hash_may_have_cyclic_values_next");        // null mixed boxes behave like null scalars here
 
@@ -95,7 +95,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_hash_may_have_cyclic_values_no");         // null hashes are never cycle roots
 
     // -- load capacity and start scanning slots --
-    emitter.instruction("ldr x9, [x0, #8]");                                    // x9 = table capacity
+    hash_layout::emit_load_header_field(emitter, "x9", "x0", HeaderField::Capacity);
     emitter.instruction("mov x10, #0");                                         // x10 = slot index
 
     emitter.label("__rt_hash_may_have_cyclic_values_loop");
@@ -103,14 +103,13 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_hash_may_have_cyclic_values_no");            // stop once the table has no cyclic-capable entries
 
     // -- compute the current slot address --
-    emitter.instruction("mov x11, #64");                                        // hash entries are 64 bytes wide
     hash_layout::emit_entry_address(emitter, "x12", "x0", "x10");
-    emitter.instruction("ldr x13, [x12]");                                      // load the occupied flag
+    hash_layout::emit_load_entry_field(emitter, "x13", "x12", EntryField::Occupied);
     emitter.instruction("cmp x13, #1");                                         // is this slot occupied?
     emitter.instruction("b.ne __rt_hash_may_have_cyclic_values_next");          // skip empty and tombstone slots
 
     // -- direct array/hash/object payloads can obviously participate in cycles --
-    emitter.instruction("ldr x14, [x12, #40]");                                 // load the entry runtime value tag
+    hash_layout::emit_load_entry_field(emitter, "x14", "x12", EntryField::ValueTag);
     emitter.instruction("cmp x14, #4");                                         // is the entry an indexed array?
     emitter.instruction("b.eq __rt_hash_may_have_cyclic_values_yes");           // arrays can participate in reference cycles
     emitter.instruction("cmp x14, #5");                                         // is the entry an associative array?
@@ -121,7 +120,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_hash_may_have_cyclic_values_next");          // plain scalars and strings cannot form cycles
 
     // -- mixed payloads only need GC if their nested payload graph can cycle --
-    emitter.instruction("ldr x15, [x12, #24]");                                 // load the boxed mixed pointer from value_lo
+    hash_layout::emit_load_entry_field(emitter, "x15", "x12", EntryField::ValueLow);
     emitter.instruction("cbz x15, __rt_hash_may_have_cyclic_values_next");      // null mixed boxes behave like null scalars
     emitter.label("__rt_hash_may_have_cyclic_values_mixed_loop");
     emitter.instruction("ldr x14, [x15]");                                      // load the boxed mixed payload tag

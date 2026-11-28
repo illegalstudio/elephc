@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates PHP `hash_algos()` with no arguments.
 pub(in crate::interpreter) fn eval_builtin_hash_algos(
@@ -51,12 +52,9 @@ pub(in crate::interpreter) fn eval_static_string_array_result(
     items: &[&str],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(items.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, items.len())?;
     for (index, item) in items.iter().enumerate() {
-        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let key = values.int(index)?;
-        let value = values.string(item)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string(item))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

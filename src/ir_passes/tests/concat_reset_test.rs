@@ -117,6 +117,55 @@ fn clean_entry_and_scalar_statements_remove_all_resets() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// A conservatively effectful owner replacement remains concat-inert when every
+/// payload ever admitted to its widened Mixed slot is proven destructor-free.
+#[test]
+fn destructor_free_owner_replacement_does_not_dirty_concat_state() {
+    let mut function = Function::new(
+        "destructor_free_owner_replacement".to_string(),
+        IrType::I64,
+        PhpType::Int,
+    );
+    let (replacement, reset_after_replacement);
+    {
+        let mut builder = Builder::new(&mut function);
+        let slot = builder.add_local(
+            Some("counter".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+
+        let one = builder.emit_const_i64(1);
+        let boxed = builder
+            .emit(
+                Op::MixedBox,
+                vec![one],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .expect("mixed_box produces a value");
+        replacement = next_inst_id(&builder);
+        builder.emit_store_local(slot, boxed);
+        reset_after_replacement = emit_concat_reset(&mut builder);
+        builder.terminate(Terminator::Return { value: Some(one) });
+    }
+    function.instructions[replacement.as_raw() as usize].effects = Effects::all();
+
+    assert!(run_once(&mut function));
+    assert_eq!(
+        function.instruction(reset_after_replacement).unwrap().op,
+        Op::Nop,
+        "a proven numeric owner replacement must not dirty concat state"
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
 /// After a scratch-dirtying operation (`StrConcat`), the first subsequent
 /// `ConcatReset` is kept to reclaim the scratch buffer, while later consecutive
 /// resets across concat-inert instructions are removed.

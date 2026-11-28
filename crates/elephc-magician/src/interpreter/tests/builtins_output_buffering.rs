@@ -27,7 +27,7 @@ fn output_handler_failed_start_releases_registration() {
     let callback_releases = values.releases.iter().filter(|value|
         values.get(**value) == FakeValue::String("strtoupper".to_string())).count();
     assert_eq!(callback_releases, 2, "release the argument temporary and retained registration");
-    assert!(crate::ffi::ob_handlers::unregister_ob_handlers_for_context(&mut context).is_empty());
+    assert!(context.release_abi_owner(), "a failed start must drop the registration's context owner");
     assert_eq!(values.ob_stack.len(), 64);
 }
 

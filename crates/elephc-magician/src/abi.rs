@@ -11,7 +11,7 @@
 //!   opaque pointers whose internal Rust layout is not exposed.
 //! - Runtime values cross this boundary as opaque cell pointers, not Rust enums.
 
-use std::ffi::c_void;
+pub use elephc_memoir::owner_layout::EvalResultWords as ElephcEvalResult;
 
 pub use crate::context::ElephcEvalContext;
 pub use crate::scope::ElephcEvalScope;
@@ -33,21 +33,3 @@ pub const SCOPE_FLAG_OWNED: u32 = 1 << 4;
 pub const SCOPE_FLAG_NATIVE_SNAPSHOT: u32 = 1 << 5;
 /// A native PHP name was detached by unset, including when eval subsequently rebound it.
 pub const SCOPE_FLAG_NATIVE_DETACHED: u32 = 1 << 6;
-
-/// Result storage written by `__elephc_eval_execute`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ElephcEvalResult {
-    pub kind: u32,
-    pub value_cell: *mut c_void,
-    pub error: *mut c_void,
-}
-
-impl ElephcEvalResult {
-    /// Resets result storage to the normal-null placeholder used by the stub.
-    pub fn clear(&mut self) {
-        self.kind = 0;
-        self.value_cell = std::ptr::null_mut();
-        self.error = std::ptr::null_mut();
-    }
-}

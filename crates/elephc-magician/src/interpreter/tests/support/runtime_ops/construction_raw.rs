@@ -17,7 +17,13 @@ macro_rules! impl_fake_construction_raw_ops {
     ) -> Result<bool, EvalStatus> {
         if !self.native_argument_pins { return Ok(false); }
         let value = self.retain(value)?;
-        unsafe { *pin.cast::<[u64; 6]>() = [0, 0, value.as_ptr() as u64, 0x105, cell, staging as u64]; }
+        use elephc_memoir::owner_layout::ArgumentPin;
+        let mut record = ArgumentPin::default();
+        record.validation.owner = value.as_ptr() as u64;
+        record.validation.kind = ArgumentPin::PENDING as u64;
+        record.native_cell = cell;
+        record.staging = staging as u64;
+        unsafe { pin.cast::<ArgumentPin>().write(record); }
         self.native_argument_pin_events.push((true, value));
         Ok(true)
     }

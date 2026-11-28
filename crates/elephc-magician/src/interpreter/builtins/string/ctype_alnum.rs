@@ -86,12 +86,7 @@ pub(in crate::interpreter) fn eval_ctype_type_name(
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array".to_string(),
         EVAL_TAG_RESOURCE => "resource".to_string(),
         EVAL_TAG_CALLABLE => "Closure".to_string(),
-        EVAL_TAG_OBJECT => {
-            let class = values.object_class_name(value)?;
-            let bytes = values.string_bytes(class);
-            values.release(class)?;
-            String::from_utf8_lossy(&bytes?).into_owned()
-        }
+        EVAL_TAG_OBJECT => runtime_object_class_name(value, values)?,
         _ => "unknown".to_string(),
     })
 }

@@ -9,7 +9,7 @@
 //! - Unlinking completes before callbacks; reentrant replacement entries remain intact.
 //! - Guard claims avoid releasing a value already borrowed by an active construction destructor.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, runtime::arrays::hash_layout};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 #[cfg(test)]
 mod tests;
@@ -60,28 +60,25 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction(if arm { "str x0, [sp, #56]" } else { "mov QWORD PTR [rsp + 56], rax" }); // remember whether this deletion owns the old value release
     if arm {
         emitter.instruction("ldr x4, [sp, #64]");                               // recover the stable entry before any PHP callbacks
-        emitter.instruction("ldp x9, x10, [x4, #24]");                          // detach the removed value's payload words
+        elephc_memoir::hash_layout::emit_entry_value(emitter, "x4", "x10", "x9", "x11");
         emitter.instruction("str x9, [sp, #24]");                               // retain the value owner until protected cleanup
-        emitter.instruction("ldr x10, [x4, #40]");                              // recover the concrete value release tag
         emitter.instruction("str x10, [sp, #32]");                              // retain its release convention after tombstoning
-        emitter.instruction("ldr x9, [x4, #8]");                                // retain the hash-owned key allocation
-        emitter.instruction("ldr x10, [x4, #16]");                              // inspect integer versus managed string key ownership
+        elephc_memoir::hash_layout::emit_entry_key(emitter, "x4", "x9", "x10");
         emitter.instruction("cmn x10, #1");                                     // integer keys own no separate bytes
         emitter.instruction("csel x9, xzr, x9, eq");                            // use a null owner for inline integer keys
         emitter.instruction("str x9, [sp, #40]");                               // detach key ownership before callbacks may reuse the slot
     } else {
         emitter.instruction("mov r8, QWORD PTR [rsp + 64]");                    // recover the stable entry before any PHP callbacks
-        emitter.instruction("mov r10, QWORD PTR [r8 + 24]");                    // detach the removed value's low payload
-        emitter.instruction("mov QWORD PTR [rsp + 24], r10");                   // retain its owner for protected cleanup
-        emitter.instruction("mov r10, QWORD PTR [r8 + 40]");                    // recover the concrete value release tag
+        elephc_memoir::hash_layout::emit_entry_value(emitter, "r8", "r10", "r11", "rax");
+        emitter.instruction("mov QWORD PTR [rsp + 24], r11");                   // retain its owner for protected cleanup
         emitter.instruction("mov QWORD PTR [rsp + 32], r10");                   // retain the release convention after tombstoning
-        emitter.instruction("mov r10, QWORD PTR [r8 + 8]");                     // retain the hash-owned key allocation
-        emitter.instruction("xor r11d, r11d");                                  // prepare no owner for an inline integer key
-        emitter.instruction("cmp QWORD PTR [r8 + 16], -1");                     // classify the owned key representation
-        emitter.instruction("cmove r10, r11");                                  // string keys keep their separate allocation owner
+        elephc_memoir::hash_layout::emit_entry_key(emitter, "r8", "r10", "r11");
+        emitter.instruction("xor eax, eax");                                    // prepare no owner for an inline integer key
+        emitter.instruction("cmp r11, -1");                                     // classify the owned key representation
+        emitter.instruction("cmove r10, rax");                                  // string keys keep their separate allocation owner
         emitter.instruction("mov QWORD PTR [rsp + 40], r10");                   // detach key ownership before callbacks may reuse the slot
     }
-    unlink(emitter);
+    elephc_memoir::values::hash_unset::emit_unlink_pinned_entry(emitter, NAME);
     // -- release detached owners and the final pin behind the exception boundary --
     emitter.instruction(if arm { "ldr x9, [sp, #40]" } else { "mov r10, QWORD PTR [rsp + 40]" }); // inspect the detached string-key owner
     emitter.instruction(if arm { "cmp x9, #0" } else { "test r10, r10" });      // integer keys need no release
@@ -115,40 +112,6 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("leave");                                           // restore the caller and retire removal storage
     }
     emitter.instruction("ret");                                                 // return without touching any entry created by a reentrant destructor
-}
-
-/// Unlinks the selected slot and updates live count before any destructor or key release.
-fn unlink(emitter: &mut Emitter) {
-    let arm = emitter.target.arch == Arch::AArch64;
-    emitter.instruction(if arm { "ldr x5, [sp]" } else { "mov r10, QWORD PTR [rsp]" }); // recover the selected stable hash header
-    emitter.instruction(if arm { "ldp x6, x7, [x4, #48]" } else { "mov r9, QWORD PTR [r8 + 48]" }); // recover insertion-order predecessor and successor
-    if !arm { emitter.instruction("mov rdx, QWORD PTR [r8 + 56]"); }            // preserve the successor while fixing both links
-    emitter.instruction(if arm { "cmn x6, #1" } else { "cmp r9, -1" });         // distinguish removal of the insertion-order head
-    branch(emitter, "ne", "jne", "previous");
-    emitter.instruction(if arm { "str x7, [x5, #24]" } else { "mov QWORD PTR [r10 + 24], rdx" }); // publish the next entry as the new head
-    jump(emitter, "next");
-    emitter.label(&format!("{NAME}_previous"));
-    hash_layout::emit_entry_address(emitter, if arm { "x9" } else { "r11" }, if arm { "x5" } else { "r10" }, if arm { "x6" } else { "r9" });
-    emitter.instruction(if arm { "str x7, [x9, #56]" } else { "mov QWORD PTR [r11 + 56], rdx" }); // bypass the removed slot in its predecessor
-    emitter.label(&format!("{NAME}_next"));
-    emitter.instruction(if arm { "cmn x7, #1" } else { "cmp rdx, -1" });        // distinguish removal of the insertion-order tail
-    branch(emitter, "ne", "jne", "following");
-    emitter.instruction(if arm { "str x6, [x5, #32]" } else { "mov QWORD PTR [r10 + 32], r9" }); // publish the previous entry as the new tail
-    jump(emitter, "tombstone");
-    emitter.label(&format!("{NAME}_following"));
-    hash_layout::emit_entry_address(emitter, if arm { "x9" } else { "r11" }, if arm { "x5" } else { "r10" }, if arm { "x7" } else { "rdx" });
-    emitter.instruction(if arm { "str x6, [x9, #48]" } else { "mov QWORD PTR [r11 + 48], r9" }); // bypass the removed slot in its successor
-    emitter.label(&format!("{NAME}_tombstone"));
-    if arm {
-        emitter.instruction("mov x9, #2");                                      // preserve probe chains with a tombstone
-        emitter.instruction("str x9, [x4]");                                    // make the removed key absent before callbacks
-        emitter.instruction("ldr x9, [x5]");                                    // recover the current number of live entries
-        emitter.instruction("sub x9, x9, #1");                                  // account for the completed deletion
-        emitter.instruction("str x9, [x5]");                                    // publish count while leaving automatic-key history unchanged
-    } else {
-        emitter.instruction("mov QWORD PTR [r8], 2");                           // make the removed key absent while preserving probe chains
-        emitter.instruction("sub QWORD PTR [r10], 1");                          // publish live count without rewinding automatic-key history
-    }
 }
 
 /// Calls a non-PHP lookup or guard claim using stable normalized query key bytes.

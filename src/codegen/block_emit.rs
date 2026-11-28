@@ -942,8 +942,8 @@ fn emit_generator_callback(
     body_label: &str,
     param_types: &[PhpType],
 ) {
-    use crate::codegen::runtime::generators::coro::GEN_RETURN_VALUE_OFFSET;
     use crate::codegen::runtime::FIBER_START_ARGS_OFFSET;
+    use elephc_memoir::coroutine_storage::GeneratorOwner;
     let target = emitter.target;
     let n = param_types.len();
     let frame_size = gen_arg_frame_size(n);
@@ -1020,18 +1020,12 @@ fn emit_generator_callback(
 
     // Forward spilled parameters through the same ABI used by the eager validator.
     emit_generator_argument_call(emitter, body_label, param_types);
+    GeneratorOwner::Return.emit_publish(emitter, gen_cache, result_reg);
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(                                                // park the body return value for getReturn()
-                &format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)
-            );
             emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(                                       // park the body return value for getReturn()
-                "mov QWORD PTR [r12 + {}], rax",
-                GEN_RETURN_VALUE_OFFSET
-            ));
             emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
         }
     }
@@ -1127,16 +1121,16 @@ fn emit_main_function(
     web_isolation: WebIsolation,
 ) -> Result<()> {
     let entry_symbol = if web {
-        frame::WEB_HANDLER_SYMBOL
+        frame::WEB_HANDLER_SYMBOL.to_string()
     } else {
-        emitter.entry_symbol()
+        emitter.entry_symbol().to_string()
     };
-    emit_fn_marker(emitter, &function.name, entry_symbol, false);
+    emit_fn_marker(emitter, &function.name, &entry_symbol, false);
     let mut layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        false,
+        true,
         shared.module_runtime_facts(module).backtrace,
     );
     if web {
@@ -1176,6 +1170,7 @@ fn emit_main_function(
         }
     }
     emit_endfn_marker(ctx.emitter, function.display_name());
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_symbol);
     if web {
         frame::emit_web_entry_stub(&mut ctx, web_isolation)?;
     }

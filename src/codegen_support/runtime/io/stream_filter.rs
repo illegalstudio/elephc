@@ -14,6 +14,7 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
+use elephc_memoir::buffers::stream_scratch;
 
 /// apply_stream_filter: transform a buffer in place with a built-in filter.
 /// Input:  AArch64 x1 = pointer, x2 = length, x3 = filter id
@@ -409,10 +410,10 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     //    output inside the scratch. --
     emitter.label("__rt_asf_b64_encode");
     // Cap input length so the encoded output fits the 64KB scratch.
-    emitter.instruction("mov x4, #49152");                                      // 49152 = 64KB * 3/4
+    emitter.instruction(&format!("mov x4, #{}", stream_scratch::BASE64_INPUT_LIMIT)); // 49152 = 64KB * 3/4
     emitter.instruction("cmp x2, x4");                                          // check whether the current cursor reached its bound
     emitter.instruction("csel x2, x4, x2, gt");                                 // x2 = MIN(x2, 49152)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_stream_grow_scratch");
+    stream_scratch::emit_expansion_address(emitter, "x4");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_b64_encode_tbl");
     emitter.instruction("mov x5, #0");                                          // read index
     emitter.instruction("mov x6, #0");                                          // write index
@@ -502,28 +503,19 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("strb w11, [x4, x6]");                                  // write encoded output into the scratch buffer
     emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
     emitter.label("__rt_asf_b64e_copyback");
-    // memcpy scratch[0..x6] back into x1.
-    emitter.instruction("mov x5, #0");                                          // initialize the read cursor
-    emitter.label("__rt_asf_b64e_cb_loop");
-    emitter.instruction("cmp x5, x6");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_b64e_done");                             // finish the base64 encoder operation when the bound is reached
-    emitter.instruction("ldrb w11, [x4, x5]");                                  // load the next byte from the scratch buffer
-    emitter.instruction("strb w11, [x1, x5]");                                  // copy scratch output back into the stream buffer
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("b __rt_asf_b64e_cb_loop");                             // continue the base64 encoder loop
-    emitter.label("__rt_asf_b64e_done");
-    emitter.instruction("mov x2, x6");                                          // return encoded length
-    emitter.instruction("ret");                                                 // return to the stream-filter caller
+    stream_scratch::emit_copy_expansion_back(
+        emitter, "__rt_asf_b64e_cb_loop", "__rt_asf_b64e_done",
+    );
 
     // -- convert.quoted-printable-encode: bytes outside 33..126 (and '=' itself)
     //    become '=XX' hex escapes. Encodes into _stream_grow_scratch and memcpy
     //    back. Caps input at 21845 bytes (worst case = 3x growth) so output
     //    fits 65536. --
     emitter.label("__rt_asf_qp_encode");
-    emitter.instruction("mov x4, #21845");                                      // ~64KB/3 worst-case cap
+    emitter.instruction(&format!("mov x4, #{}", stream_scratch::QUOTED_PRINTABLE_INPUT_LIMIT)); // ~64KB/3 worst-case cap
     emitter.instruction("cmp x2, x4");                                          // check whether the current cursor reached its bound
     emitter.instruction("csel x2, x4, x2, gt");                                 // x2 = MIN(x2, 21845)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_stream_grow_scratch");
+    stream_scratch::emit_expansion_address(emitter, "x4");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_b64_encode_tbl");
     // hex table is just '0'..'9','A'..'F' so build inline instead.
     emitter.instruction("mov x5, #0");                                          // read index
@@ -573,17 +565,9 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
     emitter.instruction("b __rt_asf_qpe_loop");                                 // continue the quoted-printable encoder loop
     emitter.label("__rt_asf_qpe_copyback");
-    emitter.instruction("mov x5, #0");                                          // initialize the read cursor
-    emitter.label("__rt_asf_qpe_cb_loop");
-    emitter.instruction("cmp x5, x6");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_qpe_done");                              // finish the quoted-printable encoder operation when the bound is reached
-    emitter.instruction("ldrb w11, [x4, x5]");                                  // load the next byte from the scratch buffer
-    emitter.instruction("strb w11, [x1, x5]");                                  // copy scratch output back into the stream buffer
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("b __rt_asf_qpe_cb_loop");                              // continue the quoted-printable encoder loop
-    emitter.label("__rt_asf_qpe_done");
-    emitter.instruction("mov x2, x6");                                          // return encoded length
-    emitter.instruction("ret");                                                 // return to the stream-filter caller
+    stream_scratch::emit_copy_expansion_back(
+        emitter, "__rt_asf_qpe_cb_loop", "__rt_asf_qpe_done",
+    );
 }
 
 /// Emits the Linux x86_64 stream runtime helper for apply stream filter.
@@ -957,10 +941,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // -- convert.base64-encode (x86_64) --
     emitter.label("__rt_asf_b64_encode_x86");
     // Cap input at 49152 bytes so the 4/3 expansion fits the scratch buffer.
-    emitter.instruction("mov r11, 49152");                                      // set the maximum input length that fits the scratch buffer
+    emitter.instruction(&format!("mov r11, {}", stream_scratch::BASE64_INPUT_LIMIT)); // set the maximum input length that fits the scratch buffer
     emitter.instruction("cmp rdx, r11");                                        // check whether the current cursor reached its bound
     emitter.instruction("cmovg rdx, r11");                                      // rdx = MIN(rdx, 49152)
-    abi::emit_symbol_address(emitter, "r11", "_stream_grow_scratch");           // r11 = scratch base
+    stream_scratch::emit_expansion_address(emitter, "r11");           // r11 = scratch base
     abi::emit_symbol_address(emitter, "r12", "_b64_encode_tbl");                // r12 = alphabet table
     emitter.instruction("xor r9, r9");                                          // read idx
     emitter.instruction("xor r10, r10");                                        // write idx
@@ -1062,24 +1046,16 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + r10], 61");                        // '='
     emitter.instruction("inc r10");                                             // advance the write cursor
     emitter.label("__rt_asf_b64e_copyback_x86");
-    emitter.instruction("xor r9, r9");                                          // initialize the read cursor
-    emitter.label("__rt_asf_b64e_cb_loop_x86");
-    emitter.instruction("cmp r9, r10");                                         // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_b64e_done_x86");                          // finish the base64 encoder operation when the bound is reached
-    emitter.instruction("movzx ecx, BYTE PTR [r11 + r9]");                      // load the next byte from the scratch buffer
-    emitter.instruction("mov BYTE PTR [rax + r9], cl");                         // copy scratch output back into the stream buffer
-    emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("jmp __rt_asf_b64e_cb_loop_x86");                       // continue the base64 encoder loop
-    emitter.label("__rt_asf_b64e_done_x86");
-    emitter.instruction("mov rdx, r10");                                        // return the transformed output length
-    emitter.instruction("ret");                                                 // return to the stream-filter caller
+    stream_scratch::emit_copy_expansion_back(
+        emitter, "__rt_asf_b64e_cb_loop_x86", "__rt_asf_b64e_done_x86",
+    );
 
     // -- convert.quoted-printable-encode (x86_64) --
     emitter.label("__rt_asf_qp_encode_x86");
-    emitter.instruction("mov r11, 21845");                                      // set the maximum input length that fits the scratch buffer
+    emitter.instruction(&format!("mov r11, {}", stream_scratch::QUOTED_PRINTABLE_INPUT_LIMIT)); // set the maximum input length that fits the scratch buffer
     emitter.instruction("cmp rdx, r11");                                        // check whether the current cursor reached its bound
     emitter.instruction("cmovg rdx, r11");                                      // rdx = MIN(rdx, 21845)
-    abi::emit_symbol_address(emitter, "r11", "_stream_grow_scratch");           // load the scratch buffer base address
+    stream_scratch::emit_expansion_address(emitter, "r11");           // load the scratch buffer base address
     emitter.instruction("xor r9, r9");                                          // initialize the read cursor
     emitter.instruction("xor r10, r10");                                        // initialize the write cursor
     emitter.label("__rt_asf_qpe_loop_x86");
@@ -1126,15 +1102,7 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r10");                                             // advance the write cursor
     emitter.instruction("jmp __rt_asf_qpe_loop_x86");                           // continue the quoted-printable encoder loop
     emitter.label("__rt_asf_qpe_copyback_x86");
-    emitter.instruction("xor r9, r9");                                          // initialize the read cursor
-    emitter.label("__rt_asf_qpe_cb_loop_x86");
-    emitter.instruction("cmp r9, r10");                                         // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_qpe_done_x86");                           // finish the quoted-printable encoder operation when the bound is reached
-    emitter.instruction("movzx ecx, BYTE PTR [r11 + r9]");                      // load the next byte from the scratch buffer
-    emitter.instruction("mov BYTE PTR [rax + r9], cl");                         // copy scratch output back into the stream buffer
-    emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("jmp __rt_asf_qpe_cb_loop_x86");                        // continue the quoted-printable encoder loop
-    emitter.label("__rt_asf_qpe_done_x86");
-    emitter.instruction("mov rdx, r10");                                        // return the transformed output length
-    emitter.instruction("ret");                                                 // return to the stream-filter caller
+    stream_scratch::emit_copy_expansion_back(
+        emitter, "__rt_asf_qpe_cb_loop_x86", "__rt_asf_qpe_done_x86",
+    );
 }

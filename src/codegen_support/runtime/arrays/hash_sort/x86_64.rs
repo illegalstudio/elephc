@@ -94,7 +94,7 @@ fn emit_sort_links(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "r10", NULL_SENTINEL);
     emitter.instruction("cmp rdi, r10");                                        // test the in-band null-container sentinel
     emitter.instruction("je __rt_hsort_ret");                                   // sentinel-null tables have no header
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the live entry count
+    hash_layout::emit_load_header_field(emitter, "r10", "rdi", hash_layout::HeaderField::Count);
     emitter.instruction("cmp r10, 2");                                          // fewer than two entries are already ordered
     emitter.instruction("jge __rt_hsort_begin");                                // allocate a frame only when sorting is needed
     emitter.label("__rt_hsort_ret");
@@ -112,7 +112,7 @@ fn emit_sort_links(emitter: &mut Emitter) {
 
     emitter.label("__rt_hsort_pass");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer
-    emitter.instruction("mov r11, QWORD PTR [r10 + 24]");                       // start the pass at the current list head
+    hash_layout::emit_load_header_field(emitter, "r11", "r10", hash_layout::HeaderField::Head);
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // p = first left-run entry
     emitter.instruction("mov QWORD PTR [rbp - 72], -1");                        // new head = none
     emitter.instruction("mov QWORD PTR [rbp - 80], -1");                        // new tail = none
@@ -133,10 +133,9 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the split cursor
     emitter.instruction("cmp r11, -1");                                         // did the source chain end inside the left run?
     emitter.instruction("je __rt_hsort_split_done");                            // keep the shorter final run
-    emitter.instruction("mov rax, r11");                                        // copy the slot index before scaling
-    emitter.instruction("shl rax, 6");                                          // convert the slot to a 64-byte entry offset
-    emitter.instruction("add rax, QWORD PTR [rbp - 16]");                       // address the split-cursor entry
-    emitter.instruction("mov r11, QWORD PTR [rax + 56]");                       // advance through the original next link
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    hash_layout::emit_entry_address_from_storage(emitter, "r10", "rax", "r11");
+    hash_layout::emit_load_entry_field(emitter, "r11", "r10", hash_layout::EntryField::Next);
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // q = next entry
     emitter.instruction("add QWORD PTR [rbp - 56], 1");                         // include the traversed entry in the left run
     emitter.instruction("jmp __rt_hsort_split");                                // continue locating the right run
@@ -159,12 +158,12 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hsort_take_left");                             // an exhausted right run leaves the left entry
     emitter.instruction("cmp QWORD PTR [rbp - 48], -1");                        // is there a concrete right entry?
     emitter.instruction("je __rt_hsort_take_left");                             // a short final right run leaves the left entry
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // load the left entry index
-    emitter.instruction("shl rdi, 6");                                          // convert the left index to an entry offset
-    emitter.instruction("add rdi, QWORD PTR [rbp - 16]");                       // pass the left entry address
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // load the right entry index
-    emitter.instruction("shl rsi, 6");                                          // convert the right index to an entry offset
-    emitter.instruction("add rsi, QWORD PTR [rbp - 16]");                       // pass the right entry address
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // load the left entry index
+    hash_layout::emit_entry_address_from_storage(emitter, "rdi", "r11", "r10");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // load the right entry index
+    hash_layout::emit_entry_address_from_storage(emitter, "rsi", "r11", "r10");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // pass the comparison mode
     emitter.instruction("call __rt_hash_sort_compare_entries");                 // compare the two run heads
     emitter.instruction("test QWORD PTR [rbp - 24], 1");                        // inspect the descending-direction bit
@@ -179,10 +178,9 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.label("__rt_hsort_take_right");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // select the current right-run entry
     emitter.instruction("mov QWORD PTR [rbp - 96], r10");                       // save the selected entry index
-    emitter.instruction("mov r11, r10");                                        // copy the slot index before scaling
-    emitter.instruction("shl r11, 6");                                          // convert the slot to a 64-byte entry offset
-    emitter.instruction("add r11, QWORD PTR [rbp - 16]");                       // address the selected entry
-    emitter.instruction("mov rax, QWORD PTR [r11 + 56]");                       // read its original successor before relinking
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    hash_layout::emit_entry_address_from_storage(emitter, "r11", "rax", "r10");
+    hash_layout::emit_load_entry_field(emitter, "rax", "r11", hash_layout::EntryField::Next);
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // advance the right-run cursor
     emitter.instruction("sub QWORD PTR [rbp - 64], 1");                         // consume one right-run entry
     emitter.instruction("jmp __rt_hsort_append");                               // append the selected entry
@@ -190,25 +188,23 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.label("__rt_hsort_take_left");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // select the current left-run entry
     emitter.instruction("mov QWORD PTR [rbp - 96], r10");                       // save the selected entry index
-    emitter.instruction("mov r11, r10");                                        // copy the slot index before scaling
-    emitter.instruction("shl r11, 6");                                          // convert the slot to a 64-byte entry offset
-    emitter.instruction("add r11, QWORD PTR [rbp - 16]");                       // address the selected entry
-    emitter.instruction("mov rax, QWORD PTR [r11 + 56]");                       // read its original successor before relinking
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    hash_layout::emit_entry_address_from_storage(emitter, "r11", "rax", "r10");
+    hash_layout::emit_load_entry_field(emitter, "rax", "r11", hash_layout::EntryField::Next);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // advance the left-run cursor
     emitter.instruction("sub QWORD PTR [rbp - 56], 1");                         // consume one left-run entry
 
     emitter.label("__rt_hsort_append");
     emitter.instruction("mov r10, QWORD PTR [rbp - 96]");                       // reload the selected entry index
-    emitter.instruction("mov r11, r10");                                        // copy the slot index before scaling
-    emitter.instruction("shl r11, 6");                                          // convert the slot to a 64-byte entry offset
-    emitter.instruction("add r11, QWORD PTR [rbp - 16]");                       // address the selected entry
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    hash_layout::emit_entry_address_from_storage(emitter, "r11", "rax", "r10");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the output tail index
-    emitter.instruction("mov QWORD PTR [r11 + 48], rax");                       // selected entry prev = old output tail
+    hash_layout::emit_store_entry_field(emitter, "rax", "r11", hash_layout::EntryField::Previous);
     emitter.instruction("cmp rax, -1");                                         // is this the first output entry of the pass?
     emitter.instruction("je __rt_hsort_first");                                 // publish it as the output head
-    emitter.instruction("shl rax, 6");                                          // convert the old tail index to an entry offset
-    emitter.instruction("add rax, QWORD PTR [rbp - 16]");                       // address the previous output tail
-    emitter.instruction("mov QWORD PTR [rax + 56], r10");                       // previous tail next = selected entry
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    hash_layout::emit_entry_address_from_storage(emitter, "rax", "r11", "rax");
+    hash_layout::emit_store_entry_field(emitter, "r10", "rax", hash_layout::EntryField::Next);
     emitter.instruction("jmp __rt_hsort_tail");                                 // retain the existing output head
     emitter.label("__rt_hsort_first");
     emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // output head = first selected entry
@@ -223,15 +219,15 @@ fn emit_sort_links(emitter: &mut Emitter) {
 
     emitter.label("__rt_hsort_pass_done");
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload the completed output tail
-    emitter.instruction("mov r11, r10");                                        // copy the tail index before scaling
-    emitter.instruction("shl r11, 6");                                          // convert the tail index to an entry offset
-    emitter.instruction("add r11, QWORD PTR [rbp - 16]");                       // address the completed output tail
-    emitter.instruction("mov QWORD PTR [r11 + 56], -1");                        // terminate the rebuilt forward chain
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the entry-storage base
+    hash_layout::emit_entry_address_from_storage(emitter, "r11", "rax", "r10");
+    emitter.instruction("mov rax, -1");                                         // materialize the end-of-chain sentinel
+    hash_layout::emit_store_entry_field(emitter, "rax", "r11", hash_layout::EntryField::Next);
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 72]");                       // reload the completed output head
-    emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // publish the pass head in the table header
+    hash_layout::emit_store_header_field(emitter, "r11", "r10", hash_layout::HeaderField::Head);
     emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // reload the completed output tail
-    emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // publish the pass tail in the table header
+    hash_layout::emit_store_header_field(emitter, "r11", "r10", hash_layout::HeaderField::Tail);
     emitter.instruction("cmp QWORD PTR [rbp - 88], 1");                         // one run means the list is fully sorted
     emitter.instruction("jle __rt_hsort_finish");                               // finish after the converged pass
     emitter.instruction("shl QWORD PTR [rbp - 32], 1");                         // double the run width for the next pass
@@ -302,8 +298,8 @@ fn emit_sort_triple(emitter: &mut Emitter) {
     emitter.label_global("__rt_hash_sort_triple");
     emitter.instruction("test rsi, 2");                                         // select entry value for value sorts
     emitter.instruction("jnz __rt_hsort_triple_value");                         // branch to the value payload reader
-    emitter.instruction("mov rdx, QWORD PTR [rdi + 16]");                       // load key length or integer-key sentinel
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load key pointer or integer payload
+    hash_layout::emit_load_entry_field(emitter, "rdx", "rdi", hash_layout::EntryField::KeyHigh);
+    hash_layout::emit_load_entry_field(emitter, "r10", "rdi", hash_layout::EntryField::KeyLow);
     emitter.instruction("cmp rdx, -1");                                         // test for a normalized integer key
     emitter.instruction("jne __rt_hsort_triple_key_str");                       // string keys retain pointer and length
     emitter.instruction("xor eax, eax");                                        // runtime tag zero denotes an integer
@@ -315,9 +311,9 @@ fn emit_sort_triple(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r10");                                        // publish the borrowed string key pointer
     emitter.instruction("ret");                                                 // return the borrowed string key triple
     emitter.label("__rt_hsort_triple_value");
-    emitter.instruction("mov r11, QWORD PTR [rdi + 40]");                       // load the per-entry value tag
-    emitter.instruction("mov r10, QWORD PTR [rdi + 24]");                       // load the low value payload word
-    emitter.instruction("mov rdx, QWORD PTR [rdi + 32]");                       // load the high value payload word
+    hash_layout::emit_load_entry_field(emitter, "r11", "rdi", hash_layout::EntryField::ValueTag);
+    hash_layout::emit_load_entry_field(emitter, "r10", "rdi", hash_layout::EntryField::ValueLow);
+    hash_layout::emit_load_entry_field(emitter, "rdx", "rdi", hash_layout::EntryField::ValueHigh);
     emitter.instruction("cmp r11, 11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("jne __rt_hsort_triple_value_tagged");                  // ordinary entries already carry a value payload
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // sort the value the reference cell owns, not the cell

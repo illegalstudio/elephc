@@ -21,6 +21,8 @@
 //!   (0), so their elements compare by raw payload bits; heterogeneous arrays box each element
 //!   (value_type 7) and keep full per-element type precision.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -136,7 +138,7 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_iter_next ---");
     emitter.label_global("__rt_array_iter_next");
 
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the heap kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap-kind byte (2 = packed, 3 = hash)
     emitter.instruction("cmp x9, #3");                                          // is the operand a hash (associative) container?
     emitter.instruction("b.eq __rt_array_iter_next_hash");                      // hashes delegate to the ordered hash iterator
@@ -145,10 +147,10 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // x10 = packed length (header word 0)
     emitter.instruction("cmp x1, x10");                                         // has the cursor walked past the last element?
     emitter.instruction("b.ge __rt_array_iter_next_done");                      // exhausted packed arrays report the done sentinel
-    emitter.instruction("ldr x11, [x0, #-8]");                                  // reload the kind word for the value_type field
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x0");
     emitter.instruction("lsr x11, x11, #8");                                    // shift the array-wide value_type into the low bits
     emitter.instruction("and x11, x11, #0x7f");                                 // isolate the value_type, dropping the copy-on-write bit
-    emitter.instruction("add x12, x0, #24");                                    // x12 = base of the packed data region (skip 24-byte header)
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x0");
     emitter.instruction("add x13, x1, #1");                                     // x13 = next cursor = index + 1
     emitter.instruction("cmp x11, #1");                                         // is the array a string array (16-byte {ptr,len} slots)?
     emitter.instruction("b.eq __rt_array_iter_next_packed_str");                // strings load a pointer/length pair
@@ -228,7 +230,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, rsi");                                        // identical heap pointers are trivially strictly equal
     emitter.instruction("je __rt_array_strict_eq_true");                        // short-circuit copy-on-write shared arrays
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = left element count (header word 0)
-    emitter.instruction("cmp rax, QWORD PTR [rsi]");                            // arrays of different length are never strictly equal
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rax", "rsi"); // arrays of different length are never strictly equal
     emitter.instruction("jne __rt_array_strict_eq_false");                      // reject on count mismatch
     emitter.instruction("test rax, rax");                                       // are both operands empty?
     emitter.instruction("je __rt_array_strict_eq_true");                        // two empty arrays are strictly equal
@@ -300,7 +302,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_iter_next ---");
     emitter.label_global("__rt_array_iter_next");
 
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the heap kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("and rax, 0xff");                                       // isolate the low heap-kind byte (2 = packed, 3 = hash)
     emitter.instruction("cmp rax, 3");                                          // is the operand a hash (associative) container?
     emitter.instruction("je __rt_array_iter_next_hash");                        // hashes delegate to the ordered hash iterator
@@ -308,9 +310,8 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = packed length (header word 0)
     emitter.instruction("cmp rsi, rax");                                        // has the cursor walked past the last element?
     emitter.instruction("jge __rt_array_iter_next_done");                       // exhausted packed arrays report the done sentinel
-    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // reload the kind word for the value_type field
-    emitter.instruction("shr r11, 8");                                          // shift the array-wide value_type into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the value_type, dropping the copy-on-write bit
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov rcx, rsi");                                        // key low word = the integer index
     emitter.instruction("mov rdx, -1");                                         // key high word = -1 marks an integer key
     emitter.instruction("cmp r11, 1");                                          // is the array a string array (16-byte {ptr,len} slots)?
@@ -322,7 +323,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rsi");                                        // scratch index for the byte-offset computation
     emitter.instruction("shl r11, 3");                                          // byte offset = index * 8
     emitter.instruction("add r11, rdi");                                        // address of the 8-byte slot within the data region
-    emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // value low word = data[index] (past the 24-byte header)
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "r9", "r11", 0);
     emitter.instruction("xor r10d, r10d");                                      // value high word unused for 8-byte slots
     emitter.instruction("jmp __rt_array_iter_next_packed_ret");                 // return the synthesized packed entry
 
@@ -330,7 +331,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rsi");                                        // scratch index for the byte-offset computation
     emitter.instruction("shl r11, 4");                                          // byte offset = index * 16
     emitter.instruction("add r11, rdi");                                        // address of the string slot base
-    emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // value low word = string pointer
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "r9", "r11", 0);
     emitter.instruction("mov r10, QWORD PTR [r11 + 32]");                       // value high word = string length
     emitter.instruction("mov r8, 1");                                           // value tag = string
     emitter.instruction("jmp __rt_array_iter_next_packed_ret");                 // return the synthesized packed string entry
@@ -339,7 +340,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rsi");                                        // scratch index for the byte-offset computation
     emitter.instruction("shl r11, 4");                                          // byte offset = index * 16
     emitter.instruction("add r11, rdi");                                        // address of the tagged-scalar slot base
-    emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // value low word = tagged-scalar payload
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "r9", "r11", 0);
     emitter.instruction("mov r8, QWORD PTR [r11 + 32]");                        // value tag = the per-slot runtime tag
     emitter.instruction("xor r10d, r10d");                                      // value high word unused for tagged scalars
     emitter.instruction("jmp __rt_array_iter_next_packed_ret");                 // return the synthesized tagged-scalar entry

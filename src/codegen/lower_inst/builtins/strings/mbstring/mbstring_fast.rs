@@ -808,11 +808,21 @@ fn try_lower_ereg_search_pos(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.emitter.instruction("mov x1, #8");                              // indexed int slots are eight bytes
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             ctx.emitter.instruction("ldr x9, [sp]");                            // load the match start
-            ctx.emitter.instruction("str x9, [x0, #24]");                       // append the match start
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "x0",
+                "x9",
+                0,
+            );
             ctx.emitter.instruction("ldr x9, [sp, #8]");                        // load the match length
-            ctx.emitter.instruction("str x9, [x0, #32]");                       // append the match length
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "x0",
+                "x9",
+                1,
+            );
             ctx.emitter.instruction("mov x9, #2");                              // publish both integer elements
-            ctx.emitter.instruction("str x9, [x0]");                            // set the logical array length
+            elephc_memoir::values::packed_slots::emit_publish_length(ctx.emitter, "x0", "x9"); // set the logical array length
             ctx.emitter.instruction("add sp, sp, #32");                         // release the output slots
             crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
@@ -839,10 +849,24 @@ fn try_lower_ereg_search_pos(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.emitter.instruction("mov rsi, 8");                              // indexed int slots are eight bytes
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // load the match start
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");           // append the match start
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "rax",
+                "r10",
+                0,
+            );
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 8]");            // load the match length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 32], r10");           // append the match length
-            ctx.emitter.instruction("mov QWORD PTR [rax], 2");                  // publish both integer elements
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "rax",
+                "r10",
+                1,
+            );
+            elephc_memoir::values::packed_slots::emit_publish_length_immediate(
+                ctx.emitter,
+                "rax",
+                2,
+            );
             ctx.emitter.instruction("add rsp, 32");                             // release the output slots
             crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
@@ -1665,26 +1689,46 @@ fn verify_full_decimal_map(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(map, "x9")?;
-            ctx.emitter.instruction("ldr x10, [x9, #-8]");                      // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x10", "x9");
             ctx.emitter.instruction("and w11, w10, #0xff");                     // isolate the top-level heap kind
             ctx.emitter.instruction("cmp w11, #2");                             // is this a packed indexed array?
             ctx.emitter.instruction(&format!("b.ne {fallback}"));               // other array shapes use the bridge
-            ctx.emitter.instruction("ubfx x10, x10, #8, #7");                   // isolate the packed element type
+            elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(ctx.emitter, "x10", "x10");
             ctx.emitter.instruction(&format!("cbnz x10, {fallback}"));          // non-int arrays use the bridge
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the map entry count
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x10", "x9");
             ctx.emitter.instruction("cmp x10, #4");                             // does the map contain four bounds?
             ctx.emitter.instruction(&format!("b.ne {fallback}"));               // other maps use the bridge
-            ctx.emitter.instruction("ldr x10, [x9, #24]");                      // load the first map bound
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "x10",
+                "x9",
+                0,
+            );
             ctx.emitter.instruction("cmp x10, #0x80");                          // is the start the full non-ASCII range?
             ctx.emitter.instruction(&format!("b.ne {fallback}"));               // other maps use the bridge
-            ctx.emitter.instruction("ldr x10, [x9, #32]");                      // load the second map bound
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "x10",
+                "x9",
+                1,
+            );
             ctx.emitter.instruction("movz w11, #0xFFFF");                       // low half of the last Unicode codepoint
             ctx.emitter.instruction("movk w11, #0x10, lsl #16");                // high half of the last Unicode codepoint
             ctx.emitter.instruction("cmp x10, x11");                            // is the end the full Unicode range?
             ctx.emitter.instruction(&format!("b.ne {fallback}"));               // other maps use the bridge
-            ctx.emitter.instruction("ldr x10, [x9, #40]");                      // load the map offset
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "x10",
+                "x9",
+                2,
+            );
             ctx.emitter.instruction(&format!("cbnz x10, {fallback}"));          // nonzero offsets use the bridge
-            ctx.emitter.instruction("ldr x10, [x9, #48]");                      // load the map format mask
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "x10",
+                "x9",
+                3,
+            );
             ctx.emitter.instruction("movz w11, #0xFFFF");                       // low half of the decimal full-range mask
             ctx.emitter.instruction("movk w11, #0x1F, lsl #16");                // high half of the decimal full-range mask
             ctx.emitter.instruction("cmp x10, x11");                            // is this the decimal full-range map?
@@ -1692,22 +1736,46 @@ fn verify_full_decimal_map(
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(map, "r10")?;
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10 - 8]");            // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r11", "r10");
             ctx.emitter.instruction("movzx eax, r11b");                         // isolate the top-level heap kind
             ctx.emitter.instruction("cmp eax, 2");                              // is this a packed indexed array?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // other array shapes use the bridge
-            ctx.emitter.instruction("shr r11, 8");                              // move the packed element type down
-            ctx.emitter.instruction("and r11d, 0x7f");                          // isolate the element type
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r11", "r11d");
             ctx.emitter.instruction(&format!("jnz {fallback}"));                // non-int arrays use the bridge
-            ctx.emitter.instruction("cmp QWORD PTR [r10], 4");                  // does the map contain four bounds?
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r10");
+            ctx.emitter.instruction("cmp r11, 4");                              // does the map contain four bounds?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // other maps use the bridge
-            ctx.emitter.instruction("cmp QWORD PTR [r10 + 24], 0x80");          // is the start the full non-ASCII range?
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "r11",
+                "r10",
+                0,
+            );
+            ctx.emitter.instruction("cmp r11, 0x80");                           // is the start the full non-ASCII range?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // other maps use the bridge
-            ctx.emitter.instruction("cmp QWORD PTR [r10 + 32], 0x10FFFF");      // is the end the full Unicode range?
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "r11",
+                "r10",
+                1,
+            );
+            ctx.emitter.instruction("cmp r11, 0x10FFFF");                       // is the end the full Unicode range?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // other maps use the bridge
-            ctx.emitter.instruction("cmp QWORD PTR [r10 + 40], 0");             // is the map offset zero?
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "r11",
+                "r10",
+                2,
+            );
+            ctx.emitter.instruction("cmp r11, 0");                              // is the map offset zero?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // nonzero offsets use the bridge
-            ctx.emitter.instruction("cmp QWORD PTR [r10 + 48], 0x1FFFFF");      // is this the decimal full-range map?
+            elephc_memoir::values::packed_slots::emit_load_packed_word(
+                ctx.emitter,
+                "r11",
+                "r10",
+                3,
+            );
+            ctx.emitter.instruction("cmp r11, 0x1FFFFF");                       // is this the decimal full-range map?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // other maps use the bridge
         }
     }
@@ -2431,7 +2499,7 @@ fn emit_array_length_and_release(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the array pointer and its length
             ctx.emitter.instruction("str x0, [sp, #0]");                        // save the array before reading its length
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the indexed-array length header
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x0"); // load the indexed-array length header
             ctx.emitter.instruction("str x9, [sp, #8]");                        // save the length across the array release
             ctx.emitter.instruction("bl __rt_decref_any");                      // release the temporary split array
             ctx.emitter.instruction("ldr x0, [sp, #8]");                        // return the array length
@@ -2440,7 +2508,7 @@ fn emit_array_length_and_release(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 32");                             // reserve the array pointer and its length
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the array before reading its length
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // load the indexed-array length header
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r10", "rax"); // load the indexed-array length header
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r10");            // save the length across the array release
             ctx.emitter.instruction("call __rt_decref_any");                    // release the temporary split array
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // return the array length

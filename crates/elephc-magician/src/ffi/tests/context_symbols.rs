@@ -119,6 +119,21 @@ fn context_new_returns_current_version_handle() {
     assert_eq!(version, ABI_VERSION);
 }
 
+/// Terminal convergence drains context owners without consuming the context's primary lease.
+#[test]
+fn context_owner_drain_keeps_context_live_until_final_free() {
+    let ctx = __elephc_eval_context_new();
+    let owner = RuntimeCellHandle::from_raw(8usize as *mut crate::value::RuntimeCell);
+    unsafe { (*ctx).set_static_property("Owner", "value", owner); }
+
+    assert_eq!(unsafe { __elephc_eval_context_has_owners(ctx) }, 1);
+    assert!(unsafe { __elephc_eval_context_drain_owners(ctx) }.is_null());
+    assert_eq!(unsafe { __elephc_eval_context_has_owners(ctx) }, 0);
+    assert_eq!(unsafe { (*ctx).abi_version() }, ABI_VERSION);
+
+    unsafe { __elephc_eval_context_free(ctx); }
+}
+
 /// Verifies a callback owner keeps a heap eval context alive until its matching release.
 #[test]
 fn context_retain_defers_heap_context_destruction() {

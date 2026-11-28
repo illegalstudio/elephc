@@ -39,14 +39,7 @@ pub fn emit_str_numeric_value(emitter: &mut Emitter) {
     abi::emit_frame_prologue(emitter, FRAME);
     abi::store_at_offset(emitter, arg0, SOURCE);
     abi::store_at_offset(emitter, arg1, LENGTH);
-    abi::emit_reg_move(emitter, result, arg1);
-    ins(emitter, "add x0, x0, #1", "add rax, 1");
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    abi::store_at_offset(emitter, result, BUFFER);
-    abi::emit_reg_move(emitter, arg0, result);
-    abi::load_at_offset(emitter, arg1, SOURCE);
-    abi::load_at_offset(emitter, arg2, LENGTH);
-    emitter.bl_c("memcpy");                                                     // copy exactly the PHP byte range into privately owned scratch
+    elephc_memoir::interop::c_strings::emit_stage_length_bounded_input(emitter, SOURCE, LENGTH, BUFFER);
     terminate_and_measure(emitter);
     abi::load_at_offset(emitter, arg0, BUFFER);
     abi::emit_call_label(emitter, "__rt_php_num_scan");

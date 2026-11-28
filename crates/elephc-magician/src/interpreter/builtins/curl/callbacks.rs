@@ -254,9 +254,7 @@ pub(in crate::interpreter) fn eval_curl_setopt_callback(
         } else {
             EvalCurlCallbackSlot::Empty
         };
-        context
-            .stream_resources_mut()
-            .set_curl_easy_callback(table_id, slot, cleared, values)?;
+        eval_curl_publish_callback_state(table_id, slot, cleared, context, values)?;
         if slot == ffi::SLOT_WRITE as usize {
             // php-src keeps ONE write mode and `CURLOPT_WRITEFUNCTION => null` restores
             // STDOUT — never whatever `CURLOPT_RETURNTRANSFER` was set to earlier (measured
@@ -305,9 +303,7 @@ pub(in crate::interpreter) fn eval_curl_setopt_callback(
     // ROOTED ONLY AFTER THE BRIDGE ACCEPTED IT, matching the AOT prelude's ordering — the
     // caller's `value` cell is still live until this returns, so nothing can be released
     // between the two steps.
-    context
-        .stream_resources_mut()
-        .set_curl_easy_callback(table_id, slot, installed, values)?;
+    eval_curl_publish_callback_state(table_id, slot, installed, context, values)?;
     if slot == ffi::SLOT_WRITE as usize {
         // Installing `CURLOPT_WRITEFUNCTION` selects php-src's `PHP_CURL_USER`, which
         // deselects `PHP_CURL_RETURN`: with a write callback installed last, `curl_exec()`
@@ -384,24 +380,36 @@ pub(in crate::interpreter) fn eval_curl_copy_callbacks(
         if register {
             eval_curl_apply_bridge_slot(copy_raw, copy_id, slot, state);
         }
-        context
-            .stream_resources_mut()
-            .set_curl_easy_callback(copy_id, slot, state, values)?;
+        eval_curl_publish_callback_state(copy_id, slot, state, context, values)?;
     }
     Ok(())
 }
 
-/// Clears every callback slot on a handle, on both sides — `curl_reset()`'s counterpart to
-/// `crates/elephc-curl/src/callbacks.rs`'s `clear_all` (which the bridge's own
-/// `elephc_curl_easy_reset` already ran; this drops the eval-side roots to match).
-pub(in crate::interpreter) fn eval_curl_clear_callbacks(
+/// Retains and publishes one callback state before releasing the detached preceding owner.
+fn eval_curl_publish_callback_state(
     table_id: i64,
+    slot: usize,
+    state: EvalCurlCallbackSlot,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    context
+) -> Result<bool, EvalStatus> {
+    let state = match state {
+        EvalCurlCallbackSlot::Callable(cell) => {
+            EvalCurlCallbackSlot::Callable(values.retain(cell)?)
+        }
+        other => other,
+    };
+    let (published, detached) = context
         .stream_resources_mut()
-        .clear_curl_easy_callbacks(table_id, values)
+        .replace_curl_easy_callback(table_id, slot, state);
+    crate::interpreter::scope_cells::retire_eval_owner_batch(
+        detached,
+        elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+        elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+        context,
+        values,
+    )?;
+    Ok(published)
 }
 
 /// Runs `transfer` with an active callback frame covering `handles`, so any callback libcurl
@@ -423,63 +431,83 @@ pub(in crate::interpreter) fn eval_curl_with_callback_frame<V, R>(
 where
     V: RuntimeValueOps,
 {
-    let mut installed = Vec::new();
-    let mut receiver_owners = Vec::new();
-    let setup = (|| {
-        for &table_id in handles {
-            for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
-                let callable = match state {
-                    EvalCurlCallbackSlot::Callable(cell) => {
-                        // Normalized ONCE per transfer rather than once per callback
-                        // invocation: a write callback fires per chunk, and re-resolving a
-                        // method/closure callable thousands of times would be pure overhead.
-                        let (callable, owner) = eval_callable(cell, context, values)?.into_parts();
-                        receiver_owners.extend(owner);
-                        Some(callable)
-                    }
-                    EvalCurlCallbackSlot::Silent => None,
-                    EvalCurlCallbackSlot::Empty => continue,
-                };
-                installed.push((table_id, slot, callable));
-            }
-        }
-        Ok::<(), EvalStatus>(())
-    })();
-    if let Err(status) = setup {
-        for owner in receiver_owners {
-            let _ = release_expr_result(owner, context, values);
-        }
-        return Err(status);
-    }
-    let mut frame = EvalCurlCallbackFrame {
-        context: context as *mut ElephcEvalContext,
-        values: (values as *mut V).cast::<c_void>(),
-        invoke: eval_curl_invoke_typed::<V>,
-        installed,
-        parked: None,
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::{
+        CleanupErrorPolicy, ReleaseOrder, StagedRuntimeOwners,
     };
-    {
-        // SAFETY: `frame` outlives the guard — it is this function's own local and the guard
-        // is dropped at the end of this block, before `frame` is moved from or goes out of
-        // scope. A nested transfer started from inside `transfer` publishes its own frame
-        // and restores THIS one when it finishes; see this module's header for why only the
-        // innermost frame is ever read and why that keeps the aliasing argument intact.
-        let _published = unsafe { ActiveFrameGuard::publish(&raw mut frame) };
-        let outcome = transfer();
-        drop(_published);
-        // THE PARKED THROW IS RETURNED, NOT STASHED. Handing it back with the transfer's own
-        // result is what keeps nesting correct: a shared slot would let an inner transfer's
-        // throw be picked up by an outer level (or clobber one already waiting there). The
-        // caller resumes it in the very next statement — it still has to consult the
-        // bridge's gate to know a throw is why the transfer stopped, which is why resuming
-        // is a separate call rather than an `Err` from here.
-        for owner in receiver_owners {
-            if let Err(status) = release_expr_result(owner, context, values) {
-                if frame.parked.is_none() { frame.parked = Some(status); }
+
+    let receiver_owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&receiver_owners, || {
+        let mut installed = Vec::new();
+        let setup = (|| {
+            for &table_id in handles {
+                for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
+                    let callable = match state {
+                        EvalCurlCallbackSlot::Callable(cell) => {
+                            // Normalized ONCE per transfer rather than once per callback
+                            // invocation: a write callback fires per chunk, and re-resolving a
+                            // method/closure callable thousands of times would be pure overhead.
+                            let (callable, owners) =
+                                eval_callable(cell, context, values)?.into_parts();
+                            if let Some(owner) = owners {
+                                receiver_owners.stage(owner);
+                            }
+                            Some(callable)
+                        }
+                        EvalCurlCallbackSlot::Silent => None,
+                        EvalCurlCallbackSlot::Empty => continue,
+                    };
+                    installed.push((table_id, slot, callable));
+                }
             }
+            Ok::<(), EvalStatus>(())
+        })();
+        if let Err(status) = setup {
+            let _ = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                receiver_owners.take_all(),
+                ReleaseOrder::Forward,
+                CleanupErrorPolicy::Ignore,
+                context,
+                values,
+            );
+            return Err(status);
         }
-        Ok((outcome, frame.parked.take()))
-    }
+        let mut frame = EvalCurlCallbackFrame {
+            context: context as *mut ElephcEvalContext,
+            values: (values as *mut V).cast::<c_void>(),
+            invoke: eval_curl_invoke_typed::<V>,
+            installed,
+            parked: None,
+        };
+        {
+            // SAFETY: `frame` outlives the guard because it is this function's own local and the guard
+            // is dropped at the end of this block, before `frame` is moved from or goes out of
+            // scope. A nested transfer started from inside `transfer` publishes its own frame
+            // and restores THIS one when it finishes; see this module's header for why only the
+            // innermost frame is ever read and why that keeps the aliasing argument intact.
+            let _published = unsafe { ActiveFrameGuard::publish(&raw mut frame) };
+            let outcome = transfer();
+            drop(_published);
+            // THE PARKED THROW IS RETURNED, NOT STASHED. Handing it back with the transfer's own
+            // result is what keeps nesting correct: a shared slot would let an inner transfer's
+            // throw be picked up by an outer level (or clobber one already waiting there). The
+            // caller resumes it in the very next statement. It still has to consult the
+            // bridge's gate to know a throw is why the transfer stopped, which is why resuming
+            // is a separate call rather than an `Err` from here.
+            if let Err(status) = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                receiver_owners.take_all(),
+                ReleaseOrder::Forward,
+                CleanupErrorPolicy::First,
+                context,
+                values,
+            ) {
+                if frame.parked.is_none() {
+                    frame.parked = Some(status);
+                }
+            }
+            Ok((outcome, frame.parked.take()))
+        }
+    })
 }
 
 /// Resumes a callback's parked throw after the transfer that produced it has returned.
@@ -620,41 +648,48 @@ fn eval_curl_run_callback<V: RuntimeValueOps>(
     //
     // This invocation owns the generated argument cells. Keep their leases until the
     // callable returns, retaining a borrowed result before retiring those arguments.
-    let mut args = vec![values.curl_handle(table_id)?];
-    let outcome = (|| {
-        let argc = usize::try_from(spec.argc).unwrap_or(0);
-        for index in 0..argc {
-            // SAFETY: the bridge guarantees `argv` points at `argc` `CallArg`s for the duration
-            // of the call (`crates/elephc-curl/src/callbacks.rs`'s trampolines build them on
-            // their own stacks).
-            let arg = unsafe { &*spec.argv.add(index) };
-            let cell = match arg.tag {
-                ffi::CALL_TAG_INT => values.int(arg.lo)?,
-                ffi::CALL_TAG_NULL => values.null()?,
-                ffi::CALL_TAG_STRING => {
-                    let len = usize::try_from(arg.hi).unwrap_or(0);
-                    let ptr = arg.lo as usize as *const u8;
-                    if len == 0 || ptr.is_null() {
-                        values.string_bytes_value(&[])?
-                    } else {
-                        // COPIED IMMEDIATELY: these bytes are libcurl's own transient receive
-                        // buffer, valid only for this call.
-                        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-                        values.string_bytes_value(bytes)?
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
+
+    let owners = StagedRuntimeOwners::default();
+    let result = RuntimeOwnerSlot::empty();
+    let result = with_runtime_owners(&(&owners, &result), || {
+        let outcome = (|| {
+            let handle = owners.stage(values.curl_handle(table_id)?);
+            let mut args = vec![handle.borrowed()];
+            let argc = usize::try_from(spec.argc).unwrap_or(0);
+            for index in 0..argc {
+                // SAFETY: the bridge guarantees `argv` points at `argc` `CallArg`s for the duration
+                // of the call (`crates/elephc-curl/src/callbacks.rs`'s trampolines build them on
+                // their own stacks).
+                let arg = unsafe { &*spec.argv.add(index) };
+                let cell = match arg.tag {
+                    ffi::CALL_TAG_INT => values.int(arg.lo)?,
+                    ffi::CALL_TAG_NULL => values.null()?,
+                    ffi::CALL_TAG_STRING => {
+                        let len = usize::try_from(arg.hi).unwrap_or(0);
+                        let ptr = arg.lo as usize as *const u8;
+                        if len == 0 || ptr.is_null() {
+                            values.string_bytes_value(&[])?
+                        } else {
+                            // COPIED IMMEDIATELY: these bytes are libcurl's own transient receive
+                            // buffer, valid only for this call.
+                            let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+                            values.string_bytes_value(bytes)?
+                        }
                     }
-                }
-                // Defensively, any tag a future bridge might add: the three named above are the
-                // only ones the six trampolines produce today, and PHP `null` is the least
-                // surprising stand-in for one this build does not know.
-                _ => values.null()?,
-            };
-            args.push(cell);
-        }
-        eval_evaluated_callable_with_values(callable, args.clone(), context, values)
-    })();
-    let result = crate::interpreter::operands::finish_eval_argument_values(
-        outcome, args, context, values,
-    )?;
+                    // Defensively, any tag a future bridge might add: the three named above are the
+                    // only ones the six trampolines produce today, and PHP `null` is the least
+                    // surprising stand-in for one this build does not know.
+                    _ => values.null()?,
+                };
+                args.push(owners.stage(cell).borrowed());
+            }
+            let returned = eval_evaluated_callable_with_values(callable, args, context, values)?;
+            result.replace(Some(promote_borrowed_result(returned, values)?));
+            Ok(())
+        })();
+        owners.finish(outcome, &result, |cell| release_expr_result(cell, context, values))
+    })?;
     let converted = (|| {
         debug_assert!(
             spec.result_kind == ffi::RESULT_INT || spec.result_kind == ffi::RESULT_STRING,

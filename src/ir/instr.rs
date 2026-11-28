@@ -101,6 +101,11 @@ impl PassOrigin {
 }
 
 impl Instruction {
+    /// Reports whether this local store retires the displaced physical frame owner.
+    pub fn replaces_local_owner(&self) -> bool {
+        self.op == Op::StoreLocal && self.effects.contains(Effects::REFCOUNT_OP)
+    }
+
     /// Creates a new instruction payload with all semantic metadata attached.
     pub fn new(
         op: Op,
@@ -148,7 +153,13 @@ impl Instruction {
                 | Op::FToStr
                 | Op::BoolToStr
                 | Op::ResourceToStr
-        )
+        ) || (self.op == Op::RuntimeCall && matches!(
+            self.immediate,
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(target)
+                | RuntimeCallTarget::ProfiledFunction { target, .. }
+            )) if target.creates_transient_string()
+        ))
     }
 
     /// Returns whether ordinary string cleanup must skip this producer.

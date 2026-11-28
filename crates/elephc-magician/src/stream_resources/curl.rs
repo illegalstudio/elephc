@@ -30,8 +30,9 @@ impl EvalStreamResources {
                 raw,
                 return_transfer: false,
                 write_user: false,
-                private_value: None,
+                private_value: RuntimeOwnerSlot::default(),
                 callbacks: Default::default(),
+                callback_owners: std::array::from_fn(|_| RuntimeOwnerSlot::default()),
             },
         );
         id
@@ -44,7 +45,7 @@ impl EvalStreamResources {
     /// module — callers outside `crate::stream_resources` have no way to name that type.
     ///
     /// RETAINS `private_value` when present: the source handle's own entry keeps its
-    /// existing (already-retained — see `set_curl_easy_private`) reference, so the new
+    /// existing already-retained reference, so the new
     /// entry needs an INDEPENDENT owned reference of its own. Without this, both entries
     /// would share one retained cell with only one owner recorded anywhere, and freeing
     /// either handle (or overwriting `CURLOPT_PRIVATE` on either) would release a
@@ -58,8 +59,8 @@ impl EvalStreamResources {
         values: &mut impl RuntimeValueOps,
     ) -> Result<i64, EvalStatus> {
         let private_value = match private_value {
-            Some(value) => Some(values.retain(value)?),
-            None => None,
+            Some(value) => RuntimeOwnerSlot::new(values.retain(value)?),
+            None => RuntimeOwnerSlot::default(),
         };
         let id = self.take_next_id();
         self.curl_easy_handles.insert(
@@ -75,6 +76,7 @@ impl EvalStreamResources {
                 // and `curl_copy_handle()` re-installs them onto the copy afterwards —
                 // exactly the loop `crate::curl_prelude::curl_copy_handle` runs.
                 callbacks: Default::default(),
+                callback_owners: std::array::from_fn(|_| RuntimeOwnerSlot::default()),
             },
         );
         Ok(id)
@@ -107,7 +109,11 @@ impl EvalStreamResources {
     pub(crate) fn curl_easy_mirror(&self, id: i64) -> Option<(bool, bool, Option<RuntimeCellHandle>)> {
         self.curl_easy_handles
             .get(&id)
-            .map(|handle| (handle.return_transfer, handle.write_user, handle.private_value))
+            .map(|handle| (
+                handle.return_transfer,
+                handle.write_user,
+                (!handle.private_value.is_empty()).then(|| handle.private_value.borrowed()),
+            ))
     }
 
     /// Returns whether `RETURNTRANSFER` is active on this handle (`curl_exec()`'s
@@ -139,173 +145,147 @@ impl EvalStreamResources {
     pub(crate) fn curl_easy_private(&self, id: i64) -> Option<RuntimeCellHandle> {
         self.curl_easy_handles
             .get(&id)
-            .and_then(|handle| handle.private_value)
+            .filter(|handle| !handle.private_value.is_empty())
+            .map(|handle| handle.private_value.borrowed())
     }
 
-    /// Stores a `CURLOPT_PRIVATE` value, RETAINING it so this table holds an independent
-    /// owned reference — not the caller's borrowed scope cell, which `unset()`/reassignment
-    /// can release out from under a stored-but-unretained handle (the exact use-after-free
-    /// this method used to allow: `curl_setopt($ch, CURLOPT_PRIVATE, $k); unset($k);
-    /// curl_getinfo($ch, CURLINFO_PRIVATE);` retained a freed cell). Releases any
-    /// PREVIOUSLY stored value first, matching PHP's own property-reassignment semantics
-    /// (`crate::curl_prelude`'s `$handle->__elephc_private = $value;` drops the old
-    /// reference the same way) and preventing an unbounded retain leak across repeated
-    /// `curl_setopt($ch, CURLOPT_PRIVATE, ...)` calls on one handle. Returns `false` (after
-    /// releasing the just-retained value, so nothing leaks) for an unknown id.
-    pub(crate) fn set_curl_easy_private(
+    /// Publishes an already-retained `CURLOPT_PRIVATE` owner and detaches its predecessor.
+    ///
+    /// The interpreter releases the returned batch after this table borrow ends, so a
+    /// destructor cannot re-enter while the preceding owner is still visible here. An
+    /// unknown id returns the incoming owner in the detached batch for the same reason.
+    pub(crate) fn replace_curl_easy_private(
         &mut self,
         id: i64,
-        value: RuntimeCellHandle,
-        values: &mut impl RuntimeValueOps,
-    ) -> Result<bool, EvalStatus> {
-        let retained = values.retain(value)?;
+        retained: RuntimeCellHandle,
+    ) -> (bool, elephc_memoir::runtime_owners::RuntimeOwnerBatch) {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            values.release(retained)?;
-            return Ok(false);
+            return (
+                false,
+                elephc_memoir::runtime_owners::RuntimeOwnerBatch::new([retained]),
+            );
         };
-        if let Some(previous) = handle.private_value.replace(retained) {
-            values.release(previous)?;
-        }
-        Ok(true)
+        let previous = handle.private_value.replace(Some(retained));
+        (
+            true,
+            elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(previous),
+        )
     }
 
-    /// Resets the PHP-layer mirror fields to `curl_reset()`'s fresh-handle defaults,
-    /// leaving the raw bridge id untouched (the bridge's own `elephc_curl_easy_reset`
-    /// already reset libcurl's own options). Releases the stored `CURLOPT_PRIVATE` value
-    /// (if any) before clearing it — the same reference `set_curl_easy_private` retained on
-    /// the way in, mirroring `crate::curl_prelude::curl_reset`'s
-    /// `$handle->__elephc_private = false;`.
-    pub(crate) fn reset_curl_easy_mirror(
+    /// Resets the PHP-layer mirror and detaches every PHP owner in one non-reentrant step.
+    ///
+    /// The raw bridge id stays untouched because `elephc_curl_easy_reset` already reset
+    /// libcurl. The caller releases the detached private value and callback roots after
+    /// this table borrow ends.
+    pub(crate) fn take_curl_easy_reset_owners(
         &mut self,
         id: i64,
-        values: &mut impl RuntimeValueOps,
-    ) -> Result<bool, EvalStatus> {
-        self.set_curl_easy_write_mode(id, false, false);
+    ) -> Option<elephc_memoir::runtime_owners::RuntimeOwnerBatch> {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            return Ok(false);
+            return None;
         };
-        if let Some(previous) = handle.private_value.take() {
-            values.release(previous)?;
-        }
-        Ok(true)
+        handle.return_transfer = false;
+        handle.write_user = false;
+        Some(Self::take_curl_easy_handle_php_owners(handle))
     }
 
-    /// Releases every retained `CURLOPT_PRIVATE` value this table still holds, leaving the
-    /// raw bridge handles themselves untouched — `EvalStreamResources`'s `Drop` impl, which
-    /// runs immediately after this at the SAME teardown, still frees those the way it
-    /// always has.
-    ///
-    /// WHY THIS EXISTS: `set_curl_easy_private`
-    /// retains an independent owned reference for every stored `CURLOPT_PRIVATE` value
-    /// (this file's own doc), and until this method existed nothing ever released that
-    /// reference for a handle that was simply never explicitly reset/overwritten —
-    /// `Drop for EvalStreamResources` frees the RAW bridge handle
-    /// (`crate::curl_ffi::easy_free`) but cannot also call `RuntimeValueOps::release`,
-    /// because `Drop::drop` receives only `&mut self`, never a `RuntimeValueOps`
-    /// implementor.
-    ///
-    /// THE FIX IS NOT IN `Drop`, because `Drop` genuinely cannot reach a `RuntimeValueOps`
-    /// — it is ONE STEP EARLIER, in `crate::ffi::context::__elephc_eval_context_free`, the
-    /// FFI teardown entry point generated code calls to free an `ElephcEvalContext`
-    /// (`EvalStreamResources`'s owner). That function has NO `RuntimeValueOps` PARAMETER
-    /// either, but — unlike `Drop` — it does not need one handed to it: production's
-    /// `RuntimeValueOps` implementor, `crate::runtime_hooks::ElephcRuntimeOps`, is a
-    /// STATELESS adapter over generated runtime C-ABI symbols
-    /// (`ElephcRuntimeOps::new()` needs no context pointer, no live eval call, nothing
-    /// beyond the process's already-running runtime heap), so it can be constructed
-    /// ad hoc, right there, a moment before `Box::from_raw(ctx)` drops the context (and,
-    /// transitively, this table). See `__elephc_eval_context_free`'s own call site for the
-    /// wiring — INCLUDING WHERE it calls this relative to that function's OTHER teardown
-    /// steps, which is load-bearing (a retained `CURLOPT_PRIVATE` value can be, or
-    /// transitively reference, an eval-declared object with a `__destruct()`, and that
-    /// dispatch needs this context's dynamic-object registration still intact) — this
-    /// method is the storage-layer half of that fix.
-    ///
-    /// CONTINUES ON A PER-ENTRY RELEASE FAILURE rather than propagating the first one:
-    /// this runs once, at teardown, with no later chance to retry, so letting one
-    /// `values.release()` failure short-circuit the loop (the previous `?`-propagating
-    /// shape) would silently leak every OTHER still-retained entry in this same table
-    /// instead of just the one that failed. Every entry's own `private_value` is still
-    /// unconditionally `.take()`n either way, so a failed release cannot be retried twice
-    /// (matching `RuntimeValueOps::release`'s own contract: a failure here is not a
-    /// "nothing happened" outcome to undo).
-    pub(crate) fn release_curl_easy_private_values(&mut self, values: &mut impl RuntimeValueOps) {
+    /// Detaches every PHP cell owned by one easy-handle record before cleanup can re-enter.
+    fn take_curl_easy_handle_php_owners(
+        handle: &mut EvalCurlEasyHandle,
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
+        let mut owners = elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
+        if let Some(private) = handle.private_value.take_optional() {
+            owners.push(private);
+        }
+        for (state, slot) in handle.callbacks.iter_mut().zip(&handle.callback_owners) {
+            *state = EvalCurlCallbackKind::Empty;
+            if let Some(owner) = slot.take_optional() {
+                owners.push(owner);
+            }
+        }
+        owners
+    }
+
+    /// Detaches every easy-handle PHP owner while retaining the native handles for `Drop`.
+    pub(super) fn take_curl_easy_php_owners(
+        &mut self,
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
+        let mut owners = elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
         for handle in self.curl_easy_handles.values_mut() {
-            if let Some(previous) = handle.private_value.take() {
-                let _ = values.release(previous);
-            }
-            // THE CALLBACK ROOTS GO OUT THE SAME DOOR, for the identical reason and at the
-            // identical moment: `set_curl_easy_callback` retains every installed callable,
-            // and `Drop for EvalStreamResources` cannot release one (it never receives a
-            // `RuntimeValueOps`). A callback closure can capture — or be — an eval-declared
-            // object with a `__destruct()`, which is exactly why this runs from
-            // `__elephc_eval_context_free` while the context's dynamic-object registration
-            // is still intact, rather than from `Drop`.
-            for slot in &mut handle.callbacks {
-                if let EvalCurlCallbackSlot::Callable(cell) = std::mem::take(slot) {
-                    let _ = values.release(cell);
-                }
-            }
+            owners.append(Self::take_curl_easy_handle_php_owners(handle));
         }
+        owners
     }
 
-    /// Replaces one callback slot, RETAINING a `Callable` value and releasing whatever the
-    /// slot previously held — the same independent-owned-reference discipline
-    /// `set_curl_easy_private` documents, and for the same reason: the caller's cell is a
-    /// borrowed scope entry that `unset()`/reassignment can free while libcurl still has the
-    /// slot registered.
+    /// Test adapter that detaches and attempts every easy-handle PHP owner release.
+    #[cfg(test)]
+    pub(crate) fn release_curl_easy_php_values(&mut self, values: &mut impl RuntimeValueOps) {
+        let owners = self.take_curl_easy_php_owners();
+        let _ = owners.release(
+            elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+            elephc_memoir::runtime_owners::CleanupErrorPolicy::Ignore,
+            |owner| values.release(owner),
+        );
+    }
+
+    /// Publishes an already-retained callback state and detaches the preceding owner.
     ///
-    /// Returns `false` (after releasing the just-retained value, so nothing leaks) for an
-    /// unknown id or an out-of-range slot.
-    pub(crate) fn set_curl_easy_callback(
+    /// An unknown handle or slot returns any incoming callable in the detached batch, so
+    /// the interpreter can release it after the table borrow ends.
+    pub(crate) fn replace_curl_easy_callback(
         &mut self,
         id: i64,
         slot: usize,
         value: EvalCurlCallbackSlot,
-        values: &mut impl RuntimeValueOps,
-    ) -> Result<bool, EvalStatus> {
-        let value = match value {
-            EvalCurlCallbackSlot::Callable(cell) => {
-                EvalCurlCallbackSlot::Callable(values.retain(cell)?)
-            }
-            other => other,
-        };
+    ) -> (bool, elephc_memoir::runtime_owners::RuntimeOwnerBatch) {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            if let EvalCurlCallbackSlot::Callable(cell) = value {
-                values.release(cell)?;
-            }
-            return Ok(false);
+            let detached = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(
+                match value {
+                    EvalCurlCallbackSlot::Callable(cell) => Some(cell),
+                    _ => None,
+                },
+            );
+            return (false, detached);
         };
         let Some(current) = handle.callbacks.get_mut(slot) else {
-            if let EvalCurlCallbackSlot::Callable(cell) = value {
-                values.release(cell)?;
-            }
-            return Ok(false);
+            let detached = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(
+                match value {
+                    EvalCurlCallbackSlot::Callable(cell) => Some(cell),
+                    _ => None,
+                },
+            );
+            return (false, detached);
         };
-        let previous = std::mem::replace(current, value);
-        if let EvalCurlCallbackSlot::Callable(cell) = previous {
-            values.release(cell)?;
-        }
-        Ok(true)
+        let owner = handle.callback_owners.get(slot).expect("callback state and owner arrays match");
+        let (replacement, kind) = match value {
+            EvalCurlCallbackSlot::Empty => (None, EvalCurlCallbackKind::Empty),
+            EvalCurlCallbackSlot::Silent => (None, EvalCurlCallbackKind::Silent),
+            EvalCurlCallbackSlot::Callable(cell) => (Some(cell), EvalCurlCallbackKind::Callable),
+        };
+        *current = kind;
+        let detached = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(
+            owner.replace(replacement),
+        );
+        (true, detached)
     }
 
-    /// Drops every callback slot on one handle, releasing each retained callable —
-    /// `curl_reset()`'s half of `crates/elephc-curl/src/callbacks.rs`'s `clear_all`
-    /// (php-src frees its handler callables in `curl_reset()` too).
-    pub(crate) fn clear_curl_easy_callbacks(
+    /// Detaches every callback owner on one handle before any release can re-enter.
+    #[cfg(test)]
+    pub(crate) fn take_curl_easy_callbacks(
         &mut self,
         id: i64,
-        values: &mut impl RuntimeValueOps,
-    ) -> Result<(), EvalStatus> {
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            return Ok(());
+            return elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
         };
-        for slot in &mut handle.callbacks {
-            if let EvalCurlCallbackSlot::Callable(cell) = std::mem::take(slot) {
-                values.release(cell)?;
+        let mut owners = elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
+        for (state, slot) in handle.callbacks.iter_mut().zip(&handle.callback_owners) {
+            *state = EvalCurlCallbackKind::Empty;
+            if let Some(cell) = slot.take_optional() {
+                owners.push(cell);
             }
         }
-        Ok(())
+        owners
     }
 
     /// Returns every non-`Empty` callback slot on one handle as `(slot index, state)`, so
@@ -320,9 +300,93 @@ impl EvalStreamResources {
             .callbacks
             .iter()
             .enumerate()
-            .filter(|(_, slot)| **slot != EvalCurlCallbackSlot::Empty)
-            .map(|(index, slot)| (index, *slot))
+            .filter(|(_, state)| **state != EvalCurlCallbackKind::Empty)
+            .map(|(index, state)| {
+                let state = match *state {
+                    EvalCurlCallbackKind::Empty => EvalCurlCallbackSlot::Empty,
+                    EvalCurlCallbackKind::Silent => EvalCurlCallbackSlot::Silent,
+                    EvalCurlCallbackKind::Callable => EvalCurlCallbackSlot::Callable(
+                        handle.callback_owners[index].borrowed(),
+                    ),
+                };
+                (index, state)
+            })
             .collect()
+    }
+
+    /// Exercises private-value publication with the historical test adapter.
+    #[cfg(test)]
+    pub(crate) fn set_curl_easy_private(
+        &mut self,
+        id: i64,
+        value: RuntimeCellHandle,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<bool, EvalStatus> {
+        let retained = values.retain(value)?;
+        let (published, detached) = self.replace_curl_easy_private(id, retained);
+        detached.release(
+            elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+            elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+            |owner| values.release(owner),
+        )?;
+        Ok(published)
+    }
+
+    /// Exercises reset detachment with the historical test adapter.
+    #[cfg(test)]
+    pub(crate) fn reset_curl_easy_mirror(
+        &mut self,
+        id: i64,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<bool, EvalStatus> {
+        let Some(detached) = self.take_curl_easy_reset_owners(id) else {
+            return Ok(false);
+        };
+        detached.release(
+            elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+            elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+            |owner| values.release(owner),
+        )?;
+        Ok(true)
+    }
+
+    /// Exercises callback publication with the historical test adapter.
+    #[cfg(test)]
+    pub(crate) fn set_curl_easy_callback(
+        &mut self,
+        id: i64,
+        slot: usize,
+        value: EvalCurlCallbackSlot,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<bool, EvalStatus> {
+        let value = match value {
+            EvalCurlCallbackSlot::Callable(cell) => {
+                EvalCurlCallbackSlot::Callable(values.retain(cell)?)
+            }
+            other => other,
+        };
+        let (published, detached) = self.replace_curl_easy_callback(id, slot, value);
+        detached.release(
+            elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+            elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+            |owner| values.release(owner),
+        )?;
+        Ok(published)
+    }
+
+    /// Exercises callback detachment with the historical test adapter.
+    #[cfg(test)]
+    pub(crate) fn clear_curl_easy_callbacks(
+        &mut self,
+        id: i64,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        let detached = self.take_curl_easy_callbacks(id);
+        detached.release(
+            elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+            elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+            |owner| values.release(owner),
+        )
     }
 
     /// Registers a freshly allocated curl MULTI handle and returns its eval table key.

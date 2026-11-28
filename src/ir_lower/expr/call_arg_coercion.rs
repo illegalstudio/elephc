@@ -523,10 +523,10 @@ pub(super) fn capture_call_argument_value(
 /// declaration order once all arguments were evaluated, so `f(?T &$a, ?T $b)` must report
 /// `$a` first even though `$b` is checked by the caller.
 ///
-/// Otherwise only a non-nullable class parameter is checked here: inside the callee its slot
-/// reads an object pointer. A union of `null`, arrays and objects (`?A &$v`, `?array &$v`) is a
-/// boxed cell in the callee and is checked on entry instead, after every argument was evaluated
-/// (`crate::ir_lower::expr::guard_reference_parameter_entry`).
+/// Otherwise only a non-nullable named-class parameter is checked here: inside the callee its
+/// slot reads an object pointer. Generic `object` and unions of `null`, arrays and objects
+/// (`?A &$v`, `?array &$v`) use boxed cells and are checked on entry instead, after every
+/// argument was evaluated (`crate::ir_lower::expr::guard_reference_parameter_entry`).
 fn guard_boxed_object_reference_argument(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -849,14 +849,17 @@ pub(super) fn object_param_guard(
     if sig.ref_params.get(index).copied().unwrap_or(false) {
         return None;
     }
-    let PhpType::Object(class_name) = param_ty.codegen_repr() else {
+    let PhpType::Object(class_name) = param_ty else {
         return None;
     };
     let source_ty = ctx.builder.value_php_type(value);
     let static_ty = argument_static_type(ctx, arg);
     let guard_ty = static_ty.as_ref().unwrap_or(&source_ty);
-    if let Some(given) = union_object_guard_word(guard_ty, &class_name) {
-        return Some((class_name, Some(given)));
+    if param_ty.uses_boxed_object_storage() && *guard_ty == PhpType::Callable {
+        return Some((class_name.clone(), Some("Closure")));
+    }
+    if let Some(given) = union_object_guard_word(guard_ty, class_name) {
+        return Some((class_name.clone(), Some(given)));
     }
     let rerunnable = matches!(
         arg.kind,
@@ -870,7 +873,7 @@ pub(super) fn object_param_guard(
     );
     let already_object = matches!(guard_ty.codegen_repr(), PhpType::Object(_));
     let literal_null = matches!(arg.kind, ExprKind::Null);
-    (rerunnable && !already_object && !literal_null).then_some((class_name, None))
+    (rerunnable && !already_object && !literal_null).then_some((class_name.clone(), None))
 }
 
 /// Adds the `instanceof` check of a `Class|false`, `Class|null` or re-read source to the current
@@ -999,8 +1002,8 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
 ///
 /// That guard re-reads its argument to name the runtime type, so it only covers side-effect
 /// free sources bound to one class. This one names the type from a rooted copy, which covers
-/// every source and the nullable and union declarations whose storage stays boxed. A raw object
-/// declaration receives the unboxed payload.
+/// every source and the nullable and union declarations whose storage stays boxed. A named-class
+/// declaration receives the unboxed payload, while generic `object` keeps the box.
 ///
 /// When the call deferred its parameter checks (`DeferredObjectParamChecks`), the decision is
 /// recorded and the boxed value returned unchanged: `coerce_operands_to_params_with_checks`
@@ -1014,8 +1017,8 @@ fn guard_runtime_object_param(
 ) -> Option<LoweredValue> {
     let (_, param_ty) = sig.params.get(index)?;
     let boundary = runtime_object_param_boundary(ctx, param_ty, value.value, arg)?;
-    // The re-reading guard tests `instanceof`, which a closure passes for a bare `object`
-    // parameter; this one keeps closures out of that raw object storage.
+    // Named classes may use the cheaper re-reading guard before entering raw object storage.
+    // Generic `object` stays boxed, so this path validates its runtime tag directly.
     let bare_object = matches!(param_ty, PhpType::Object(class)
         if class.is_empty() || class.eq_ignore_ascii_case("object"));
     if let (PhpType::Object(class_name), true) = (param_ty, !bare_object) {
@@ -1036,7 +1039,7 @@ fn guard_runtime_object_param(
     Some(emit_object_param_guard(ctx, sig, index, value, &boundary, arg.span))
 }
 
-/// Emits the runtime class check of regular parameter `index` and, for raw object storage,
+/// Emits the runtime class check of regular parameter `index` and, for named-class storage,
 /// unboxes the accepted value.
 fn emit_object_param_guard(
     ctx: &mut LoweringContext<'_, '_>,
@@ -1052,7 +1055,10 @@ fn emit_object_param_guard(
     let value = crate::ir_lower::object_boundary_checks::guard_runtime_object_value(
         ctx, value, boundary, prefix, &suffix, release, span,
     );
-    if !matches!(param_ty, PhpType::Object(_)) || callee_reflects_boxed_object(ctx) {
+    if !matches!(param_ty, PhpType::Object(_))
+        || param_ty.uses_boxed_object_storage()
+        || callee_reflects_boxed_object(ctx)
+    {
         return value;
     }
     let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, param_ty.clone(),
@@ -1191,8 +1197,8 @@ fn emit_reference_object_param_guard(
 /// Returns whether the call being lowered is the builtin `ReflectionObject`/`ReflectionClass`
 /// constructor, which the backend lowers itself.
 ///
-/// It reads a boxed operand through static metadata, as before this check existed, while an
-/// unboxed bare `object` outside a method names no class to dispatch on.
+/// It reads a boxed operand through static metadata rather than deriving a receiver class from
+/// the declared parameter.
 fn callee_reflects_boxed_object(ctx: &LoweringContext<'_, '_>) -> bool {
     let Some(class) = ctx.call_description.as_deref()
         .and_then(|description| description.strip_suffix("::__construct"))
@@ -1527,10 +1533,10 @@ fn union_object_guard_word(actual: &PhpType, class_name: &str) -> Option<&'stati
     }
 }
 
-/// Guards a `Object(class)|false` / `Object(class)|null` argument and unboxes the object.
+/// Guards an `Object(class)|false` / `Object(class)|null` argument for object storage.
 ///
 /// The rejected branch throws a catchable `TypeError` naming the supplied alternative; the
-/// accepted branch extracts the raw object payload the declared parameter ABI expects.
+/// accepted branch keeps generic `object` boxed and extracts the raw payload for named classes.
 fn guard_union_object_param(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -1542,6 +1548,9 @@ fn guard_union_object_param(
 ) -> LoweredValue {
     let span = Some(arg.span);
     let value = emit_object_param_check(ctx, sig, index, value, class_name, given, arg, true);
+    if class_name.is_empty() || class_name.eq_ignore_ascii_case("object") {
+        return value;
+    }
     let object_ty = PhpType::Object(class_name.to_string());
     let result = ctx.emit_owned_value(
         Op::MixedUnbox,

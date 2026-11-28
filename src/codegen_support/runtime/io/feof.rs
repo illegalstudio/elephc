@@ -9,7 +9,6 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_feof` runtime helper.
 /// Dispatches to the target-specific implementation based on `emitter.target`.
@@ -34,8 +33,7 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.label("__rt_feof_local_fd");
 
     // -- load eof flag for this fd from _eof_flags array --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
-    emitter.instruction("ldrb w0, [x9, x0]");                                   // load _eof_flags[fd] into return register
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_load_indexed_byte(emitter, "w0", "x0", "x9");
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -53,7 +51,6 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jge __rt_user_wrapper_feof");                          // dispatch into the wrapper's stream_eof instead of reading the eof-flag table
 
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table base address for the queried file descriptor
-    emitter.instruction("movzx eax, BYTE PTR [r10 + rdi]");                     // load the tracked eof flag byte for the requested file descriptor into the integer result register
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_load_indexed_byte(emitter, "eax", "rdi", "r10");
     emitter.instruction("ret");                                                 // return the eof flag to the caller using the standard x86_64 integer result register
 }

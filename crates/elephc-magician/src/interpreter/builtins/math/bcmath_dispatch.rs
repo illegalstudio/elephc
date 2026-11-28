@@ -9,6 +9,7 @@
 //! - Magician calls the standalone C ABI so AOT and eval share one process scale.
 //! - ABI errors become catchable `ValueError` or `DivisionByZeroError` objects.
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 use std::ptr;
 
@@ -528,15 +529,13 @@ fn copy_bridge_string(
     out_ptr: *mut u8,
     out_len: usize,
 ) -> Result<String, BcmathDispatchError> {
-    if out_ptr.is_null() && out_len != 0 {
-        return Err(BcmathDispatchError::Runtime(EvalStatus::RuntimeFatal));
+    // The bridge accepts only the exact pointer and length it returned.
+    let bytes = unsafe {
+        elephc_memoir::runtime_bytes::copy_owned(out_ptr, out_len, |pointer| {
+            elephc_bcmath_free(pointer.cast_mut(), out_len);
+        })
     }
-    let bytes = if out_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(out_ptr, out_len).to_vec() }
-    };
-    unsafe { elephc_bcmath_free(out_ptr, out_len) };
+    .ok_or(BcmathDispatchError::Runtime(EvalStatus::RuntimeFatal))?;
     String::from_utf8(bytes)
         .map_err(|_| BcmathDispatchError::Runtime(EvalStatus::RuntimeFatal))
 }
@@ -577,13 +576,10 @@ fn materialize_result(
         BcmathResult::Int(value) => values.int(i64::from(value)),
         BcmathResult::String(value) => values.string(&value),
         BcmathResult::StringPair((quotient, remainder)) => {
-            let mut result = values.array_new(2)?;
-            let zero = values.int(0)?;
-            let quotient = values.string(&quotient)?;
-            result = values.array_set(result, zero, quotient)?;
-            let one = values.int(1)?;
-            let remainder = values.string(&remainder)?;
-            values.array_set(result, one, remainder)
+            let mut result = EvalArrayBuilder::indexed(values, 2)?;
+            result.index(0, |values| values.string(&quotient))?;
+            result.index(1, |values| values.string(&remainder))?;
+            Ok(result.finish())
         }
     }
 }

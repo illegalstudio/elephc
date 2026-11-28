@@ -270,7 +270,10 @@ fn reference_mutation_preserves_alias_ownership() {
         assert!(entry.flags().dirty);
         assert_eq!(entry.flags().ownership, ownership);
     }
-    assert_eq!(scope.drain_owned_cells(), vec![value]);
+    assert_eq!(
+        scope.drain_owned_cells().iter().collect::<Vec<_>>(),
+        vec![value],
+    );
 }
 
 /// Verifies draining a scope returns only visible owned cells.
@@ -285,7 +288,7 @@ fn drain_owned_cells_returns_visible_owned_entries() {
 
     let drained = scope.drain_owned_cells();
 
-    assert_eq!(drained, vec![owned]);
+    assert_eq!(drained.iter().collect::<Vec<_>>(), vec![owned]);
     assert!(scope.entry("owned").is_none());
     assert!(scope.entry("borrowed").is_none());
 }

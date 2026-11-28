@@ -9,8 +9,10 @@
 //! - Success transfers native string ownership; a throw returns PendingThrowable with zero output.
 //! - The boundary restores handler, activation-frame, and diagnostic-suppression state.
 
+use elephc_memoir::activation_records;
+
 use super::*;
-use crate::codegen_support::try_handlers::{TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
+use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
 
 /// Emits the protected host callback without retaining any Rust frame or request-state borrow.
 pub(super) fn emit(emitter: &mut Emitter) {
@@ -34,12 +36,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", frame - 16));              // establish the protected callback frame
     emitter.instruction(&format!("stp x0, x1, [sp, #{locals}]"));               // retain optional eval context and the borrowed object box
     emitter.instruction(&format!("str x2, [sp, #{}]", locals + 16));            // retain the caller-owned result slot
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"), (TRY_HANDLER_DIAG_DEPTH_OFFSET, "_rt_diag_suppression")] {
-        abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
-        emitter.instruction(&format!("str x10, [sp, #{offset}]"));              // save the handler chain, surviving activation, or suppression depth
-    }
+    activation_records::emit_save_runtime_try_prefix(emitter, "x10");
     emitter.instruction("mov x10, sp");                                         // use the local record as this callback's exception boundary
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // pass the opaque handler jump buffer to the platform C library
     emitter.save_exception_handler();
     emitter.instruction("cbnz x0, __rt_mbstring_stringable_throw");             // convert an escaping PHP throw into a returned runtime status
@@ -55,10 +54,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_stringable_throw");
     emitter.instruction(&format!("mov w0, #{}", RuntimeBuiltinStatus::PendingThrowable as i32)); // retain the throwable already published by the native unwinder
     emitter.label("__rt_mbstring_stringable_done");
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"), (TRY_HANDLER_DIAG_DEPTH_OFFSET, "_rt_diag_suppression")] {
-        emitter.instruction(&format!("ldr x10, [sp, #{offset}]"));              // restore state skipped by an escaping callback or nested suppression
-        abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
-    }
+    activation_records::emit_restore_runtime_try_prefix(emitter, "x10");
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame - 16));       // restore the original caller linkage after boundary cleanup
     emitter.instruction(&format!("add sp, sp, #{frame}"));                      // release every callback spill and handler word
     emitter.instruction("ret");                                                 // return a C status without unwinding through the caller
@@ -84,12 +80,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the optional eval context
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // retain the borrowed boxed object
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // retain the caller-owned string result slot
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"), (TRY_HANDLER_DIAG_DEPTH_OFFSET, "_rt_diag_suppression")] {
-        abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
-        emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], r10"));   // save the previous handler, activation frame, or suppression depth
-    }
+    activation_records::emit_save_runtime_try_prefix(emitter, "r10");
     emitter.instruction("mov r10, rsp");                                        // publish this callback's local exception record
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction(&format!("lea rdi, [rsp + {TRY_HANDLER_JMP_BUF_OFFSET}]")); // pass the opaque jump buffer through the SysV C ABI
     emitter.save_exception_handler();
     emitter.instruction("test eax, eax");                                       // distinguish initial execution from an escaping PHP throw
@@ -107,10 +100,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_stringable_throw");
     emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::PendingThrowable as i32)); // preserve the native unwinder's pending throwable
     emitter.label("__rt_mbstring_stringable_done");
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"), (TRY_HANDLER_DIAG_DEPTH_OFFSET, "_rt_diag_suppression")] {
-        emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {offset}]"));   // restore state after normal return or longjmp
-        abi::emit_store_reg_to_symbol(emitter, "r10", symbol, 0);
-    }
+    activation_records::emit_restore_runtime_try_prefix(emitter, "r10");
     emitter.instruction("leave");                                               // discard the complete handler and restore the caller frame
     emitter.instruction("ret");                                                 // return a C status without unwinding through Rust
     emitter.label("__rt_mbstring_stringable_invalid");

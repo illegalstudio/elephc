@@ -100,16 +100,11 @@ pub(in crate::interpreter) fn eval_preg_split_piece_value(
     offset_capture: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = values.string_bytes_value(&piece.bytes)?;
     if !offset_capture {
-        return Ok(value);
+        return values.string_bytes_value(&piece.bytes);
     }
-
     let offset = i64::try_from(piece.offset).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let offset = values.int(offset)?;
-    let mut pair = values.array_new(2)?;
-    let value_key = values.int(0)?;
-    pair = values.array_set(pair, value_key, value)?;
-    let offset_key = values.int(1)?;
-    values.array_set(pair, offset_key, offset)
+    super::captures::eval_preg_offset_pair(values, offset, |values| {
+        values.string_bytes_value(&piece.bytes)
+    })
 }

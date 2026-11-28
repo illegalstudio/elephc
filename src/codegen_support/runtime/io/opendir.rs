@@ -11,7 +11,7 @@
 //! - The `DIR*` is recorded in the `_dir_handles` table keyed by descriptor so
 //!   `readdir()`, `rewinddir()`, and `closedir()` can hand it back to libc.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// opendir: open a directory stream and return its descriptor.
 /// Input:  AArch64 x1/x2 = directory path string
@@ -86,9 +86,8 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     emitter.bl_c("dirfd");
 
     // -- record the DIR* in the fd->DIR* table for readdir/closedir --
-    abi::emit_symbol_address(emitter, "x9", "_dir_handles");
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the DIR* handle
-    emitter.instruction("str x10, [x9, x0, lsl #3]");                           // _dir_handles[fd] = DIR*
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.emit_store_indexed_word(emitter, "x10", "x0", "x9");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the frame
     emitter.instruction("ret");                                                 // return the directory descriptor
@@ -170,9 +169,8 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("dirfd");
 
     // -- record the DIR* in the fd->DIR* table for readdir/closedir --
-    abi::emit_symbol_address(emitter, "r10", "_dir_handles");                   // base of the fd->DIR* table
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the DIR* handle
-    emitter.instruction("mov QWORD PTR [r10 + rax * 8], r9");                   // _dir_handles[fd] = DIR*
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.emit_store_indexed_word(emitter, "r9", "rax", "r10");
     emitter.instruction("add rsp, 16");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the directory descriptor

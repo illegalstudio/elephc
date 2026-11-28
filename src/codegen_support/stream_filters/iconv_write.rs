@@ -40,8 +40,8 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::{Arch, Platform};
 
-/// Capacity of the shared `_stream_grow_scratch` window used as the iconv output buffer.
-const ICONV_SCRATCH: i64 = 65536;
+use elephc_memoir::buffers::stream_scratch::CAPACITY as ICONV_SCRATCH;
+use elephc_memoir::buffers::stream_tables;
 
 /// `iconvctl()` request that sets a descriptor's transliteration (GNU libiconv numbering,
 /// which Apple's iconv keeps).
@@ -126,8 +126,7 @@ fn emit_apple_option_restore_arm64(emitter: &mut Emitter) {
         emitter.instruction("ldrb w11, [x10, x9]");                             // this descriptor's recorded option bits
         emitter.instruction(&format!("ubfx w11, w11, #{bit}, #1"));             // isolate this option's on/off flag
         emitter.instruction("str w11, [sp, #32]");                              // iconvctl reads the flag through a pointer
-        abi::emit_symbol_address(emitter, "x10", "_iconv_handles");
-        emitter.instruction("ldr x0, [x10, x9, lsl #3]");                       // arg 0 = the iconv_t for this descriptor
+        elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_load_indexed_word(emitter, "x0", "x9", "x10");
         emitter.instruction(&format!("mov w1, #{request}"));                    // arg 1 = the ICONV_SET_* request for this option
         emitter.instruction("add x2, sp, #32");                                 // arg 2 = &flag
         emitter.bl_c("iconvctl"); // write the flag back onto the pair Apple iconv shares
@@ -172,14 +171,13 @@ fn emit_arm64<F>(
     }
 
     emitter.label(&loop_label);
-    abi::emit_symbol_address(emitter, "x9", "_stream_grow_scratch");
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "x9");
     emitter.instruction("str x9, [sp, #32]");                                   // iconv outbuf = scratch window base
     emitter.instruction(&format!("mov w10, #{}", ICONV_SCRATCH & 0xFFFF));      // low half of the scratch capacity
     emitter.instruction(&format!("movk w10, #{}, lsl #16", ICONV_SCRATCH >> 16)); // high half of the scratch capacity
     emitter.instruction("str x10, [sp, #40]");                                  // iconv outbytesleft = scratch capacity
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the descriptor to index the handle table
-    abi::emit_symbol_address(emitter, "x9", "_iconv_handles");
-    emitter.instruction("ldr x0, [x9, x0, lsl #3]");                            // arg 0 = the iconv_t for this descriptor
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_load_indexed_word(emitter, "x0", "x0", "x9");
     emitter.instruction("add x1, sp, #16");                                     // arg 1 = &inbuf
     emitter.instruction("add x2, sp, #24");                                     // arg 2 = &inbytesleft
     emitter.instruction("add x3, sp, #32");                                     // arg 3 = &outbuf
@@ -192,7 +190,7 @@ fn emit_arm64<F>(
     emitter.instruction("sub x12, x10, x11");                                   // produced = capacity - remaining
     emitter.instruction(&format!("cbz x12, {}", after_write));                  // nothing produced: skip the write
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved descriptor
-    abi::emit_symbol_address(emitter, "x1", "_stream_grow_scratch");
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "x1");
     emitter.instruction("mov x2, x12");                                         // produced byte count as the write length
     emitter.syscall(4);
     emitter.label(&after_write);
@@ -212,15 +210,13 @@ fn emit_arm64<F>(
     emitter.label(close_label);
     emitter.instruction("sub sp, sp, #16");                                     // helper frame: [0]=fd [8]=x30
     emitter.instruction("str x30, [sp, #8]");                                   // save the return address
-    abi::emit_symbol_address(emitter, "x9", "_iconv_handles");
-    emitter.instruction("ldr x1, [x9, x0, lsl #3]");                            // load this descriptor's iconv_t
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_load_indexed_word(emitter, "x1", "x0", "x9");
     emitter.instruction(&format!("cbz x1, {}_done", close_label));              // nothing attached: nothing to close
     emitter.instruction("str x0, [sp, #0]");                                    // save the descriptor across iconv_close
     emitter.instruction("mov x0, x1");                                          // arg 0 = the iconv_t
     emitter.bl_c("iconv_close"); // release the iconv descriptor
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the descriptor
-    abi::emit_symbol_address(emitter, "x9", "_iconv_handles");
-    emitter.instruction("str xzr, [x9, x0, lsl #3]");                           // clear this descriptor's iconv handle
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_clear_indexed_word(emitter, "x0", "x9");
     emitter.label(&format!("{}_done", close_label));
     emitter.instruction("ldr x30, [sp, #8]");                                   // restore the return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
@@ -239,17 +235,15 @@ fn emit_arm64<F>(
     emitter.instruction("cmn x0, #1");                                          // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("b.eq {}", skip_store));                       // iconv_open failed → attach no filter
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the file descriptor
-    abi::emit_symbol_address(emitter, "x9", "_iconv_handles");
-    emitter.instruction("str x0, [x9, x1, lsl #3]");                            // store the iconv_t for this descriptor
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_store_indexed_word(emitter, "x0", "x1", "x9");
     if emitter.target.platform == Platform::MacOS {
         // -- record this filter's own //TRANSLIT and //IGNORE for the fwrite helper to restore --
         abi::emit_symbol_address(emitter, "x9", "_iconv_write_options");
         emitter.instruction(&format!("mov w10, #{option_bits}"));               // this filter's option bits (1 = //TRANSLIT, 2 = //IGNORE)
         emitter.instruction("strb w10, [x9, x1]");                              // record them for this descriptor
     }
-    abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
     emitter.instruction("mov w10, #12");                                        // write-filter id 12 = convert.iconv write
-    emitter.instruction("strb w10, [x9, x1]");                                  // record the iconv write filter for this descriptor
+    stream_tables::WRITE_FILTERS.emit_store_indexed_byte(emitter, "w10", "x1", "x9");
     abi::emit_symbol_address(emitter, "x10", fwrite_label);
     abi::emit_symbol_address(emitter, "x9", "_iconv_fwrite_fn");
     emitter.instruction("str x10, [x9]");                                       // _iconv_fwrite_fn = the iconv write helper
@@ -300,12 +294,11 @@ fn emit_x86_64<F>(
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // iconv inbytesleft = payload length
 
     emitter.label(&loop_label);
-    abi::emit_symbol_address(emitter, "r9", "_stream_grow_scratch"); // scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "r9"); // scratch window base
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // iconv outbuf = scratch window base
     emitter.instruction(&format!("mov QWORD PTR [rbp - 48], {}", ICONV_SCRATCH)); // iconv outbytesleft = scratch capacity
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the descriptor to index the handle table
-    abi::emit_symbol_address(emitter, "r9", "_iconv_handles"); // iconv handle table base
-    emitter.instruction("mov rdi, QWORD PTR [r9 + rdi*8]");                     // arg 0 = the iconv_t for this descriptor
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_load_indexed_word(emitter, "rdi", "rdi", "r9");
     emitter.instruction("lea rsi, [rbp - 24]");                                 // arg 1 = &inbuf
     emitter.instruction("lea rdx, [rbp - 32]");                                 // arg 2 = &inbytesleft
     emitter.instruction("lea rcx, [rbp - 40]");                                 // arg 3 = &outbuf
@@ -318,7 +311,7 @@ fn emit_x86_64<F>(
     emitter.instruction(&format!("jz {}", after_write));                        // nothing produced: skip the write
     emitter.instruction("mov rdx, rax");                                        // produced byte count as the write length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the saved descriptor
-    abi::emit_symbol_address(emitter, "rsi", "_stream_grow_scratch"); // write buffer = the scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "rsi"); // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the transcoded chunk through libc write()
     emitter.label(&after_write);
     emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // remaining inbytesleft?
@@ -340,16 +333,14 @@ fn emit_x86_64<F>(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 16");                                         // helper frame: [-8]=fd
-    abi::emit_symbol_address(emitter, "r9", "_iconv_handles"); // iconv handle table base
-    emitter.instruction("mov rsi, QWORD PTR [r9 + rdi*8]");                     // load this descriptor's iconv_t
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_load_indexed_word(emitter, "rsi", "rdi", "r9");
     emitter.instruction("test rsi, rsi");                                       // anything attached?
     emitter.instruction(&format!("jz {}_done", close_label));                   // nothing attached: nothing to close
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the descriptor across iconv_close
     emitter.instruction("mov rdi, rsi");                                        // arg 0 = the iconv_t
     emitter.instruction("call iconv_close");                                    // release the iconv descriptor
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the descriptor
-    abi::emit_symbol_address(emitter, "r9", "_iconv_handles"); // iconv handle table base
-    emitter.instruction("mov QWORD PTR [r9 + rdi*8], 0");                       // clear this descriptor's iconv handle
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_clear_indexed_word(emitter, "rdi", "r9");
     emitter.label(&format!("{}_done", close_label));
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -369,10 +360,8 @@ fn emit_x86_64<F>(
     emitter.instruction("cmp rax, -1");                                         // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("je {}", skip_store));                         // iconv_open failed → attach no filter
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
-    abi::emit_symbol_address(emitter, "r9", "_iconv_handles"); // iconv handle table base
-    emitter.instruction("mov QWORD PTR [r9 + rdi*8], rax");                     // store the iconv_t for this descriptor
-    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters"); // write-filter table base
-    emitter.instruction("mov BYTE PTR [r9 + rdi], 12");                         // write-filter id 12 = convert.iconv write
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_store_indexed_word(emitter, "rax", "rdi", "r9");
+    stream_tables::WRITE_FILTERS.emit_store_indexed_byte(emitter, "12", "rdi", "r9");
     emitter.instruction(&format!("lea r10, [rip + {}]", fwrite_label));         // address of the iconv write helper
     abi::emit_symbol_address(emitter, "r9", "_iconv_fwrite_fn"); // _iconv_fwrite_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _iconv_fwrite_fn = the iconv write helper

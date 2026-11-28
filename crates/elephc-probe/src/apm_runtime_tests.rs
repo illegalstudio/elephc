@@ -759,21 +759,28 @@ fn a_reset_waits_for_a_write_in_progress() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _fixture = ApmFixture::new();
     let base = REGION.load(Ordering::Relaxed);
-    let writing = TableGate::enter(base).expect("the table is open");
-    let started = std::time::Instant::now();
-    let reset = std::thread::spawn(reset_routes);
-    // Checked as soon as the reset has raised its flag: a fixed sleep raced
-    // the bounded `GATE_WAIT` on loaded CI runners, where the sleeping
-    // thread woke after the reset had already given up waiting.
-    let gate = shared_word(base, ROUTES_GATE_OFFSET);
-    while gate.load(Ordering::Acquire) & GATE_RESETTING == 0 {
-        assert!(!reset.is_finished(), "the reset raises its flag before running");
-        std::thread::yield_now();
-    }
-    assert!(!reset.is_finished(), "the reset waits for the write in progress");
-    drop(writing);
-    assert!(reset.join().unwrap().contains("route table reset"));
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    std::thread::scope(|scope| {
+        let writing = TableGate::enter(base).expect("the table is open");
+        let (waiting, wait_entered) = std::sync::mpsc::sync_channel(0);
+        let (resume, writer_released) = std::sync::mpsc::sync_channel(0);
+        let reset = scope.spawn(move || {
+            TableGate::exclusive_with_writer_deadline(
+                base,
+                || reset_routes_exclusive(base, 0),
+                |_| {
+                    waiting.send(()).unwrap();
+                    writer_released.recv().unwrap();
+                    true
+                },
+            )
+        });
+        wait_entered.recv().expect("the reset encountered the active writer");
+        let gate = shared_word(base, ROUTES_GATE_OFFSET).load(Ordering::Acquire);
+        drop(writing);
+        resume.send(()).unwrap();
+        assert!(reset.join().unwrap().contains("route table reset"));
+        assert_eq!(gate, GATE_RESETTING | 1, "the reset holds the gate and waits for the writer");
+    });
     // Once done, the table is open again.
     assert!(TableGate::enter(base).is_some());
     assert_eq!(shared_word(base, ROUTES_GATE_OFFSET).load(Ordering::Relaxed), 0);

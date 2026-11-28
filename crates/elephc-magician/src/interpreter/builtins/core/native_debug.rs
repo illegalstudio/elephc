@@ -9,6 +9,9 @@
 //! - Snapshot cells, entry cells, and native guard depths are retired on every exit.
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 
 /// Borrows the receiver while protecting a complete nested rendering operation.
 pub(super) fn with_guard<V: RuntimeValueOps>(
@@ -40,16 +43,27 @@ pub(super) fn with_projection<V: RuntimeValueOps>(
         }
         Err(status) => return Err(status),
     };
-    let projection = project_info(object, info, context, values);
-    let info_released = eval_release_value(context, values, info);
-    let hash = projection?;
-    if let Err(status) = info_released {
-        let _ = eval_release_value(context, values, hash);
-        return Err(status);
-    }
-    let result = render(hash, context, values);
-    let released = eval_release_value(context, values, hash);
-    result.and(released)
+    let info = RuntimeOwnerSlot::new(info);
+    let hash = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&info, &hash), || {
+        let projection = project_info(object, info.borrowed(), context, values);
+        if let Ok(value) = projection.as_ref() {
+            hash.replace(Some(*value));
+        }
+        let info_released = eval_release_value(context, values, info.take());
+        match (projection, info_released) {
+            (Err(status), _) => Err(status),
+            (Ok(_), Err(status)) => {
+                let _ = eval_release_value(context, values, hash.take());
+                Err(status)
+            }
+            (Ok(_), Ok(())) => {
+                let result = render(hash.borrowed(), context, values);
+                let released = eval_release_value(context, values, hash.take());
+                result.and(released)
+            }
+        }
+    })
 }
 
 /// Shares native warning formatting while retaining the original error until the fatal boundary.
@@ -57,18 +71,20 @@ fn hook_failed(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let error = context.take_pending_throw();
-    if let Some(error) = error {
-        let _ = warn_hook_failure(error, context, values);
-    }
-    let fatal = values.fatal(elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL);
-    // Native fatal exits here. Embedders may return an error and still need to retire the owner.
-    let released = match error {
-        Some(error) => eval_release_value(context, values, error),
-        None => Ok(()),
-    };
-    fatal.and(released)?;
-    Err(EvalStatus::RuntimeFatal)
+    let error = RuntimeOwnerSlot::empty();
+    error.replace(context.take_pending_throw());
+    with_runtime_owners(&error, || {
+        if !error.is_empty() {
+            let _ = warn_hook_failure(error.borrowed(), context, values);
+        }
+        let fatal = values.fatal(elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL);
+        // Native fatal exits here. Embedders may return an error and still need to retire the owner.
+        let released = error
+            .take_optional()
+            .map_or(Ok(()), |error| eval_release_value(context, values, error));
+        fatal.and(released)?;
+        Err(EvalStatus::RuntimeFatal)
+    })
 }
 
 /// Formats eval-defined exception names without consulting the native parent class id.
@@ -79,12 +95,27 @@ fn warn_hook_failure(
 ) -> Result<(), EvalStatus> {
     let identity = super::print_r::eval_debug_object_identity(error, values);
     let name = super::print_r::eval_debug_object_class_name(error, identity, context, values)?;
-    let class = values.string(&name)?;
-    let warning = values.operator_static_call("SimpleXMLElement", "__elephc_debug_warning", vec![error.borrowed(), class.borrowed()]);
-    let class_released = eval_release_value(context, values, class);
-    let result = warning?;
-    let result_released = eval_release_value(context, values, result);
-    class_released.and(result_released)
+    let class = RuntimeOwnerSlot::new(values.string(&name)?);
+    let warning = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&class, &warning), || {
+        let operation = values.operator_static_call(
+            "SimpleXMLElement",
+            "__elephc_debug_warning",
+            vec![error.borrowed(), class.borrowed()],
+        );
+        if let Ok(result) = operation.as_ref() {
+            warning.replace(Some(*result));
+        }
+        let class_released = eval_release_value(context, values, class.take());
+        match (operation, class_released) {
+            (Err(status), _) => Err(status),
+            (Ok(_), Err(status)) => {
+                let _ = eval_release_value(context, values, warning.take());
+                Err(status)
+            }
+            (Ok(_), Ok(())) => eval_release_value(context, values, warning.take()),
+        }
+    })
 }
 
 /// Supplies the interpreter-visible class name for nullable hook diagnostics.
@@ -96,15 +127,27 @@ fn project_info(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let identity = super::print_r::eval_debug_object_identity(object, values);
     let class_name = super::print_r::eval_debug_object_class_name(object, identity, context, values)?;
-    let class = values.string(&class_name)?;
-    let projection = values.operator_static_call("SimpleXMLElement", "__elephc_debug_project", vec![info.borrowed(), class.borrowed()]);
-    let class_released = eval_release_value(context, values, class);
-    let hash = projection?;
-    if let Err(status) = class_released {
-        let _ = eval_release_value(context, values, hash);
-        return Err(status);
-    }
-    Ok(hash)
+    let class = RuntimeOwnerSlot::new(values.string(&class_name)?);
+    let hash = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&class, &hash), || {
+        let projection = values.operator_static_call(
+            "SimpleXMLElement",
+            "__elephc_debug_project",
+            vec![info.borrowed(), class.borrowed()],
+        );
+        if let Ok(result) = projection.as_ref() {
+            hash.replace(Some(*result));
+        }
+        let class_released = eval_release_value(context, values, class.take());
+        match (projection, class_released) {
+            (Err(status), _) => Err(status),
+            (Ok(_), Err(status)) => {
+                let _ = eval_release_value(context, values, hash.take());
+                Err(status)
+            }
+            (Ok(_), Ok(())) => Ok(hash.take()),
+        }
+    })
 }
 
 /// Owns each acquired snapshot key and value until their nested rendering has finished.
@@ -115,18 +158,20 @@ pub(super) fn with_entry<V: RuntimeValueOps>(
     values: &mut V,
     render: impl FnOnce(RuntimeCellHandle, RuntimeCellHandle, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
-    let key = values.array_iter_key(hash, position)?;
-    let element = match values.array_get(hash, key) {
-        Ok(element) => element,
-        Err(status) => {
-            let _ = eval_release_value(context, values, key);
-            return Err(status);
-        }
-    };
-    let result = render(key, element, context, values);
-    let element_released = eval_release_value(context, values, element);
-    let key_released = eval_release_value(context, values, key);
-    result.and(element_released).and(key_released)
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            let key = owners.stage(values.array_iter_key(hash, position)?);
+            let element = owners.stage(values.array_get(hash, key.borrowed())?);
+            render(
+                key.borrowed(),
+                element.borrowed(),
+                context,
+                values,
+            )
+        })();
+        owners.release(result, |cell| eval_release_value(context, values, cell))
+    })
 }
 
 /// Streams the accumulated var_dump prefix before an observable user hook runs.
@@ -136,9 +181,11 @@ pub(super) fn flush(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if output.is_empty() { return Ok(()); }
-    let text = values.string_bytes_value(output)?;
-    let result = values.echo(text);
-    let released = eval_release_value(context, values, text);
-    output.clear();
-    result.and(released)
+    let text = RuntimeOwnerSlot::new(values.string_bytes_value(output)?);
+    with_runtime_owners(&text, || {
+        let result = values.echo(text.borrowed());
+        let released = eval_release_value(context, values, text.take());
+        output.clear();
+        result.and(released)
+    })
 }

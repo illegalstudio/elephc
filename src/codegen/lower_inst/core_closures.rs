@@ -101,15 +101,8 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes =
         callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + captures.len() * 16;
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime closure descriptor while storing captures
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
-        ctx.emitter,
-        descriptor_reg,
-        descriptor_label,
+    elephc_memoir::callables::storage::emit_new_from_static(
+        ctx.emitter, total_bytes, descriptor_reg, descriptor_label, elephc_memoir::callables::storage::ObjectHandle::Public,
     );
     for (idx, ((_, capture_ty, by_ref), operand)) in
         captures.iter().zip(operands.iter()).enumerate()

@@ -293,20 +293,11 @@ fn replace_owned_eval_global(
     pending_throw: Option<usize>,
 ) {
     emitter.comment("publish eval global replacement before retiring the previous owner");
-    abi::emit_push_result_value(emitter, ty);
-    abi::emit_load_symbol_to_result(emitter, symbol, ty);
-    abi::emit_push_result_value(emitter, ty);
-    if *ty == PhpType::Str {
-        let (ptr, len) = abi::string_result_regs(emitter);
-        abi::emit_load_temporary_stack_slot(emitter, ptr, 16);
-        abi::emit_load_temporary_stack_slot(emitter, len, 24);
-    } else {
-        abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
-    }
-    abi::emit_store_result_to_symbol(emitter, symbol, ty, false);
-    // Only the retired pointer is needed for release, including a string's first saved word.
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0);
-    abi::emit_release_temporary_stack(emitter, 32);
+    elephc_memoir::symbol_owners::emit_publish_owner(
+        emitter,
+        |emitter, previous| abi::emit_load_symbol_to_reg(emitter, previous, symbol, 0),
+        |emitter| abi::emit_store_result_to_symbol(emitter, symbol, ty, false),
+    );
     retire_eval_replacement_owner(emitter, ty, pending_throw);
     emitter.comment("eval global replacement owns its native payload");
 }
@@ -319,17 +310,12 @@ fn replace_owned_eval_local(
 ) -> Result<()> {
     let ty = local.ty.codegen_repr();
     ctx.emitter.comment("publish eval local replacement before retiring the previous owner");
-    abi::emit_push_result_value(ctx.emitter, &ty);
-    ctx.load_local_to_result(local.slot)?;
-    abi::emit_push_result_value(ctx.emitter, &ty);
-    load_saved_eval_local_result(ctx, &ty, 16);
-    ctx.store_current_result_to_local(local.slot)?;
-    load_saved_eval_local_result(ctx, &ty, 0);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    if ty == PhpType::Str {
-        let (ptr, _) = abi::string_result_regs(ctx.emitter);
-        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr);
-    }
+    let (registers, count) = eval_owner_result_registers(ctx, &ty);
+    elephc_memoir::symbol_owners::emit_publish_staged_owner(
+        ctx, |ctx| &mut *ctx.emitter, &registers[..count],
+        |ctx| ctx.load_local_to_result(local.slot).map(|_| ()),
+        |ctx| ctx.store_current_result_to_local(local.slot),
+    )?;
     retire_eval_replacement_owner(ctx.emitter, &ty, pending_throw);
     ctx.emitter.comment("eval local replacement owns its native payload");
     Ok(())
@@ -344,17 +330,12 @@ fn replace_owned_eval_ref_cell(
 ) -> Result<()> {
     let ty = payload_ty.codegen_repr();
     ctx.emitter.comment("publish eval reference-cell replacement before retiring its previous payload");
-    abi::emit_push_result_value(ctx.emitter, &ty);
-    ctx.load_ref_cell_payload_to_result(local.slot, &ty)?;
-    abi::emit_push_result_value(ctx.emitter, &ty);
-    load_saved_eval_local_result(ctx, &ty, 16);
-    ctx.store_current_result_to_ref_cell_local(local.slot, &ty)?;
-    load_saved_eval_local_result(ctx, &ty, 0);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    if ty == PhpType::Str {
-        let (ptr, _) = abi::string_result_regs(ctx.emitter);
-        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr);
-    }
+    let (registers, count) = eval_owner_result_registers(ctx, &ty);
+    elephc_memoir::symbol_owners::emit_publish_staged_owner(
+        ctx, |ctx| &mut *ctx.emitter, &registers[..count],
+        |ctx| ctx.load_ref_cell_payload_to_result(local.slot, &ty).map(|_| ()),
+        |ctx| ctx.store_current_result_to_ref_cell_local(local.slot, &ty),
+    )?;
     retire_eval_replacement_owner(ctx.emitter, &ty, pending_throw);
     ctx.emitter.comment("eval reference cell owns its converted payload");
     Ok(())
@@ -391,14 +372,15 @@ pub(super) fn retire_eval_owner_with_entry(
     }
 }
 
-/// Restores a heap pointer or string pair from a saved eval replacement operand.
-fn load_saved_eval_local_result(ctx: &mut FunctionContext<'_>, ty: &PhpType, offset: usize) {
+/// Selects the ABI words used by one eval owner, including a string's borrowed length.
+fn eval_owner_result_registers(
+    ctx: &FunctionContext<'_>, ty: &PhpType,
+) -> ([&'static str; 2], usize) {
     if *ty == PhpType::Str {
-        let (ptr, len) = abi::string_result_regs(ctx.emitter);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, ptr, offset);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, len, offset + 8);
+        let (pointer, length) = abi::string_result_regs(ctx.emitter);
+        ([pointer, length], 2)
     } else {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        ([abi::int_result_reg(ctx.emitter), ""], 1)
     }
 }
 
@@ -570,8 +552,6 @@ mod tests {
                 let cleanup = asm.find(release).unwrap();
                 assert!(publication < cleanup, "{target}: {ty}: {asm}");
                 assert_eq!(asm.matches(release).count(), 1, "{target}: {ty}: {asm}");
-                let restored = if target == "linux-x86_64" { "add rsp, 32" } else { "add sp, sp, #32" };
-                assert!(asm.find(restored).unwrap() < cleanup, "{target}: cleanup must not strand temporary stack owners");
                 assert!(!asm.contains("__rt_incref"), "{target}: the replacement already owns its payload");
             }
         }

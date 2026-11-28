@@ -7,6 +7,9 @@
 //! Key details:
 //! - The entry owns throw-safe cleanup; the decoder assumes the allocation-free preflight succeeded.
 
+use elephc_memoir::values::incomplete_object::{self, PROPERTY_HASH};
+use elephc_memoir::{ValueTag, values::owned_payload};
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
@@ -31,12 +34,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x2, [sp, #{}]", source_len_offset));      // preserve source length across setjmp
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_unser_legacy_active", 0);
     emitter.instruction(&format!("str x10, [sp, #{legacy_offset}]"));           // checkpoint sharing before any hydration callback runs
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction("str x10, [sp]");                                       // handler.next = previous exception-handler head
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction("str x10, [sp, #8]");                                   // preserve the activation frame that survives this boundary
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "x10", 0);
     emitter.instruction("mov x10, sp");                                         // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
@@ -354,15 +352,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldrb w11, [x10, x9]");                                 // bounded closing delimiter
     emitter.instruction("cmp w11, #125");                                       // exact `}`
     emitter.instruction("b.ne __rt_unser_at_array_fail");                       // anything but '}' fails the array
-    emitter.instruction("mov x0, #24");                                         // box the hash: Mixed cell = tag + two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the boxed Mixed cell
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap header
-    emitter.instruction("mov x9, #5");                                          // value tag 5 = associative array (hash)
-    emitter.instruction("str x9, [x0]");                                        // store the value tag
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the hash pointer
-    emitter.instruction("str x9, [x0, #8]");                                    // store the hash pointer (ownership transferred, no incref)
-    emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
+    owned_payload::emit_owned_pointer_from_slot_with_scratch(emitter, ValueTag::new(5), "[sp, #24]", ["x9", "x9"]);
     emitter.instruction("ldr x1, [sp, #88]");                                   // pass this array's reserved zero-based index beside its box
     emitter.instruction("bl __rt_unserialize_register_array");                  // retain a context lease for references after hydration
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')
@@ -419,32 +409,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #80]");                                  // unknown classes suppress hooks and use opaque properties
     emitter.instruction("b __rt_unser_obj_incomplete");                         // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete");
-    emitter.instruction("mov x0, #32");                                         // class id, original class name, and opaque property hash
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the incomplete-object payload
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the object heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // give the incomplete object a normal PHP handle
-    emitter.instruction("mov x9, #-2");                                         // reserved class id for __PHP_Incomplete_Class
-    emitter.instruction("str x9, [x0]");                                        // publish synthetic class id
-    emitter.instruction("str x0, [sp, #24]");                                   // preserve incomplete object across string persistence
-    emitter.instruction("ldr x1, [sp, #40]");                                   // original serialized class-name bytes
-    emitter.instruction("ldr x2, [sp, #72]");                                   // original serialized class-name length
-    emitter.instruction("bl __rt_str_persist");                                 // own the class name independently of the source wire
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload incomplete object payload
-    emitter.instruction("str x1, [x0, #8]");                                    // persisted original class-name pointer
-    emitter.instruction("str x2, [x0, #16]");                                   // persisted original class-name length
-    emitter.instruction("str xzr, [x0, #24]");                                  // property hash is created after its count is parsed
+    incomplete_object::emit_new(emitter, 24, 40, 72);
     emitter.label("__rt_unser_obj_allocated");
     emitter.instruction("str x0, [sp, #24]");                                   // save the new object pointer
-    emitter.instruction("mov x0, #24");                                         // allocate the object's stable boxed Mixed cell
-    emitter.instruction("bl __rt_heap_alloc");                                  // create the box before decoding any property values
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the box header
-    emitter.instruction("mov x9, #6");                                          // value tag 6 = object
-    emitter.instruction("str x9, [x0]");                                        // publish the object tag
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the object pointer
-    emitter.instruction("str x9, [x0, #8]");                                    // transfer the object ownership into the box
-    emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
+    owned_payload::emit_owned_pointer_from_slot_with_scratch(emitter, ValueTag::new(6), "[sp, #24]", ["x9", "x9"]);
     emitter.instruction("str x0, [sp, #96]");                                   // retain the stable result box through hooks and parsing
     emitter.instruction("ldr x9, [sp, #88]");                                   // reserved value index for this object
     emitter.instruction("mov x10, #65536");                                     // value-registry capacity
@@ -480,7 +448,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __unserialize magic: parse the body into an assoc array, then call
     //    __unserialize($this, $data) instead of injecting properties by name --
     emitter.instruction("ldr x9, [sp, #24]");                                   // object pointer
-    emitter.instruction("ldr x9, [x9]");                                        // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_unserialize_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // __unserialize method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_unser_obj_default");                     // no __unserialize → inject properties by name
@@ -530,7 +498,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #7");                                          // values are boxed Mixed cells
     emitter.instruction("bl __rt_hash_new");                                    // allocate property hash before parsing values
     emitter.instruction("ldr x9, [sp, #24]");                                   // incomplete-object payload
-    emitter.instruction("str x0, [x9, #24]");                                   // transfer hash ownership into incomplete object
+    emitter.instruction(&format!("str x0, [x9, #{PROPERTY_HASH}]"));            // transfer hash ownership into incomplete object
     emitter.label("__rt_unser_obj_default_props");
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize the property index
     emitter.label("__rt_unser_at_obj_loop");
@@ -561,12 +529,12 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b __rt_unser_obj_skip_prop_store");                    // transferred value now belongs to the hydrated object
     emitter.label("__rt_unser_obj_store_opaque_prop");
     emitter.instruction("ldr x0, [sp, #24]");                                   // incomplete-object payload
-    emitter.instruction("ldr x0, [x0, #24]");                                   // opaque property hash
+    emitter.instruction(&format!("ldr x0, [x0, #{PROPERTY_HASH}]"));            // opaque property hash
     emitter.instruction("ldr x1, [sp, #48]");                                   // serialized property key pointer
     emitter.instruction("ldr x2, [sp, #56]");                                   // serialized property key length
     emitter.instruction("bl __rt_unser_store_entry");                           // insert the property, reusing a duplicate key's box
     emitter.instruction("ldr x9, [sp, #24]");                                   // incomplete-object payload after a possible hash grow
-    emitter.instruction("str x0, [x9, #24]");                                   // retain updated property hash pointer
+    emitter.instruction(&format!("str x0, [x9, #{PROPERTY_HASH}]"));            // retain updated property hash pointer
     emitter.label("__rt_unser_obj_skip_prop_store");
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the property index
     emitter.instruction("add x4, x4, #1");                                      // advance the property index
@@ -578,7 +546,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_unser_at_obj_box");                       // incomplete objects never run class hooks
     emitter.label("__rt_unser_obj_wakeup");
     emitter.instruction("ldr x9, [sp, #24]");                                   // object pointer
-    emitter.instruction("ldr x9, [x9]");                                        // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x9");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_wakeup_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // __wakeup method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_unser_at_obj_box");                      // no __wakeup → box the object directly

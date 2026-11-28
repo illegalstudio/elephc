@@ -21,6 +21,8 @@
 //!   string = 16-byte ptr+len slots) are read directly. The array is NOT
 //!   mutated — elements are only read.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits `__rt_vsprintf(array_ptr, fmt_ptr, fmt_len) -> string`.
@@ -51,11 +53,11 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
 
     // -- read the array length and runtime value_type --
     emitter.instruction("cbz x0, __rt_vsprintf_empty");                         // null array → format with zero args
-    emitter.instruction("ldr x9, [x0]");                                        // array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // array logical length
     emitter.instruction("str x9, [x29, #32]");                                  // save the argument count
-    emitter.instruction("add x10, x0, #24");                                    // skip the 24-byte array header to the slot payload
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("str x10, [x29, #40]");                                 // save the slot base pointer
-    emitter.instruction("ldr x11, [x0, #-8]");                                  // packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x0");
     emitter.instruction("lsr x11, x11, #8");                                    // shift the runtime value_type into the low byte
     emitter.instruction("and x11, x11, #0x7f");                                 // isolate the value_type tag (drop the COW bit)
     emitter.instruction("str x11, [x29, #48]");                                 // save the value_type
@@ -192,13 +194,12 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     // -- read the array length and runtime value_type (array ptr in rdi) --
     emitter.instruction("test rdi, rdi");                                       // null array?
     emitter.instruction("jz __rt_vsprintf_empty_x86");                          // → format with zero args
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r9", "rdi"); // array logical length
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save the argument count
-    emitter.instruction("lea r10, [rdi + 24]");                                 // slot base = array + 24-byte header
+    elephc_memoir::values::packed_slots::emit_packed_payload(emitter, "r10", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the slot base
-    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // packed array kind word
-    emitter.instruction("shr r11, 8");                                          // shift the runtime value_type into the low byte
-    emitter.instruction("and r11, 0x7f");                                       // isolate the value_type (drop the COW bit)
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the value_type
     emitter.instruction("mov r12, 8");                                          // default slot size = 8 bytes
     emitter.instruction("cmp r11, 1");                                          // string-typed array (16-byte slots)?

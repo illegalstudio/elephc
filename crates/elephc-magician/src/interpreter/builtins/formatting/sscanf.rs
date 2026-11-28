@@ -11,6 +11,7 @@
 //!   the scanning implementation.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "sscanf",
@@ -59,13 +60,11 @@ pub(in crate::interpreter) fn eval_sscanf_result(
     let input = values.string_bytes(input)?;
     let format = values.string_bytes(format)?;
     let matches = eval_sscanf_matches(&input, &format);
-    let mut result = values.array_new(matches.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, matches.len())?;
     for (index, matched) in matches.iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = values.string_bytes_value(matched)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string_bytes_value(matched))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Extracts `%d`, `%f`, `%s`, and `%%` matches with the same subset as native `sscanf()`.

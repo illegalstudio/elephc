@@ -36,8 +36,8 @@ pub(super) fn lower_in_array_int_needle_string_array_aarch64(
     ctx.load_value_to_reg(needle, "x11")?;
     ctx.emitter.instruction("scvtf d1, x11");                                   // promote the integer needle for PHP numeric-string comparison
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the numeric-string membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
@@ -85,8 +85,8 @@ pub(super) fn lower_in_array_int_needle_string_array_x86_64(
     ctx.load_value_to_reg(needle, "r10")?;
     ctx.emitter.instruction("cvtsi2sd xmm1, r10");                              // promote the integer needle for PHP numeric-string comparison
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed string payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r12", "r11"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "r11");
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the numeric-string membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length
@@ -182,8 +182,8 @@ pub(super) fn lower_in_array_bool_needle_string_array_aarch64(
     ctx.load_value_to_reg(needle, "x11")?;
     emit_reg_nonzero_bool(ctx, "x11");
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the string truthiness scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
@@ -220,8 +220,8 @@ pub(super) fn lower_in_array_bool_needle_string_array_x86_64(
     ctx.load_value_to_reg(needle, "r10")?;
     emit_reg_nonzero_bool(ctx, "r10");
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed string payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r12", "r11"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "r11");
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the string truthiness scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length

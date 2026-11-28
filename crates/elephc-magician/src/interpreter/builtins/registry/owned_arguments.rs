@@ -13,7 +13,7 @@ use super::*;
 use super::binding::bind_builtin_arguments;
 use crate::interpreter::dynamic_functions::builtin_arguments;
 use elephc_builtin_contract::BuiltinContract;
-use crate::runtime_hooks::owner_frames::with_runtime_owners;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Evaluates call_user_func inputs by value before adapting required references into temporary cells.
 pub(in crate::interpreter) fn eval_builtin_call_by_value(
@@ -45,7 +45,7 @@ pub(in crate::interpreter) fn eval_builtin_call_array_expr(
         |contract, lexical_scope, context, values, owners, evaluated| {
             let lexical_scope = lexical_scope.ok_or(EvalStatus::RuntimeFatal)?;
             let array = eval_owned_expr(array, context, lexical_scope, values)?;
-            owners.push(array);
+            owners.stage(array);
             capture_array(contract, array, context, values, owners, evaluated)
         })
 }
@@ -59,7 +59,7 @@ pub(in crate::interpreter) fn eval_builtin_callback_with_arguments(
         |contract, _, context, values, owners, evaluated| {
             for (index, argument) in arguments.into_iter().enumerate() {
                 let value = values.retain(argument.value)?;
-                owners.push(value);
+                owners.stage(value);
                 evaluated.push(EvaluatedCallArg { value, ..argument });
                 capture_callback_argument(contract, &mut evaluated[index], index, preserve_references,
                     context, values, owners)?;
@@ -71,15 +71,21 @@ pub(in crate::interpreter) fn eval_builtin_callback_with_arguments(
 /// Captures array elements in key order, then releases the source array while argument owners remain pinned.
 fn capture_array(
     contract: &BuiltinContract, array: RuntimeCellHandle, context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>, evaluated: &mut Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps, owners: &StagedRuntimeOwners, evaluated: &mut Vec<EvaluatedCallArg>,
 ) -> Result<(), EvalStatus> {
     if !values.is_array_like(array)? { return Err(EvalStatus::RuntimeFatal); }
-    append_unpacked_call_arg_values_with_owners(array, evaluated, &mut false, context, values, Some(owners))?;
+    append_unpacked_call_arg_values_with_owners(
+        array,
+        evaluated,
+        &mut false,
+        context,
+        values,
+        owners,
+    )?;
     for (index, argument) in evaluated.iter_mut().enumerate() {
         capture_callback_argument(contract, argument, index, true, context, values, owners)?;
     }
-    let index = owners.iter().position(|owner| *owner == array).expect("owned callback array");
-    owners.remove(index);
+    let array = owners.take_first(array).expect("owned callback array");
     context.clear_array_metadata(array);
     eval_release_value(context, values, array)
 }
@@ -87,17 +93,16 @@ fn capture_array(
 /// Retains an explicit output wrapper or detaches an ordinary input from the referenced caller value.
 fn capture_callback_argument(
     contract: &BuiltinContract, argument: &mut EvaluatedCallArg, position: usize, preserve_references: bool,
-    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps, owners: &StagedRuntimeOwners,
 ) -> Result<(), EvalStatus> {
     if preserve_references && builtin_arguments::by_reference(Some(contract), argument.name.as_deref(), position) {
         if let Some(EvalReferenceTarget::Cell { cell }) = argument.ref_target.as_ref() {
             if !values.is_reference(argument.value)? {
                 let old = argument.value;
                 let reference = values.retain(*cell)?;
-                owners.push(reference);
+                owners.stage(reference);
                 argument.value = reference;
-                let index = owners.iter().position(|owner| *owner == old).expect("owned callback input");
-                owners.remove(index);
+                let old = owners.take_first(old).expect("owned callback input");
                 eval_release_value(context, values, old)?;
             }
         }
@@ -111,9 +116,8 @@ fn capture_callback_argument(
     context.copy_array_metadata(old, copy);
     argument.value = copy;
     argument.ref_target = None;
-    owners.push(copy);
-    let index = owners.iter().position(|owner| *owner == old).expect("owned callback input");
-    owners.remove(index);
+    owners.stage(copy);
+    let old = owners.take_first(old).expect("owned callback input");
     eval_release_value(context, values, old)
 }
 
@@ -122,53 +126,52 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
     name: &str, callback: bool, mut lexical_scope: Option<&mut ElephcEvalScope>,
     context: &mut ElephcEvalContext, values: &mut V,
     evaluate: impl FnOnce(&BuiltinContract, Option<&mut ElephcEvalScope>, &mut ElephcEvalContext, &mut V,
-        &mut Vec<RuntimeCellHandle>, &mut Vec<EvaluatedCallArg>) -> Result<(), EvalStatus>,
+        &StagedRuntimeOwners, &mut Vec<EvaluatedCallArg>) -> Result<(), EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut owners = Vec::new();
-    let mut evaluated = Vec::new();
-    let mut ordered = Vec::new();
-    let mut callback_reference_metadata = Vec::new();
-    let result = (|| {
-        let contract = elephc_builtin_contract::lookup(name).ok_or(EvalStatus::UnsupportedConstruct)?;
-        evaluate(
-            contract,
-            lexical_scope.as_deref_mut(),
-            context,
-            values,
-            &mut owners,
-            &mut evaluated,
-        )?;
-        // call_user_func forwards variadic names to its target, rather than binding them to
-        // its own `args` parameter. Keep the same owner lease around that named dispatch.
-        if name == "call_user_func" && evaluated.iter().any(|argument| argument.name.is_some()) {
-            ordered.extend(evaluated.iter().map(|argument| argument.value));
-            let borrowed = evaluated.iter().cloned().map(|mut argument| {
-                argument.value = argument.value.borrowed();
-                argument
-            }).collect();
-            return with_runtime_owners(&owners, || {
-                eval_call_user_func_with_call_args_from_scope(
-                    borrowed, lexical_scope.as_deref(), context, values,
-                ).and_then(|result| promote_borrowed_result(result, values))
-            });
-        }
-        ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&mut owners))?;
-        if callback {
-            adapt_callback_references(
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch};
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let mut evaluated = Vec::new();
+        let mut ordered = Vec::new();
+        let mut callback_reference_metadata = Vec::new();
+        let result = (|| {
+            let contract = elephc_builtin_contract::lookup(name).ok_or(EvalStatus::UnsupportedConstruct)?;
+            evaluate(
                 contract,
-                &mut ordered,
-                &mut owners,
-                &mut callback_reference_metadata,
+                lexical_scope.as_deref_mut(),
                 context,
                 values,
+                &owners,
+                &mut evaluated,
             )?;
-        }
-        let borrowed = ordered
-            .iter()
-            .copied()
-            .map(RuntimeCellHandle::borrowed)
-            .collect::<Vec<_>>();
-        with_runtime_owners(&owners, || {
+            // call_user_func forwards variadic names to its target, rather than binding them to
+            // its own `args` parameter. Keep the same owner lease around that named dispatch.
+            if name == "call_user_func" && evaluated.iter().any(|argument| argument.name.is_some()) {
+                ordered.extend(evaluated.iter().map(|argument| argument.value));
+                let borrowed = evaluated.iter().cloned().map(|mut argument| {
+                    argument.value = argument.value.borrowed();
+                    argument
+                }).collect();
+                return eval_call_user_func_with_call_args_from_scope(
+                    borrowed, lexical_scope.as_deref(), context, values,
+                ).and_then(|result| promote_borrowed_result(result, values));
+            }
+            ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&owners))?;
+            if callback {
+                adapt_callback_references(
+                    contract,
+                    &mut ordered,
+                    &owners,
+                    &mut callback_reference_metadata,
+                    context,
+                    values,
+                )?;
+            }
+            let borrowed = ordered
+                .iter()
+                .copied()
+                .map(RuntimeCellHandle::borrowed)
+                .collect::<Vec<_>>();
             let result = eval_builtin_with_values_from_scope(
                 name,
                 &borrowed,
@@ -177,46 +180,40 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
                 values,
             )?.ok_or(EvalStatus::UnsupportedConstruct)?;
             promote_borrowed_result(result, values)
-        })
-    })();
-    let preserved = result.as_ref().ok().copied();
-    for reference in callback_reference_metadata {
-        if preserved.map_or(true, |value| value.as_ptr() != reference.as_ptr()) {
-            context.clear_array_metadata(reference);
+        })();
+        let preserved = result.as_ref().ok().copied();
+        for reference in callback_reference_metadata {
+            if preserved.map_or(true, |value| value.as_ptr() != reference.as_ptr()) {
+                context.clear_array_metadata(reference);
+            }
         }
-    }
-    if ordered.is_empty() {
-        // Partial evaluation still destroys captured PHP arguments in parameter order.
-        let names = eval_builtin_param_names(name).unwrap_or(&[]);
-        let mut partial = evaluated.iter().enumerate().collect::<Vec<_>>();
-        partial.sort_by_key(|(position, argument)| argument.name.as_deref()
-            .and_then(|name| names.iter().position(|parameter| *parameter == name)).unwrap_or(*position));
-        ordered.extend(partial.into_iter().map(|(_, argument)| argument.value));
-    }
-    let mut releases = Vec::new();
-    for value in ordered {
-        if let Some(index) = owners.iter().position(|owner| *owner == value) {
-            releases.push(owners.remove(index));
+        if ordered.is_empty() {
+            // Partial evaluation still destroys captured PHP arguments in parameter order.
+            let names = eval_builtin_param_names(name).unwrap_or(&[]);
+            let mut partial = evaluated.iter().enumerate().collect::<Vec<_>>();
+            partial.sort_by_key(|(position, argument)| argument.name.as_deref()
+                .and_then(|name| names.iter().position(|parameter| *parameter == name)).unwrap_or(*position));
+            ordered.extend(partial.into_iter().map(|(_, argument)| argument.value));
         }
-    }
-    releases.extend(owners);
-    let mut cleanup = Ok(());
-    for value in releases {
-        if let Err(status) = eval_release_value(context, values, value) { cleanup = Err(status); }
-    }
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
+        let mut releases = RuntimeOwnerBatch::empty();
+        for value in ordered {
+            if let Some(owner) = owners.take_first(value) { releases.push(owner); }
         }
-    }
+        releases.append(owners.take_all());
+        finish_eval_owner_batch(
+            &releases,
+            result,
+            ReleaseOrder::Forward,
+            CleanupErrorPolicy::Last,
+            context,
+            values,
+        )
+    })
 }
 
 /// Warns for callback values sent to reference parameters and transfers their owners into temporary wrappers.
 fn adapt_callback_references(
-    contract: &BuiltinContract, arguments: &mut [RuntimeCellHandle], owners: &mut Vec<RuntimeCellHandle>,
+    contract: &BuiltinContract, arguments: &mut [RuntimeCellHandle], owners: &StagedRuntimeOwners,
     callback_reference_metadata: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -231,10 +228,9 @@ fn adapt_callback_references(
             context.copy_array_metadata(old, reference);
             callback_reference_metadata.push(reference);
         }
-        owners.push(reference);
+        owners.stage(reference);
         *argument = reference;
-        let position = owners.iter().position(|owner| *owner == old).expect("owned callback argument");
-        owners.remove(position);
+        let old = owners.take_first(old).expect("owned callback argument");
         // The wrapper becomes the sole call owner so initialization can destroy a temporary old value.
         eval_release_value(context, values, old)?;
     }

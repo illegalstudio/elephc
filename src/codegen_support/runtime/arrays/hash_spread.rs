@@ -14,9 +14,11 @@
 //! - `__rt_hash_project_spread` preserves integer keys and normalizes numeric
 //!   string property names to the integer keys produced by PHP array casts.
 
+use elephc_memoir::values::hash_payload::HashPayloadSlots;
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::hash_layout::{EntryField, HeaderField};
 
 /// Emits `__rt_hash_spread` and `__rt_hash_project_spread` for the active target.
 ///
@@ -74,22 +76,21 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #72]");                                   // save the selected key transformation mode
 
     // -- derive the starting next integer key by scanning the destination for its largest integer key --
-    emitter.instruction("ldr x5, [x0, #8]");                                    // load the destination hash capacity as the scan bound
+    hash_layout::emit_load_header_field(emitter, "x5", "x0", HeaderField::Capacity);
     emitter.instruction("mov x6, #0");                                          // initialize the slot cursor
     emitter.instruction("mov x7, #0");                                          // track whether any integer key has been observed
     emitter.instruction("mov x8, #0");                                          // initialize the maximum integer key placeholder
     emitter.label("__rt_hash_spread_key_scan");
     emitter.instruction("cmp x6, x5");                                          // has every destination slot been inspected?
     emitter.instruction("b.ge __rt_hash_spread_key_scan_done");                 // finish scanning once the cursor reaches capacity
-    emitter.instruction("mov x9, #64");                                         // x9 = hash entry size in bytes
     hash_layout::emit_entry_address(emitter, "x10", "x0", "x6");
-    emitter.instruction("ldr x11, [x10]");                                      // load the occupied marker for this slot
+    hash_layout::emit_load_entry_field(emitter, "x11", "x10", EntryField::Occupied);
     emitter.instruction("cmp x11, #1");                                         // is this slot a live entry?
     emitter.instruction("b.ne __rt_hash_spread_key_scan_next");                 // ignore empty or tombstone slots while deriving the next key
-    emitter.instruction("ldr x11, [x10, #16]");                                 // load the normalized key length or integer sentinel
+    hash_layout::emit_load_entry_field(emitter, "x11", "x10", EntryField::KeyHigh);
     emitter.instruction("cmn x11, #1");                                         // check whether the key length is the integer-key sentinel
     emitter.instruction("b.ne __rt_hash_spread_key_scan_next");                 // string keys do not affect PHP's next automatic integer key
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored integer key payload
+    hash_layout::emit_load_entry_field(emitter, "x12", "x10", EntryField::KeyLow);
     emitter.instruction("cbz x7, __rt_hash_spread_key_scan_take");              // the first integer key seeds the maximum tracker
     emitter.instruction("cmp x12, x8");                                         // compare the candidate key against the current maximum
     emitter.instruction("b.le __rt_hash_spread_key_scan_next");                 // keep scanning if the candidate key is not larger
@@ -137,9 +138,8 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // refcounted children need a reference bump
     emitter.instruction("cmp x5, #7");                                          // is the source value a boxed mixed cell?
     emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // refcounted children need a reference bump
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the scalar value low word
-    emitter.instruction("ldr x4, [sp, #56]");                                   // reload the scalar value high word
-    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the scalar value runtime tag
+    let payload = HashPayloadSlots { low: 48, reload_later: true };
+    payload.emit_reload(emitter);
     emitter.instruction("b __rt_hash_spread_insert");                           // scalars are ready to insert
 
     emitter.label("__rt_hash_spread_value_reference");
@@ -152,23 +152,11 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_spread_insert");                           // insert the retained reference cell
 
     emitter.label("__rt_hash_spread_value_str");
-    emitter.instruction("ldr x1, [sp, #48]");                                   // load the borrowed source string pointer
-    emitter.instruction("ldr x2, [sp, #56]");                                   // load the borrowed source string length
-    emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for the destination owner
-    emitter.instruction("str x1, [sp, #48]");                                   // save the owned string pointer
-    emitter.instruction("str x2, [sp, #56]");                                   // save the owned string length
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the owned string value low word
-    emitter.instruction("ldr x4, [sp, #56]");                                   // reload the owned string value high word
-    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the string value runtime tag
+    payload.emit_persist_string(emitter);
     emitter.instruction("b __rt_hash_spread_insert");                           // insert the owned string payload
 
     emitter.label("__rt_hash_spread_value_ref");
-    emitter.instruction("ldr x0, [sp, #48]");                                   // load the borrowed refcounted child pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the child for the destination owner
-    emitter.instruction("str xzr, [sp, #56]");                                  // canonicalize the retained reference's unused high payload word
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the retained child value low word
-    emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only the low payload word
-    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the refcounted value runtime tag
+    payload.emit_retain_pointer(emitter);
 
     // -- select the destination key: reindex integer keys, preserve string keys --
     emitter.label("__rt_hash_spread_insert");
@@ -255,7 +243,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
 
     // -- derive the starting next integer key by scanning the destination for its largest integer key --
     emitter.instruction("mov r10, rdi");                                        // keep the destination hash pointer stable across the scan
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the destination hash capacity as the scan bound
+    hash_layout::emit_load_header_field(emitter, "r11", "r10", HeaderField::Capacity);
     emitter.instruction("xor r8d, r8d");                                        // initialize the slot cursor
     emitter.instruction("xor r9d, r9d");                                        // track whether any integer key has been observed
     emitter.instruction("xor eax, eax");                                        // initialize the maximum integer key placeholder
@@ -263,11 +251,13 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, r11");                                         // has every destination slot been inspected?
     emitter.instruction("jge __rt_hash_spread_x86_key_scan_done");              // finish scanning once the cursor reaches capacity
     hash_layout::emit_entry_address(emitter, "rcx", "r10", "r8");
-    emitter.instruction("cmp QWORD PTR [rcx], 1");                              // is this slot a live entry?
+    hash_layout::emit_load_entry_field(emitter, "rax", "rcx", EntryField::Occupied);
+    emitter.instruction("cmp rax, 1");                                          // is this slot a live entry?
     emitter.instruction("jne __rt_hash_spread_x86_key_scan_next");              // ignore empty or tombstone slots while deriving the next key
-    emitter.instruction("cmp QWORD PTR [rcx + 16], -1");                        // is the normalized key an integer key?
+    hash_layout::emit_load_entry_field(emitter, "rax", "rcx", EntryField::KeyHigh);
+    emitter.instruction("cmp rax, -1");                                         // is the normalized key an integer key?
     emitter.instruction("jne __rt_hash_spread_x86_key_scan_next");              // string keys do not affect PHP's next automatic integer key
-    emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // load the stored integer key payload
+    hash_layout::emit_load_entry_field(emitter, "rdx", "rcx", EntryField::KeyLow);
     emitter.instruction("test r9, r9");                                         // has any integer key seeded the maximum tracker?
     emitter.instruction("je __rt_hash_spread_x86_key_scan_take");               // the first integer key becomes the current maximum
     emitter.instruction("cmp rdx, rax");                                        // compare the candidate key against the current maximum
@@ -316,9 +306,8 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // refcounted children need a reference bump
     emitter.instruction("cmp r9, 7");                                           // is the source value a boxed mixed cell?
     emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // refcounted children need a reference bump
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the scalar value low word
-    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the scalar value high word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the scalar value runtime tag
+    let payload = HashPayloadSlots { low: 56, reload_later: true };
+    payload.emit_reload(emitter);
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // scalars are ready to insert
 
     emitter.label("__rt_hash_spread_x86_value_reference");
@@ -331,23 +320,11 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // insert the retained reference cell
 
     emitter.label("__rt_hash_spread_x86_value_str");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed source string pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // load the borrowed source string length
-    emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for the destination owner
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the owned string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the owned string length
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the owned string value low word
-    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the owned string value high word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the string value runtime tag
+    payload.emit_persist_string(emitter);
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // insert the owned string payload
 
     emitter.label("__rt_hash_spread_x86_value_ref");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed refcounted child pointer
-    emitter.instruction("call __rt_incref");                                    // retain the child for the destination owner
-    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // canonicalize the retained reference's unused high payload word
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the retained child value low word
-    emitter.instruction("xor r8d, r8d");                                        // refcounted hash values store only the low payload word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the refcounted value runtime tag
+    payload.emit_retain_pointer(emitter);
 
     // -- select the destination key: reindex integer keys, preserve string keys --
     emitter.label("__rt_hash_spread_x86_insert");

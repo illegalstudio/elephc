@@ -33,7 +33,7 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save chunk size
 
     // -- calculate number of chunks: ceil(length / chunk_size) --
-    emitter.instruction("ldr x2, [x0]");                                        // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x2", "x0"); // load source array length
     emitter.instruction("sub x3, x1, #1");                                      // compute chunk_size - 1
     emitter.instruction("add x2, x2, x3");                                      // bias numerator for ceiling division
     emitter.instruction("udiv x2, x2, x1");                                     // compute number of chunks
@@ -49,7 +49,7 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_chunk_ref_outer");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // load source array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload source index i
     emitter.instruction("cmp x4, x3");                                          // compare source index with source length
     emitter.instruction("b.ge __rt_array_chunk_ref_done");                      // stop when every source element has been consumed
@@ -68,11 +68,11 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x5, x6");                                          // compare inner index with chunk size
     emitter.instruction("b.ge __rt_array_chunk_ref_push");                      // push current chunk once it is full
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // reload source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // reload source array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload source index i
     emitter.instruction("cmp x4, x3");                                          // compare source index with source length
     emitter.instruction("b.ge __rt_array_chunk_ref_push");                      // push partial chunk once source is exhausted
-    emitter.instruction("add x7, x0, #24");                                     // compute source data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x7", "x0");
     emitter.instruction("ldr x1, [x7, x4, lsl #3]");                            // load source element pointer
     emitter.instruction("str x1, [sp, #48]");                                   // preserve source element pointer across incref
     emitter.instruction("mov x0, x1");                                          // move element pointer into incref argument register
@@ -114,7 +114,7 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // ROUNDED UP to a 16-byte multiple: the bookkeeping (including the inner chunk index main added) needs 56 bytes, but `push rbp` already landed rsp on a 16-byte boundary, so reserving a non-16-multiple would leave every `call` in this body misaligned and hand the callee a stack SysV x86_64 forbids. Pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`; see arrays/array_free_deep.rs for the curl SIGSEGV that class of bug produced.
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across nested constructor and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested chunk size across nested constructor and append helper calls
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the source indexed-array logical length before computing the number of chunks
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rax", "rdi"); // load the source indexed-array logical length before computing the number of chunks
     emitter.instruction("mov rcx, rsi");                                        // copy the requested chunk size before biasing the numerator for ceiling division
     emitter.instruction("sub rcx, 1");                                          // compute chunk_size - 1 for the ceiling-division numerator bias
     emitter.instruction("add rax, rcx");                                        // bias the source indexed-array logical length for ceiling division
@@ -129,7 +129,7 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_chunk_ref_outer_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the source index before checking whether every source payload slot has been consumed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before reading the logical length and candidate payloads
-    emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare the source index against the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rcx", "r10"); // compare the source index against the source indexed-array logical length
     emitter.instruction("jge __rt_array_chunk_ref_done_x86");                   // finish once every source payload slot has been assigned to some chunk
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the requested chunk size as the inner indexed-array capacity to the shared constructor
     emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because the current implementation chunks refcounted indexed arrays
@@ -151,9 +151,9 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_chunk_ref_push_x86");                   // push the current inner indexed array once the requested chunk size has been reached
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before checking whether the source payload stream is exhausted
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the source index before checking whether the source payload stream is exhausted
-    emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare the source index against the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rcx", "r10"); // compare the source index against the source indexed-array logical length
     emitter.instruction("jge __rt_array_chunk_ref_push_x86");                   // push the partially-filled inner indexed array once the source payload stream is exhausted
-    emitter.instruction("lea r11, [r10 + 24]");                                 // compute the payload base address for the source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r10");
     emitter.instruction("mov rsi, QWORD PTR [r11 + rcx * 8]");                  // load the current borrowed refcounted payload from the source indexed array into the append helper value register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the current inner indexed-array pointer into the append helper receiver register
     emitter.instruction("call __rt_array_push_refcounted");                     // append the retained current refcounted payload into the current inner indexed array

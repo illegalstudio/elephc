@@ -51,20 +51,15 @@ pub fn emit_array_edge_value(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_get_mixed_key");                          // reuse the ordinary indexed read path and return its box
     emitter.label("__rt_aedge_val_hash");
     emitter.instruction("cbz x1, __rt_aedge_val_head");                         // which == 0 selects the insertion-order head
-    emitter.instruction("ldr x9, [x0, #32]");                                   // x9 = insertion-order tail slot index
+    hash_layout::emit_order_edge(emitter, "x9", "x0", true);
     emitter.instruction("b __rt_aedge_val_slot");                               // load the selected entry
     emitter.label("__rt_aedge_val_head");
-    emitter.instruction("ldr x9, [x0, #24]");                                   // x9 = insertion-order head slot index
+    hash_layout::emit_order_edge(emitter, "x9", "x0", false);
     emitter.label("__rt_aedge_val_slot");
     emitter.instruction("cmn x9, #1");                                          // is the selected slot empty (index == -1)?
     emitter.instruction("b.eq __rt_aedge_val_null");                            // an inconsistent empty chain has no edge value
     hash_layout::emit_entry_address(emitter, "x10", "x0", "x9");
-    emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
-    emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
-    emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
-    emitter.instruction("mov x0, x14");                                         // value_tag = the entry's runtime tag
-    emitter.instruction("mov x1, x9");                                          // value_lo = the entry's low payload word
-    emitter.instruction("mov x2, x13");                                         // value_hi = the entry's high payload word
+    elephc_memoir::hash_layout::emit_entry_value(emitter, "x10", "x0", "x1", "x2");
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aedge_val_deref_done", "x0", "x1", "x2");
     emitter.instruction("b __rt_mixed_from_value");                             // retain/persist the payload and return the box
     emitter.label("__rt_aedge_val_null");
@@ -84,7 +79,7 @@ fn emit_array_edge_value_linux_x86_64(emitter: &mut Emitter) {
     emit_normalize_x86_64(emitter, "__rt_aedge_val", "__rt_aedge_val_null");
     emitter.instruction("test r11, r11");                                       // is the container empty?
     emitter.instruction("je __rt_aedge_val_null");                              // an empty container has no edge value
-    emitter.instruction("movzx eax, BYTE PTR [rdi - 8]");                       // reload the low-byte heap kind after normalization
+    elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
     emitter.instruction("cmp eax, 3");                                          // is the container an associative hash?
     emitter.instruction("je __rt_aedge_val_hash");                              // hashes read the head/tail slot directly
     emitter.instruction("test rsi, rsi");                                       // which == 0 keeps rsi = 0, the first index?
@@ -97,19 +92,15 @@ fn emit_array_edge_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_aedge_val_hash");
     emitter.instruction("test rsi, rsi");                                       // which == 0 selects the insertion-order head?
     emitter.instruction("je __rt_aedge_val_head");                              // load the head slot
-    emitter.instruction("mov rax, QWORD PTR [rdi + 32]");                       // rax = insertion-order tail slot index
+    hash_layout::emit_order_edge(emitter, "rax", "rdi", true);
     emitter.instruction("jmp __rt_aedge_val_slot");                             // load the selected entry
     emitter.label("__rt_aedge_val_head");
-    emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                       // rax = insertion-order head slot index
+    hash_layout::emit_order_edge(emitter, "rax", "rdi", false);
     emitter.label("__rt_aedge_val_slot");
     emitter.instruction("cmp rax, -1");                                         // is the selected slot empty (index == -1)?
     emitter.instruction("je __rt_aedge_val_null");                              // an inconsistent empty chain has no edge value
     hash_layout::emit_entry_address(emitter, "r10", "rdi", "rax");
-    emitter.instruction("mov r8, QWORD PTR [r10 + 24]");                        // r8 = value_lo from the hash entry
-    emitter.instruction("mov r9, QWORD PTR [r10 + 32]");                        // r9 = value_hi from the hash entry
-    emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry
-    emitter.instruction("mov rdi, r8");                                         // value_lo = the entry's low payload word
-    emitter.instruction("mov rsi, r9");                                         // value_hi = the entry's high payload word
+    elephc_memoir::hash_layout::emit_entry_value(emitter, "r10", "rax", "rdi", "rsi");
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aedge_val_deref_done", "rax", "rdi", "rsi");
     emitter.instruction("jmp __rt_mixed_from_value");                           // retain/persist the payload and return the box
     emitter.label("__rt_aedge_val_null");

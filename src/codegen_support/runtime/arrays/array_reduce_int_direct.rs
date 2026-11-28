@@ -44,7 +44,7 @@ pub fn emit_array_reduce_int_direct(emitter: &mut Emitter) {
     emitter.label("__rt_array_reduce_int_direct_loop");
     emitter.instruction("cmp x21, x22");                                        // has every source element been reduced?
     emitter.instruction("b.ge __rt_array_reduce_int_direct_done");              // finish once the source is exhausted
-    emitter.instruction("add x9, x20, #24");                                    // address the packed source payload
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x20");
     emitter.instruction("ldr x1, [x9, x21, lsl #3]");                           // pass the current int element as the second parameter
     emitter.instruction("mov x0, x23");                                         // pass the raw accumulator as the first parameter
     emitter.instruction("blr x19");                                             // call the typed int reducer
@@ -84,7 +84,7 @@ fn emit_array_reduce_int_direct_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_reduce_int_direct_loop_x86_64");
     emitter.instruction("cmp r14, r15");                                        // has every source element been reduced?
     emitter.instruction("jge __rt_array_reduce_int_direct_done_x86_64");        // finish once the source is exhausted
-    emitter.instruction("mov rsi, QWORD PTR [r13 + r14 * 8 + 24]");             // pass the current int element as the second parameter
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r13", "r14", "rsi", "r11");
     emitter.instruction("mov rdi, rbx");                                        // pass the raw accumulator as the first parameter
     emitter.instruction("call r12");                                            // call the typed int reducer
     emitter.instruction("mov rbx, rax");                                        // keep the returned int accumulator

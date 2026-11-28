@@ -9,7 +9,15 @@
 //! - The caller retains aligned stack storage until the V5 coordinator retires deferred ownership.
 
 use super::{abi, emit::Emitter, platform::Arch};
-use elephc_builtin_contract::mbstring_abi::invoke::MbNativeQueryV1;
+use elephc_builtin_contract::mbstring_abi::invoke::{MbNativeCaptureV1, MbNativeQueryV1};
+
+const CAPTURE_MODE_OFFSET: usize = std::mem::offset_of!(MbNativeQueryV1, capture)
+    + std::mem::offset_of!(MbNativeCaptureV1, mode);
+const CAPTURE_DISCARDED_OFFSET: usize = std::mem::offset_of!(MbNativeQueryV1, capture)
+    + std::mem::offset_of!(MbNativeCaptureV1, discarded);
+const CONTEXT_OFFSET: usize = std::mem::offset_of!(MbNativeQueryV1, context);
+const CONFIGURATION_OFFSET: usize = std::mem::offset_of!(MbNativeQueryV1, configuration);
+const FILTER_OFFSET: usize = std::mem::offset_of!(MbNativeQueryV1, filter);
 
 /// Stack-aligned storage for one invocation's native query policy and displaced output owner.
 pub(crate) const STATE_BYTES: usize = (std::mem::size_of::<MbNativeQueryV1>() + 15) & !15;
@@ -20,11 +28,16 @@ pub(crate) fn stage(emitter: &mut Emitter, offset: usize) {
     let scratch = match target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
     let query_configuration = target.extern_symbol("elephc_mbstring_query_configuration_v1");
     abi::emit_load_int_immediate(emitter, scratch, 0);
-    for field in [0, 8, 16, 32] {
+    for field in [
+        CAPTURE_MODE_OFFSET,
+        CAPTURE_DISCARDED_OFFSET,
+        CONTEXT_OFFSET,
+        FILTER_OFFSET,
+    ] {
         abi::emit_store_to_sp(emitter, scratch, offset + field);
     }
     abi::emit_extern_symbol_address(emitter, scratch, &query_configuration);
-    abi::emit_store_to_sp(emitter, scratch, offset + 24);
+    abi::emit_store_to_sp(emitter, scratch, offset + CONFIGURATION_OFFSET);
     abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(target, 5), offset);
 }
 

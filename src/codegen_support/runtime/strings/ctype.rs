@@ -322,18 +322,15 @@ fn emit_aarch64_object(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish a stable frame
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the ctype kind
     emitter.instruction("cbz x1, __rt_ctype_object_unknown");                   // a null object pointer has only a generic name
-    emitter.instruction("ldr x9, [x1]");                                        // load the concrete runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x1");
     emitter.instruction("cmn x9, #2");                                          // reserved id -2 denotes an incomplete unserialized object
     emitter.instruction("b.eq __rt_ctype_object_incomplete");                   // name the incomplete class exactly as PHP does
-    abi::emit_symbol_address(emitter, "x10", "_class_name_count");
-    emitter.instruction("ldr x10, [x10]");                                      // load the dense class-name lookup bound
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10"); // load the dense class-name lookup bound
     emitter.instruction("cmp x9, x10");                                         // validate the object class id before indexing metadata
     emitter.instruction("b.hs __rt_ctype_object_unknown");                      // invalid ids fall back to the generic name
-    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
-    emitter.instruction("lsl x12, x9, #4");                                     // scale the class id by the 16-byte metadata row
-    emitter.instruction("add x11, x11, x12");                                   // select the class-name metadata row
-    emitter.instruction("ldr x1, [x11]");                                       // load the real class-name pointer
-    emitter.instruction("ldr x2, [x11, #8]");                                   // load the real class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x11", "x11", "x9", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x1", "x2", "x11");
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the ctype kind
     emitter.instruction("bl __rt_ctype_deprecated");                            // report the object's concrete class name
     emitter.instruction("b __rt_ctype_object_done");                            // return the false answer
@@ -655,16 +652,15 @@ fn emit_x86_64_object(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the ctype kind
     emitter.instruction("test rsi, rsi");                                       // a null object pointer has only a generic name
     emitter.instruction("jz __rt_ctype_object_unknown");                        // fall back to the generic type name
-    emitter.instruction("mov r8, QWORD PTR [rsi]");                             // load the object's concrete runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rsi");
     emitter.instruction("cmp r8, -2");                                          // reserved id -2 denotes an incomplete unserialized object
     emitter.instruction("je __rt_ctype_object_incomplete");                     // name the incomplete class exactly as PHP does
-    emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]");         // load the dense class-name lookup bound
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r9"); // load the dense class-name lookup bound
     emitter.instruction("cmp r8, r9");                                          // validate the object class id before indexing metadata
     emitter.instruction("jae __rt_ctype_object_unknown");                       // invalid ids fall back to the generic name
-    emitter.instruction("lea r10, [rip + _class_name_entries]");                // materialize the class-name metadata table base
-    emitter.instruction("shl r8, 4");                                           // scale the class id by the 16-byte metadata row
-    emitter.instruction("mov rsi, QWORD PTR [r10 + r8]");                       // load the real class-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");                   // load the real class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r8", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rsi", "rdx", "r10");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the ctype kind
     emitter.instruction("call __rt_ctype_deprecated");                          // report the object's concrete class name
     emitter.instruction("jmp __rt_ctype_object_done");                          // return the false answer

@@ -36,7 +36,7 @@ impl FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.retains.push(value);
         *self.cell_owners.entry(value.as_ptr() as usize).or_default() += 1;
-        Ok(value.owned())
+        Ok(RuntimeCellHandle::from_raw(value.as_ptr()))
     }
     /// Records fake PHP warnings without writing to stderr.
     pub(super) fn runtime_warning(&mut self, message: &str) -> Result<(), EvalStatus> {

@@ -8,7 +8,8 @@
 //! - `__invoke`, `__call`, and `__callStatic` receive normalized argument arrays.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::with_runtime_owners;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Dispatches an invokable object through `__invoke()` without enforcing hook visibility.
 pub(in crate::interpreter) fn eval_invokable_object_call_result(
@@ -213,12 +214,17 @@ pub(super) fn eval_magic_call_args(
     evaluated_args: Vec<EvaluatedCallArg>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    let method = values.string(method_name)?;
-    let args = match eval_magic_call_arg_array(evaluated_args, values) {
-        Ok(args) => args,
-        Err(status) => { let _ = values.release(method); return Err(status); }
-    };
-    Ok(positional_args(vec![method, args]))
+    let method = RuntimeOwnerSlot::new(values.string(method_name)?);
+    with_runtime_owners(&method, || {
+        let args = match eval_magic_call_arg_array(evaluated_args, values) {
+            Ok(args) => args,
+            Err(status) => {
+                let _ = values.release(method.take());
+                return Err(status);
+            }
+        };
+        Ok(positional_args(vec![method.take(), args]))
+    })
 }
 
 /// Materializes PHP's `$args` array for a magic method fallback.
@@ -228,27 +234,24 @@ pub(super) fn eval_magic_call_arg_array(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let contains_named = evaluated_args.iter().any(|arg| arg.name.is_some());
     let mut args = if contains_named {
-        values.assoc_new(evaluated_args.len())?
+        EvalArrayBuilder::assoc(values, evaluated_args.len())?
     } else {
-        values.array_new(evaluated_args.len())?
+        EvalArrayBuilder::indexed(values, evaluated_args.len())?
     };
     let mut next_positional = 0_i64;
-    let result = (|| {
-        for arg in evaluated_args {
+    for arg in evaluated_args {
+        args.update(|values, owners, _| {
             let key = if let Some(name) = arg.name {
-                values.string(&name)?
+                owners.stage(values.string(&name)?)
             } else {
                 let current = next_positional;
-                next_positional = next_positional.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-                values.int(current)?
+                next_positional = next_positional
+                    .checked_add(1)
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                owners.stage(values.int(current)?)
             };
-            let inserted = values.array_set(args, key, arg.value);
-            let released = values.release(key);
-            args = inserted?;
-            released?;
-        }
-        Ok(())
-    })();
-    if let Err(status) = result { let _ = values.release(args); return Err(status); }
-    Ok(args)
+            Ok(Some((key.borrowed(), arg.value)))
+        })?;
+    }
+    Ok(args.finish())
 }

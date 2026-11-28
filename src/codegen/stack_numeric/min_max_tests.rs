@@ -162,6 +162,111 @@ fn stack_numeric_assignment_copy_observes_a_selection() {
     }
 }
 
+/// A selection copy keeps its cell while a complete owner scope mirrors its destination.
+#[test]
+fn stack_numeric_assignment_copy_allows_scoped_owner_mirror() {
+    let mut function = Function::new("scoped_selection_copy".into(), IrType::Void, PhpType::Void);
+    let destination = function.add_local(
+        Some("picked".into()),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+        LocalKind::PhpLocal,
+    );
+    let temporary = function.add_local(
+        Some("owner".into()),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+        LocalKind::OwnedTemp,
+    );
+    let mut builder = Builder::new(&mut function);
+    let entry = builder.create_named_block("entry", vec![]);
+    builder.set_entry(entry);
+    builder.position_at_end(entry);
+    let one = builder.emit_const_i64(1);
+    let half = builder.emit_const_f64(0.5);
+    let selected = builder
+        .emit(
+            Op::MixedMinMax,
+            vec![one, half],
+            Some(Immediate::I64(MinMaxRule::MaxPair.immediate())),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    let copy = builder
+        .emit(
+            Op::MixedClone,
+            vec![selected],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    let destination_owner = builder
+        .emit(
+            Op::Acquire,
+            vec![copy],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    let temporary_owner = builder
+        .emit(
+            Op::Acquire,
+            vec![copy],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    builder.emit_store_local(temporary, temporary_owner);
+    builder.emit(
+        Op::PushCallOperandOwner,
+        vec![],
+        Some(Immediate::LocalSlot(temporary)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    builder.emit(Op::Release, vec![copy], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+    builder.emit_store_local(destination, destination_owner);
+    builder.emit(
+        Op::PopCallOperandOwner,
+        vec![],
+        Some(Immediate::LocalSlot(temporary)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    builder.emit(
+        Op::ReleaseLocalSlot,
+        vec![],
+        Some(Immediate::LocalSlot(temporary)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    builder.emit(
+        Op::Release,
+        vec![selected],
+        None,
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    builder.terminate(Terminator::Return { value: None });
+    crate::ir::validate_function(&function).unwrap();
+
+    let frame = plan(&function);
+    assert!(frame.cells.contains(&selected));
+    assert!(frame.cells.contains(&copy));
+}
+
 /// Builds `cast(mixed_min_max(1, pin(checked), pin(box(raw)), 0.5))`: the lifetime pins call
 /// lowering takes on computed arguments that are not the last one.
 fn pinned_operands() -> (Function, ValueId, ValueId, ValueId) {

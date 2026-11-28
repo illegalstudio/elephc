@@ -15,7 +15,7 @@ use crate::codegen_support::emit::Emitter;
 pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     // -- keep a fresh integer prefix packed until the first unsupported token --
     emitter.instruction("ldr x10, [sp, #24]");                                  // load the array under construction
-    emitter.instruction("ldr x10, [x10, #-8]");                                 // inspect its runtime element representation
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x10");
     emitter.instruction("and x10, x10, #0x7f00");                               // exclude the heap kind and COW bit from the type check
     emitter.instruction("cbnz x10, __rt_json_array_prefix_generic");            // widened arrays keep the ordinary recursive path
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the borrowed JSON slice
@@ -52,7 +52,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
 pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     // -- keep a fresh integer prefix packed until the first unsupported token --
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // load the array under construction
-    emitter.instruction("mov r8, QWORD PTR [r8 - 8]");                          // inspect its runtime element representation
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r8", "r8");
     emitter.instruction("and r8, 0x7f00");                                      // exclude the heap kind and COW bit from the type check
     emitter.instruction("jnz __rt_json_array_prefix_generic_x");                // widened arrays keep the ordinary recursive path
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the borrowed JSON slice

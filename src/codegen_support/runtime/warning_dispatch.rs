@@ -13,12 +13,20 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::types::PhpType;
+use elephc_memoir::{owner_records, values::packed_slots};
+use elephc_memoir::buffers::diagnostic_buffer::{self, FragmentFrame};
 
 const FRAME: usize = 1024;
 const BUFFER: usize = 704;
 const LENGTH: usize = 712;
 const LEVEL: usize = 720;
 const PREFIX: usize = 728;
+const WARNING_OWNERS: owner_records::Context<'static> = owner_records::Context {
+    head: "_exc_call_frame_top",
+    cleanup: "__rt_warning_cleanup",
+    visitor: "__rt_gc_warning_frame_owners",
+};
+
 const ARRAY: usize = 736;
 const ARGS: usize = 744;
 const RESULT: usize = 752;
@@ -100,33 +108,12 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     // the full-warning atom so ABI analysis starts at its actual prologue.
     // The fragment entry crosses atoms through an unconditional jump only.
     e.label_shared("__rt_warning_append");
-    arg(e, 0, input_len);
-    abi::emit_reg_move(e, result, a0);
-    abi::emit_branch_if_int_result_zero(e, "__rt_warning_done");
-    abi::emit_load_symbol_to_reg(e, scratch, "_rt_diag_pending_len", 0);
-    abi::emit_store_to_sp(e, scratch, PREFIX);
-    arg(e, 1, input_len);
-    ins(e, "adds x1, x1, x10", "add rsi, r10");
-    ins(e, "b.hs __rt_warning_allocation_failed", "jc __rt_warning_allocation_failed");
-    abi::emit_store_to_sp(e, a1, LENGTH);
-    abi::emit_load_symbol_to_reg(e, a0, "_rt_diag_pending_ptr", 0);
-    abi::emit_call_label(e, &e.target.extern_symbol("realloc"));
-    abi::emit_branch_if_int_result_zero(e, "__rt_warning_allocation_failed");
-    save(e, BUFFER);
-    abi::emit_reg_move(e, a0, result);
-    abi::emit_load_temporary_stack_slot(e, scratch, PREFIX);
-    ins(e, "add x0, x0, x10", "add rdi, r10");
-    arg(e, 1, input_ptr);
-    arg(e, 2, input_len);
-    abi::emit_call_label(e, &e.target.extern_symbol("memcpy"));
-    arg(e, 0, BUFFER);
-    arg(e, 1, LENGTH);
-    abi::emit_store_reg_to_symbol(e, a0, "_rt_diag_pending_ptr", 0);
-    abi::emit_store_reg_to_symbol(e, a1, "_rt_diag_pending_len", 0);
+    diagnostic_buffer::emit_append(e, FragmentFrame {
+        input_ptr, input_len, buffer: BUFFER, length: LENGTH, prefix: PREFIX,
+    });
     abi::emit_load_temporary_stack_slot(e, result, COMPLETE);
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_done");
-    abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_ptr", 0);
-    abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_len", 0);
+    diagnostic_buffer::emit_detach(e);
     for offset in [ARGS, RESULT, HANDLED, PREFIX] {
         abi::emit_load_int_immediate(e, result, 0);
         save(e, offset);
@@ -249,8 +236,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_call_label(e, "__rt_diag_write");
     e.label("__rt_warning_release");
     abi::emit_store_zero_to_symbol(e, "_rt_diag_warning_message_len", 0);
-    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
-    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
+    owner_records::pop_stack(e, ACTIVATION, WARNING_OWNERS.head);
     abi::emit_temporary_stack_address(e, a0, 0);
     abi::emit_call_label(e, "__rt_warning_cleanup");
     e.label("__rt_warning_done");
@@ -267,9 +253,9 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     // unconditional jump crosses to the allocator's shared recovery entry.
     e.label("__rt_warning_allocation_failed");
     abi::emit_jump(e, "__rt_heap_allocation_failed");
-    emit_cleanup(e);
+    diagnostic_buffer::emit_cleanup(e, BUFFER, [ARGS, RESULT]);
     super::arrays::emit_native_frame_owners(e, "__rt_gc_warning_frame_owners", &[ARGS, RESULT]);
-    emit_reset(e);
+    diagnostic_buffer::emit_reset(e);
 }
 
 /// Writes one static diagnostic fragment through the target's diagnostic ABI.
@@ -292,11 +278,8 @@ fn emit_arguments(e: &mut Emitter) {
     let arm = e.target.arch == Arch::AArch64;
     let result = abi::int_result_reg(e);
     let scratch = if arm { "x10" } else { "r10" };
-    for (index, value) in [(0, 4), (1, 8)] {
-        abi::emit_load_int_immediate(e, abi::int_arg_reg_name(e.target, index), value);
-    }
-    abi::emit_call_label(e, "__rt_array_new");
-    crate::codegen_support::emit_array_value_type_stamp(e, result, &PhpType::Mixed);
+    abi::emit_load_int_immediate(e, abi::int_arg_reg_name(e.target, 0), 4);
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(e);
     save(e, ARRAY);
     for index in 0..4 {
         match index {
@@ -344,67 +327,19 @@ fn emit_arguments(e: &mut Emitter) {
             }
         }
         abi::emit_load_temporary_stack_slot(e, scratch, ARRAY);
-        abi::emit_store_to_address(e, result, scratch, 24 + index * 8);
+        let length = if arm { "x11" } else { "r11" };
+        packed_slots::emit_publish_word_at(e, scratch, result, length, index);
     }
     abi::emit_load_temporary_stack_slot(e, result, ARRAY);
-    abi::emit_load_int_immediate(e, scratch, 4);
-    abi::emit_store_to_address(e, scratch, result, 0);
     emit_box_current_owned_value_as_mixed(e, &PhpType::Array(Box::new(PhpType::Mixed)));
     save(e, ARGS);
 }
 
 /// Publishes an owning cleanup activation before entering arbitrary user code.
 fn emit_activation(e: &mut Emitter) {
-    let scratch = if e.target.arch == Arch::AArch64 { "x10" } else { "r10" };
-    abi::emit_load_symbol_to_reg(e, scratch, "_exc_call_frame_top", 0);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION);
-    abi::emit_symbol_address(e, scratch, "__rt_warning_cleanup");
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 8);
-    abi::emit_temporary_stack_address(e, scratch, 0);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 16);
-    abi::emit_load_int_immediate(e, scratch, 0);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 24);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 32);
-    abi::emit_symbol_address(e, scratch, "__rt_gc_warning_frame_owners");
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 40);
-    abi::emit_temporary_stack_address(e, scratch, ACTIVATION);
-    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
-}
-
-/// Releases the detached warning buffer and any constructed callback/result boxes.
-fn emit_cleanup(e: &mut Emitter) {
-    let a0 = abi::int_arg_reg_name(e.target, 0);
-    let result = abi::int_result_reg(e);
-    e.label_global("__rt_warning_cleanup");
-    abi::emit_frame_prologue(e, 32);
-    abi::emit_store_to_sp(e, a0, 0);
-    for (offset, helper) in [(ARGS, "__rt_decref_mixed"), (RESULT, "__rt_decref_mixed")] {
-        abi::emit_load_temporary_stack_slot(e, result, 0);
-        let record = if e.target.arch == Arch::AArch64 { "x10" } else { "r10" };
-        abi::emit_reg_move(e, record, result);
-        abi::emit_load_from_address(e, result, record, offset);
-        abi::emit_load_int_immediate(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, 0);
-        abi::emit_store_to_address(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, record, offset);
-        abi::emit_call_label(e, helper);
-    }
-    abi::emit_load_temporary_stack_slot(e, a0, 0);
-    abi::emit_load_from_address(e, a0, a0, BUFFER);
-    abi::emit_call_label(e, &e.target.extern_symbol("free"));
-    abi::emit_frame_restore(e, 32);
-    e.instruction("ret");                                                       // release warning-owned state on normal return and native unwind
-}
-
-/// Discards incomplete diagnostic fragments at request/process teardown.
-fn emit_reset(e: &mut Emitter) {
-    e.label_global("__rt_diag_reset");
-    abi::emit_frame_prologue(e, 16);
-    let a0 = abi::int_arg_reg_name(e.target, 0);
-    abi::emit_load_symbol_to_reg(e, a0, "_rt_diag_pending_ptr", 0);
-    abi::emit_call_label(e, &e.target.extern_symbol("free"));
-    abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_ptr", 0);
-    abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_len", 0);
-    abi::emit_frame_restore(e, 16);
-    e.instruction("ret");                                                       // never join warning fragments from distinct web requests
+    let data = abi::int_result_reg(e);
+    abi::emit_temporary_stack_address(e, data, 0);
+    owner_records::publish_stack(e, data, ACTIVATION, WARNING_OWNERS);
 }
 
 #[cfg(test)]

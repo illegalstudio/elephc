@@ -167,7 +167,7 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_discarded_object_string_con
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     let scratch = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-    for offset in [0, EVAL_RESULT_VALUE_CELL_OFFSET, EVAL_RESULT_ERROR_OFFSET] {
+    for offset in [elephc_memoir::owner_layout::EvalResultWords::KIND, EVAL_RESULT_VALUE_CELL_OFFSET, EVAL_RESULT_ERROR_OFFSET] {
         abi::emit_store_to_sp(ctx.emitter, scratch, offset);
     }
     let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);

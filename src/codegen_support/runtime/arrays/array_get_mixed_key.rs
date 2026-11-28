@@ -15,6 +15,8 @@
 //! - Inputs are array pointer, normalized key pair, and warning/fetch-mode flags. The result is
 //!   always a boxed `Mixed` pointer in the target result register (caller owns it).
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen_support::emit::Emitter;
@@ -56,7 +58,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_array_get_mixed_key_null_receiver");         // sentinel-null receivers from missed reads → optional warning + Mixed(null)
 
     // -- dispatch on array storage kind --
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed kind metadata from the array header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte (kind tag)
     emitter.instruction("cmp x9, #3");                                          // kind 3 = hash storage?
     emitter.instruction("b.eq __rt_array_get_mixed_key_hash");                  // route hash-storage arrays through hash_get
@@ -71,14 +73,14 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
 
     // -- integer key on indexed storage: inline bounds-checked read --
     emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = key_lo (int index)
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = array length (header offset 0)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = array length (header offset 0)
     emitter.instruction("cmp x12, #0");                                         // negative index → null
     emitter.instruction("b.lt __rt_array_get_mixed_key_int_missing");           // warn and return null for a negative indexed-array key
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
     emitter.instruction("b.ge __rt_array_get_mixed_key_int_missing");           // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("ldr x13, [x0, #-8]");                                  // reload kind metadata for element type tag
-    emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
-    emitter.instruction("add x10, x0, #24");                                    // skip the 24-byte array header to reach the contiguous payload
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x13", "x0");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x13", "x13");
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
     emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_boxed");         // boxed slots are copied into a fresh zval cell before returning
     emitter.instruction("cmp x13, #1");                                         // do indexed slots contain string pointer/length pairs?
@@ -108,17 +110,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_get_mixed_key_clone_done");               // share the helper epilogue with ref-cell cloning
 
     emitter.label("__rt_array_get_mixed_key_detach_indexed");
-    emitter.instruction("str x0, [sp, #48]");                                   // preserve the old cell whose array-owner reference will be replaced
-    emitter.instruction("bl __rt_mixed_clone");                                 // detach the selected zval while resources retain shared identity
-    emitter.instruction("str x0, [sp, #56]");                                   // preserve the replacement across old-cell cleanup
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the unique indexed-array pointer
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the selected integer index
-    emitter.instruction("add x9, x9, #24");                                     // address the boxed Mixed payload base
-    emitter.instruction("str x0, [x9, x10, lsl #3]");                           // publish the detached zval in the unique outer array
-    emitter.instruction("ldr x0, [sp, #48]");                                   // drop the replaced array-owner reference to the shared cell
-    emitter.instruction("bl __rt_decref_mixed");                                // release the old cell without affecting aliases that still own it
-    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the detached cell now owned by the array
-    emitter.instruction("bl __rt_incref");                                      // add the caller-owned reference consumed after the nested write
+    packed_slots::emit_clone_owned_packed_element_aarch64(emitter);
     emitter.instruction("b __rt_array_get_mixed_key_clone_done");               // return through the shared epilogue
 
     emitter.label("__rt_array_get_mixed_key_clone_ref_cell");
@@ -274,7 +266,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_get_mixed_key_null_receiver");           // sentinel-null receivers from missed reads → optional warning + Mixed(null)
 
     // -- dispatch on array storage kind --
-    emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // load packed kind metadata from the array header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r9", "rdi");
     emitter.instruction("and r9, 0xff");                                        // isolate the low byte (kind tag)
     emitter.instruction("cmp r9, 3");                                           // kind 3 = hash storage?
     emitter.instruction("je __rt_array_get_mixed_key_hash");                    // route hash-storage arrays through hash_get
@@ -289,15 +281,14 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
 
     // -- integer key on indexed storage: inline bounds-checked read --
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = key_lo (int index); caller-saved scratch only
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // r9 = array length (header offset 0)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r9", "rdi"); // r9 = array length (header offset 0)
     emitter.instruction("test r8, r8");                                         // negative index → null
     emitter.instruction("js __rt_array_get_mixed_key_int_missing");             // warn and return null for a negative indexed-array key
     emitter.instruction("cmp r8, r9");                                          // index >= length → null
     emitter.instruction("jge __rt_array_get_mixed_key_int_missing");            // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // reload kind metadata for element type tag
-    emitter.instruction("shr r11, 8");                                          // shift the element type tag into the low 7 bits
-    emitter.instruction("and r11, 0x7f");                                       // mask the element type tag
-    emitter.instruction("lea r10, [rdi + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "rdi");
     emitter.instruction("cmp r11, 7");                                          // are indexed slots already boxed Mixed pointers?
     emitter.instruction("je __rt_array_get_mixed_key_indexed_boxed");           // boxed slots are copied into a fresh zval cell before returning
     emitter.instruction("cmp r11, 1");                                          // do indexed slots contain string pointer/length pairs?
@@ -328,18 +319,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_get_mixed_key_clone_done");             // share the helper epilogue with ref-cell cloning
 
     emitter.label("__rt_array_get_mixed_key_detach_indexed");
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the old cell whose array-owner reference will be replaced
-    emitter.instruction("call __rt_mixed_clone");                               // detach the selected zval while resources retain shared identity
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the replacement across old-cell cleanup
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the unique indexed-array pointer
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the selected integer index
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r8 * 8], rax");              // publish the detached zval in the unique outer array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // drop the replaced array-owner reference to the shared cell
-    emitter.instruction("call __rt_decref_mixed");                              // release the old cell without affecting aliases that still own it
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the detached cell now owned by the array
-    abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // add the caller-owned reference consumed after the nested write
-    abi::emit_pop_reg(emitter, "rax");
+    packed_slots::emit_clone_owned_packed_element_x86_64(emitter);
     emitter.instruction("jmp __rt_array_get_mixed_key_clone_done");             // return through the shared epilogue
 
     emitter.label("__rt_array_get_mixed_key_clone_ref_cell");

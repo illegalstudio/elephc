@@ -380,17 +380,15 @@ pub(super) fn emit_eval_called_class_name_result_aarch64(ctx: &mut FunctionConte
     let missing = ctx.next_label("eval_called_class_missing");
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "x12")?;
-    abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(ctx.emitter, "x10");
     ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the class-name table
     ctx.emitter.instruction(&format!("b.hs {}", missing));                      // fall back to the lexical eval class when metadata is missing
-    abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
-    ctx.emitter.instruction("lsl x12, x12, #4");                                // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add x11, x11, x12");                               // select the called-class metadata row
-    ctx.emitter.instruction("ldr x1, [x11]");                                   // load the called-class name pointer
-    ctx.emitter.instruction("ldr x2, [x11, #8]");                               // load the called-class name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "x11", "x11", "x12", "x13");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, "x1", "x2", "x11");
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
-    abi::emit_symbol_address(ctx.emitter, "x1", "_class_name_missing");
+    elephc_memoir::values::class_metadata::emit_missing_class_name_address(ctx.emitter, "x1");
     ctx.emitter.instruction("mov x2, #0");                                      // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
@@ -401,17 +399,15 @@ pub(super) fn emit_eval_called_class_name_result_x86_64(ctx: &mut FunctionContex
     let missing = ctx.next_label("eval_called_class_missing");
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "r8")?;
-    abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(ctx.emitter, "r9");
     ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the class-name table
     ctx.emitter.instruction(&format!("jae {}", missing));                       // fall back to the lexical eval class when metadata is missing
-    abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-    ctx.emitter.instruction("shl r8, 4");                                       // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add r10, r8");                                     // select the called-class metadata row
-    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");                        // load the called-class name pointer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                    // load the called-class name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "r10", "r10", "r8", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, "rax", "rdx", "r10");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
-    abi::emit_symbol_address(ctx.emitter, "rax", "_class_name_missing");
+    elephc_memoir::values::class_metadata::emit_missing_class_name_address(ctx.emitter, "rax");
     ctx.emitter.instruction("mov rdx, 0");                                      // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
@@ -436,12 +432,20 @@ pub(super) fn emit_eval_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_
                 ctx.load_local_to_result(slot)?;
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
                 let object_reg = eval_mixed_unbox_low_payload_reg(ctx);
-                abi::emit_load_from_address(ctx.emitter, reg, object_reg, 0);
+                elephc_memoir::values::object_storage::emit_load_class_id(
+                    ctx.emitter,
+                    reg,
+                    object_reg,
+                );
             }
             PhpType::Object(_) => {
                 let offset = ctx.local_offset(slot)?;
                 abi::load_at_offset(ctx.emitter, reg, offset);
-                abi::emit_load_from_address(ctx.emitter, reg, reg, 0);
+                elephc_memoir::values::object_storage::emit_load_class_id(
+                    ctx.emitter,
+                    reg,
+                    reg,
+                );
             }
             other => {
                 return Err(CodegenIrError::invalid_module(format!(

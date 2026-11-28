@@ -22,6 +22,9 @@
 //!   verbatim: stream_select only sets bits for fds in `0..63`, so a boxed/large
 //!   or out-of-range return is harmlessly skipped there rather than dereferenced.
 
+use elephc_memoir::buffers::stream_tables;
+
+use elephc_memoir::heap_kind::{HeapStart, emit_branch_outside_heap};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// vtable slot index of `stream_cast` (see `USER_WRAPPER_METHOD_NAMES`).
@@ -64,15 +67,8 @@ pub fn emit_user_wrapper_stream_cast(emitter: &mut Emitter) {
     // A `: int` return arrives as a raw fd; an untyped/`resource` return arrives
     // as a boxed Mixed cell (heap pointer) whose payload word holds the fd.
     emitter.instruction("cbz x0, __rt_uwcast_neg1");                            // null/false-ish → not selectable
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-    emitter.instruction("cmp x0, x9");                                          // is the return below the managed heap?
-    emitter.instruction("b.lo __rt_uwcast_ret");                                // raw small int → it is already the fd
-    abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // current heap byte length
-    emitter.instruction("add x10, x9, x10");                                    // managed heap end address
-    emitter.instruction("cmp x0, x10");                                         // is the return at or beyond the heap end?
-    emitter.instruction("b.hs __rt_uwcast_ret");                                // raw int above the heap → already the fd
-    emitter.instruction("ldr x9, [x0]");                                        // boxed Mixed runtime tag
+    emit_branch_outside_heap(emitter, HeapStart::Arena, "__rt_uwcast_ret");
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, "x9", "x0");
     emitter.instruction("cmp x9, #0");                                          // tag 0 = int?
     emitter.instruction("b.eq __rt_uwcast_unbox");                              // unbox the integer payload as the fd
     emitter.instruction("cmp x9, #9");                                          // tag 9 = resource?
@@ -80,7 +76,7 @@ pub fn emit_user_wrapper_stream_cast(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #-1");                                         // any other boxed kind (bool false/null/string) → not selectable
     emitter.instruction("b __rt_uwcast_ret");                                   // return the not-selectable sentinel
     emitter.label("__rt_uwcast_unbox");
-    emitter.instruction("ldr x0, [x0, #8]");                                    // payload word of the Mixed cell is the underlying fd
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "x0", "x0");
     emitter.instruction("b __rt_uwcast_ret");                                   // return the unboxed fd
 
     emitter.label("__rt_uwcast_passthrough");
@@ -104,15 +100,14 @@ fn emit_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emitter.instruction("mov w9, #0x4000");                                     // high half of the synthetic fd base (0x4000 << 16 = 0x40000000)
     emitter.instruction("lsl x9, x9, #16");                                     // form 0x40000000 in x9
     emitter.instruction("sub x9, x0, x9");                                      // x9 = fd - 0x40000000 = handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "x10", "x9", "x0");
     emitter.instruction(&format!("cbz x0, {}", missing_label));                 // slot empty (fclose'd or never registered): not selectable
 }
 
 /// AArch64: resolve the stream_cast method pointer for the object in `x0` into
 /// `x11`. Branches to `missing_label` when the wrapper class omits the method.
 fn emit_method_lookup(emitter: &mut Emitter, missing_label: &str) {
-    emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_SLOT_CAST * 8)); // load the stream_cast method pointer (slot 10)
@@ -134,11 +129,10 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
 
     // $cast_as stays in rsi across both lookups (neither touches it).
     emitter.instruction(&format!("sub rdi, {:#x}", FD_WRAPPER_BIT));            // rdi = fd - 0x40000000 = handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov rdi, QWORD PTR [r10 + rdi * 8]");                  // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "r10", "rdi", "rdi");
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // fclose'd or never registered: not selectable
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SLOT_CAST * 8)); // load the stream_cast method pointer (slot 10)
@@ -151,15 +145,8 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
     // -- normalize the return to a raw int fd (see the AArch64 path for the rationale) --
     emitter.instruction("test rax, rax");                                       // null/false-ish return?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // → not selectable
-    abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("cmp rax, r10");                                        // is the return below the managed heap?
-    emitter.instruction("jb __rt_uwcast_ret_x86");                              // raw small int → already the fd
-    abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // current heap byte length
-    emitter.instruction("add r11, r10");                                        // managed heap end address
-    emitter.instruction("cmp rax, r11");                                        // is the return at or beyond the heap end?
-    emitter.instruction("jae __rt_uwcast_ret_x86");                             // raw int above the heap → already the fd
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // boxed Mixed runtime tag
+    emit_branch_outside_heap(emitter, HeapStart::Arena, "__rt_uwcast_ret_x86");
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, "r10", "rax");
     emitter.instruction("cmp r10, 0");                                          // tag 0 = int?
     emitter.instruction("je __rt_uwcast_unbox_x86");                            // unbox the integer payload as the fd
     emitter.instruction("cmp r10, 9");                                          // tag 9 = resource?
@@ -167,7 +154,7 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                         // other boxed kind → not selectable
     emitter.instruction("jmp __rt_uwcast_ret_x86");                             // return the not-selectable sentinel
     emitter.label("__rt_uwcast_unbox_x86");
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // payload word of the Mixed cell is the underlying fd
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "rax", "rax");
     emitter.instruction("jmp __rt_uwcast_ret_x86");                             // return the unboxed fd
 
     emitter.label("__rt_uwcast_passthrough_x86");

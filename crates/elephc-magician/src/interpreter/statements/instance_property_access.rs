@@ -8,6 +8,7 @@
 //! - Declared, dynamic, magic, hooked, and reference-backed properties share visibility checks.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
 
 /// Reads one object property while enforcing eval-declared member visibility.
 pub(in crate::interpreter) fn eval_property_get_result(
@@ -25,7 +26,7 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
     property_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-    owned: Option<&mut Vec<RuntimeCellHandle>>,
+    owned: Option<&StagedRuntimeOwners>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_property_read_result(object, property_name, context, values, owned, false)
 }
@@ -44,7 +45,7 @@ pub(super) fn eval_unset_property_get_result(
 /// Shares ordinary and quiet container reads without using an isset guard before a getter.
 pub(super) fn eval_property_read_result(
     object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps, owned: Option<&mut Vec<RuntimeCellHandle>>, quiet: bool,
+    values: &mut impl RuntimeValueOps, owned: Option<&StagedRuntimeOwners>, quiet: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
@@ -746,9 +747,8 @@ pub(super) fn eval_property_reference_target(
         return Ok(EvalReferenceTarget::Cell { cell });
     }
     let alias_name = eval_property_reference_alias_name(object_identity, storage_property_name);
-    for replaced in set_reference_alias(context, scope, &alias_name, source_name, values)? {
-        values.release(replaced)?;
-    }
+    let replaced = set_reference_alias(context, scope, &alias_name, source_name, values)?;
+    crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     Ok(EvalReferenceTarget::Variable {
         scope: scope as *mut ElephcEvalScope,
         name: alias_name,
@@ -1083,11 +1083,11 @@ pub(super) fn eval_magic_property_set(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut native_node = std::pin::pin!([0_u64; 4]);
+    let native_node = std::pin::pin!(elephc_memoir::owner_layout::MagicSetGuard::default());
     if !values.native_magic_set_guard_push(
         identity,
         property_name,
-        native_node.as_mut().get_mut(),
+        native_node.as_ref(),
     )? {
         return Ok(false);
     }
@@ -1105,7 +1105,7 @@ pub(super) fn eval_magic_property_set(
         let result = finish_magic_property_name(result, property, context, values)?;
         release_expr_result(result, context, values)
     })();
-    let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
+    let popped = values.native_magic_set_guard_pop(native_node.as_ref());
     result.and(popped).map(|()| true)
 }
 

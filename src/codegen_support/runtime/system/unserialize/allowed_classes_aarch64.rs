@@ -7,6 +7,8 @@
 //! Key details:
 //! - Option values are normalized into owned direct-string arrays before object hydration.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::{
     UNSER_ALLOWED_CLASSES_ENTRY_PREFIX, UNSER_ALLOWED_CLASSES_POLICY_PREFIX,
@@ -99,8 +101,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_unser_options_done");                        // publish is already complete
     emitter.instruction("add x11, x10, #1");                                    // advance index before any nested helper call
     emitter.instruction("str x11, [sp, #16]");                                  // preserve next index across conversion helpers
-    emitter.instruction("ldr x11, [x9, #-8]");                                  // packed array metadata precedes the payload header
-    emitter.instruction("ubfx x11, x11, #8, #7");                               // extract the runtime element tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x9");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x11", "x11");
     emitter.instruction("cmp x11, #1");                                         // direct string payload?
     emitter.instruction("b.eq __rt_unser_options_indexed_string");              // direct strings append without conversion
     emitter.instruction("cmp x11, #6");                                         // direct object pointer payload?
@@ -109,7 +111,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_unser_options_indexed_mixed");               // keep the conditional branch inside the options-decoder atom
     emitter.instruction("b __rt_unser_allowed_classes_entry_metadata_error");   // reject other homogeneous types through the shared error path
     emitter.label("__rt_unser_options_indexed_mixed");
-    emitter.instruction("add x12, x9, #24");                                    // skip indexed header to the packed payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x9");
     emitter.instruction("ldr x12, [x12, x10, lsl #3]");                         // read the selected boxed Mixed pointer
     emitter.instruction("cbnz x12, __rt_unser_options_indexed_cell_ready");     // keep the conditional branch inside the options-decoder atom
     emitter.instruction("b __rt_unser_allowed_classes_entry_null_error");       // report a malformed/null cell through the shared error path
@@ -124,13 +126,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov x3, x13");                                         // forward invalid boxed runtime tag
     emitter.instruction("b __rt_unser_allowed_classes_entry_type_error");       // other boxed types are invalid class names
     emitter.label("__rt_unser_options_indexed_string");
-    emitter.instruction("add x9, x9, #24");                                     // direct payload begins after indexed header
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
     emitter.instruction("lsl x10, x10, #4");                                    // string pair stride is sixteen bytes
     emitter.instruction("add x9, x9, x10");                                     // select the current direct string pair
     emitter.instruction("ldp x1, x2, [x9]");                                    // borrow source string pointer and length
     emitter.instruction("b __rt_unser_options_append_borrowed");                // append the borrowed string as an allowed name
     emitter.label("__rt_unser_options_indexed_object");
-    emitter.instruction("add x12, x9, #24");                                    // skip indexed header to direct object slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x9");
     emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load selected direct object pointer
     emitter.instruction("cbnz x0, __rt_unser_options_indexed_object_ready");    // keep the conditional branch inside the options-decoder atom
     emitter.instruction("b __rt_unser_allowed_classes_entry_null_error");       // report a null object slot through the shared error path
@@ -236,12 +238,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_unser_allowed_list_mixed");
     emitter.instruction("ldr x12, [x12]");                                      // heterogeneous allow-list representation?
     emitter.instruction("cbnz x12, __rt_unser_class_allowed_mixed_cell");       // boxed cells need an extra dereference
-    emitter.instruction("add x9, x9, #24");                                     // skip indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
     emitter.instruction("lsl x10, x11, #4");                                    // direct string element stride = pointer + length
     emitter.instruction("add x9, x9, x10");                                     // select the current direct-string pair
     emitter.instruction("b __rt_unser_class_allowed_compare");                  // compare against the requested class name
     emitter.label("__rt_unser_class_allowed_mixed_cell");
-    emitter.instruction("add x9, x9, #24");                                     // skip the indexed-array header to the cell slots
+    packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
     emitter.instruction("lsl x10, x11, #3");                                    // boxed Mixed elements are pointers
     emitter.instruction("ldr x9, [x9, x10]");                                   // load the validated boxed string cell
     emitter.instruction("add x9, x9, #8");                                      // string payload pair follows Mixed tag

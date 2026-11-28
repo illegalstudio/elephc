@@ -987,7 +987,6 @@ fn emit_owned_static_string_store(module: &Module, emitter: &mut Emitter, slot: 
 
 /// Publishes a retained heap owner before releasing the displaced value and its destructors.
 fn emit_publish_owned_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
-    let result = abi::int_result_reg(emitter);
     if slot.ty.codegen_repr() == PhpType::Mixed {
         let prefix = slot_body_label_raw(slot, "set_reference");
         crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
@@ -995,15 +994,12 @@ fn emit_publish_owned_static_property_slot(emitter: &mut Emitter, slot: &EvalSta
         );
         return;
     }
-    abi::emit_push_reg(emitter, result);
-    abi::emit_load_symbol_to_reg(emitter, result, &slot.symbol, 0);
-    abi::emit_push_reg(emitter, result);
-    abi::emit_load_temporary_stack_slot(emitter, result, 16);
-    abi::emit_store_reg_to_symbol(emitter, result, &slot.symbol, 0);
-    clear_uninitialized_marker_after_static_store(emitter, slot);
-    abi::emit_pop_reg(emitter, result);
-    abi::emit_decref_if_refcounted(emitter, &slot.ty.codegen_repr());
-    abi::emit_release_temporary_stack(emitter, 16);
+    elephc_memoir::symbol_owners::emit_replace_result_owner(
+        emitter,
+        &slot.symbol,
+        |emitter| clear_uninitialized_marker_after_static_store(emitter, slot),
+        |emitter| abi::emit_decref_if_refcounted(emitter, &slot.ty.codegen_repr()),
+    );
 }
 
 /// Emits an ARM64 scalar static-property store after Mixed coercion.

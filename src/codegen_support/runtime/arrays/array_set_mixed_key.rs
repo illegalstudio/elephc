@@ -113,15 +113,15 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the indexed-array pointer
     emitter.instruction("cmp x1, #0");                                          // negative int keys cannot live in packed indexed storage
     emitter.instruction("b.lt __rt_array_set_mixed_key_int_promote");           // promote to a hash so a negative key survives like PHP
-    emitter.instruction("ldr x9, [x0]");                                        // load the current logical length of the indexed array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0");
     emitter.instruction("cmp x1, x9");                                          // a key past the end would create a sparse gap
     emitter.instruction("b.hi __rt_array_set_mixed_key_int_promote");           // promote to a hash so a sparse key survives like PHP
     emitter.instruction("b.eq __rt_array_set_mixed_key_int_plain");             // a contiguous append has no existing reference slot
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // inspect the existing slot representation
-    emitter.instruction("ubfx x10, x10, #8, #7");                               // isolate the indexed element tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x0");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x10", "x10");
     emitter.instruction("cmp x10, #7");                                         // only boxed slots can hold invoker markers
     emitter.instruction("b.ne __rt_array_set_mixed_key_int_plain");             // typed slots use ordinary widening and replacement
-    emitter.instruction("add x10, x0, #24");                                    // locate the packed data area
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("ldr x10, [x10, x1, lsl #3]");                          // inspect the overwritten boxed slot
     emitter.instruction("cbz x10, __rt_array_set_mixed_key_int_plain");         // absent slots have no write-through identity
     emitter.instruction("ldr x11, [x10]");                                      // preserve the marker pointer while inspecting its inner tag
@@ -137,7 +137,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     // cell pointers — reading either one dereferenced the integer and segfaulted. Only element 0,
     // the one just written, survived. Widen first, exactly as the Mixed-append lowering does.
     emitter.instruction("str x1, [sp, #24]");                                   // save the target index across the widening call
-    emitter.instruction("ldr x1, [x0, #-8]");                                   // load the destination's packed metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x1", "x0");
     emitter.instruction("lsr x1, x1, #8");                                      // move the runtime value_type tag into the low bits
     emitter.instruction("and x1, x1, #0x7f");                                   // isolate the destination's value_type tag
     emitter.instruction("cmp x1, #7");                                          // tag 7 = the slots already hold boxed Mixed cells
@@ -306,16 +306,15 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the indexed-array pointer
     emitter.instruction("cmp rdi, 0");                                          // negative int keys cannot live in packed indexed storage
     emitter.instruction("jl __rt_array_set_mixed_key_int_promote");             // promote to a hash so a negative key survives like PHP
-    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the current logical length of the indexed array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rcx", "rax");
     emitter.instruction("cmp rdi, rcx");                                        // a key past the end would create a sparse gap
     emitter.instruction("ja __rt_array_set_mixed_key_int_promote");             // promote to a hash so a sparse key survives like PHP
     emitter.instruction("je __rt_array_set_mixed_key_int_plain");               // a contiguous append has no existing reference slot
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // inspect the existing slot representation
-    emitter.instruction("shr r10, 8");                                          // move the indexed element tag into the low bits
-    emitter.instruction("and r10, 0x7f");                                       // isolate the indexed element tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
     emitter.instruction("cmp r10, 7");                                          // only boxed slots can hold invoker markers
     emitter.instruction("jne __rt_array_set_mixed_key_int_plain");              // typed slots use ordinary widening and replacement
-    emitter.instruction("mov r10, QWORD PTR [rax + 24 + rdi * 8]");             // inspect the overwritten boxed slot
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "rax", "rdi", "r10", "r11");
     emitter.instruction("test r10, r10");                                       // absent slots have no write-through identity
     emitter.instruction("jz __rt_array_set_mixed_key_int_plain");               // avoid inspecting an absent boxed slot
     emitter.instruction("cmp QWORD PTR [r10], 11");                             // invoker markers retain the caller storage address
@@ -329,9 +328,8 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     // holding raw integers behind a header claiming they were cell pointers. Here `rdi` holds the
     // integer key and `rax` the array — the opposite of the AArch64 register split.
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the target index across the widening call
-    emitter.instruction("mov rsi, QWORD PTR [rax - 8]");                        // load the destination's packed metadata
-    emitter.instruction("shr rsi, 8");                                          // move the runtime value_type tag into the low bits
-    emitter.instruction("and rsi, 0x7f");                                       // isolate the destination's value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rsi", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rsi", "rsi");
     emitter.instruction("cmp rsi, 7");                                          // tag 7 = the slots already hold boxed Mixed cells
     emitter.instruction("je __rt_array_set_mixed_key_int_boxed");               // nothing to widen for an already-Mixed destination
     emitter.instruction("mov rdi, rax");                                        // __rt_array_to_mixed takes the array in rdi and the tag in rsi

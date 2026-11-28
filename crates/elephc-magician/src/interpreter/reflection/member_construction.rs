@@ -9,6 +9,9 @@
 //! - Native callable defaults are converted into eval expressions without execution.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::{
+    EvalArrayBuilder, with_collection_cells,
+};
 
 /// Handles eval-backed `ReflectionMethod::createFromMethodName()` static calls.
 pub(in crate::interpreter) fn eval_reflection_method_create_from_method_name_result(
@@ -358,10 +361,11 @@ pub(super) fn eval_reflection_object_class_name(
     if let Some(class_name) = context.dynamic_object_class_name(identity) {
         return Ok(class_name);
     }
-    let class_name = values.object_class_name(object)?;
-    let bytes = values.string_bytes(class_name);
-    values.release(class_name)?;
-    let class_name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let bytes = with_collection_cells(values, |values, owners| {
+        let class_name = owners.stage(values.object_class_name(object)?);
+        values.string_bytes(class_name.borrowed())
+    })?;
+    let class_name = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
     Ok(class_name.trim_start_matches('\\').to_string())
 }
 
@@ -376,10 +380,11 @@ pub(super) fn eval_reflection_object_dynamic_property_exists(
     }
     let property_count = values.object_property_len(object)?;
     for position in 0..property_count {
-        let key = values.object_property_iter_key(object, position)?;
-        let key_bytes = values.string_bytes(key);
-        values.release(key)?;
-        if key_bytes? == property_name.as_bytes() {
+        let key_bytes = with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.object_property_iter_key(object, position)?);
+            values.string_bytes(key.borrowed())
+        })?;
+        if key_bytes == property_name.as_bytes() {
             return Ok(true);
         }
     }
@@ -411,36 +416,34 @@ pub(super) fn eval_reflection_object_dynamic_property_array_result(
     owner_kind: u64,
     reflected_name: &str,
     filter: Option<u64>,
-    mut result: RuntimeCellHandle,
+    result: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if owner_kind != EVAL_REFLECTION_OWNER_PROPERTY {
         return Ok(result);
     }
-    let Some(object) = eval_reflection_object_reflected_object(reflection_object, context, values)?
+    let mut result = EvalArrayBuilder::from_owned(values, result);
+    let Some(object) = eval_reflection_object_reflected_object(reflection_object, context, result.values())?
     else {
-        return Ok(result);
+        return Ok(result.finish());
     };
     let property_names =
-        eval_reflection_object_dynamic_property_names(object, reflected_name, context, values);
-    values.release(object)?;
+        eval_reflection_object_dynamic_property_names(object, reflected_name, context, result.values());
+    result.values().release(object)?;
     let property_names = property_names?;
     for name in property_names {
         let member = eval_reflection_dynamic_property_metadata(reflected_name);
         if !eval_reflection_member_matches_filter(&member, filter) {
             continue;
         }
-        let member_object = eval_reflection_member_object_result(
-            EVAL_REFLECTION_OWNER_PROPERTY,
-            &name,
-            &member,
-            context,
-            values,
-        )?;
-        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, member_object)?;
+        result.object(|values| {
+            eval_reflection_member_object_result(
+                EVAL_REFLECTION_OWNER_PROPERTY, &name, &member, context, values,
+            )
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Enumerates public dynamic property names on the object behind `ReflectionObject`.
@@ -453,11 +456,12 @@ pub(super) fn eval_reflection_object_dynamic_property_names(
     let mut names = Vec::new();
     let property_count = values.object_property_len(object)?;
     for position in 0..property_count {
-        let key = values.object_property_iter_key(object, position)?;
-        let key_bytes = values.string_bytes(key);
-        values.release(key)?;
+        let key_bytes = with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.object_property_iter_key(object, position)?);
+            values.string_bytes(key.borrowed())
+        })?;
         let property_name =
-            String::from_utf8(key_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+            String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         if !eval_reflection_dynamic_property_name_is_visible(
             reflected_name,
             &property_name,

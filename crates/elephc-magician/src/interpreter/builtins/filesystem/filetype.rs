@@ -62,10 +62,12 @@ pub(in crate::interpreter) fn eval_filetype_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
-        return match eval_user_wrapper_stat_int_field(stat, "mode", values)? {
-            Some(mode) => values.string(eval_filetype_label_from_mode(mode)),
-            None => values.bool_value(false),
-        };
+        return eval_with_user_wrapper_stat_lease(stat, context, values, |stat, values| {
+            match eval_user_wrapper_stat_int_field(stat, "mode", values)? {
+                Some(mode) => values.string(eval_filetype_label_from_mode(mode)),
+                None => values.bool_value(false),
+            }
+        });
     }
     if stream_wrappers::is_phar_stream(&path) {
         return if elephc_phar::extract_url_bytes(path.as_bytes()).is_some() {

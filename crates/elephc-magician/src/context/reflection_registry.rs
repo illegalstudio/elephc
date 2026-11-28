@@ -13,10 +13,11 @@
 //!   mistaken for the freed reflector.
 
 use super::*;
+use elephc_memoir::object_owners::WeakIdentityOwners;
 
 thread_local! {
     /// Owning context of each registered reflector identity on this thread's contexts.
-    static REFLECTION_IDENTITY_OWNERS: RefCell<HashMap<u64, usize>> = RefCell::new(HashMap::new());
+    static REFLECTION_IDENTITY_OWNERS: RefCell<WeakIdentityOwners> = RefCell::new(WeakIdentityOwners::default());
 }
 
 /// Clears the reflection metadata a freed native object left in its owning context.
@@ -26,7 +27,7 @@ thread_local! {
 /// before they are reclaimed, so every recorded owner is live.
 pub(crate) unsafe fn forget_released_reflection_identity(identity: u64) {
     let owner = REFLECTION_IDENTITY_OWNERS
-        .try_with(|owners| owners.borrow_mut().remove(&identity))
+        .try_with(|owners| owners.borrow_mut().take(identity))
         .ok()
         .flatten();
     if let Some(context) = owner.and_then(|owner| unsafe { (owner as *mut ElephcEvalContext).as_mut() }) {
@@ -38,26 +39,23 @@ pub(crate) unsafe fn forget_released_reflection_identity(identity: u64) {
 pub(crate) fn untrack_reflection_identities_for_context(context: *mut ElephcEvalContext) {
     let context = context as usize;
     let _ = REFLECTION_IDENTITY_OWNERS
-        .try_with(|owners| owners.borrow_mut().retain(|_, owner| *owner != context));
+        .try_with(|owners| owners.borrow_mut().untrack_context(context));
 }
 
 impl ElephcEvalContext {
     /// Records this context as the owner of one registered reflector identity.
-    fn own_eval_reflection_identity(&mut self, identity: u64) {
+    pub(super) fn own_eval_reflection_identity(&mut self, identity: u64) {
         let context = self as *mut Self as usize;
         let _ = REFLECTION_IDENTITY_OWNERS
-            .try_with(|owners| owners.borrow_mut().insert(identity, context));
+            .try_with(|owners| owners.borrow_mut().register(identity, context));
     }
 
     /// Removes stale metadata before a reclaimed native address identifies another object.
     pub(crate) fn clear_eval_reflection_identity(&mut self, identity: u64) {
         let context = self as *mut Self as usize;
-        let _ = REFLECTION_IDENTITY_OWNERS.try_with(|owners| {
-            let mut owners = owners.borrow_mut();
-            if owners.get(&identity) == Some(&context) {
-                owners.remove(&identity);
-            }
-        });
+        let _ = REFLECTION_IDENTITY_OWNERS
+            .try_with(|owners| owners.borrow_mut().clear_if_owned(identity, context));
+        self.forget_reflected_parameter_default(identity);
         self.eval_reflection_attributes.remove(&identity);
         self.eval_reflection_classes.remove(&identity);
         self.eval_reflection_functions.remove(&identity);
@@ -288,5 +286,21 @@ mod tests {
             context.eval_reflection_method(identity),
             Some(("ReleasedReflectorClass", "method"))
         );
+    }
+
+    /// Frees a ReflectionParameter's default metadata before its address can be reused.
+    #[test]
+    fn released_reflection_parameter_forgets_its_default() {
+        let mut context = Box::new(ElephcEvalContext::new());
+        let identity = 0x5eed_0f_d307;
+        context.register_reflected_parameter_default(identity, EvalReflectedParameterDefault {
+            default: crate::eval_ir::EvalExpr::Const(crate::eval_ir::EvalConst::Null),
+            declaring_class: Some("OldOwner".into()),
+            magic_scope: None,
+        });
+        assert!(context.reflected_parameter_default(identity).is_some());
+
+        unsafe { forget_released_reflection_identity(identity) };
+        assert!(context.reflected_parameter_default(identity).is_none());
     }
 }

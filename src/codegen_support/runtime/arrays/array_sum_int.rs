@@ -18,6 +18,8 @@
 //! - The two entries are self-contained so Mach-O dead stripping can remove either
 //!   one without leaving a branch into removed code.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
 
@@ -80,7 +82,7 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool, raw_result:
         emitter.instruction("ldr x10, [x3]");                                   // load the seed Mixed tag
         emitter.instruction("ldr x11, [x3, #8]");                               // load the seed payload word
     }
-    emitter.instruction("add x12, x0, #24");                                    // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x0");
     emitter.instruction("add x12, x12, x1, lsl #3");                            // address the first element in the requested range
     emitter.instruction("cbz x10, 1f");                                         // tag 0 starts the checked integer sequence
     emitter.instruction("cmp x10, #2");                                         // tag 2 is a float seed
@@ -152,7 +154,7 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool, raw_result:
     }
 
     emitter.label(&vector_restart);
-    emitter.instruction("add x12, x0, #24");                                    // rebuild the element cursor from the original array base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x0");
     emitter.instruction("add x12, x12, x1, lsl #3");                            // address the first element in the requested range
     emitter.instruction("sub x9, x2, x1");                                      // rebuild the exact element count after the failed gate
 
@@ -255,7 +257,7 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool, raw_result: 
         emitter.instruction("mov r11, QWORD PTR [rcx]");                        // load the seed Mixed tag
         emitter.instruction("mov r8, QWORD PTR [rcx + 8]");                     // load the seed payload word
     }
-    emitter.instruction("lea r9, [rdi + 24]");                                  // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
     emitter.instruction("lea r9, [r9 + rsi * 8]");                              // address the first element in the requested range
     emitter.instruction("test r11, r11");                                       // tag 0 starts the checked integer sequence
     emitter.instruction(&format!("jz {int_gate}"));                             // int seeds enter the SIMD gate for the integer sequence
@@ -342,7 +344,7 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool, raw_result: 
     }
 
     emitter.label(&vector_restart);
-    emitter.instruction("lea r9, [rdi + 24]");                                  // rebuild the element cursor from the original array base
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
     emitter.instruction("lea r9, [r9 + rsi * 8]");                              // address the first element in the requested range
     emitter.instruction("mov r10, rdx");                                        // rebuild the exclusive end before subtracting the start
     emitter.instruction("sub r10, rsi");                                        // rebuild the exact element count after the failed gate

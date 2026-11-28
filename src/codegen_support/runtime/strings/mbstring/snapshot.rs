@@ -61,10 +61,10 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mbstring_array_next_value");                    // normalize the value before returning it
     emitter.label("__rt_mbstring_array_next_indexed");
     emitter.instruction("ldr x9, [x2]");                                        // read the next logical indexed position
-    emitter.instruction("ldr x10, [x0]");                                       // read the indexed array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x0"); // read the indexed array length
     emitter.instruction("cmp x9, x10");                                         // check the live bounds before loading a slot
     emitter.instruction("b.hs __rt_mbstring_array_next_end");                   // finish without reading beyond the indexed payload
-    emitter.instruction("ldr x12, [x0, #-8]");                                  // read the indexed element type from heap metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x12", "x0");
     emitter.instruction("lsr x12, x12, #8");                                    // move the element type into the low bits
     emitter.instruction("and x12, x12, #0x7f");                                 // remove the persistent COW flag
     emitter.instruction("mov x13, #8");                                         // ordinary scalar and pointer slots occupy one word
@@ -75,13 +75,13 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_array_next_wide");
     emitter.instruction("mov x13, #16");                                        // select the two-word physical slot size
     emitter.label("__rt_mbstring_array_next_stride");
-    emitter.instruction("ldr x10, [x0, #16]");                                  // read the authoritative physical slot width
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x10");
     emitter.instruction("cmp x10, x13");                                        // require type metadata and slot width to agree
     emitter.instruction("b.ne __rt_mbstring_array_next_error");                 // reject malformed storage before reading an element
     emitter.instruction("ldr x11, [sp, #16]");                                  // recover the key output descriptor
     emitter.instruction("stp xzr, x9, [x11]");                                  // publish the integer index without allocating a key cell
     emitter.instruction("str xzr, [x11, #16]");                                 // clear the unused key high word
-    emitter.instruction("add x11, x0, #24");                                    // address the indexed payload after its header
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x0");
     emitter.instruction("madd x11, x9, x13, x11");                              // address the selected typed slot
     emitter.instruction("add x9, x9, #1");                                      // advance to the next logical position
     emitter.instruction("str x9, [x2]");                                        // publish the next indexed cursor
@@ -186,9 +186,8 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // read the next logical indexed position
     emitter.instruction("cmp r11, QWORD PTR [rdi]");                            // check the live bounds before loading a slot
     emitter.instruction("jae __rt_mbstring_array_next_end");                    // finish without reading beyond the indexed payload
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // read the indexed element type from heap metadata
-    emitter.instruction("shr rax, 8");                                          // move the element type into the low bits
-    emitter.instruction("and rax, 0x7f");                                       // remove the persistent COW flag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rax", "rax");
     emitter.instruction("mov r8, 8");                                           // ordinary scalar and pointer slots occupy one word
     emitter.instruction("cmp rax, 1");                                          // strings occupy a pointer and length pair
     emitter.instruction("je __rt_mbstring_array_next_wide");                    // select a two-word string slot
@@ -197,14 +196,20 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_array_next_wide");
     emitter.instruction("mov r8, 16");                                          // select the two-word physical slot size
     emitter.label("__rt_mbstring_array_next_stride");
-    emitter.instruction("cmp r8, QWORD PTR [rdi + 16]");                        // require type metadata and slot width to agree
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rdi", "rcx");
+    emitter.instruction("cmp r8, rcx");                                         // require type metadata and slot width to agree
     emitter.instruction("jne __rt_mbstring_array_next_error");                  // reject malformed storage before reading an element
     emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");                       // recover the key output descriptor
     emitter.instruction("mov QWORD PTR [rcx], 0");                              // publish the integer key tag
     emitter.instruction("mov QWORD PTR [rcx + 8], r11");                        // publish the logical index without allocating a key cell
     emitter.instruction("mov QWORD PTR [rcx + 16], 0");                         // clear the unused key high word
     emitter.instruction("imul r8, r11");                                        // scale the index by the validated physical slot width
-    emitter.instruction("lea r8, [rdi + r8 + 24]");                             // address the indexed slot after its header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(
+        emitter,
+        "r8",
+        "rdi",
+        "r8",
+    );
     emitter.instruction("inc r11");                                             // advance to the next logical position
     emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the next indexed cursor
     emitter.instruction("mov rdi, QWORD PTR [r8]");                             // borrow the low payload word

@@ -13,6 +13,7 @@
 //!   procedural date/time aliases; splitting by alias would obscure the shared
 //!   fallback and timezone-table rules.
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::*;
 
 #[path = "../../../../../../src/list_id_prelude/table.rs"]
@@ -236,25 +237,30 @@ fn eval_mktime_alias(
     if args.len() > 6 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut full = Vec::with_capacity(6);
-    let mut temps = Vec::new();
-    let date_name = if name == "gmmktime" { "gmdate" } else { "date" };
-    for (index, spec) in ["G", "i", "s", "n", "j", "Y"].into_iter().enumerate() {
-        if let Some(arg) = args.get(index) {
-            full.push(*arg);
-        } else {
-            let default = eval_current_date_part_int(date_name, spec, context, values)?;
-            temps.push(default);
-            full.push(default);
-        }
-    }
-    let result = eval_mktime_result(
-        name, full[0], full[1], full[2], full[3], full[4], full[5], context, values,
-    );
-    for temp in temps {
-        values.release(temp)?;
-    }
-    result
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::StagedRuntimeOwners;
+
+    let temps = StagedRuntimeOwners::default();
+    with_runtime_owners(&temps, || {
+        let result = (|| {
+            let mut full = Vec::with_capacity(6);
+            let date_name = if name == "gmmktime" { "gmdate" } else { "date" };
+            for (index, spec) in ["G", "i", "s", "n", "j", "Y"].into_iter().enumerate() {
+                if let Some(arg) = args.get(index) {
+                    full.push(*arg);
+                } else {
+                    let default = temps.stage(eval_current_date_part_int(
+                        date_name, spec, context, values,
+                    )?);
+                    full.push(default.borrowed());
+                }
+            }
+            eval_mktime_result(
+                name, full[0], full[1], full[2], full[3], full[4], full[5], context, values,
+            )
+        })();
+        crate::interpreter::scope_cells::finish_staged_runtime_owners(&temps, result, values)
+    })
 }
 
 /// Constructs one native DateTime-family object and runs its constructor.
@@ -315,13 +321,11 @@ fn eval_timezone_identifiers_filtered_alias(
         return eval_timezone_identifiers_country_error(context, values);
     }
     let rows = eval_timezone_identifier_rows(group, &country);
-    let mut result = values.array_new(rows.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, rows.len())?;
     for (index, name) in rows.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = values.string(name)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string(name))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns the requested DateTimeZone group mask, defaulting to `DateTimeZone::ALL`.
@@ -375,12 +379,12 @@ fn eval_timezone_identifiers_country_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(EVAL_DATETIMEZONE_PER_COUNTRY_ERROR)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception(
+        "ValueError",
+        EVAL_DATETIMEZONE_PER_COUNTRY_ERROR,
+        context,
+        values,
+    )
 }
 
 /// Calls one object-method alias with selected argument indices.
@@ -497,24 +501,24 @@ fn eval_strftime_alias(
     if args.len() != 1 && args.len() != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut call_args = Vec::with_capacity(3);
-    call_args.push(args[0]);
-    let mut temps = Vec::new();
-    if let Some(timestamp) = args.get(1) {
-        call_args.push(*timestamp);
-    } else {
-        let timestamp = eval_time_result(values)?;
-        temps.push(timestamp);
-        call_args.push(timestamp);
-    }
-    let utc = values.bool_value(utc)?;
-    temps.push(utc);
-    call_args.push(utc);
-    let result = eval_static_alias("DateTime", "__elephc_strftime", call_args, context, values);
-    for temp in temps {
-        values.release(temp)?;
-    }
-    result
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::StagedRuntimeOwners;
+
+    let temps = StagedRuntimeOwners::default();
+    with_runtime_owners(&temps, || {
+        let result = (|| {
+            let mut call_args = Vec::with_capacity(3);
+            call_args.push(args[0]);
+            if let Some(timestamp) = args.get(1) {
+                call_args.push(*timestamp);
+            } else {
+                call_args.push(temps.stage(eval_time_result(values)?).borrowed());
+            }
+            call_args.push(temps.stage(values.bool_value(utc)?).borrowed());
+            eval_static_alias("DateTime", "__elephc_strftime", call_args, context, values)
+        })();
+        crate::interpreter::scope_cells::finish_staged_runtime_owners(&temps, result, values)
+    })
 }
 
 /// Returns the bundled timezone database version.

@@ -9,6 +9,7 @@
 //! - Native executable tests separately validate actual heap reference counts.
 
 use super::*;
+use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
 use crate::value::RuntimeCell;
 
 /// Releases each literal on success, later expression failure, and duplicate or unknown named binding.
@@ -191,8 +192,8 @@ fn raw_string_ref_args(original: [u64; 2], current: [u64; 2]) -> BoundNativeFunc
         evaluation_owners: Vec::new(),
         values: Vec::new(),
         ref_slots: vec![BoundNativeFunctionRefSlot::RawString {
-            original,
-            slot: Box::new(current),
+            original: InvokerSlotWords::new(original[0], original[1]),
+            slot: InvokerSlot::pin(InvokerSlotWords::new(current[0], current[1])),
             target: None,
             force_writeback: false,
         }],
@@ -207,7 +208,7 @@ fn raw_heap_ref_args(original: u64, current: u64) -> BoundNativeFunctionArgs {
         values: Vec::new(),
         ref_slots: vec![BoundNativeFunctionRefSlot::OwnedRawWord {
             original,
-            slot: Box::new([current, 0]),
+            slot: InvokerSlot::pin(InvokerSlotWords::new(current, 0)),
             target: None,
         }],
         named_keys: Vec::new(),

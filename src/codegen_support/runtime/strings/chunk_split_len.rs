@@ -16,7 +16,7 @@
 //! - ABI: AArch64 x1/x2 = subject, x3 = chunk length, x4/x5 = separator; x86_64
 //!   rax/rdx = subject, rdi = chunk length, rcx/r8 = separator. Result in x0/rax.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_chunk_split_len` helper for the active target.
 pub fn emit_chunk_split_len(emitter: &mut Emitter) {
@@ -43,10 +43,9 @@ fn emit_chunk_split_len_aarch64(e: &mut Emitter) {
     e.instruction("mul x12, x9, x5");                                            // total separator bytes
     e.instruction("adds x0, x2, x12");                                           // result length = subject + separators
     e.instruction("b.cs __rt_chunk_split_len_overflow");                         // reject a wrapped total
-    abi::emit_symbol_address(e, "x9", "_heap_max");
-    e.instruction("ldr x9, [x9]");                                               // load the configured heap bound
-    e.instruction("cmp x0, x9");                                                 // would chunk_split() exceed the heap?
-    e.instruction("b.hi __rt_chunk_split_len_overflow");                         // report the same allocation fatal
+    elephc_memoir::memory::emit_branch_if_size_exceeds_heap(
+        e, "x0", "x9", "__rt_chunk_split_len_overflow",
+    );
     e.instruction("ret");                                                        // return the exact result length
     e.label("__rt_chunk_split_len_overflow");
     e.instruction("b __rt_alloc_overflow");                                      // keep the shared fatal trampoline cross-atom safe
@@ -75,10 +74,9 @@ fn emit_chunk_split_len_x86_64(e: &mut Emitter) {
     e.instruction("jo __rt_chunk_split_len_overflow_x86_64");                    // reject a wrapped separator total
     e.instruction("add rax, r10");                                               // result length = subject + separators
     e.instruction("jc __rt_chunk_split_len_overflow_x86_64");                    // reject a wrapped total
-    abi::emit_symbol_address(e, "r9", "_heap_max");
-    e.instruction("mov r9, QWORD PTR [r9]");                                     // load the configured heap bound
-    e.instruction("cmp rax, r9");                                                // would chunk_split() exceed the heap?
-    e.instruction("ja __rt_chunk_split_len_overflow_x86_64");                    // report the same allocation fatal
+    elephc_memoir::memory::emit_branch_if_size_exceeds_heap(
+        e, "rax", "r9", "__rt_chunk_split_len_overflow_x86_64",
+    );
     e.instruction("ret");                                                        // return the exact result length
     e.label("__rt_chunk_split_len_overflow_x86_64");
     e.instruction("jmp __rt_alloc_overflow");                                    // keep the shared fatal trampoline reachable

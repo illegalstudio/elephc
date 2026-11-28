@@ -10,6 +10,8 @@
 //! - `$offset` resolution for `preg_match()` / `preg_match_all()` lives here too.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Builds PHP's indexed `$matches` capture array for one regex result.
 pub(in crate::interpreter) fn eval_preg_capture_array(
@@ -22,22 +24,15 @@ pub(in crate::interpreter) fn eval_preg_capture_array(
     let len = captures.map_or(0, |captures| {
         eval_preg_visible_capture_len(captures, unmatched_as_null)
     });
-    let mut result = values.array_new(len)?;
+    let mut result = EvalArrayBuilder::indexed(values, len)?;
     if let Some(captures) = captures {
         for index in 0..len {
-            let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-            let value = eval_preg_capture_value(
-                subject,
-                captures,
-                index,
-                offset_capture,
-                unmatched_as_null,
-                values,
-            )?;
-            result = values.array_set(result, key, value)?;
+            result.index(index, |values| {
+                eval_preg_capture_value(subject, captures, index, offset_capture, unmatched_as_null, values)
+            })?;
         }
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns the capture count PHP should expose, dropping trailing unmatched groups.
@@ -66,37 +61,61 @@ pub(in crate::interpreter) fn eval_preg_capture_bytes<'a>(
         .map(|matched| &subject[matched.start()..matched.end()])
 }
 
-/// Builds one capture entry as either a string or PHP's `[string, byte_offset]` pair.
-pub(in crate::interpreter) fn eval_preg_capture_value(
+/// Builds one capture entry as either a string or PHP's [string, byte_offset] pair.
+pub(in crate::interpreter) fn eval_preg_capture_value<V: RuntimeValueOps>(
     subject: &[u8],
     captures: &Captures<'_>,
     index: usize,
     offset_capture: bool,
     unmatched_as_null: bool,
-    values: &mut impl RuntimeValueOps,
+    values: &mut V,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let matched = captures.get(index);
-    let value = if matched.is_none() && unmatched_as_null {
-        values.null()?
-    } else {
+    let construct = |values: &mut V| {
+        if matched.is_none() && unmatched_as_null {
+            return values.null();
+        }
         let bytes = matched.as_ref().map_or(b"".as_slice(), |matched| {
             &subject[matched.start()..matched.end()]
         });
-        values.string_bytes_value(bytes)?
+        values.string_bytes_value(bytes)
     };
     if !offset_capture {
-        return Ok(value);
+        return construct(values);
     }
 
-    let offset = matched.map_or(Ok(-1_i64), |matched| {
+    let offset = matched.as_ref().map_or(Ok(-1_i64), |matched| {
         i64::try_from(matched.start()).map_err(|_| EvalStatus::RuntimeFatal)
     })?;
-    let offset = values.int(offset)?;
-    let mut pair = values.array_new(2)?;
-    let value_key = values.int(0)?;
-    pair = values.array_set(pair, value_key, value)?;
-    let offset_key = values.int(1)?;
-    values.array_set(pair, offset_key, offset)
+    eval_preg_offset_pair(values, offset, construct)
+}
+
+/// Builds an owned value-and-offset pair for capture and split results.
+pub(super) fn eval_preg_offset_pair<V: RuntimeValueOps>(
+    values: &mut V,
+    offset: i64,
+    construct: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut pair = EvalArrayBuilder::indexed(values, 2)?;
+    pair.index(0, construct)?;
+    pair.index(1, |values| values.int(offset))?;
+    Ok(pair.finish())
+}
+
+/// Keeps the matches array rooted until the scalar result has been constructed.
+pub(super) fn eval_preg_finish_capture_result<V: RuntimeValueOps>(
+    matches: RuntimeCellHandle,
+    values: &mut V,
+    construct: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let matches = RuntimeOwnerSlot::new(matches);
+    with_runtime_owners(&matches, || match construct(values) {
+        Ok(result) => Ok((result, matches.take())),
+        Err(status) => {
+            let _ = values.release(matches.take());
+            Err(status)
+        }
+    })
 }
 
 /// Reads an optional PHP `$offset` argument, defaulting to `0`.

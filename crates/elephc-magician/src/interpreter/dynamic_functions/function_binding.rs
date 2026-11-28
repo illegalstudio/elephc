@@ -27,6 +27,7 @@
 //!   the callee therefore reach the eval caller's variables through those markers.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::with_mutable_runtime_owners;
 
 /// Binds evaluated positional and named values to declared parameter order.
 pub(in crate::interpreter) fn bind_evaluated_function_args(
@@ -198,12 +199,25 @@ fn release_native_bound_arg_owners(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) {
-    for bound in bound_args {
-        for (key, _) in &bound.variadic_ref_targets {
-            let _ = release_expr_result(*key, context, values);
-        }
-        let _ = release_expr_result(bound.value, context, values);
-    }
+    use elephc_memoir::runtime_owners::{
+        CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch,
+    };
+
+    let owners = RuntimeOwnerBatch::new(bound_args.into_iter().flat_map(|bound| {
+        bound
+            .variadic_ref_targets
+            .into_iter()
+            .map(|(key, _)| key)
+            .chain(std::iter::once(bound.value))
+            .filter(|value| !value.is_borrowed())
+    }));
+    let _ = crate::interpreter::scope_cells::retire_eval_owner_batch(
+        owners,
+        ReleaseOrder::Forward,
+        CleanupErrorPolicy::Ignore,
+        context,
+        values,
+    );
 }
 
 /// Returns how many leading regular slots the call actually reaches.
@@ -443,29 +457,36 @@ fn native_missing_argument_message(
 /// Materializes omitted parameters and reclaims earlier defaults if a later default fails.
 fn fill_native_function_defaults(
     function: &NativeFunction,
-    bound_args: &mut [Option<BoundMethodArg>],
+    bound_args: &mut Vec<Option<BoundMethodArg>>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let filled = (|| {
-        for (position, bound) in bound_args.iter_mut().enumerate() {
-            if bound.is_some() { continue; }
-            if position < function.required_param_count() { return Err(EvalStatus::RuntimeFatal); }
-            let default = function.param_default(position).ok_or(EvalStatus::RuntimeFatal)?;
-            *bound = Some(BoundMethodArg {
-                value: materialize_native_callable_default(default, context, values)?,
-                ref_target: None,
-                variadic_ref_targets: Vec::new(),
-            });
+    with_mutable_runtime_owners(bound_args, |bound_args| {
+        let filled = (|| {
+            for position in 0..bound_args.len() {
+                if bound_args[position].is_some() { continue; }
+                if position < function.required_param_count() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let default = function.param_default(position).ok_or(EvalStatus::RuntimeFatal)?;
+                let value = materialize_native_callable_default(default, context, values)?;
+                bound_args[position] = Some(BoundMethodArg {
+                    value,
+                    ref_target: None,
+                    variadic_ref_targets: Vec::new(),
+                });
+            }
+            Ok(())
+        })();
+        if filled.is_err() {
+            for position in 0..bound_args.len() {
+                if let Some(bound) = bound_args[position].take() {
+                    let _ = release_expr_result(bound.value, context, values);
+                }
+            }
         }
-        Ok(())
-    })();
-    if filled.is_err() {
-        for bound in bound_args.iter_mut().filter_map(Option::take) {
-            let _ = release_expr_result(bound.value, context, values);
-        }
-    }
-    filled
+        filled
+    })
 }
 
 /// Coerces and stages parameters, reclaiming every untransferred binding owner on failure.
@@ -492,47 +513,52 @@ fn finish_native_function_binding(
 fn apply_native_function_arg_types(
     function: &NativeFunction,
     variadic_index: Option<usize>,
-    bound_args: &mut [BoundMethodArg],
+    bound_args: &mut Vec<BoundMethodArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    for (position, bound_arg) in bound_args.iter_mut().enumerate() {
-        let param_index = if variadic_index.is_some_and(|index| position >= index) {
-            variadic_index.ok_or(EvalStatus::RuntimeFatal)?
-        } else {
-            position
-        };
-        let Some(param_type) = function.param_type(param_index) else {
-            continue;
-        };
-        let original = bound_arg.value;
-        if native_function_object_reference_defers_nominal_check(
-            function,
-            param_index,
-            param_type,
-            original,
-            values,
-        )? {
-            continue;
+    with_mutable_runtime_owners(bound_args, |bound_args| {
+        for position in 0..bound_args.len() {
+            let param_index = if variadic_index.is_some_and(|index| position >= index) {
+                variadic_index.ok_or(EvalStatus::RuntimeFatal)?
+            } else {
+                position
+            };
+            let Some(param_type) = function.param_type(param_index) else {
+                continue;
+            };
+            let original = bound_args[position].value;
+            if native_function_object_reference_defers_nominal_check(
+                function,
+                param_index,
+                param_type,
+                original,
+                values,
+            )? {
+                continue;
+            }
+            // PHP omits the parameter name for a variadic slot in an argument TypeError.
+            let parameter = if variadic_index.is_some_and(|index| position >= index) {
+                None
+            } else {
+                function.param_names().get(param_index).map(String::as_str)
+            };
+            let replacement = eval_method_parameter_value_or_throw(
+                function.name(),
+                position + 1,
+                parameter,
+                param_type,
+                original,
+                context,
+                values,
+            )?;
+            bound_args[position].value = replacement;
+            if replacement != original {
+                release_expr_result(original, context, values)?;
+            }
         }
-        // PHP omits the parameter name for a variadic slot in an argument TypeError.
-        let parameter = if variadic_index.is_some_and(|index| position >= index) {
-            None
-        } else {
-            function.param_names().get(param_index).map(String::as_str)
-        };
-        bound_arg.value = eval_method_parameter_value_or_throw(
-            function.name(),
-            position + 1,
-            parameter,
-            param_type,
-            original,
-            context,
-            values,
-        )?;
-        if bound_arg.value != original { release_expr_result(original, context, values)?; }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Leaves exact object-reference validation to the compiled callee entry guard.

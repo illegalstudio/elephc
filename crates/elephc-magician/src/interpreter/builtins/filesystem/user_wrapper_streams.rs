@@ -90,8 +90,11 @@ pub(in crate::interpreter) fn eval_user_wrapper_fclose_result(
         )?;
         values.release(result)?;
     }
-    let closed = context.stream_resources_mut().close(id);
-    values.release(info.object)?;
+    let closed_info = context.stream_resources_mut().close_user_wrapper_stream(id);
+    let closed = closed_info.is_some();
+    if let Some(closed_info) = closed_info {
+        values.release(closed_info.object)?;
+    }
     values.bool_value(closed).map(Some)
 }
 

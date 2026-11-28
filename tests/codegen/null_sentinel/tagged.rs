@@ -225,9 +225,24 @@ fn test_tagged_unary_minus_and_abs_narrow_null() {
 }
 
 
+/// Returns the assembly emitted for PHP statements, excluding the compiler-owned terminal cleanup.
+fn main_php_statement_assembly(user_asm: &str) -> &str {
+    let main_start = user_asm
+        .find("_main:")
+        .or_else(|| user_asm.find("\nmain:").map(|i| i + 1))
+        .expect("user asm contains the main label");
+    let main_body = &user_asm[main_start..];
+    let main_end = main_body
+        .find("epilogue + exit(0)")
+        .or_else(|| main_body.find("\n    ret"))
+        .map(|i| i + main_start)
+        .unwrap_or(user_asm.len());
+    &user_asm[main_start..main_end]
+}
+
 /// Phase 3 narrowing proof: a plain non-nullable int emits no in-band sentinel material
-/// under the tagged representation — neither the 0x7fff_ffff_ffff_fffe immediate nor its
-/// decimal form appears anywhere in the user assembly for echo + var_dump of an int local.
+/// under the tagged representation. Neither the 0x7fff_ffff_ffff_fffe immediate nor its
+/// decimal form appears in the PHP statement assembly for echo and var_dump of an int local.
 #[test]
 fn test_tagged_plain_int_emits_no_sentinel_check() {
     let dir = make_cli_test_dir("elephc_tagged_plain_int_asm");
@@ -240,13 +255,7 @@ fn test_tagged_plain_int_emits_no_sentinel_check() {
         false,
         elephc::codegen::NullRepr::Tagged,
     );
-    let main_start = user_asm
-        .find("_main:")
-        .or_else(|| user_asm.find("\nmain:").map(|i| i + 1))
-        .expect("user asm contains the main label");
-    let main_body = &user_asm[main_start..];
-    let main_end = main_body.find("ret").map(|i| i + main_start).unwrap_or(user_asm.len());
-    let main_section = &user_asm[main_start..main_end];
+    let main_section = main_php_statement_assembly(&user_asm);
     let lower = main_section.to_lowercase();
     assert!(
         !lower.contains("0xfffe") && !main_section.contains("9223372036854775806"),
@@ -269,13 +278,7 @@ fn test_sentinel_plain_int_still_emits_sentinel_check() {
         false,
         elephc::codegen::NullRepr::Sentinel,
     );
-    let main_start = user_asm
-        .find("_main:")
-        .or_else(|| user_asm.find("\nmain:").map(|i| i + 1))
-        .expect("user asm contains the main label");
-    let main_body = &user_asm[main_start..];
-    let main_end = main_body.find("ret").map(|i| i + main_start).unwrap_or(user_asm.len());
-    let main_section = &user_asm[main_start..main_end];
+    let main_section = main_php_statement_assembly(&user_asm);
     let lower = main_section.to_lowercase();
     assert!(
         lower.contains("0xfffe") || main_section.contains("9223372036854775806"),

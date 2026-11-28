@@ -562,18 +562,24 @@ fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg
     let (message_ptr, message_len) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x9, [{}]", receiver_reg));    // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("add x10, x10, x9, lsl #4");                // address the receiver class-name row
-            ctx.emitter.instruction(&format!("ldr {}, [x10]", message_ptr));    // borrow the receiver class-name pointer
-            ctx.emitter.instruction(&format!("ldr {}, [x10, #8]", message_len)); // borrow the receiver class-name length
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                "x9",
+                receiver_reg,
+            );
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "x10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "x10", "x10", "x9", "x11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, message_ptr, message_len, "x10");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [{}]", receiver_reg)); // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to its metadata row
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", message_ptr)); // borrow the receiver class-name pointer
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", message_len)); // borrow the receiver class-name length
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                "r9",
+                receiver_reg,
+            );
+            elephc_memoir::values::class_metadata::emit_class_name_table_address(ctx.emitter, "r10");
+            elephc_memoir::values::class_metadata::emit_class_name_row_address(ctx.emitter, "r10", "r10", "r9", "r11");
+            elephc_memoir::values::class_metadata::emit_load_class_name_pair(ctx.emitter, message_ptr, message_len, "r10");
         }
     }
     emit_string_result_concat_prefix(ctx, "Object of class ");

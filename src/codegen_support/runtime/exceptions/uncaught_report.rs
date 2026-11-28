@@ -78,6 +78,10 @@
 //!   restores its own saved registers on exit. x86_64 realigns `rsp` once at the entry because the
 //!   tail jump may arrive 8-off.
 
+use elephc_memoir::{
+    activation_records::FRAME_READER,
+    buffers::output::{self, ControlField},
+};
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{DEBUGINFO_FATAL_MSG, DEBUGINFO_WARNING_PREFIX};
 use crate::codegen_support::{abi, emit::Emitter};
@@ -146,7 +150,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     // nothing at all on stdout. Nothing is live yet at the entry, so the call costs no spill.
     emitter.instruction("mov x10, #0");                                         // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "x10", "_print_r_mode", 0);          // an escaping exception abandons a print_r(..., true) capture: the report must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "x10", ControlField::InHandler);
     emitter.instruction("bl __rt_ob_flush_all");                                // drain every open output buffer before the report is written
 
     abi::emit_load_symbol_to_reg(emitter, "x10", "_uncaught_report_mode", 0);
@@ -293,15 +297,13 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish the frame pointer
     emitter.instruction("mov x19, x0");                                         // keep the throwable across the writes
 
-    emitter.instruction("ldr x10, [x19]");                                      // runtime class id from the object header
-    abi::emit_symbol_address(emitter, "x11", "_class_name_count");
-    emitter.instruction("ldr x11, [x11]");                                      // number of named class ids
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x19");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x11"); // number of named class ids
     emitter.instruction("cmp x10, x11");                                        // is the class id inside the name table?
     emitter.instruction("b.hs __rt_uncaught_no_name");                          // an unknown id writes no class name, exactly as var_dump does
-    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
-    emitter.instruction("add x11, x11, x10, lsl #4");                           // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("ldr x0, [x11]");                                       // class-name pointer
-    emitter.instruction("ldr x1, [x11, #8]");                                   // class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x11", "x11", "x10", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x0", "x1", "x11");
     emitter.instruction("bl __rt_stdout_write");                                // write the throwable class name
 
     emitter.label("__rt_uncaught_no_name");
@@ -400,7 +402,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x0, #16]");                                  // activation self-pointer, or an owned-value payload
     emitter.instruction("cmp x11, x0");                                         // an ownership guard stores its own address here
     emitter.instruction("b.eq __rt_uncaught_write_trace_next");                 // guards are not PHP frames
-    emitter.instruction("ldr x10, [x0, #24]");                                  // the frame reader published by the function prologue
+    emitter.instruction(&format!("ldr x10, [x0, #{FRAME_READER}]"));            // the frame reader published by the function prologue
     emitter.instruction("cbz x10, __rt_uncaught_write_trace_next");             // a hidden or synthetic frame exposes no reader
     emitter.instruction("mov x1, #0");                                          // options 0: print the arguments
     emitter.instruction("ldr x2, [sp, #8]");                                    // the zero-based output index of this frame
@@ -438,7 +440,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.label_global("__rt_debuginfo_fatal");
     emitter.instruction("mov x10, #0");                                         // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "x10", "_print_r_mode", 0);          // the fatal abandons a print_r(..., true) capture: it must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "x10", ControlField::InHandler);
     emitter.instruction("sub sp, sp, #16");                                     // reserve the linkage frame
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address for the helper calls
     emitter.instruction("mov x29, sp");                                         // establish the frame pointer
@@ -523,7 +525,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and rsp, -16");                                        // realign the stack for the C-ABI flush; this helper never returns
     emitter.instruction("xor r10d, r10d");                                      // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "r10", "_print_r_mode", 0);          // an escaping exception abandons a print_r(..., true) capture: the report must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "r10", ControlField::InHandler);
     emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the report is written
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_uncaught_report_mode", 0);
@@ -683,16 +685,13 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // second push keeps the stack 16-byte aligned for calls
     emitter.instruction("mov r12, rax");                                        // keep the throwable across the writes
 
-    emitter.instruction("mov r9, QWORD PTR [r12]");                             // runtime class id from the object header
-    abi::emit_symbol_address(emitter, "r10", "_class_name_count");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // number of named class ids
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r10"); // number of named class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id inside the name table?
     emitter.instruction("jae __rt_uncaught_no_name");                           // an unknown id writes no class name, exactly as var_dump does
-    abi::emit_symbol_address(emitter, "r10", "_class_name_entries");
-    emitter.instruction("shl r9, 4");                                           // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("add r10, r9");                                         // address of this class's entry
-    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r9", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rdi", "rsi", "r10");
     emitter.instruction("call __rt_stdout_write");                              // write the throwable class name
 
     emitter.label("__rt_uncaught_no_name");
@@ -790,7 +789,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uncaught_write_trace_done");                   // nothing left to print
     emitter.instruction("cmp QWORD PTR [rdi + 16], rdi");                       // an ownership guard stores its own address here
     emitter.instruction("je __rt_uncaught_write_trace_next");                   // guards are not PHP frames
-    emitter.instruction("mov r10, QWORD PTR [rdi + 24]");                       // the frame reader published by the function prologue
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {FRAME_READER}]")); // the frame reader published by the function prologue
     emitter.instruction("test r10, r10");                                       // a hidden or synthetic frame exposes no reader
     emitter.instruction("jz __rt_uncaught_write_trace_next");                   // skip frames without a reader
     emitter.instruction("xor esi, esi");                                        // options 0: print the arguments
@@ -831,7 +830,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and rsp, -16");                                        // realign the stack for the C-ABI flush; this helper never returns
     emitter.instruction("xor r10d, r10d");                                      // zero clears the capture flags below
     abi::emit_store_reg_to_symbol(emitter, "r10", "_print_r_mode", 0);          // the fatal abandons a print_r(..., true) capture: it must reach stdout
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
+    output::emit_store_control(emitter, "r10", ControlField::InHandler);
     emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the fatal is written
     emitter.instruction("call __rt_debuginfo_fatal_text");                      // the fatal line with its location
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)

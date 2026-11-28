@@ -373,15 +373,8 @@ unsafe fn eval_static_method_call_inner(
     let Some((class_name, method)) = target.rsplit_once("::") else {
         return EvalStatus::RuntimeFatal.code();
     };
-    let arg_count = *arg_pack;
-    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
-    let args = if arg_count == 0 {
-        Vec::new()
-    } else {
-        slice::from_raw_parts(arg_ptrs, arg_count)
-            .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
-            .collect()
+    let Some(args) = (unsafe { elephc_memoir::owner_layout::EvalMethodArgPack::decode(arg_pack) }) else {
+        return EvalStatus::RuntimeFatal.code();
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
@@ -426,15 +419,8 @@ unsafe fn eval_native_frame_static_method_call_inner(
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
-    let arg_count = *arg_pack;
-    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
-    let args = if arg_count == 0 {
-        Vec::new()
-    } else {
-        slice::from_raw_parts(arg_ptrs, arg_count)
-            .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
-            .collect()
+    let Some(args) = (unsafe { elephc_memoir::owner_layout::EvalMethodArgPack::decode(arg_pack) }) else {
+        return EvalStatus::RuntimeFatal.code();
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
@@ -476,15 +462,8 @@ unsafe fn eval_method_call_inner(
     let Ok(method) = abi_name_to_string(method_ptr, method_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
-    let arg_count = *arg_pack;
-    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
-    let args = if arg_count == 0 {
-        Vec::new()
-    } else {
-        slice::from_raw_parts(arg_ptrs, arg_count)
-            .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
-            .collect()
+    let Some(args) = (unsafe { elephc_memoir::owner_layout::EvalMethodArgPack::decode(arg_pack) }) else {
+        return EvalStatus::RuntimeFatal.code();
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);

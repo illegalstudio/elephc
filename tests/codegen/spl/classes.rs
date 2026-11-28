@@ -472,6 +472,41 @@ echo count($json);
     assert_eq!(out, "2|2\na|3\n1\n3|c\n3|3|c\n3");
 }
 
+/// SPL publishes each replacement or removal before running a displaced object's destructor.
+#[test]
+fn test_spl_slot_retirement_publishes_state_before_destructors() {
+    let out = compile_and_run(r#"<?php
+class InspectFixedSlot {
+    public static SplFixedArray $slots;
+    public function __destruct() {
+        $value = self::$slots->offsetGet(0);
+        echo is_object($value) ? "old" : ($value ?? "null"), "\n";
+    }
+}
+class InspectListSlot {
+    public static SplDoublyLinkedList $slots;
+    public function __destruct() {
+        $value = self::$slots->offsetGet(0);
+        echo is_object($value) ? "old" : $value, "\n";
+    }
+}
+$fixed = new SplFixedArray(1);
+InspectFixedSlot::$slots = $fixed;
+$fixed->offsetSet(0, new InspectFixedSlot());
+$fixed->offsetSet(0, "replacement");
+$fixed->offsetSet(0, new InspectFixedSlot());
+$fixed->offsetUnset(0);
+$list = new SplDoublyLinkedList();
+InspectListSlot::$slots = $list;
+$list->push(new InspectListSlot());
+$list->push("tail");
+$list->offsetSet(0, "replacement");
+$list->offsetSet(0, new InspectListSlot());
+$list->offsetUnset(0);
+"#);
+    assert_eq!(out, "replacement\nnull\nreplacement\ntail\n");
+}
+
 // Tests that negative size to SplFixedArray constructor throws ValueError, out-of-bounds
 // get/set throws OutOfBoundsException, non-integer index throws TypeError, and fromArray
 // with string keys throws InvalidArgumentException.
@@ -909,4 +944,24 @@ try { $f[$r] = 1; } catch (TypeError $e) { echo "set: ", $e->getMessage(), "\n";
         out,
         "set: Cannot access offset of type resource on SplFixedArray\n"
     );
+}
+
+/// Legacy list serialization reserves the full byte payload before copying an item.
+#[test]
+fn test_spl_legacy_serialization_preserves_large_binary_item() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+function encode_list(int $length): void {
+    $list = new SplDoublyLinkedList();
+    $list->push(str_repeat("x\0", $length));
+    $list->push(false);
+    $encoded = $list->serialize();
+    echo strlen($encoded), "|", substr($encoded, 0, 14), "|",
+         ord($encoded[15]), "|", substr($encoded, -7);
+}
+encode_list(32768);
+"#,
+        524288,
+    );
+    assert_eq!(out, "65557|i:0;:s:65536:\"|0|\";:b:0;");
 }

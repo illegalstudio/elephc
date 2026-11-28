@@ -77,9 +77,7 @@ pub(crate) use exceptions::emit_creation_line_load;
 pub(crate) use exceptions::emit_guarded_cleanup_call;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
 /// Every object-allocation site in codegen calls `emit_acquire_object_handle`.
-pub(crate) use objects::{
-    emit_acquire_object_handle, object_handle_free_slots, object_handle_index_slots,
-};
+pub(crate) use objects::emit_acquire_object_handle;
 /// The PHP RESOURCE-id registry — a numbering space entirely separate from the
 /// object handles above. `RESOURCE_ID_TABLE_SLOTS` sizes its two side tables in
 /// the fixed data section.
@@ -101,17 +99,50 @@ pub(crate) use arrays::{
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
 /// Retire allocator payload-base metadata before bulk web arena reclamation.
-pub(crate) use arrays::heap_live_bases::emit_reset as emit_heap_live_bases_reset;
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
 /// runtime emitter must name the same `.comm` word or the guard silently never fires.
 pub(crate) use system::STACK_LIMIT_SYMBOL;
 /// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
-    FIBER_CALLABLE_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,
-    FIBER_STACK_SIZE_OFFSET, FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET,
+    FIBER_CALLABLE_OFFSET, FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET,
     FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED, FIBER_STATE_RUNNING,
-    FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
+    FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED,
     FIBER_USER_ARG_MAX_OFFSET,
 };
 
 pub(crate) use exceptions::guards as exception_guards;
+
+mod memoir;
+
+#[cfg(test)]
+mod memoir_values_tests;
+
+#[cfg(test)]
+mod memoir_storage_tests;
+
+#[cfg(test)]
+mod memoir_boxed_tests;
+
+#[cfg(test)]
+mod memoir_identity_tests;
+
+#[cfg(test)]
+mod memoir_interop_tests;
+
+#[cfg(test)]
+mod memoir_mixed_storage_tests;
+
+#[cfg(test)]
+mod memoir_owner_records_tests;
+
+#[cfg(test)]
+mod memoir_storage_followup_tests;
+
+#[cfg(test)]
+mod memoir_remaining_ownership_tests;
+
+#[cfg(test)]
+mod memoir_lifecycle_tests;
+
+#[cfg(test)]
+mod memoir_residual_tests;

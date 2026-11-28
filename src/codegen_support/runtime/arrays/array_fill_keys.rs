@@ -8,6 +8,8 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -47,7 +49,7 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #32]");                                   // save result value_type tag
 
     // -- create hash table with capacity = length * 2 --
-    emitter.instruction("ldr x0, [x0]");                                        // x0 = keys array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x0", "x0"); // x0 = keys array length
     emitter.instruction("lsl x0, x0, #1");                                      // x0 = length * 2 (capacity with headroom)
     emitter.instruction("mov x9, #16");                                         // x9 = minimum capacity
     emitter.instruction("cmp x0, x9");                                          // compare with minimum
@@ -61,7 +63,7 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_fill_keys_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload keys array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // x3 = keys array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // x3 = keys array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // x4 = i
     emitter.instruction("cmp x4, x3");                                          // compare i with length
     emitter.instruction("b.ge __rt_array_fill_keys_done");                      // if i >= length, done
@@ -69,7 +71,7 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     // -- load key string from keys[i] (16 bytes per string element) --
     emitter.instruction("lsl x5, x4, #4");                                      // x5 = i * 16 (byte offset for string element)
     emitter.instruction("add x5, x0, x5");                                      // x5 = keys_array + byte offset
-    emitter.instruction("add x5, x5, #24");                                     // x5 = skip header to data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x5");
     emitter.instruction("ldr x1, [x5]");                                        // x1 = key_ptr = keys[i].ptr
     emitter.instruction("ldr x2, [x5, #8]");                                    // x2 = key_len = keys[i].len
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
@@ -134,7 +136,7 @@ fn emit_array_fill_keys_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rcx");                                        // copy the indexed-array key loop index before scaling it to the 16-byte string slot size
     emitter.instruction("shl r11, 4");                                          // scale the indexed-array key loop index by the 16-byte string slot size
     emitter.instruction("add r10, r11");                                        // advance from the indexed-array base pointer to the selected string key slot
-    emitter.instruction("add r10, 24");                                         // skip the indexed-array header to reach the selected string key slot payload
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination associative-array pointer before inserting the current key/value pair
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the current key pointer from the selected indexed-array string slot
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the current key length from the selected indexed-array string slot

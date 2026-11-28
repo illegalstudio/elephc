@@ -9,6 +9,8 @@
 //! - Array contracts, scalar errors, string offsets, and ArrayAccess share owner cleanup.
 
 use super::*;
+use super::property_write_receivers::release_receivers;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Appends to the receiver left in the local after evaluating the RHS.
 pub(super) fn eval_array_append_var_stmt(
@@ -31,14 +33,15 @@ fn eval_local_offset_write(
     name: &str, index: Option<&EvalExpr>, value: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut operands = Vec::new();
-    let mut result = (|| {
+    let operands = StagedRuntimeOwners::default();
+    with_runtime_owners(&operands, || {
+    let result = (|| {
         let index = index.map(|index| eval_owned_expr(index, context, scope, values)).transpose()?;
-        if let Some(index) = index { operands.push(index); }
+        if let Some(index) = index { operands.stage(index); }
         let value = eval_owned_expr(value, context, scope, values)?;
-        operands.push(value);
+        operands.stage(value);
         let current = visible_scope_cell(context, scope, name).map(|cell| values.retain(cell)).transpose()?;
-        if let Some(current) = current { operands.push(current); }
+        if let Some(current) = current { operands.stage(current); }
         let tag = current.map(|cell| values.type_tag(cell)).transpose()?;
         if let Some(current) = current {
             if tag == Some(EVAL_TAG_OBJECT) {
@@ -52,7 +55,7 @@ fn eval_local_offset_write(
                 }
                 if index.is_none() {
                     if let Some(returned) = super::super::runtime_ops::simplexml_properties::append(values, current, value)? {
-                        operands.push(returned);
+                        operands.stage(returned);
                         return Ok(());
                     }
                 }
@@ -61,7 +64,7 @@ fn eval_local_offset_write(
                     None => {
                         reject_weak_map_append(current, context, values)?;
                         let index = values.null()?;
-                        operands.push(index);
+                        operands.stage(index);
                         index
                     }
                 };
@@ -71,13 +74,13 @@ fn eval_local_offset_write(
                     Some(value) => value,
                     None => eval_method_call_result(current, "offsetSet", vec![index, value], context, values)?,
                 };
-                operands.push(returned);
+                operands.stage(returned);
                 return Ok(());
             }
             if let Some(index) = index {
                 if tag == Some(EVAL_TAG_STRING) {
                     let replacement = eval_string_offset_write(current, index, value, context, values)?;
-                    operands.push(replacement);
+                    operands.stage(replacement);
                     validate_generic_local_contracts(scope, name, replacement, context, values)?;
                     return write_back_owned_variable_ref_target(scope, name, replacement, context, values);
                 }
@@ -87,20 +90,20 @@ fn eval_local_offset_write(
             Some(cell) if matches!(tag, Some(EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)) => cell,
             _ => {
                 let array = eval_array_autovivification(current, index.is_none(), context, values)?;
-                operands.push(array);
+                operands.stage(array);
                 array
             }
         };
         let declared = generic_local_contracts(scope, name, context);
         let replacement = if let Some(index) = index {
             let index = match normalized_array_string_index(index, values)? {
-                Some(normalized) => { operands.push(normalized); normalized }
+                Some(normalized) => { operands.stage(normalized); normalized }
                 None => index,
             };
             for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
             let replacement = eval_array_set_target_for_index(array, index, values)?;
             if replacement != array {
-                operands.push(replacement);
+                operands.stage(replacement);
                 context.clone_array_element_aliases(array, replacement, None);
             }
             eval_array_element_reference_write(replacement, index, value, context, values)?;
@@ -115,11 +118,8 @@ fn eval_local_offset_write(
         }
         write_back_owned_variable_ref_target(scope, name, replacement, context, values)
     })();
-    for operand in operands.into_iter().rev() {
-        let released = eval_release_value(context, values, operand);
-        if result.is_ok() { result = released; }
-    }
-    result
+        result.and(release_receivers(&operands, context, values))
+    })
 }
 
 /// Preserves the native WeakMap distinction between an absent offset and an explicit null key.

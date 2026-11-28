@@ -9,6 +9,7 @@
 //! - The incoming native SP separates pending, nested and recursive call activations.
 //! - The leaf expansion preserves every outgoing argument register and never invokes PHP.
 
+use elephc_memoir::activation_records::{DATA, OPERAND_STACK_BASE, PREVIOUS};
 use super::*;
 use crate::ir::{LocalSlotId, ValueId};
 use std::collections::BTreeSet;
@@ -49,7 +50,7 @@ fn activate_owner(ctx: &mut FunctionContext<'_>, owner: LocalSlotId) -> Result<(
             ctx.emitter.instruction(&format!("jz {done}"));                     // older call surfaces keep their independent parameter retain
         }
     }
-    abi::emit_load_from_address(ctx.emitter, scratch, cursor, 16);
+    abi::emit_load_from_address(ctx.emitter, scratch, cursor, DATA);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {scratch}, {address}"));      // select the exact owning slot for this argument
@@ -60,15 +61,15 @@ fn activate_owner(ctx: &mut FunctionContext<'_>, owner: LocalSlotId) -> Result<(
             ctx.emitter.instruction(&format!("je {found}"));                    // pending outer arguments have different owning slots
         }
     }
-    abi::emit_load_from_address(ctx.emitter, cursor, cursor, 0);
+    abi::emit_load_from_address(ctx.emitter, cursor, cursor, PREVIOUS);
     abi::emit_jump(ctx.emitter, &scan);
     ctx.emitter.label(&found);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("mov {scratch}, sp"));             // capture the callee's actual incoming native stack pointer
-            ctx.emitter.instruction(&format!("str {scratch}, [{cursor}, #32]"));// activate this reference argument only for that call
+            ctx.emitter.instruction(&format!("str {scratch}, [{cursor}, #{OPERAND_STACK_BASE}]"));// activate this reference argument only for that call
         }
-        Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [{cursor} + 32], rsp")),// activate this reference argument only for that call
+        Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [{cursor} + {OPERAND_STACK_BASE}], rsp")),// activate this reference argument only for that call
     }
     ctx.emitter.label(&done);
     Ok(())

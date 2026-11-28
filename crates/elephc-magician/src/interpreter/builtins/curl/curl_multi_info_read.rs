@@ -21,6 +21,7 @@
 //!   hands its four fields back one `INFO_FIELD_*` read at a time, so this assembles PHP's
 //!   `['msg' => …, 'result' => …, 'handle' => …]` array out of plain integers.
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
@@ -139,17 +140,11 @@ fn eval_curl_multi_info_read_result(
         }
     }
     let easy_id = context.stream_resources().curl_easy_id_for_raw(easy_raw);
-    let mut array = values.assoc_new(3)?;
-    let msg_key = values.string("msg")?;
-    let msg = values.int(msg)?;
-    array = values.array_set(array, msg_key, msg)?;
-    let result_key = values.string("result")?;
-    let result = values.int(result)?;
-    array = values.array_set(array, result_key, result)?;
+    let mut array = EvalArrayBuilder::assoc(values, 3)?;
+    array.string("msg", |values| values.int(msg))?;
+    array.string("result", |values| values.int(result))?;
     if let Some(easy_id) = easy_id {
-        let handle_key = values.string("handle")?;
-        let handle = values.curl_handle(easy_id)?;
-        array = values.array_set(array, handle_key, handle)?;
+        array.string("handle", |values| values.curl_handle(easy_id))?;
     }
-    Ok(array)
+    Ok(array.finish())
 }

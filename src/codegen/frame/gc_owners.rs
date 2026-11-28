@@ -15,8 +15,7 @@ use super::*;
 pub(super) fn emit(ctx: &mut FunctionContext<'_>, entry: &str) {
     ctx.emitter.label_global(&format!("{entry}__gc_frame_owners"));
     destructor_cleanup::enter_borrowed_frame(ctx.emitter);
-    let arm = ctx.emitter.target.arch == Arch::AArch64;
-    ctx.emitter.instruction(if arm { "str x1, [sp, #8]" } else { "mov QWORD PTR [rsp + 8], rsi" }); // retain this traversal's independent native context
+    elephc_memoir::frame_owners::emit_save_visit_context(ctx.emitter);
     for (_, slot, ty, offset) in function_cleanup_locals(ctx, None) {
         let ty = if ctx.numeric_local_slots.contains(&slot) { PhpType::Mixed } else { ty };
         if !graph_type(&ty) { continue; }
@@ -25,7 +24,7 @@ pub(super) fn emit(ctx: &mut FunctionContext<'_>, entry: &str) {
             abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), state);
             abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip);
         }
-        visit(ctx, offset, 0);
+        elephc_memoir::frame_owners::emit_visit_frame_slot(ctx.emitter, offset, 0);
         ctx.emitter.label(&skip);
     }
     for (_, offset) in eval_scope_locals(ctx) {
@@ -38,13 +37,13 @@ pub(super) fn emit(ctx: &mut FunctionContext<'_>, entry: &str) {
         abi::emit_branch_if_int_result_zero(ctx.emitter, &skip);
         abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1),
             "__rt_gc_frame_owner_slot");
-        ctx.emitter.instruction(if arm { "ldr x2, [sp, #8]" } else { "mov rdx, QWORD PTR [rsp + 8]" }); // retain this saved-frame traversal's slot identities and mode
+        elephc_memoir::frame_owners::emit_load_visit_context(ctx.emitter);
         let entry = ctx.emitter.target.extern_symbol("__elephc_eval_scope_visit_owners_v1");
         abi::emit_call_label(ctx.emitter, &entry);
         ctx.emitter.label(&skip);
     }
     for (_, _, ty, offset) in ref_cell_owner_locals(ctx) {
-        visit(ctx, offset, 128 | crate::codegen_support::runtime::reference_cells::payload_tag(&ty));
+        elephc_memoir::frame_owners::emit_visit_frame_slot(ctx.emitter, offset, 128 | crate::codegen_support::runtime::reference_cells::payload_tag(&ty));
     }
     destructor_cleanup::leave_borrowed_frame(ctx.emitter);
 }
@@ -54,17 +53,6 @@ fn graph_type(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } |
         PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_) | PhpType::Callable | PhpType::Iterable)
 }
-
-/// Passes one authoritative owner-slot address and its reference normalization descriptor.
-fn visit(ctx: &mut FunctionContext<'_>, offset: usize, tag: i64) {
-    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), tag);
-    ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 {
-        "ldr x2, [sp, #8]"
-    } else { "mov rdx, QWORD PTR [rsp + 8]" });                                 // reuse the caller's slot-identity set and traversal mode
-    abi::emit_call_label(ctx.emitter, "__rt_gc_frame_owner_slot");
-}
-
 
 #[cfg(test)]
 mod tests {

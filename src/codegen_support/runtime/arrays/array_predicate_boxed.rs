@@ -11,10 +11,9 @@
 //! - Every temporary has an owner slot covered by a resumable native exception boundary.
 
 use crate::codegen_support::{abi, arrays, emit::Emitter, platform::Arch, value_boxing};
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::types::PhpType;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 192;
 const HANDLER: usize = FRAME - 16;
@@ -284,47 +283,26 @@ fn box_unboxed_value(emitter: &mut Emitter) {
 
 /// Installs a native handler before any source, result or callback argument owner is acquired.
 fn install_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_value", PREVIOUS), ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // keep all predicate-owned cells reachable across callback and cleanup throws
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_predicate_boxed_caught");
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        "__rt_array_predicate_boxed_caught",
+    );
 }
 
 /// Restores the caller's handler and diagnostic depth after predicate ownership cleanup.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears a slot without overwriting the current owner or callback ABI arguments.
 fn clear_slot(emitter: &mut Emitter, offset: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, offset);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(offset));
 }
 
 /// Retires an owner after clearing its slot so interrupted cleanup can resume safely.
 fn release_slot(emitter: &mut Emitter, offset: usize, helper: &str) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-    clear_slot(emitter, offset);
-    abi::emit_call_label(emitter, helper);
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(offset), helper);
 }
 
 /// Returns the Mixed payload's low-word register and exception-chain older-owner argument.

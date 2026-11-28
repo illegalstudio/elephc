@@ -19,13 +19,11 @@
 //! - Array-to-string and object-to-number warnings flow through the standard warning helper,
 //!   preserving suppression and dynamic eval class names on every supported target.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::runtime::data::{
     SPRINTF_ARRAY_TO_STRING_WARNING, SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX,
     SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX, SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX,
     UNSER_OBJECT_STRING_ERROR_PREFIX, UNSER_OBJECT_STRING_ERROR_SUFFIX,
-};
-use crate::codegen_support::sentinels::{
-    emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
 };
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -204,7 +202,7 @@ fn emit_sprintf_mixed_to_string_aarch64(emitter: &mut Emitter, eval_bridge: bool
     emitter.instruction("str x9, [sp, #104]");                                  // retain the normalized tag for diagnostics
     emitter.instruction("str x1, [sp, #8]");                                    // preserve the receiver for eval fallback
     emitter.instruction("mov x0, x1");                                          // keep the borrowed object as the method receiver
-    emitter.instruction("ldr x11, [x0]");                                       // load the object's dense runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x0");
     emitter.instruction("tbnz x11, #63, __rt_sprintf_mixed_string_eval");       // synthetic negative ids belong to eval
     abi::emit_load_symbol_to_reg(emitter, "x10", "_class_tostring_count", 0);
     emitter.instruction("cmp x11, x10");                                        // is the class id inside the generated table?
@@ -473,7 +471,7 @@ fn emit_sprintf_mixed_to_string_linux_x86_64(emitter: &mut Emitter, eval_bridge:
     emitter.label("__rt_sprintf_mixed_string_object_x64");
     emitter.instruction("mov QWORD PTR [rbp - 104], 6");                        // normalize erased objects to the object tag
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve receiver for eval fallback
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // load the object's dense runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rdi");
     emitter.instruction("test r8, r8");                                         // reject synthetic negative class ids
     emitter.instruction("js __rt_sprintf_mixed_string_eval_x64");               // synthetic ids belong to eval
     emitter.instruction("cmp r8, QWORD PTR [rip + _class_tostring_count]");     // is the class id inside the generated table?
@@ -612,13 +610,13 @@ fn emit_sprintf_warnings_aarch64(emitter: &mut Emitter, eval_bridge: bool) {
         emitter.instruction("cbz x0, __rt_sprintf_numeric_warning_done");       // the bridge emitted the exact dynamic class warning
         emitter.instruction("ldr x0, [sp, #24]");                               // restore the native object candidate after bridge failure
     }
-    emitter.instruction("ldr x13, [x0]");                                       // load the native object's dense runtime class id
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x13", "x0");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10");
     emitter.instruction("cmp x13, x10");                                        // is the class id within the dense name table?
     emitter.instruction("b.hs __rt_sprintf_numeric_warning_fallback");          // malformed ids use the generic spelling
-    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-    emitter.instruction("add x10, x10, x13, lsl #4");                           // select the static class-name row
-    emitter.instruction("ldp x11, x12, [x10]");                                 // borrow the class-name pointer and byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x10", "x13", "x14");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x11", "x12", "x10");
     emitter.instruction("cbnz x12, __rt_sprintf_numeric_warning_name_ready");   // use non-empty generated metadata
     emitter.instruction("b __rt_sprintf_numeric_warning_fallback");             // empty metadata uses the generic spelling
     emitter.label("__rt_sprintf_numeric_warning_closure");
@@ -687,14 +685,12 @@ fn emit_sprintf_warnings_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) 
         emitter.instruction("jz __rt_sprintf_numeric_warning_done_x64");        // yes, avoid emitting a native duplicate
         emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                   // restore the native object candidate after bridge failure
     }
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // load the object's dense runtime class id
-    emitter.instruction("cmp r8, QWORD PTR [rip + _class_name_count]");         // is the class id within the dense name table?
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rdi");
+    elephc_memoir::values::class_metadata::emit_cmp_class_id_to_name_count(emitter, "r8"); // is the class id within the dense name table?
     emitter.instruction("jae __rt_sprintf_numeric_warning_fallback_x64");       // malformed ids use the generic spelling
-    emitter.instruction("lea r9, [rip + _class_name_entries]");                 // class-name metadata base
-    emitter.instruction("shl r8, 4");                                           // scale the id by the pointer/length row width
-    emitter.instruction("add r9, r8");                                          // select the static class-name row
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // borrow the class-name pointer
-    emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                         // borrow the class-name byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r9");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r9", "r9", "r8", "rax");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "r10", "r11", "r9");
     emitter.instruction("test r11, r11");                                       // empty metadata falls back to object
     emitter.instruction("jnz __rt_sprintf_numeric_warning_name_ready_x64");     // use non-empty generated metadata
     emitter.instruction("jmp __rt_sprintf_numeric_warning_fallback_x64");       // select the generic spelling
@@ -742,13 +738,13 @@ fn emit_sprintf_string_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish an aligned Error-construction frame
     emitter.instruction("cbnz x1, __rt_sprintf_string_error_closure");          // callable descriptors report the Closure class
     emitter.instruction("cbz x0, __rt_sprintf_string_error_fallback");          // missing object metadata uses a generic class spelling
-    emitter.instruction("ldr x13, [x0]");                                       // load the native object's dense runtime class id
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x13", "x0");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10");
     emitter.instruction("cmp x13, x10");                                        // is the class id within the dense name table?
     emitter.instruction("b.hs __rt_sprintf_string_error_fallback");             // malformed or eval ids use the generic spelling
-    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-    emitter.instruction("add x10, x10, x13, lsl #4");                           // select the static class-name row
-    emitter.instruction("ldp x11, x12, [x10]");                                 // borrow the class-name pointer and byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x10", "x13", "x14");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x11", "x12", "x10");
     emitter.instruction("cbnz x12, __rt_sprintf_string_error_name_ready");      // use non-empty generated metadata
     emitter.instruction("b __rt_sprintf_string_error_fallback");                // empty metadata uses the generic spelling
     emitter.label("__rt_sprintf_string_error_closure");
@@ -769,18 +765,12 @@ fn emit_sprintf_string_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat");                                      // append PHP's conversion failure suffix
     emitter.instruction("bl __rt_str_persist");                                 // give the Error stable message ownership
     emitter.instruction("stp x1, x2, [sp, #16]");                               // preserve the message pair across allocation
-    emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Error object payload
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies a throwable object
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the runtime object heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // assign the Error's PHP object handle
+    throwable_storage::emit_allocate(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
-    emitter.instruction("str x9, [x0]");                                        // stamp the per-program Error class id
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
     emitter.instruction("ldp x10, x11, [sp, #16]");                             // recover the persisted message pair
-    emitter.instruction("stp x10, x11, [x0, #8]");                              // store Error message pointer and length
-    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous Throwable defaults to null
+    emitter.instruction(&format!("stp x10, x11, [x0, #{}]", throwable_storage::MESSAGE_POINTER)); // store Error message pointer and length
+    throwable_storage::emit_default_fields(emitter, "x0");
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame linkage before unwinding
     emitter.instruction("add sp, sp, #64");                                     // release Error-construction state
@@ -802,14 +792,12 @@ fn emit_sprintf_string_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_sprintf_string_error_closure_x64");           // select Closure without inspecting a descriptor
     emitter.instruction("test rdi, rdi");                                       // is native object metadata available?
     emitter.instruction("jz __rt_sprintf_string_error_fallback_x64");           // no, use the generic object spelling
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // load the object's dense runtime class id
-    emitter.instruction("cmp r8, QWORD PTR [rip + _class_name_count]");         // is the class id within the dense name table?
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r8", "rdi");
+    elephc_memoir::values::class_metadata::emit_cmp_class_id_to_name_count(emitter, "r8"); // is the class id within the dense name table?
     emitter.instruction("jae __rt_sprintf_string_error_fallback_x64");          // malformed or eval ids use the generic spelling
-    emitter.instruction("lea r9, [rip + _class_name_entries]");                 // class-name metadata base
-    emitter.instruction("shl r8, 4");                                           // scale the id by the pointer/length row width
-    emitter.instruction("add r9, r8");                                          // select the static class-name row
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // borrow the class-name pointer
-    emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                         // borrow the class-name byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r9");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r9", "r9", "r8", "rax");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "r10", "r11", "r9");
     emitter.instruction("test r11, r11");                                       // empty metadata falls back to object
     emitter.instruction("jnz __rt_sprintf_string_error_name_ready_x64");        // use non-empty generated metadata
     emitter.instruction("jmp __rt_sprintf_string_error_fallback_x64");          // select the generic spelling
@@ -834,20 +822,14 @@ fn emit_sprintf_string_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // give the Error stable message ownership
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve persisted message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve persisted message length
-    emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the Error object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(6))); // throwable heap-kind marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
-    emitter.instruction("call __rt_object_handle_acquire");                     // assign the Error's PHP object handle
+    throwable_storage::emit_allocate(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // stamp the per-program Error class id
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // recover persisted message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store Error message pointer
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover persisted message byte length
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store Error message byte length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous Throwable defaults to null
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+    throwable_storage::emit_default_fields(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("leave");                                               // restore the caller frame before unwinding
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard catchable exception path

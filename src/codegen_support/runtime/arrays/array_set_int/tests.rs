@@ -9,7 +9,7 @@
 //! - The slow path must retain copy-on-write splitting for every supported target.
 
 use super::*;
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Target}};
 use std::{
     fs,
     path::PathBuf,
@@ -74,7 +74,7 @@ fn scalar_array_set_paths_assemble_on_all_supported_targets() {
             let store = match target.arch {
                 Arch::AArch64 => assembly.find("str x2, [x9, x1, lsl #3]").unwrap(),
                 Arch::X86_64 => assembly
-                    .find("mov QWORD PTR [rdi + 24 + rsi * 8], rdx")
+                    .find("mov QWORD PTR [rdi + rsi * 8 + 24], rdx")
                     .unwrap(),
             };
             assert!(fast < store && store < slow && slow < cow, "{name}, PIC={pic}");

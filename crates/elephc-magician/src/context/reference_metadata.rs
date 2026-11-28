@@ -9,6 +9,7 @@
 //! - Reference targets retain the exact caller-side storage and access scope needed for writeback.
 
 use super::*;
+use elephc_memoir::runtime_owners::{RuntimeOwnerBatch, RuntimeOwnerList, RuntimeOwners};
 
 /// Native descriptor-invoker ABI registered by generated code for AOT functions.
 pub type NativeFunctionInvoker =
@@ -27,7 +28,7 @@ pub struct ElephcEvalExecutionScope {
 pub struct EvalFunctionArgsFrame {
     regular_params: Vec<String>,
     actual_count: usize,
-    surplus: Vec<RuntimeCellHandle>,
+    surplus: RuntimeOwnerList,
     scope: *const ElephcEvalScope,
     sensitive_parameters: Vec<bool>,
     sensitive_variadic: Option<usize>,
@@ -47,8 +48,8 @@ pub(crate) struct EvalBacktraceFrame {
 
 impl EvalBacktraceFrame {
     /// Transfers the activation's retained surplus cells to its exit cleanup.
-    pub(super) fn into_argument_cells(self) -> Vec<RuntimeCellHandle> {
-        self.arguments.surplus
+    pub(super) fn into_argument_cells(self) -> RuntimeOwnerBatch {
+        self.arguments.surplus.into_owned()
     }
 
     /// Creates an active frame with its entry-site and callable-kind metadata.
@@ -118,7 +119,7 @@ impl EvalFunctionArgsFrame {
         Self {
             regular_params,
             actual_count,
-            surplus,
+            surplus: RuntimeOwnerList::new(surplus),
             scope: std::ptr::null(),
             sensitive_parameters: Vec::new(),
             sensitive_variadic: None,
@@ -165,7 +166,7 @@ impl EvalFunctionArgsFrame {
 
     /// Returns a positional surplus argument after the fixed parameter prefix.
     pub(crate) fn surplus_arg(&self, position: usize) -> Option<RuntimeCellHandle> {
-        self.surplus.get(position).copied()
+        self.surplus.get(position)
     }
 
     /// Returns the number of fixed parameters preceding the positional surplus tail.
@@ -216,6 +217,27 @@ pub enum EvalReferenceTarget {
         slot: usize,
         source_tag: u64,
     },
+}
+
+impl RuntimeOwners for EvalReferenceTarget {
+    /// Publishes only independently owned handles embedded in reference-selection metadata.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        match self {
+            Self::ArrayElement { index, .. } => index.visit_owned_slots(visit),
+            Self::NestedArrayElement {
+                array_target,
+                index,
+            } => {
+                array_target.visit_owned_slots(visit);
+                index.visit_owned_slots(visit);
+            }
+            Self::ObjectProperty { object, .. } => object.visit_owned_slots(visit),
+            Self::Cell { cell } => cell.visit_owned_slots(visit),
+            Self::Variable { .. }
+            | Self::StaticProperty { .. }
+            | Self::InvokerSlot { .. } => {}
+        }
+    }
 }
 
 /// Normalized PHP array key used for eval-side reference metadata.

@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - The positive fixture mirrors the lowered sum loop, including the transparent
-//!   clone/acquire/release scaffold around the boxed accumulator.
+//!   clone/acquire/release scaffold around the boxed accumulator and its complete
+//!   transient owner publication.
 //! - Negative cases break the unit step, observe the induction after the loop, or
 //!   add an unsupported body op; they must keep the boxed loop.
 
@@ -36,7 +37,7 @@ struct Fixture {
 }
 
 /// Builds `entry -> header(i < count(data)) -> body(sum += data[i]; i += 1) -> header`.
-fn fixture(failure: Break) -> Fixture {
+fn fixture(failure: Break, scoped_owner: bool) -> Fixture {
     let mut function = Function::new("sum".into(), IrType::Void, PhpType::Void);
     let data_type = PhpType::Array(Box::new(PhpType::Int));
     let data = function.add_local(
@@ -56,6 +57,12 @@ fn fixture(failure: Break) -> Fixture {
         IrType::I64,
         PhpType::Int,
         LocalKind::PhpLocal,
+    );
+    let owner = function.add_local(
+        Some("owner".into()),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+        LocalKind::OwnedTemp,
     );
     let mut b = Builder::new(&mut function);
     let entry = b.create_named_block("entry", vec![]);
@@ -186,27 +193,76 @@ fn fixture(failure: Break) -> Fixture {
             Ownership::Owned,
         )
         .unwrap();
-    assert!(b
-        .emit(
+    if scoped_owner {
+        let temporary = b
+            .emit(
+                Op::Acquire,
+                vec![clone],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .unwrap();
+        b.emit_store_local(owner, temporary);
+        b.emit(
+            Op::PushCallOperandOwner,
+            vec![],
+            Some(Immediate::LocalSlot(owner)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        assert!(b
+            .emit(
+                Op::Release,
+                vec![clone],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            )
+            .is_none());
+        b.emit_store_local(sum, acquired);
+        b.emit(
+            Op::PopCallOperandOwner,
+            vec![],
+            Some(Immediate::LocalSlot(owner)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        b.emit(
             Op::ReleaseLocalSlot,
             vec![],
-            Some(Immediate::LocalSlot(sum)),
+            Some(Immediate::LocalSlot(owner)),
             IrType::Void,
             PhpType::Void,
             Ownership::NonHeap,
-        )
-        .is_none());
-    b.emit_store_local(sum, acquired);
-    assert!(b
-        .emit(
-            Op::Release,
-            vec![clone],
-            None,
-            IrType::Void,
-            PhpType::Void,
-            Ownership::NonHeap,
-        )
-        .is_none());
+        );
+    } else {
+        assert!(b
+            .emit(
+                Op::ReleaseLocalSlot,
+                vec![],
+                Some(Immediate::LocalSlot(sum)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            )
+            .is_none());
+        b.emit_store_local(sum, acquired);
+        assert!(b
+            .emit(
+                Op::Release,
+                vec![clone],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            )
+            .is_none());
+    }
     if matches!(failure, Break::ExtraBodyOp) {
         let _ = b.emit_const_i64(7);
     }
@@ -258,35 +314,40 @@ fn defining(value: &crate::ir::Value) -> crate::ir::InstId {
 /// The exact boxed reduction scaffold becomes one helper call in the preheader.
 #[test]
 fn sum_loop_rewrites_boxed_reduction() {
-    let Fixture { mut function, entry, exit } = fixture(Break::None);
-    assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
-    assert!(ArraySumLoop.run(&mut function, &mut DataPool::default()));
-    assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
-    let entry_block = function.block(entry).unwrap();
-    let helper = entry_block
-        .instructions
-        .iter()
-        .filter_map(|id| function.instruction(*id))
-        .find(|inst| inst.op == Op::ArraySumInt)
-        .expect("helper call in the preheader");
-    assert_eq!(helper.origin, Some(PassOrigin::ArraySumLoop));
-    assert_eq!(helper.result_ownership, Ownership::Owned);
-    assert!(matches!(
-        entry_block.terminator,
-        Some(Terminator::Br { target, .. }) if target == exit
-    ));
-    assert!(entry_block
-        .instructions
-        .iter()
-        .filter_map(|id| function.instruction(*id))
-        .any(|inst| inst.op == Op::StoreLocal));
+    for scoped_owner in [false, true] {
+        let Fixture { mut function, entry, exit } = fixture(Break::None, scoped_owner);
+        assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
+        assert!(
+            ArraySumLoop.run(&mut function, &mut DataPool::default()),
+            "scoped_owner={scoped_owner}"
+        );
+        assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
+        let entry_block = function.block(entry).unwrap();
+        let helper = entry_block
+            .instructions
+            .iter()
+            .filter_map(|id| function.instruction(*id))
+            .find(|inst| inst.op == Op::ArraySumInt)
+            .expect("helper call in the preheader");
+        assert_eq!(helper.origin, Some(PassOrigin::ArraySumLoop));
+        assert_eq!(helper.result_ownership, Ownership::Owned);
+        assert!(matches!(
+            entry_block.terminator,
+            Some(Terminator::Br { target, .. }) if target == exit
+        ));
+        assert!(entry_block
+            .instructions
+            .iter()
+            .filter_map(|id| function.instruction(*id))
+            .any(|inst| inst.op == Op::StoreLocal));
+    }
 }
 
 /// Step two, an observed induction and an extra body op all keep the boxed loop.
 #[test]
 fn sum_loop_rejects_unproven_reductions() {
     for failure in [Break::StepTwo, Break::ObserveIndex, Break::ExtraBodyOp] {
-        let Fixture { mut function, .. } = fixture(failure);
+        let Fixture { mut function, .. } = fixture(failure, true);
         assert!(!ArraySumLoop.run(&mut function, &mut DataPool::default()), "{failure:?}");
         assert!(
             !function

@@ -127,13 +127,13 @@ fn emit_backtrace_print_arg_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stdout_write");                                // write the object prefix
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the object payload
     emitter.instruction("cbz x9, __rt_bt_arg_object_fallback");                 // malformed null objects use the generic name
-    emitter.instruction("ldr x11, [x9]");                                       // keep the runtime class id clear of symbol-address scratch
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x9");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10");
     emitter.instruction("cmp x11, x10");                                        // is the class id inside the dense name table?
     emitter.instruction("b.hs __rt_bt_arg_object_fallback");                    // negative or out-of-range ids use object
-    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-    emitter.instruction("add x10, x10, x11, lsl #4");                           // select the 16-byte class-name row
-    emitter.instruction("ldp x0, x1, [x10]");                                   // load class-name pointer and length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x10", "x11", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x0", "x1", "x10");
     emitter.instruction("cbnz x1, __rt_bt_arg_object_name_ready");              // non-empty metadata is authoritative
     emitter.label("__rt_bt_arg_object_fallback");
     abi::emit_symbol_address(emitter, "x0", "_unser_type_object");
@@ -349,15 +349,13 @@ fn emit_backtrace_print_arg_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the object payload
     emitter.instruction("test r9, r9");                                         // is the object pointer structurally present?
     emitter.instruction("jz __rt_bt_arg_object_fallback_x");                    // malformed null objects use the generic name
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the runtime class id
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r9");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "r10");
     emitter.instruction("cmp r9, r10");                                         // is the class id inside the dense name table?
     emitter.instruction("jae __rt_bt_arg_object_fallback_x");                   // negative or out-of-range ids use object
-    abi::emit_symbol_address(emitter, "r10", "_class_name_entries");
-    emitter.instruction("shl r9, 4");                                           // scale the id to a 16-byte row
-    emitter.instruction("add r10, r9");                                         // select the class-name row
-    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the class-name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r9", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rdi", "rsi", "r10");
     emitter.instruction("test rsi, rsi");                                       // reject empty metadata rows
     emitter.instruction("jnz __rt_bt_arg_object_name_ready_x");                 // non-empty metadata is authoritative
     emitter.label("__rt_bt_arg_object_fallback_x");

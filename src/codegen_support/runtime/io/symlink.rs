@@ -97,10 +97,7 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr");                                        // path → null-terminated C path in x0
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
 
-    emitter.instruction("mov x0, #4096");                                       // PATH_MAX-style buffer for the link target
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned heap storage; result in x0
-    emitter.instruction("mov x9, #1");                                          // heap-kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // tag the buffer in the uniform heap header
+    elephc_memoir::interop::c_strings::emit_allocate_path_buffer(emitter, 4096);
     emitter.instruction("str x0, [sp, #8]");                                    // save buffer pointer
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // first arg: path
@@ -117,10 +114,7 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return canonical link target
 
     emitter.label("__rt_readlink_fail");
-    emitter.instruction("ldr x0, [sp, #8]");                                    // reload owned buffer for cleanup
-    emitter.instruction("bl __rt_heap_free");                                   // release the unused buffer
-    emitter.instruction("mov x1, #0");                                          // empty pointer (string|false sentinel)
-    emitter.instruction("mov x2, #0");                                          // empty length (string|false sentinel)
+    elephc_memoir::interop::c_strings::emit_release_failed_path_buffer(emitter, 8, 16);
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate frame
     emitter.instruction("ret");                                                 // return empty string
@@ -232,10 +226,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_cstr");                                      // path → C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path
 
-    emitter.instruction("mov rax, 4096");                                       // request 4 KiB owned buffer
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // owned-string heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the buffer in the uniform heap header
+    elephc_memoir::interop::c_strings::emit_allocate_path_buffer(emitter, 4096);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save buffer pointer
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first libc readlink arg = path
@@ -252,10 +243,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return owned string
 
     emitter.label("__rt_readlink_fail_x86");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload buffer for cleanup
-    emitter.instruction("call __rt_heap_free");                                 // release unused buffer
-    emitter.instruction("xor eax, eax");                                        // empty string pointer
-    emitter.instruction("xor edx, edx");                                        // empty string length
+    elephc_memoir::interop::c_strings::emit_release_failed_path_buffer(emitter, 8, 16);
     emitter.instruction("add rsp, 32");                                         // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return empty string

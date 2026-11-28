@@ -17,6 +17,7 @@
 //!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 //! - Web handlers preserve every host callee-saved register before request reset can run.
 
+use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
@@ -52,13 +53,13 @@ pub(super) use web_host_abi::preserve_host_callee_saved;
 
 const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
-const EXCEPTION_ACTIVATION_BYTES: usize = crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET + 8;
+const EXCEPTION_ACTIVATION_BYTES: usize = elephc_memoir::activation_records::EXTENDED_BYTES;
 
 /// Bytes reserved for one addressable iterator state record.
 ///
 /// Fourteen 8-byte words hold the source, cursor, current key/value, source snapshot, and two
 /// owned successor-key anchors used to recover from associative-table relocation.
-const ITERATOR_STATE_BYTES: usize = 112;
+const ITERATOR_STATE_BYTES: usize = elephc_memoir::values::iterator_storage::STATE_BYTES;
 
 /// Symbol name for the C-callable `--web` top-level handler.
 ///
@@ -663,50 +664,24 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
     let Some(offset) = ctx.exception_activation_offset else {
         return;
     };
-    let callback = format!("{entry_label}__cdylib_exception_cleanup");
-    ctx.emitter.comment("publish PHP frame activation");
-    let scratch = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x10",
-        Arch::X86_64 => "r10",
-    };
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
-    abi::store_at_offset(ctx.emitter, scratch, offset);
-    if ctx.exception_cleanup_activation {
-        abi::emit_symbol_address(ctx.emitter, scratch, &callback);
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - 8);
-    let frame_pointer = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x29",
-        Arch::X86_64 => "rbp",
-    };
-    abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
-    // Main carries source coordinates for generated diagnostics but is not a PHP-visible
-    // backtrace frame, so its reader stays null.
-    if ctx.backtrace_activation && !ctx.is_main {
-        abi::emit_symbol_address(ctx.emitter, scratch, &frame_reader_label(entry_label));
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - 24);
-    // Synthetic cleanup frames still retain their incoming source coordinate. Their
-    // reader stays absent, so PHP backtraces omit them while generated diagnostics can
-    // recover source coordinates through helpers that do not appear in PHP backtraces.
-    if ctx.backtrace_enabled {
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - 32);
-    if ctx.exception_cleanup_activation
-        && (ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator)
-    {
-        abi::emit_symbol_address(ctx.emitter, scratch, &format!("{entry_label}__gc_frame_owners"));
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET);
-    abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+    let cleanup = ctx.exception_cleanup_activation.then(|| format!("{entry_label}__cdylib_exception_cleanup"));
+    // Main has diagnostics coordinates but does not furnish a PHP backtrace frame.
+    let reader = (ctx.backtrace_activation && !ctx.is_main).then(|| frame_reader_label(entry_label));
+    let caller_line = ctx.backtrace_enabled.then_some("_php_backtrace_next_line");
+    let features = &ctx.module.required_runtime_features;
+    let visitor = (ctx.exception_cleanup_activation && (features.fiber || features.generator))
+        .then(|| format!("{entry_label}__gc_frame_owners"));
+    elephc_memoir::activation_records::emit_push_frame(
+        ctx.emitter,
+        elephc_memoir::FrameOffset::new(offset),
+        elephc_memoir::activation_records::FrameActivation {
+            head: "_exc_call_frame_top",
+            cleanup: cleanup.as_deref(),
+            reader: reader.as_deref(),
+            caller_line,
+            visitor: visitor.as_deref(),
+        },
+    );
 }
 
 /// Removes the current PHP frame from the cleanup activation chain on return.
@@ -714,12 +689,9 @@ fn emit_exception_activation_pop(ctx: &mut FunctionContext<'_>) {
     let Some(offset) = ctx.exception_activation_offset else {
         return;
     };
-    let scratch = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x10",
-        Arch::X86_64 => "r10",
-    };
-    abi::load_at_offset(ctx.emitter, scratch, offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+    elephc_memoir::activation_records::emit_pop_frame(
+        ctx.emitter, elephc_memoir::FrameOffset::new(offset), "_exc_call_frame_top",
+    );
 }
 
 /// Emits a non-escaping cleanup callback for one abandoned PHP activation.
@@ -758,7 +730,7 @@ pub(super) fn emit_exception_cleanup_callback(
             ctx.emitter.instruction("str x19, [sp, #8]");                       // preserve the scratch stack-base register
             ctx.emitter.instruction("mov x19, sp");                             // remember the callback stack before cleanup switches frames
             ctx.emitter.instruction("mov x29, x0");                             // select the abandoned PHP frame passed by the unwinder
-            emit_function_local_epilogue_cleanup(ctx, None, None);
+            emit_abandoned_activation_cleanup(ctx);
             ctx.emitter.instruction("mov sp, x19");                             // restore the callback stack after frame-relative cleanup
             ctx.emitter.instruction("ldr x19, [sp, #8]");                       // restore the caller's scratch stack-base register
             ctx.emitter.instruction("ldp x29, x30, [sp, #16]");                 // restore the callback frame chain and return address
@@ -772,7 +744,7 @@ pub(super) fn emit_exception_cleanup_callback(
             ctx.emitter.instruction("sub rsp, 8");                              // keep the callback stack aligned for nested cleanup calls
             ctx.emitter.instruction("mov r12, rbp");                            // remember the callback frame before selecting the PHP frame
             ctx.emitter.instruction("mov rbp, rdi");                            // select the abandoned PHP frame passed by the unwinder
-            emit_function_local_epilogue_cleanup(ctx, None, None);
+            emit_abandoned_activation_cleanup(ctx);
             ctx.emitter.instruction("mov rbp, r12");                            // restore the callback frame after PHP-local cleanup
             ctx.emitter.instruction("lea rsp, [rbp - 8]");                      // discard cleanup-call stack temporaries and padding
             ctx.emitter.instruction("pop r12");                                 // restore the caller's preserved stack-base register
@@ -781,6 +753,15 @@ pub(super) fn emit_exception_cleanup_callback(
         }
     }
     ctx.unwinding_cleanup = false;
+}
+
+/// Cleans the abandoned PHP frame selected by the activation unwinder.
+fn emit_abandoned_activation_cleanup(ctx: &mut FunctionContext<'_>) {
+    if !ctx.is_main {
+        emit_function_local_epilogue_cleanup(ctx, None, None);
+        return;
+    }
+    emit_main_terminal_cleanup_body(ctx);
 }
 
 /// Retains a mutable by-value parameter so its frame slot has one callee-owned reference.
@@ -797,8 +778,8 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.
 fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_concat_off", 0);
-    abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
+    SavedConcatCursor::Frame(FrameOffset::new(ctx.concat_base_offset))
+        .emit_save(ctx.emitter, scratch);
 }
 
 /// Emits frame teardown and exits the process with status 0.
@@ -812,44 +793,7 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
-    // Drain still-active output buffers before any teardown so user output
-    // handlers (including eval-registered ones) run while locals, statics, and
-    // the eval context are still alive. The exit-path flush in abi::emit_exit
-    // stays as the guard for exit()/die() and fatal terminations.
-    abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
-    if ctx.uses_pcntl_signal_handlers() {
-        abi::emit_call_label(ctx.emitter, "__rt_pcntl_release_handlers");
-    }
-    emit_main_local_epilogue_cleanup(ctx);
-    emit_main_static_local_cleanup(ctx);
-    emit_main_global_epilogue_cleanup(ctx);
-    let (static_properties, hosting_tables) =
-        super::runtime_metadata::static_properties_hosting_last(ctx.module);
-    emit_main_static_property_cleanup(ctx, static_properties);
-    // Collect PHP cycles while eval declarations and hosted extension state are alive.
-    emit_shutdown_cycle_collection(ctx.emitter);
-    emit_eval_context_epilogue_cleanup(ctx);
-    // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
-    // hosting tables release the engine objects (`free_obj` may still use module state), and the
-    // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
-    // store before `php_module_shutdown`. The hook's own RSHUTDOWN then finds no request left.
-    if !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module) {
-        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
-        abi::emit_call_label(ctx.emitter, &symbol);
-    }
-    emit_main_static_property_cleanup(ctx, hosting_tables);
-    // Last owner teardown: a destructor above, or an engine object a hosting table released, may
-    // still reach C code that calls a callback.
-    if module_binds_extern_callbacks(ctx.module) {
-        abi::emit_call_label(ctx.emitter, EXTERN_CALLBACK_RELEASE_LABEL);
-    }
-    if module_uses_resource_inventory_cleanup(ctx.module) {
-        abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
-    }
-    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
-        abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_stream_registry_cleanup");
+    emit_main_terminal_cleanup_body(ctx);
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
@@ -880,6 +824,65 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.epilogue_emitted = true;
 }
 
+/// Emits the cleanup body shared by normal main return and activation unwinding from `exit`.
+fn emit_main_terminal_cleanup_body(ctx: &mut FunctionContext<'_>) {
+    let inherited_unwinding = ctx.unwinding_cleanup;
+    ctx.unwinding_cleanup = true;
+    // Drain still-active output buffers before any teardown so user output
+    // handlers (including eval-registered ones) run while locals, statics, and
+    // the eval context are still alive. The exit-path flush in abi::emit_exit
+    // stays as the guard for exit()/die() and fatal terminations.
+    emit_terminal_cleanup_call(ctx.emitter, "__rt_ob_flush_all");
+    if ctx.uses_pcntl_signal_handlers() {
+        emit_terminal_cleanup_call(ctx.emitter, "__rt_pcntl_release_handlers");
+    }
+    if ctx.module.required_runtime_features.eval_bridge {
+        let shutdown = ctx.emitter.target.extern_symbol("__elephc_eval_pcntl_shutdown");
+        emit_terminal_cleanup_call(ctx.emitter, &shutdown);
+    }
+    emit_main_local_epilogue_cleanup(ctx);
+    let (static_properties, hosting_tables) =
+        super::runtime_metadata::static_properties_hosting_last(ctx.module);
+    emit_main_persistent_root_stabilization(ctx, &static_properties);
+    // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
+    // hosting tables release the engine objects (`free_obj` may still use module state), and the
+    // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
+    // store before `php_module_shutdown`. The hook's own RSHUTDOWN then finds no request left.
+    if !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module) {
+        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
+        emit_terminal_cleanup_call(ctx.emitter, &symbol);
+    }
+    emit_main_static_property_cleanup(ctx, &hosting_tables);
+    // Last owner teardown: a destructor above, or an engine object a hosting table released, may
+    // still reach C code that calls a callback.
+    if module_binds_extern_callbacks(ctx.module) {
+        emit_terminal_cleanup_call(ctx.emitter, EXTERN_CALLBACK_RELEASE_LABEL);
+    }
+    if module_uses_resource_inventory_cleanup(ctx.module) {
+        emit_terminal_cleanup_call(ctx.emitter, "__rt_resource_inventory_reset");
+    }
+    emit_terminal_cleanup_call(ctx.emitter, "__rt_stream_registry_cleanup");
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        emit_terminal_cleanup_call(ctx.emitter, "__rt_mbstring_release_catalog");
+    }
+    let mut final_properties = static_properties;
+    final_properties.extend(hosting_tables);
+    emit_main_persistent_root_stabilization(ctx, &final_properties);
+    emit_eval_context_epilogue_cleanup(ctx);
+    emit_main_persistent_root_stabilization(ctx, &final_properties);
+    ctx.unwinding_cleanup = inherited_unwinding;
+    if !inherited_unwinding {
+        emit_pending_shutdown_exception(ctx.emitter);
+    }
+}
+
+/// Invokes one terminal no-argument cleanup without allowing a destructor throw to skip later owners.
+fn emit_terminal_cleanup_call(emitter: &mut Emitter, entry: &str) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::emit_unary_cleanup_preserving_exception(emitter, entry, result);
+}
+
 /// Routine that releases every callable descriptor an extern callback slot retains.
 pub(super) const EXTERN_CALLBACK_RELEASE_LABEL: &str = "__rt_release_extern_callbacks";
 
@@ -905,10 +908,15 @@ pub(super) fn emit_extern_callback_release_routine(emitter: &mut Emitter, data: 
     emitter.comment("--- extern callback descriptor slots release ---");
     emitter.label_global(EXTERN_CALLBACK_RELEASE_LABEL);
     abi::emit_frame_prologue(emitter, 16);
-    for slot in data.extern_callback_slots() {
-        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), slot, 0);
-        abi::emit_store_zero_to_symbol(emitter, slot, 0);
-        crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    for (index, slot) in data.extern_callback_slots().iter().enumerate() {
+        elephc_memoir::symbol_owners::emit_drain_symbol_owner(
+            emitter,
+            slot,
+            &format!("__rt_release_extern_callback_slot_{index}"),
+            elephc_memoir::symbol_owners::PublishedDestructor::None,
+            |emitter| abi::emit_store_zero_to_symbol(emitter, slot, 0),
+            crate::codegen::callable_descriptor::emit_release_current_descriptor,
+        );
     }
     abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
@@ -922,13 +930,11 @@ pub(super) fn emit_extern_callback_release_routine(emitter: &mut Emitter, data: 
 /// destructor before teardown, and a destructor throw propagates as from the cleanups.
 fn emit_shutdown_cycle_collection(emitter: &mut Emitter) {
     emitter.comment("shutdown: collect cycles so their destructors run, as PHP's shutdown does");
-    abi::emit_call_label(emitter, "__rt_gc_collect_cycles_explicit");
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
+    emit_terminal_cleanup_call(emitter, "__rt_gc_collect_cycles_explicit");
 }
 
 /// Retires class static owners once, finishing every property before propagating a destructor throw.
-fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: Vec<(String, PhpType)>) {
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: &[(String, PhpType)]) {
     if properties.is_empty() { return; }
     for (symbol, php_type) in properties {
         let ty = php_type.codegen_repr();
@@ -954,24 +960,17 @@ fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: 
                 ctx.emitter.instruction(&format!("je {done}"));                 // skip properties that never acquired an owner
             }
         }
-        if ty == PhpType::Str {
-            abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 0);
-        } else {
-            abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
-        }
-        ctx.emitter.comment("retire the static property before invoking its destructor");
-        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &symbol, 8);
-        if ty == PhpType::Str {
-            abi::emit_unary_cleanup_preserving_exception(ctx.emitter, "__rt_heap_free_safe", result);
-        } else {
-            abi::emit_decref_preserving_exception(ctx.emitter, &ty);
-        }
+        let drain = ctx.next_label("drain_static_property");
+        abi::emit_drain_static_owner(ctx.emitter, symbol, &ty, &drain,
+            Some(crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL));
         ctx.emitter.label(&done);
     }
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
+}
+
+/// Propagates cleanup exceptions only after the static-root pass has completed.
+fn emit_pending_shutdown_exception(emitter: &mut Emitter) {
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
 }
 
 /// Releases initialized function static locals before process-exit diagnostics.
@@ -992,16 +991,15 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
             0,
         );
         abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-        emit_static_symbol_value_cleanup(ctx, &record.symbol, &ty);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 0);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 8);
+        let drain = ctx.next_label("drain_static_local");
+        abi::emit_drain_static_owner(ctx.emitter, &record.symbol, &ty, &drain, Some(0));
         abi::emit_store_zero_to_symbol(ctx.emitter, &record.init_symbol, 0);
         ctx.emitter.label(&done);
     }
 }
 
-/// Releases global symbol storage owned by the top-level EIR body before diagnostics.
-fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+/// Collects global symbol storage owned by the top-level EIR body before diagnostics.
+fn main_owned_globals(ctx: &FunctionContext<'_>) -> Vec<(String, PhpType)> {
     let mut globals = ctx.module.data.global_names.clone();
     // Eval exposes process globals even when no source-level global instruction names them.
     for name in ["argc", "argv"] {
@@ -1009,48 +1007,88 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             globals.push(name.to_string());
         }
     }
-    for name in globals {
+    globals.into_iter().filter_map(|name| {
         if ctx.module.extern_globals.contains_key(&name) {
-            continue;
+            return None;
         }
         let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed
         };
-        if !cleanup_tracked_codegen_type(&ty) {
-            continue;
-        }
         let symbol = ir_global_symbol(&name);
-        if !ctx.data.has_comm(&symbol) {
-            continue;
-        }
-        ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
-        emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
-        if ty == PhpType::Str {
-            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
-        }
-    }
+        (cleanup_tracked_codegen_type(&ty) && ctx.data.has_comm(&symbol)).then_some((symbol, ty))
+    }).collect()
 }
 
-/// Releases the refcounted value stored in a static-local symbol.
-fn emit_static_symbol_value_cleanup(ctx: &mut FunctionContext<'_>, symbol: &str, ty: &PhpType) {
-    match ty {
-        PhpType::Str => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), symbol, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-        }
-        PhpType::Callable => {
-            abi::emit_load_symbol_to_result(ctx.emitter, symbol, ty);
-            abi::emit_decref_if_refcounted(ctx.emitter, ty);
-        }
-        other if other.is_refcounted() => {
-            abi::emit_load_symbol_to_result(ctx.emitter, symbol, other);
-            abi::emit_decref_if_refcounted(ctx.emitter, other);
-        }
-        _ => {}
-    }
+/// Revisits persistent roots repopulated by a destructor belonging to a later root.
+fn emit_main_persistent_root_stabilization(
+    ctx: &mut FunctionContext<'_>,
+    properties: &[(String, PhpType)],
+) {
+    let globals = main_owned_globals(ctx);
+    let static_locals = ctx.data.static_locals().to_vec();
+    let enum_slots = super::enum_singletons::enum_owner_symbols(ctx.module);
+    let restart = ctx.next_label("persistent_root_drain");
+    let enum_drain = ctx.next_label("enum_case_drain");
+    elephc_memoir::terminal_cleanup::emit_fixed_point_pass(
+        ctx,
+        &restart,
+        |ctx, restart| ctx.emitter.label(restart),
+        |ctx| {
+            emit_main_static_local_cleanup(ctx);
+            for (symbol, ty) in &globals {
+                let drain = ctx.next_label("drain_global");
+                abi::emit_drain_static_owner(
+                    ctx.emitter,
+                    symbol,
+                    ty,
+                    &drain,
+                    (*ty == PhpType::Str).then_some(0),
+                );
+            }
+            emit_main_static_property_cleanup(ctx, properties);
+            super::enum_singletons::emit_enum_slot_cleanup(
+                ctx.emitter,
+                ctx.module,
+                &enum_drain,
+            );
+            emit_eval_context_owner_drain(ctx);
+        },
+        |ctx| emit_shutdown_cycle_collection(ctx.emitter),
+        |ctx, restart| {
+            for (symbol, _) in globals.iter().chain(properties) {
+                let empty = ctx.next_label("static_root_empty");
+                elephc_memoir::symbol_owners::emit_branch_if_published_owner(
+                    ctx.emitter,
+                    symbol,
+                    restart,
+                    &empty,
+                );
+            }
+            for record in static_locals.iter().filter(|record| {
+                cleanup_tracked_codegen_type(&record.php_type.codegen_repr())
+            }) {
+                let empty = ctx.next_label("static_local_root_empty");
+                elephc_memoir::symbol_owners::emit_branch_if_published_owner(
+                    ctx.emitter,
+                    &record.symbol,
+                    restart,
+                    &empty,
+                );
+            }
+            for symbol in &enum_slots {
+                let empty = ctx.next_label("enum_case_root_empty");
+                elephc_memoir::symbol_owners::emit_branch_if_published_owner(
+                    ctx.emitter,
+                    symbol,
+                    restart,
+                    &empty,
+                );
+            }
+            emit_branch_if_eval_context_owners(ctx, restart);
+        },
+    );
 }
 
 /// Emits the C-callable `--web` top-level handler prologue.
@@ -1614,6 +1652,46 @@ fn emit_eval_context_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Drains every persistent eval inventory without consuming its context lease.
+fn emit_eval_context_owner_drain(ctx: &mut FunctionContext<'_>) {
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_drain_owners_v1");
+    for (name, offset) in eval_context_locals(ctx) {
+        let result = abi::int_result_reg(ctx.emitter);
+        let done = ctx.next_label("eval_context_owner_drain_done");
+        ctx.emitter
+            .comment(&format!("terminal owner drain {}", name));
+        abi::load_at_offset(ctx.emitter, result, offset);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        emit_eval_handle_cleanup_call(ctx, &symbol, result);
+        ctx.emitter.label(&done);
+    }
+}
+
+/// Restarts terminal convergence when an eval context received another persistent owner.
+fn emit_branch_if_eval_context_owners(ctx: &mut FunctionContext<'_>, restart: &str) {
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_has_owners_v1");
+    for (_, offset) in eval_context_locals(ctx) {
+        let result = abi::int_result_reg(ctx.emitter);
+        let done = ctx.next_label("eval_context_owner_rescan_done");
+        abi::load_at_offset(ctx.emitter, result, offset);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        abi::emit_call_label(ctx.emitter, &symbol);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, restart);
+        ctx.emitter.label(&done);
+    }
+}
+
 /// Frees one persistent eval scope handle when it was allocated.
 fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -1927,7 +2005,7 @@ pub(super) fn emit_owned_local_cleanup(
                     "cmp {}, {}",
                     result, scratch
                 ));
-                abi::emit_branch_if_equal_wide(ctx.emitter, &done);                // frame cells own no heap payload
+                abi::emit_branch_if_equal_wide(ctx.emitter, &done);             // frame cells own no heap payload
             }
         }
         abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);

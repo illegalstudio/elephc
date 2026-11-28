@@ -8,6 +8,7 @@
 //! - A foreign receiver may warn on null even when its static object type is non-nullable.
 //! - An immediate buffer access rejects the null read's handle zero before execution can resume.
 //! - Borrowed inliner bindings can be forwarded only across a unique dominating store.
+//! - Proven numeric owner bookkeeping is non-observable inside the checked-access prefix.
 
 use std::collections::HashMap;
 
@@ -31,6 +32,7 @@ pub(super) fn traps_on_null(function: &Function, read: &crate::ir::Instruction) 
 pub(super) fn null_trapping_access(function: &Function, read: &crate::ir::Instruction) -> Option<InstId> {
     let handle = read.result?;
     let ValueDef::Instruction { block, index, .. } = function.value(handle)?.def else { return None; };
+    let numeric = super::buffer_access::numeric::preserving_instructions(function);
     for &id in function.block(block)?.instructions.get(index as usize + 1..)? {
         let inst = &function.instructions[id.as_raw() as usize];
         if matches!(inst.op, Op::BufferGet | Op::BufferSet)
@@ -39,7 +41,14 @@ pub(super) fn null_trapping_access(function: &Function, read: &crate::ir::Instru
         if inst.op == Op::Acquire
             && inst.operands.first().is_some_and(|&value| buffer_handle_value(function, value) == handle)
         { continue; }
-        if !super::buffer_property_loops::can_duplicate(function, id) { return None; }
+        // This scan proves that no observable operation can resume after the null warning;
+        // unlike guard cloning, it does not duplicate the load or retain its ownership.
+        if inst.op == Op::LoadLocal && inst.effects.difference(Effects::READS_LOCAL).is_empty() {
+            continue;
+        }
+        if !numeric.contains(&id) && !super::buffer_property_loops::can_duplicate(function, id) {
+            return None;
+        }
     }
     None
 }

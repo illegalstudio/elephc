@@ -9,6 +9,7 @@
 //! - Shuffle mutates array order using runtime random helpers while preserving element ownership.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout::{self, EntryField, HeaderField};
 
 /// shuffle: shuffle an integer array in place using Fisher-Yates algorithm.
 /// Input: x0 = array pointer
@@ -30,7 +31,7 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save array pointer
 
     // -- load array metadata --
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = array length
     emitter.instruction("str x9, [sp, #8]");                                    // save length to stack
 
     // -- Fisher-Yates: iterate i from length-1 down to 1 --
@@ -46,7 +47,7 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
 
     // -- swap data[i] and data[j] --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = array pointer
-    emitter.instruction("add x2, x1, #24");                                     // x2 = data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("ldr x3, [x2, x19, lsl #3]");                           // x3 = data[i]
     emitter.instruction("ldr x4, [x2, x0, lsl #3]");                            // x4 = data[j] (x0 = j from arc4random)
     emitter.instruction("str x4, [x2, x19, lsl #3]");                           // data[i] = data[j]
@@ -76,7 +77,7 @@ fn emit_shuffle_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the array pointer and Fisher-Yates loop cursor
     emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots for the shuffled array pointer and the current descending Fisher-Yates cursor
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the shuffled indexed-array pointer across random-number helper calls
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the indexed-array logical length once before starting the Fisher-Yates loop
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the indexed-array logical length once before starting the Fisher-Yates loop
     emitter.instruction("cmp r10, 2");                                          // does the indexed array contain fewer than two elements?
     emitter.instruction("jb __rt_shuffle_done");                                // arrays of length zero or one are already trivially shuffled
     emitter.instruction("sub r10, 1");                                          // initialize the descending Fisher-Yates cursor to the final indexed-array slot
@@ -91,7 +92,7 @@ fn emit_shuffle_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // restore the Fisher-Yates cursor after the C-ABI bridge call clobbered r10
     emitter.instruction("mov r11, rax");                                        // preserve the sampled Fisher-Yates partner index before reloading the array base pointer
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the indexed-array pointer after the random helper clobbered caller-saved registers
-    emitter.instruction("lea r9, [r8 + 24]");                                   // compute the indexed-array payload base pointer so the swap can address element slots directly
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "r8");
     emitter.instruction("mov rax, QWORD PTR [r9 + r10 * 8]");                   // load the current Fisher-Yates tail element that will be swapped toward the sampled position
     emitter.instruction("mov rdx, QWORD PTR [r9 + r11 * 8]");                   // load the sampled Fisher-Yates partner element before overwriting either slot
     emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rdx");                   // store the sampled partner element into the current Fisher-Yates tail slot
@@ -131,18 +132,18 @@ fn emit_hash_shuffle_links_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish the shuffle frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash table
-    emitter.instruction("ldr x9, [x0]");                                        // load the live entry count
+    hash_layout::emit_load_header_field(emitter, "x9", "x0", HeaderField::Count);
     emitter.instruction("str x9, [sp, #16]");                                   // save the entry count
     emitter.instruction("cmp x9, #2");                                          // fewer than two entries are already shuffled
     emitter.instruction("b.lt __rt_hash_shuffle_links_return");                 // skip allocation for trivial tables
-    emitter.instruction("lsl x0, x9, #3");                                      // reserve one word per entry slot
-    emitter.bl_c("malloc");                                                     // allocate the independent slot-index array
-    emitter.instruction("cbz x0, __rt_hash_shuffle_links_alloc_failed");        // a failed allocation terminates like the sort sidecar
-    emitter.instruction("str x0, [sp, #8]");                                    // save the slot-index array
+    elephc_memoir::buffers::native_words::emit_allocate_frame_vector(
+        emitter, 64, 72, "__rt_hash_shuffle_links_allocated",
+    );
+    emitter.label("__rt_hash_shuffle_links_allocated");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the hash table
-    emitter.instruction("ldr x10, [x9, #40]");                                  // borrow the separate entry storage
+    hash_layout::emit_entries(emitter, "x10", "x9");
     emitter.instruction("str x10, [sp, #40]");                                  // save the entry storage base
-    emitter.instruction("ldr x11, [x9, #24]");                                  // start the walk at the insertion-order head
+    hash_layout::emit_order_edge(emitter, "x11", "x9", false);
     emitter.instruction("str x11, [sp, #24]");                                  // save the current slot index
     emitter.instruction("mov x12, #0");                                         // start the slot walk at index zero
 
@@ -154,9 +155,8 @@ fn emit_hash_shuffle_links_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload the current slot index
     emitter.instruction("str x11, [x13, x12, lsl #3]");                         // record this entry's slot index
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the entry storage base
-    emitter.instruction("lsl x14, x11, #6");                                    // scale the slot index to the 64-byte entry size
-    emitter.instruction("add x14, x10, x14");                                   // address the current entry
-    emitter.instruction("ldr x11, [x14, #56]");                                 // follow the insertion-order next link
+    hash_layout::emit_entry_address_from_storage(emitter, "x14", "x10", "x11");
+    hash_layout::emit_load_entry_field(emitter, "x11", "x14", EntryField::Next);
     emitter.instruction("str x11, [sp, #24]");                                  // save the next slot index
     emitter.instruction("add x12, x12, #1");                                    // advance the walk index
     emitter.instruction("b __rt_hash_shuffle_links_walk");                      // continue collecting the chain
@@ -193,8 +193,7 @@ fn emit_hash_shuffle_links_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x13, x12, lsl #3]");                         // load the shuffled slot index
     emitter.instruction("ldr x11, [sp, #0]");                                   // reload the hash table
     emitter.instruction("ldr x14, [sp, #40]");                                  // reload the entry storage base
-    emitter.instruction("lsl x15, x10, #6");                                    // scale the slot index to the entry size
-    emitter.instruction("add x15, x14, x15");                                   // address the shuffled entry
+    hash_layout::emit_entry_address_from_storage(emitter, "x15", "x14", "x10");
     emitter.instruction("cbnz x12, __rt_hash_shuffle_links_prev");              // the head entry has no predecessor
     emitter.instruction("mov x16, #-1");                                        // the head's prev link is the end sentinel
     emitter.instruction("b __rt_hash_shuffle_links_store_prev");                // store the head sentinel
@@ -202,7 +201,7 @@ fn emit_hash_shuffle_links_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x17, x12, #1");                                    // index of the predecessor in the shuffled array
     emitter.instruction("ldr x16, [x13, x17, lsl #3]");                         // load the predecessor slot index
     emitter.label("__rt_hash_shuffle_links_store_prev");
-    emitter.instruction("str x16, [x15, #48]");                                 // publish the shuffled prev link
+    hash_layout::emit_store_entry_field(emitter, "x16", "x15", EntryField::Previous);
     emitter.instruction("add x17, x12, #1");                                    // index of the successor in the shuffled array
     emitter.instruction("cmp x17, x9");                                         // is this the final entry?
     emitter.instruction("b.lt __rt_hash_shuffle_links_next");                   // the tail's next link is the end sentinel
@@ -211,28 +210,24 @@ fn emit_hash_shuffle_links_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_shuffle_links_next");
     emitter.instruction("ldr x16, [x13, x17, lsl #3]");                         // load the successor slot index
     emitter.label("__rt_hash_shuffle_links_store_next");
-    emitter.instruction("str x16, [x15, #56]");                                 // publish the shuffled next link
+    hash_layout::emit_store_entry_field(emitter, "x16", "x15", EntryField::Next);
     emitter.instruction("cbnz x12, __rt_hash_shuffle_links_no_head");           // only the first entry updates the head
-    emitter.instruction("str x10, [x11, #24]");                                 // publish the shuffled chain head
+    hash_layout::emit_store_header_field(emitter, "x10", "x11", HeaderField::Head);
     emitter.label("__rt_hash_shuffle_links_no_head");
     emitter.instruction("add x17, x12, #1");                                    // recompute the successor position
     emitter.instruction("cmp x17, x9");                                         // is this the final entry?
     emitter.instruction("b.ne __rt_hash_shuffle_links_no_tail");                // only the last entry updates the tail
-    emitter.instruction("str x10, [x11, #32]");                                 // publish the shuffled chain tail
+    hash_layout::emit_store_header_field(emitter, "x10", "x11", HeaderField::Tail);
     emitter.label("__rt_hash_shuffle_links_no_tail");
     emitter.instruction("add x12, x12, #1");                                    // advance the relink cursor
     emitter.instruction("b __rt_hash_shuffle_links_relink");                    // continue relinking the shuffled chain
 
     emitter.label("__rt_hash_shuffle_links_relink_done");
-    emitter.instruction("ldr x0, [sp, #8]");                                    // load the temporary slot-index array
-    emitter.bl_c("free");                                                       // release the independent sidecar
+    elephc_memoir::buffers::native_words::emit_release_frame_vector(emitter, 72);
     emitter.label("__rt_hash_shuffle_links_return");
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the shuffle frame
     emitter.instruction("ret");                                                 // return after relinking the table
-
-    emitter.label("__rt_hash_shuffle_links_alloc_failed");
-    abi::emit_jump(emitter, "__rt_heap_allocation_failed");                     // terminate exactly like the sort sidecar allocation
 
     emitter.label("__rt_hash_shuffle_links_null");
     emitter.instruction("ret");                                                 // return immediately for a null table
@@ -250,19 +245,18 @@ fn emit_hash_shuffle_links_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the shuffle frame
     emitter.instruction("sub rsp, 64");                                         // reserve the walk, swap, and relink state
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the hash table
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the live entry count
+    hash_layout::emit_load_header_field(emitter, "r10", "rax", HeaderField::Count);
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the entry count
     emitter.instruction("cmp r10, 2");                                          // fewer than two entries are already shuffled
     emitter.instruction("jb __rt_hash_shuffle_links_return");                   // skip allocation for trivial tables
-    emitter.instruction("lea rdi, [r10 * 8]");                                  // reserve one word per entry slot
-    emitter.bl_c("malloc");                                                     // allocate the independent slot-index array
-    emitter.instruction("test rax, rax");                                       // did the sidecar allocation fail?
-    emitter.instruction("jz __rt_hash_shuffle_links_alloc_failed");             // terminate exactly like the sort sidecar allocation
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the slot-index array
+    elephc_memoir::buffers::native_words::emit_allocate_frame_vector(
+        emitter, 24, 16, "__rt_hash_shuffle_links_allocated",
+    );
+    emitter.label("__rt_hash_shuffle_links_allocated");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash table
-    emitter.instruction("mov r11, QWORD PTR [r10 + 40]");                       // borrow the separate entry storage
+    hash_layout::emit_entries(emitter, "r11", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the entry storage base
-    emitter.instruction("mov r10, QWORD PTR [r10 + 24]");                       // start the walk at the insertion-order head
+    hash_layout::emit_order_edge(emitter, "r10", "r10", false);
     emitter.instruction("xor r9d, r9d");                                        // start the slot walk at index zero
 
     emitter.label("__rt_hash_shuffle_links_walk");
@@ -270,10 +264,9 @@ fn emit_hash_shuffle_links_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_hash_shuffle_links_walk_done");               // finish the walk once every slot is recorded
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the slot-index array
     emitter.instruction("mov QWORD PTR [r11 + r9 * 8], r10");                   // record this entry's slot index
-    emitter.instruction("mov r11, r10");                                        // copy the slot index before scaling
-    emitter.instruction("shl r11, 6");                                          // scale to the 64-byte entry size
-    emitter.instruction("add r11, QWORD PTR [rbp - 48]");                       // address the current entry
-    emitter.instruction("mov r10, QWORD PTR [r11 + 56]");                       // follow the insertion-order next link
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the borrowed entry storage
+    hash_layout::emit_consume_index_entry_address(emitter, "r11", "r10");
+    hash_layout::emit_load_entry_field(emitter, "r10", "r11", EntryField::Next);
     emitter.instruction("add r9, 1");                                           // advance the walk index
     emitter.instruction("jmp __rt_hash_shuffle_links_walk");                    // continue collecting the chain
 
@@ -306,9 +299,8 @@ fn emit_hash_shuffle_links_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_hash_shuffle_links_relink_done");             // finish once the chain is complete
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the slot-index array
     emitter.instruction("mov r10, QWORD PTR [r11 + r9 * 8]");                   // load the shuffled slot index
-    emitter.instruction("mov r8, r10");                                         // copy the slot index before scaling
-    emitter.instruction("shl r8, 6");                                           // scale to the 64-byte entry size
-    emitter.instruction("add r8, QWORD PTR [rbp - 48]");                        // address the shuffled entry
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the borrowed entry storage
+    hash_layout::emit_entry_address_from_storage(emitter, "r8", "rcx", "r10");
     emitter.instruction("test r9, r9");                                         // is this the head entry?
     emitter.instruction("jnz __rt_hash_shuffle_links_prev");                    // the head has no predecessor
     emitter.instruction("mov rdx, -1");                                         // the head's prev link is the end sentinel
@@ -317,7 +309,7 @@ fn emit_hash_shuffle_links_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rcx, [r9 - 1]");                                   // index of the predecessor in the shuffled array
     emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");                  // load the predecessor slot index
     emitter.label("__rt_hash_shuffle_links_store_prev");
-    emitter.instruction("mov QWORD PTR [r8 + 48], rdx");                        // publish the shuffled prev link
+    hash_layout::emit_store_entry_field(emitter, "rdx", "r8", EntryField::Previous);
     emitter.instruction("lea rcx, [r9 + 1]");                                   // index of the successor in the shuffled array
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // is this the final entry?
     emitter.instruction("jl __rt_hash_shuffle_links_next");                     // the tail's next link is the end sentinel
@@ -326,31 +318,27 @@ fn emit_hash_shuffle_links_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_shuffle_links_next");
     emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");                  // load the successor slot index
     emitter.label("__rt_hash_shuffle_links_store_next");
-    emitter.instruction("mov QWORD PTR [r8 + 56], rdx");                        // publish the shuffled next link
+    hash_layout::emit_store_entry_field(emitter, "rdx", "r8", EntryField::Next);
     emitter.instruction("test r9, r9");                                         // is this the head entry?
     emitter.instruction("jnz __rt_hash_shuffle_links_no_head");                 // only the first entry updates the head
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the hash table
-    emitter.instruction("mov QWORD PTR [r8 + 24], r10");                        // publish the shuffled chain head
+    hash_layout::emit_store_header_field(emitter, "r10", "r8", HeaderField::Head);
     emitter.label("__rt_hash_shuffle_links_no_head");
     emitter.instruction("lea rcx, [r9 + 1]");                                   // recompute the successor position
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // is this the final entry?
     emitter.instruction("jne __rt_hash_shuffle_links_no_tail");                 // only the last entry updates the tail
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the hash table
-    emitter.instruction("mov QWORD PTR [r8 + 32], r10");                        // publish the shuffled chain tail
+    hash_layout::emit_store_header_field(emitter, "r10", "r8", HeaderField::Tail);
     emitter.label("__rt_hash_shuffle_links_no_tail");
     emitter.instruction("add r9, 1");                                           // advance the relink cursor
     emitter.instruction("jmp __rt_hash_shuffle_links_relink");                  // continue relinking the shuffled chain
 
     emitter.label("__rt_hash_shuffle_links_relink_done");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // load the temporary slot-index array
-    emitter.bl_c("free");                                                       // release the independent sidecar
+    elephc_memoir::buffers::native_words::emit_release_frame_vector(emitter, 16);
     emitter.label("__rt_hash_shuffle_links_return");
     emitter.instruction("add rsp, 64");                                         // release the shuffle frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return after relinking the table
-
-    emitter.label("__rt_hash_shuffle_links_alloc_failed");
-    abi::emit_jump(emitter, "__rt_heap_allocation_failed");                     // terminate exactly like the sort sidecar allocation
 
     emitter.label("__rt_hash_shuffle_links_null");
     emitter.instruction("ret");                                                 // return immediately for a null table

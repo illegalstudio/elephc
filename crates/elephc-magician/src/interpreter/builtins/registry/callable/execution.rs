@@ -21,16 +21,39 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let previous_strict_types = context.strict_types();
-    context.set_strict_types(false);
-    let result = eval_evaluated_callable_with_values_in_engine_frame(
-        callback,
-        evaluated_args,
-        context,
-        values,
-    );
-    context.set_strict_types(previous_strict_types);
-    result
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+    use elephc_memoir::runtime_owners::{
+        CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch,
+    };
+
+    let arguments = RuntimeOwnerBatch::new(evaluated_args);
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&arguments, &result), || {
+        let previous_strict_types = context.strict_types();
+        context.set_strict_types(false);
+        let invocation = eval_evaluated_callable_with_values_in_engine_frame(
+            callback,
+            arguments
+                .iter()
+                .map(RuntimeCellHandle::borrowed)
+                .collect(),
+            context,
+            values,
+        );
+        context.set_strict_types(previous_strict_types);
+        let operation = invocation
+            .and_then(|value| promote_borrowed_result(value, values))
+            .map(|value| {
+                debug_assert!(result.replace(Some(value)).is_none());
+            });
+        arguments.finish(
+            operation,
+            &result,
+            ReleaseOrder::Forward,
+            CleanupErrorPolicy::Last,
+            |argument| release_expr_result(argument, context, values),
+        )
+    })
 }
 
 /// Executes one engine-frame callback after the public entry installed weak binding.

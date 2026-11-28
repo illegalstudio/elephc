@@ -16,11 +16,19 @@ pub(in crate::codegen::lower_inst) fn lower_nullsafe_prop_get(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
+    let object_type = raw_value_php_type(ctx, object)?;
+    // Generic `object`, `?object` and `mixed` keep tagged boxed storage because a Closure is an
+    // object at the PHP boundary but not a raw ordinary-object payload. Their concrete class is
+    // selected by the Mixed property ladder, so an empty generic-object class name must never be
+    // sent to the named-class slot resolver.
+    if crate::types::object_boundary::runtime_checked_object_source(&object_type) {
+        return lower_mixed_prop_get(ctx, inst, object, &property);
+    }
     let Some((class_name, nullable)) = nullable_object_receiver_class(ctx, object)? else {
         return Err(CodegenIrError::unsupported(format!(
             "{} for receiver PHP type {:?}",
             inst.op.name(),
-            raw_value_php_type(ctx, object)?
+            object_type
         )));
     };
     if !nullable {

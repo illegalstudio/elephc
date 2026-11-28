@@ -43,12 +43,14 @@
 //!   a callee-saved register would corrupt a value the bridge's `x_agg_step` caller
 //!   holds live across the call.
 
+use elephc_memoir::values::packed_mixed_prefix;
+use elephc_memoir::{callables::argument_storage, cleanup_preserve, values::array_header};
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
     TRY_HANDLER_SLOT_SIZE,
 };
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 // The firewall handler record must match the layout __rt_throw_current assumes:
 // next@0, survivor@8, diag@TRY_HANDLER_DIAG_DEPTH_OFFSET,
@@ -103,15 +105,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     // -- allocate an (argc + 2)-slot argument array and stamp value_type = Mixed once --
     emitter.instruction("ldr x0, [sp, #272]");                                  // row argument count
     emitter.instruction("add x0, x0, #2");                                      // + 2 for the prepended [context, rownumber] slots
-    emitter.instruction("mov x1, #8");                                          // boxed Mixed slots store one pointer each
-    emitter.instruction("bl __rt_array_new");                                   // x0 = indexed array backing storage
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed array kind word from the header
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve the indexed-array kind and persistent COW flag
-    emitter.instruction("and x10, x10, x12");                                   // keep only the persistent metadata bits
-    emitter.instruction("mov x11, #7");                                         // value_type tag 7 = boxed Mixed
-    emitter.instruction("lsl x11, x11, #8");                                    // move the tag into the packed kind-word byte lane
-    emitter.instruction("orr x10, x10, x11");                                   // combine the heap kind with the value_type tag
-    emitter.instruction("str x10, [x0, #-8]");                                  // persist the stamped kind word (never re-stamped: no push_int)
+    array_header::emit_allocate_mixed_slots(emitter);
     emitter.instruction("str x0, [sp, #288]");                                  // save the args array pointer
 
     // -- slot 0: the current accumulator (incref when non-null; box PHP null otherwise) --
@@ -127,9 +121,9 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed PHP null
     emitter.label("__rt_pdo_call_agg_step_slot0_store");
     emitter.instruction("ldr x10, [sp, #288]");                                 // args array pointer (caller-saved temp)
-    emitter.instruction("str x0, [x10, #24]");                                  // store the accumulator/null into slot 0
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "x10", "x0", 0);
     emitter.instruction("mov x11, #1");                                         // running element count = 1
-    emitter.instruction("str x11, [x10, #0]");                                  // update the array length field
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x10", "x11"); // update the array length field
 
     // -- slot 1: the row number boxed as a Mixed int --
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
@@ -139,7 +133,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #288]");                                 // args array pointer
     emitter.instruction("str x0, [x10, #32]");                                  // store the row number into slot 1
     emitter.instruction("mov x11, #2");                                         // running element count = 2
-    emitter.instruction("str x11, [x10, #0]");                                  // update the array length field
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x10", "x11"); // update the array length field
 
     // -- boxing loop: box each row ElephcVal into slots 2.. --
     emitter.instruction("str xzr, [sp, #312]");                                 // loop index k = 0
@@ -183,16 +177,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pdo_call_agg_step_box_call");                   // box the string via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_call");
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed Mixed row value
-    emitter.instruction("ldr x9, [sp, #312]");                                  // reload the loop index (clobbered by the call)
-    emitter.instruction("ldr x10, [sp, #288]");                                 // reload the args array pointer (caller-saved temp)
-    emitter.instruction("add x12, x9, #2");                                     // element index = k + 2 (past [context, rownumber])
-    emitter.instruction("lsl x12, x12, #3");                                    // (k + 2) * 8
-    emitter.instruction("add x12, x12, #24");                                   // element region begins 24 bytes past the header
-    emitter.instruction("str x0, [x10, x12]");                                  // store the boxed row value into slot k+2
-    emitter.instruction("add x9, x9, #1");                                      // advance the loop index
-    emitter.instruction("str x9, [sp, #312]");                                  // persist the loop index
-    emitter.instruction("add x11, x9, #2");                                     // total element count = (k+1) + 2
-    emitter.instruction("str x11, [x10, #0]");                                  // update the array length field
+    packed_mixed_prefix::emit_append_from_frame(emitter, 288, 312, 2);
     emitter.instruction("b __rt_pdo_call_agg_step_loop");                       // box the next row value
     emitter.label("__rt_pdo_call_agg_step_loop_done");
 
@@ -204,14 +189,9 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #296]");                                  // save the boxed Mixed argument cell
 
     // -- push a setjmp firewall handler around the invoke --
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction("str x10, [sp, #0]");                                   // handler record: previous handler-stack top
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction("str x10, [sp, #8]");                                   // handler record: activation frame to survive a throw
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction("str x10, [sp, #16]");                                  // handler record: saved diagnostic-suppression depth
+    elephc_memoir::activation_records::emit_save_arm_runtime_try_prefix(emitter, "x10");
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link the record as the active handler
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
     emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("cbnz x0, __rt_pdo_call_agg_step_threw");               // nonzero → arrived via longjmp
@@ -224,16 +204,10 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #304]");                                  // save the new accumulator
 
     // pop the firewall handler before any further runtime calls
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
 
     // -- release the args container (drops the slot-0 accumulator incref) --
-    emitter.instruction("ldr x0, [sp, #296]");                                  // boxed Mixed argument cell
-    emitter.instruction("bl __rt_decref_mixed");                                // release the cell (drops the array ref boxing took)
-    emitter.instruction("ldr x0, [sp, #288]");                                  // raw args array pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release the array and deep-free its boxed args
+    argument_storage::emit_release_boxed_array(emitter, 296, 288);
 
     // -- release the OLD accumulator's own ref (it is being replaced) --
     emitter.instruction("ldr x0, [sp, #248]");                                  // old accumulator
@@ -247,20 +221,10 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
 
     // -- longjmp path: the step callback threw --
     emitter.label("__rt_pdo_call_agg_step_threw");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0); // take ownership of the pending Throwable
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
-    emitter.instruction("cbz x0, __rt_pdo_call_agg_step_threw_released");       // tolerate a defensive null exception slot
-    emitter.instruction("bl __rt_decref_any");                                  // release the caught Throwable object
-    emitter.label("__rt_pdo_call_agg_step_threw_released");
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
+    cleanup_preserve::emit_discard_caught_exception(emitter, "__rt_pdo_call_agg_step_threw_released");
     // release the args container (drops the slot-0 incref) but PRESERVE the accumulator
-    emitter.instruction("ldr x0, [sp, #296]");                                  // boxed Mixed argument cell
-    emitter.instruction("bl __rt_decref_mixed");                                // release the cell
-    emitter.instruction("ldr x0, [sp, #288]");                                  // raw args array pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release the array (the slot-0 incref is dropped here)
+    argument_storage::emit_release_boxed_array(emitter, 296, 288);
     emitter.instruction("ldr x9, [sp, #280]");                                  // threw out-param pointer
     emitter.instruction("mov x10, #1");                                         // signal the callback threw
     emitter.instruction("str x10, [x9]");                                       // *threw = 1
@@ -312,15 +276,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     // -- allocate an (argc + 2)-slot argument array and stamp value_type = Mixed once --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // row argument count
     emitter.instruction("add rdi, 2");                                          // + 2 for the prepended [context, rownumber] slots
-    emitter.instruction("mov rsi, 8");                                          // boxed Mixed slots store one pointer each
-    emitter.instruction("call __rt_array_new");                                 // rax = indexed array backing storage
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed array kind word from the header
-    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap marker + indexed-array kind + COW bit
-    emitter.instruction("and r10, r11");                                        // keep only the persistent metadata bits
-    emitter.instruction("mov r11, 7");                                          // value_type tag 7 = boxed Mixed
-    emitter.instruction("shl r11, 8");                                          // move the tag into the packed kind-word byte lane
-    emitter.instruction("or r10, r11");                                         // combine the heap kind with the value_type tag
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the stamped kind word (never re-stamped)
+    array_header::emit_allocate_mixed_slots(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the args array pointer
 
     // -- slot 0: the current accumulator (incref when non-null; box PHP null otherwise) --
@@ -337,8 +293,8 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed PHP null
     emitter.label("__rt_pdo_call_agg_step_slot0_store_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // args array pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // store the accumulator/null into slot 0
-    emitter.instruction("mov QWORD PTR [r10], 1");                              // update the array length field to 1
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "r10", "rax", 0);
+    elephc_memoir::values::packed_slots::emit_publish_length_immediate(emitter, "r10", 1); // update the array length field to 1
 
     // -- slot 1: the row number boxed as a Mixed int --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // value_lo = row number
@@ -347,7 +303,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed Mixed(int) row number
     emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // args array pointer
     emitter.instruction("mov QWORD PTR [r10 + 32], rax");                       // store the row number into slot 1
-    emitter.instruction("mov QWORD PTR [r10], 2");                              // update the array length field to 2
+    elephc_memoir::values::packed_slots::emit_publish_length_immediate(emitter, "r10", 2); // update the array length field to 2
 
     // -- boxing loop: box each row ElephcVal into slots 2.. --
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // loop index k = 0
@@ -390,17 +346,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");             // box the string via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_call_x86");
     emitter.instruction("call __rt_mixed_from_value");                          // rax = owned boxed Mixed row value
-    emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // reload the loop index (clobbered by the call)
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the args array pointer
-    emitter.instruction("mov rcx, r9");                                         // compute the element byte offset
-    emitter.instruction("add rcx, 2");                                          // element index = k + 2 (past [context, rownumber])
-    emitter.instruction("shl rcx, 3");                                          // (k + 2) * 8
-    emitter.instruction("add rcx, 24");                                         // element region begins 24 bytes past the header
-    emitter.instruction("mov QWORD PTR [r11 + rcx], rax");                      // store the boxed row value into slot k+2
-    emitter.instruction("add r9, 1");                                           // advance the loop index
-    emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // persist the loop index
-    emitter.instruction("add r9, 2");                                           // total element count = (k+1) + 2
-    emitter.instruction("mov QWORD PTR [r11], r9");                             // update the array length field
+    packed_mixed_prefix::emit_append_from_frame(emitter, 56, 80, 2);
     emitter.instruction("jmp __rt_pdo_call_agg_step_loop_x86");                 // box the next row value
     emitter.label("__rt_pdo_call_agg_step_loop_done_x86");
 
@@ -412,14 +358,9 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the boxed Mixed argument cell
 
     // -- push a setjmp firewall handler around the invoke --
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 320], r10");                      // handler record: record.next
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 312], r10");                      // handler record: survivor frame
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 304], r10");                      // handler record: saved diagnostic depth
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", 320);
     emitter.instruction("lea r10, [rbp - 320]");                                // r10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link the record as the active handler
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction("lea rdi, [rbp - 296]");                                // rdi = &jmp_buf inside the handler record (record + 24)
     emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
@@ -433,16 +374,10 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the new accumulator
 
     // pop the firewall handler before any further runtime calls
-    emitter.instruction("mov r10, QWORD PTR [rbp - 320]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 304]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 320);
 
     // -- release the args container (drops the slot-0 accumulator incref) --
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // boxed Mixed argument cell
-    emitter.instruction("call __rt_decref_mixed");                              // release the cell
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // raw args array pointer
-    emitter.instruction("call __rt_decref_any");                                // release the array and deep-free its boxed args
+    argument_storage::emit_release_boxed_array(emitter, 64, 56);
 
     // -- release the OLD accumulator's own ref (it is being replaced) --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // old accumulator
@@ -457,21 +392,10 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
 
     // -- longjmp path: the step callback threw --
     emitter.label("__rt_pdo_call_agg_step_threw_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 320]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 304]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
-    emitter.instruction("test rax, rax");                                       // was a Throwable actually published?
-    emitter.instruction("jz __rt_pdo_call_agg_step_threw_released_x86");        // tolerate a defensive null exception slot
-    emitter.instruction("call __rt_decref_any");                                // release the caught Throwable object
-    emitter.label("__rt_pdo_call_agg_step_threw_released_x86");
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 320);
+    cleanup_preserve::emit_discard_caught_exception(emitter, "__rt_pdo_call_agg_step_threw_released_x86");
     // release the args container (drops the slot-0 incref) but PRESERVE the accumulator
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // boxed Mixed argument cell
-    emitter.instruction("call __rt_decref_mixed");                              // release the cell
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // raw args array pointer
-    emitter.instruction("call __rt_decref_any");                                // release the array (the slot-0 incref is dropped here)
+    argument_storage::emit_release_boxed_array(emitter, 64, 56);
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // threw out-param pointer
     emitter.instruction("mov QWORD PTR [rax], 1");                              // *threw = 1
     emitter.instruction("xor eax, eax");                                        // return null (the bridge preserves the old accumulator)

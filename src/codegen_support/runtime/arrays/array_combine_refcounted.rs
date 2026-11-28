@@ -8,6 +8,8 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -55,7 +57,7 @@ pub fn emit_array_combine_refcounted(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #32]");                                   // save result value_type tag
 
     // -- create hash table with capacity = max(length * 2, 16) --
-    emitter.instruction("ldr x0, [x0]");                                        // load keys array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x0", "x0"); // load keys array length
     emitter.instruction("lsl x0, x0, #1");                                      // compute capacity with headroom
     emitter.instruction("mov x9, #16");                                         // load minimum capacity
     emitter.instruction("cmp x0, x9");                                          // compare requested capacity with minimum
@@ -67,20 +69,20 @@ pub fn emit_array_combine_refcounted(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_combine_ref_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload keys array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // load keys array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // load keys array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload loop index
     emitter.instruction("cmp x4, x3");                                          // compare loop index with key count
     emitter.instruction("b.ge __rt_array_combine_ref_done");                    // finish once every key/value pair has been inserted
     emitter.instruction("lsl x5, x4, #4");                                      // compute byte offset for string key element
     emitter.instruction("add x5, x0, x5");                                      // move to keyed string element
-    emitter.instruction("add x5, x5, #24");                                     // skip array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x5");
     emitter.instruction("ldr x1, [x5]");                                        // load key pointer
     emitter.instruction("ldr x2, [x5, #8]");                                    // load key length
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
     emitter.instruction("str x1, [sp, #40]");                                   // preserve key pointer across incref
     emitter.instruction("str x2, [sp, #48]");                                   // preserve key length across incref
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload values array pointer
-    emitter.instruction("add x5, x5, #24");                                     // compute values data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x5");
     emitter.instruction("ldr x3, [x5, x4, lsl #3]");                            // load borrowed refcounted value
     emitter.instruction("str x3, [sp, #56]");                                   // preserve borrowed value across incref
     emitter.instruction("mov x0, x3");                                          // move borrowed value into incref argument register
@@ -135,7 +137,7 @@ fn emit_array_combine_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the string-key indexed array across nested hash-constructor and insertion helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the refcounted-values indexed array across nested hash-constructor and insertion helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the requested hash value_type tag across nested hash-constructor and insertion helper calls
-    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the string-key indexed-array logical length before deriving the destination hash capacity
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdi", "rdi"); // load the string-key indexed-array logical length before deriving the destination hash capacity
     emitter.instruction("shl rdi, 1");                                          // double the string-key count to give the destination hash some insertion headroom
     emitter.instruction("cmp rdi, 16");                                         // clamp the destination hash capacity to the minimum bucket count expected by the runtime
     emitter.instruction("jge __rt_array_combine_ref_capacity_x86");             // keep the doubled key-count capacity when it already meets the minimum bucket count
@@ -149,12 +151,12 @@ fn emit_array_combine_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_combine_ref_loop_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the array-combine loop index before reading the next key/value pair
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the string-key indexed array before reading its logical length and selected key slot
-    emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare the loop index against the string-key indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rcx", "r10"); // compare the loop index against the string-key indexed-array logical length
     emitter.instruction("jge __rt_array_combine_ref_done_x86");                 // finish once every key/value pair has been inserted into the destination hash table
     emitter.instruction("mov r11, rcx");                                        // copy the loop index before scaling it to the 16-byte string slot size
     emitter.instruction("shl r11, 4");                                          // scale the loop index by the 16-byte string slot size used by the key array
     emitter.instruction("add r10, r11");                                        // advance from the key-array base pointer to the selected string key slot
-    emitter.instruction("add r10, 24");                                         // skip the indexed-array header to reach the selected string key payload
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the selected key pointer from the string-key indexed array
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the selected key length from the string-key indexed array
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric-string keys to PHP integer array keys
@@ -162,7 +164,7 @@ fn emit_array_combine_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // preserve the normalized key high word across incref and hash insertion helper calls
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the array-combine loop index after key normalization clobbered caller-saved registers
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the refcounted-values indexed array before reading the selected value payload
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the refcounted-values indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov r11, QWORD PTR [r10 + rcx * 8]");                  // load the selected borrowed refcounted value payload from the values indexed array
     emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // preserve the selected borrowed refcounted value payload across the incref helper call
     emitter.instruction("mov rax, r11");                                        // pass the selected borrowed refcounted value payload in the x86_64 heap-helper input register expected by __rt_incref

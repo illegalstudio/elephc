@@ -55,7 +55,7 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     // is the encoder that renders `[5 => 3]` the way PHP does, `{"5":3}` rather than `[3]`.
     // The conditional branch skips OVER an unconditional one because AArch64 cannot name an
     // external label in a conditional branch.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_json_arr_int_packed");                       // packed storage encodes inline below
@@ -100,7 +100,7 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
 
     // -- get array length --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array ptr
-    emitter.instruction("ldr x3, [x0]");                                        // load array length from header offset 0
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // load array length from header offset 0
     emitter.instruction("str x3, [sp, #24]");                                   // save length
     emitter.instruction("str xzr, [sp, #32]");                                  // index = 0
 
@@ -189,7 +189,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     // Same runtime-promotion probe as the AArch64 path; `__rt_json_encode_assoc` takes the
     // container in RAX and returns rax/rdx exactly as this entry does. NOTE the register:
     // every json encoder here carries the array in RAX, not rdi.
-    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rax");
     emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_json_arr_int_packed");                        // packed storage encodes inline below
@@ -224,7 +224,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r11", write));      // persist the updated write pointer before entering the element loop
     emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the array opens
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source array pointer (depth_enter clobbered rax)
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the integer-array length from the first header field
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rax"); // load the integer-array length from the first header field
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the array length across itoa calls and buffer growth
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the integer-array element loop counter to zero
 
@@ -249,7 +249,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strbuf_sync");                               // let itoa format just past the cursor (or at the heap buffer's opening offset)
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source integer-array pointer before loading the current element payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current integer-array element index before computing the payload slot address
-    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8 + 24]");             // load the integer element payload from the indexed-array storage slot
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "rax", "r10", "rax", "r11");
     emitter.instruction("call __rt_itoa");                                      // encode the integer element as a decimal JSON slice
     emitter.instruction("mov rsi, rax");                                        // pass the decimal slice pointer to the append helper (rdx = length)
     emitter.instruction(&format!("lea rdi, [rbp - {}]", desc));                 // address of the output-buffer descriptor

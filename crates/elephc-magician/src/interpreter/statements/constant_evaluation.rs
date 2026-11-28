@@ -23,6 +23,7 @@
 //!   implemented interface's own constants and its parents'.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Makes sure php-src's first evaluation of class constant or enum case `holder::name` has
 /// happened: it is evaluated now, once, with its notices, and stored.
@@ -46,9 +47,7 @@ pub(in crate::interpreter) fn eval_ensure_class_constant(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(value) = eval_class_constant_value(holder, name, context, values)? {
-        if !value.is_borrowed() {
-            values.release(value)?;
-        }
+        release_expr_result(value, context, values)?;
     }
     Ok(())
 }
@@ -84,7 +83,7 @@ pub(in crate::interpreter) fn eval_class_constant_value(
         return Ok(Some(value));
     }
     if let Some(replaced) = context.set_class_constant_cell(&owner, constant.name(), value) {
-        values.release(replaced)?;
+        eval_release_value(context, values, replaced)?;
     }
     Ok(context.class_constant_cell(&owner, constant.name()))
 }
@@ -263,14 +262,22 @@ pub(in crate::interpreter) fn eval_validate_backed_enum_cases(
             );
         }
         for (existing, existing_value) in &seen {
-            let equal = values.compare(EvalBinOp::StrictEq, value, *existing_value)?;
-            if values.truthy(equal)? {
+            let equal = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(
+                values.compare(EvalBinOp::StrictEq, value, *existing_value)?,
+            );
+            let duplicate = crate::runtime_hooks::owner_frames::with_runtime_owners(&equal, || {
+                values.truthy(equal.borrowed())
+            });
+            let released = values.release(equal.take());
+            if duplicate? {
+                released?;
                 return eval_throw_error(
                     &format!("Duplicate value in enum {display} for cases {existing} and {case_name}"),
                     context,
                     values,
                 );
             }
+            released?;
         }
         seen.push((case_name, value));
     }
@@ -443,10 +450,8 @@ pub(in crate::interpreter) fn eval_reflection_evaluating_getter_result(
             };
             // An identity outlives its object, so the entry counts only for a live parameter
             // reflector.
-            let class_name = values.object_class_name(object)?;
-            let is_parameter = values.string_bytes(class_name);
-            values.release(class_name)?;
-            if !is_parameter?.eq_ignore_ascii_case(b"ReflectionParameter") {
+            let class_name = runtime_object_class_name(object, values)?;
+            if !class_name.eq_ignore_ascii_case("ReflectionParameter") {
                 return Ok(None);
             }
             eval_reflected_parameter_default(&reflected, context, values)
@@ -762,11 +767,12 @@ fn eval_default_condition<V: RuntimeValueOps>(
     let Some(value) = eval_preview_outcome(value, context, values)? else {
         return Ok(None);
     };
-    let answer = test(value, values);
-    if !value.is_borrowed() {
-        values.release(value)?;
-    }
-    answer.map(Some)
+    let value = RuntimeOwnerSlot::new(value);
+    with_runtime_owners(&value, || {
+        let answer = test(value.borrowed(), values);
+        let released = release_expr_result(value.take(), context, values);
+        answer.and_then(|answer| released.map(|()| Some(answer)))
+    })
 }
 
 /// Reports whether evaluating constant expression `expr` constructs an object (`new`).
@@ -843,7 +849,7 @@ pub(in crate::interpreter) fn eval_record_declaration_snapshot(
         if let Some(cell) = context.class_constant_cell(origin, constant.name()) {
             let copy = values.retain(cell)?;
             if let Some(replaced) = context.set_class_constant_cell(&holder, constant.name(), copy) {
-                values.release(replaced)?;
+                eval_release_value(context, values, replaced)?;
             }
         }
     }

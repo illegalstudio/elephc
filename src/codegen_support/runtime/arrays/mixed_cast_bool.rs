@@ -11,6 +11,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::values::container_header;
 
 /// Emits the `__rt_mixed_cast_bool` runtime helper.
 ///
@@ -91,7 +92,7 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_bool_from_array");
     emitter.instruction("cbz x1, __rt_mixed_cast_bool_false");                  // null containers stay falsy
-    emitter.instruction("ldr x0, [x1]");                                        // load the current container element count from the header
+    container_header::emit_load_count(emitter, "x0", "x1");
     emitter.instruction("cmp x0, #0");                                          // compare the element count against zero
     emitter.instruction("cset x0, ne");                                         // containers are truthy when non-empty
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the container truthiness result
@@ -185,7 +186,7 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_bool_from_array_linux_x86_64");
     emitter.instruction("test rdi, rdi");                                       // null container pointers stay falsy
     emitter.instruction("je __rt_mixed_cast_bool_false_linux_x86_64");          // return false when the container pointer is null
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the current container element count from the header
+    container_header::emit_load_count(emitter, "rax", "rdi");
     emitter.instruction("test rax, rax");                                       // compare the container element count against zero
     emitter.instruction("setne al");                                            // containers are truthy when non-empty
     emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register

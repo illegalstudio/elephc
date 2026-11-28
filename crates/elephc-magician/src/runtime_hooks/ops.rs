@@ -13,6 +13,9 @@ use super::externs::*;
 use super::tags::{bitwise_op_tag, compare_op_tag};
 use super::ElephcRuntimeOps;
 use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
+use elephc_builtin_contract::callable_abi::{
+    CallableParameterViewV1, CallableSignatureViewV1, NO_VARIADIC_PARAMETER,
+};
 use elephc_builtin_contract::output_abi::OutputAction;
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
@@ -186,37 +189,68 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         level: i64,
         args: &[RuntimeCellHandle],
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-        let mut arg_array = self.array_new(args.len())?;
-        for (index, value) in args.iter().copied().enumerate() {
-            let key = self.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-            let retained = self.retain(value)?;
-            let stored = self.array_set(arg_array, key, retained);
-            self.release_cells([key, retained])?;
-            arg_array = stored?;
-        }
-        let mut result = std::ptr::null_mut();
-        let mut invoked = 0u64;
-        let status = unsafe {
-            __elephc_eval_error_handler_dispatch(
-                level,
-                arg_array.as_ptr(),
-                &mut result,
-                &mut invoked,
-            )
-        };
-        self.release(arg_array)?;
-        if status == EvalStatus::UncaughtThrowable.code() {
-            let thrown = self.take_pending_native_throwable().ok_or(EvalStatus::RuntimeFatal)?;
-            self.schedule_pending_throw(thrown)?;
-            return Err(EvalStatus::UncaughtThrowable);
-        }
-        if status != EvalStatus::Ok.code() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        if invoked == 0 {
-            return Ok(None);
-        }
-        Self::handle(result).map(Some)
+        let arg_array = super::owner_frames::RuntimeOwnerSlot::new(self.array_new(args.len())?);
+        super::owner_frames::with_runtime_owners(&arg_array, || {
+            for (index, value) in args.iter().copied().enumerate() {
+                let owners = elephc_memoir::runtime_owners::StagedRuntimeOwners::default();
+                super::owner_frames::with_runtime_owners(&owners, || {
+                    let key = owners.stage(
+                        self.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?,
+                    );
+                    let retained = owners.stage(self.retain(value)?);
+                    let stored = self.array_set(
+                        arg_array.borrowed(),
+                        key.borrowed(),
+                        retained.borrowed(),
+                    );
+                    let cleanup = owners.take_all().release(
+                        elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+                        elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+                        |owner| self.release(owner),
+                    );
+                    let stored = stored?;
+                    cleanup?;
+                    arg_array.update_receiver(stored);
+                    Ok(())
+                })?;
+            }
+            let mut result = std::ptr::null_mut();
+            let mut invoked = 0u64;
+            let status = unsafe {
+                __elephc_eval_error_handler_dispatch(
+                    level,
+                    arg_array.borrowed().as_ptr(),
+                    &mut result,
+                    &mut invoked,
+                )
+            };
+            let result = (!result.is_null()).then(|| {
+                super::owner_frames::RuntimeOwnerSlot::new(RuntimeCellHandle::from_raw(result))
+            });
+            super::owner_frames::with_runtime_owners(&result, || {
+                if let Err(cleanup_status) = self.release(arg_array.take()) {
+                    if let Some(result) = result.as_ref() { let _ = self.release(result.take()); }
+                    return Err(cleanup_status);
+                }
+                if status == EvalStatus::UncaughtThrowable.code() {
+                    if let Some(result) = result.as_ref() { let _ = self.release(result.take()); }
+                    let thrown = self.take_pending_native_throwable()
+                        .ok_or(EvalStatus::RuntimeFatal)?;
+                    self.schedule_pending_throw(thrown)?;
+                    return Err(EvalStatus::UncaughtThrowable);
+                }
+                if status != EvalStatus::Ok.code() {
+                    if let Some(result) = result.as_ref() { let _ = self.release(result.take()); }
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                if invoked == 0 {
+                    if let Some(result) = result.as_ref() { self.release(result.take())?; }
+                    return Ok(None);
+                }
+                result.as_ref().map(|result| result.take()).map(Some)
+                    .ok_or(EvalStatus::RuntimeFatal)
+            })
+        })
     }
 
     /// Installs an eval-owned callback in the native terminal exception dispatcher.

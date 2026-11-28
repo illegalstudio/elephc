@@ -215,6 +215,68 @@ rmdir("gw");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Successful close and a no-match open both retire each native glob envelope.
+#[test]
+fn test_glob_stream_wrapper_releases_envelope_on_close_and_no_match() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+file_put_contents("glob-owned.txt", "sample");
+for ($i = 0; $i < 3; $i++) {
+    $directory = opendir("glob://glob-owned.*");
+    if ($directory !== false) {
+        echo "open ";
+        closedir($directory);
+    }
+    if (@opendir("glob://glob-never-matches-*") === false) {
+        echo "missing ";
+    }
+}
+unlink("glob-owned.txt");
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "open missing open missing open missing ");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A successful libc glob followed by a failed descriptor duplication releases its owners.
+#[test]
+fn test_glob_stream_wrapper_releases_envelope_when_dup_fails() {
+    let out = compile_and_run_with_heap_debug_and_c_fixture(
+        r#"<?php
+extern function glob_fixture_disable_stderr(): int;
+extern function glob_fixture_restore_stderr(): int;
+file_put_contents("glob-dup.txt", "sample");
+$disabled = glob_fixture_disable_stderr();
+$missing = @opendir("glob://glob-dup.*") === false;
+$restored = glob_fixture_restore_stderr();
+unlink("glob-dup.txt");
+echo $disabled === 1 && $missing && $restored === 1 ? "clean" : "fixture failed";
+"#,
+        r#"
+#include <stdint.h>
+#include <unistd.h>
+
+static int saved_stderr = -1;
+
+int64_t glob_fixture_disable_stderr(void) {
+    saved_stderr = dup(STDERR_FILENO);
+    return saved_stderr >= 0 && close(STDERR_FILENO) == 0;
+}
+
+int64_t glob_fixture_restore_stderr(void) {
+    if (saved_stderr < 0) {
+        return 0;
+    }
+    int restored = dup2(saved_stderr, STDERR_FILENO);
+    close(saved_stderr);
+    return restored == STDERR_FILENO;
+}
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "clean");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies compiled PHP output for tempnam.
 #[test]
 fn test_tempnam() {

@@ -37,7 +37,7 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save requested size
     emitter.instruction("str x2, [sp, #16]");                                   // save borrowed pad payload
-    emitter.instruction("ldr x9, [x0]");                                        // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load source array length
     emitter.instruction("str x9, [sp, #24]");                                   // save source array length
 
     // -- determine absolute target size and padding direction --
@@ -91,7 +91,7 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x7, x9");                                          // compare loop index with source length
     emitter.instruction("b.ge __rt_array_pad_ref_fill_right");                  // move on to right-padding after copying every source element
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("add x2, x1, #24");                                     // compute source data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("ldr x1, [x2, x7, lsl #3]");                            // load borrowed source payload
     emitter.instruction("str x7, [sp, #56]");                                   // preserve source loop index across helper calls
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload destination array pointer
@@ -141,7 +141,7 @@ fn emit_array_pad_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across normalization and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the signed requested target size across normalization and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the borrowed pad payload across the repeated refcounted append helper calls
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before deriving the normalized target size and pad count
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the source indexed-array logical length before deriving the normalized target size and pad count
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the source indexed-array logical length across the destination constructor call
     emitter.instruction("mov r11, rsi");                                        // copy the signed requested target size before normalizing it to an absolute length
     emitter.instruction("xor ecx, ecx");                                        // initialize the pad-left flag to false before checking whether the requested target size is negative
@@ -195,7 +195,7 @@ fn emit_array_pad_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare the source-copy index against the source indexed-array logical length
     emitter.instruction("jge __rt_array_pad_ref_fill_right_x86");               // move on to right-padding after copying every source refcounted payload into the destination array
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before reading the next source refcounted payload
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rsi, QWORD PTR [r10 + rcx * 8]");                  // load the next borrowed refcounted payload from the source indexed array
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the padded destination indexed-array pointer before appending the retained source payload
     emitter.instruction("call __rt_array_push_refcounted");                     // append the retained source payload into the padded destination indexed array

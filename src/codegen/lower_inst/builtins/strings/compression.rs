@@ -7,6 +7,7 @@
 //! Key details:
 //! - Optional levels, output buffers, failure boxing, and stack cleanup stay target-aware.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use super::*;
 
 mod inflate;
@@ -140,9 +141,7 @@ pub(super) fn lower_gzcompress_aarch64(ctx: &mut FunctionContext<'_>, inst: &Ins
     ctx.emitter.instruction("mov x0, x2");                                      // pass the source length to compressBound
     ctx.emitter.bl_c("compressBound");                                          // compute the worst-case compressed byte length
     ctx.emitter.instruction("str x0, [sp, #24]");                               // seed destLen with the output capacity
-    ctx.emitter.instruction("bl __rt_heap_alloc");                              // allocate the compressed-data buffer
-    ctx.emitter.instruction("mov x9, #1");                                      // heap kind 1 = owned string
-    ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("str x0, [sp, #32]");                               // save the destination buffer pointer
     ctx.emitter.instruction("add x1, sp, #24");                                 // pass &destLen as the compress2 in/out length
     ctx.emitter.instruction("ldr x2, [sp, #8]");                                // pass the source pointer
@@ -165,11 +164,7 @@ pub(super) fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Inst
     ctx.emitter.instruction("mov rdi, rdx");                                    // pass the source length to compressBound
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // seed destLen with the output capacity
-    ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(
-        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))
-    );                                                                          // materialize the x86_64 string heap kind word
-    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("mov QWORD PTR [rsp + 32], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer
     ctx.emitter.instruction("lea rsi, [rsp + 24]");                             // pass &destLen as the compress2 in/out length
@@ -198,9 +193,7 @@ pub(super) fn lower_gzdeflate_aarch64(
     ctx.emitter.instruction("mov x0, x2");                                      // pass the source length to compressBound
     ctx.emitter.bl_c("compressBound");                                          // compute the worst-case compressed byte length
     ctx.emitter.instruction("str x0, [sp, #144]");                              // save the output capacity
-    ctx.emitter.instruction("bl __rt_heap_alloc");                              // allocate the compressed-data buffer
-    ctx.emitter.instruction("mov x9, #1");                                      // heap kind 1 = owned string
-    ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("str x0, [sp, #128]");                              // save the destination buffer pointer
 
     ctx.emitter.instruction("mov x9, #0");                                      // initialize the z_stream clear index
@@ -257,11 +250,7 @@ pub(super) fn lower_gzdeflate_x86_64(
     ctx.emitter.instruction("mov rdi, rdx");                                    // pass the source length to compressBound
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the output capacity
-    ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(
-        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))
-    );                                                                          // materialize the x86_64 string heap kind word
-    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
     ctx.emitter.instruction("xor r9, r9");                                      // initialize the z_stream clear index
@@ -317,9 +306,7 @@ pub(super) fn lower_gzuncompress_aarch64(ctx: &mut FunctionContext<'_>, ok: &str
     ctx.emitter.instruction("csel x9, x9, x10, gt");                            // choose the larger output buffer size
     ctx.emitter.instruction("str x9, [sp, #16]");                               // seed destLen with the output capacity
     ctx.emitter.instruction("mov x0, x9");                                      // pass the output capacity to the heap allocator
-    ctx.emitter.instruction("bl __rt_heap_alloc");                              // allocate the decompressed-data buffer
-    ctx.emitter.instruction("mov x9, #1");                                      // heap kind 1 = owned string
-    ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("str x0, [sp, #24]");                               // save the destination buffer pointer
     ctx.emitter.instruction("add x1, sp, #16");                                 // pass &destLen as the uncompress in/out length
     ctx.emitter.instruction("ldr x2, [sp, #0]");                                // pass the source pointer
@@ -350,11 +337,7 @@ pub(super) fn lower_gzuncompress_x86_64(ctx: &mut FunctionContext<'_>, ok: &str,
     ctx.emitter.label(&sized);
     ctx.emitter.instruction("mov QWORD PTR [rsp + 16], r9");                    // seed destLen with the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
-    ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(
-        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))
-    );                                                                          // materialize the x86_64 string heap kind word
-    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer
     ctx.emitter.instruction("lea rsi, [rsp + 16]");                             // pass &destLen as the uncompress in/out length

@@ -10,7 +10,10 @@
 //! - The generated invoker remains authoritative for defaults, named-argument errors, and arity.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, with_mutable_runtime_owners, with_runtime_owners,
+};
+use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch};
 
 /// Invokes one boxed descriptor through its protected uniform adapter.
 pub(super) fn eval_native_descriptor_with_call_args(
@@ -24,7 +27,7 @@ pub(super) fn eval_native_descriptor_with_call_args(
         .ok_or(EvalStatus::UnsupportedConstruct)?;
     let mut staged = stage_native_descriptor_args(&signature, evaluated_args, context, values)?;
     let _native_context = crate::context::push_native_frame_context(context);
-    let result = with_runtime_owners(&staged.values, || {
+    let result = with_runtime_owners(&(&staged.values, &staged.ref_slots), || {
         let arg_array = match build_native_function_arg_array(&staged, values) {
             Ok(arguments) => arguments,
             Err(status) => {
@@ -41,16 +44,7 @@ pub(super) fn eval_native_descriptor_with_call_args(
             // Encoded weak-global invocation profile: the raw `-1` scope would set the
             // invoker's private by-reference warning bit and silently copy by-ref args.
             let result = values.invoke_native_callable(callback, arg_array.borrowed(), -4);
-            let writeback = write_back_native_function_ref_args(&staged, context, values);
-            let result = match (result, writeback) {
-                (Err(status), _) => Err(status),
-                (Ok(value), Err(status)) => {
-                    let _ = eval_release_value(context, values, value);
-                    Err(status)
-                }
-                (Ok(value), Ok(())) => Ok(value),
-            };
-            finish_eval_argument_values(result, [arg_array.take()], context, values)
+            finish_native_invocation(result, &staged, &arg_array, context, values)
         })
     });
     finish_eval_argument_values(result, staged.values.drain(..), context, values)
@@ -71,114 +65,113 @@ fn stage_native_descriptor_args(
     };
     let mut binding = DescriptorBindingState::new(signature.regular_param_count);
     let mut pending = std::collections::VecDeque::from(evaluated_args);
-    while let Some(argument) = pending.front().cloned() {
-        let parameter_index = binding.parameter_index(signature, argument.name.as_deref());
-        let parameter = parameter_index.and_then(|index| signature.parameters.get(index));
-        if !parameter.is_some_and(|parameter| parameter.by_ref) {
-            let argument = pending.pop_front().expect("the staged argument is still pending");
-            staged.named_keys.push(argument.name);
-            staged.values.push(argument.value);
-            continue;
-        }
-
-        let parameter = parameter.expect("a by-reference descriptor parameter has metadata");
-        let target = match argument.ref_target.clone() {
-            Some(target) => Some(target),
-            None => {
-                if let Err(status) = values.warning(&format!(
-                    "{}(): Argument #{} (${}) must be passed by reference, value given",
-                    signature.display_name,
-                    parameter_index.unwrap_or(0) + 1,
-                    if parameter.name.is_empty() { "arg" } else { &parameter.name },
-                )) {
-                    return abort_native_descriptor_staging(status, staged, pending, context, values);
-                }
-                None
+    let prepared = with_mutable_runtime_owners(&mut staged, |staged| {
+        while let Some(argument) = pending.front().cloned() {
+            let parameter_index = binding.parameter_index(signature, argument.name.as_deref());
+            let parameter = parameter_index.and_then(|index| signature.parameters.get(index));
+            if !parameter.is_some_and(|parameter| parameter.by_ref) {
+                let argument = pending.pop_front().expect("the staged argument is still pending");
+                staged.named_keys.push(argument.name);
+                staged.values.push(argument.value);
+                continue;
             }
-        };
-        let parameter_type = descriptor_parameter_type(parameter.type_tag);
-        let coerced = match parameter_type.as_ref() {
-            Some(parameter_type) => {
-                let parameter_name = (!parameter.name.is_empty()).then_some(parameter.name.as_str());
-                match eval_method_parameter_value_or_throw(
-                    &signature.display_name,
-                    parameter_index.unwrap_or(0) + 1,
-                    parameter_name,
-                    parameter_type,
-                    argument.value,
+
+            let parameter = parameter.expect("a by-reference descriptor parameter has metadata");
+            let target = match argument.ref_target.clone() {
+                Some(target) => Some(target),
+                None => {
+                    values.warning(&format!(
+                        "{}(): Argument #{} (${}) must be passed by reference, value given",
+                        signature.display_name,
+                        parameter_index.unwrap_or(0) + 1,
+                        if parameter.name.is_empty() { "arg" } else { &parameter.name },
+                    ))?;
+                    None
+                }
+            };
+            let parameter_type = descriptor_parameter_type(parameter.type_tag);
+            let coerced = match parameter_type.as_ref() {
+                Some(parameter_type) => {
+                    let parameter_name =
+                        (!parameter.name.is_empty()).then_some(parameter.name.as_str());
+                    eval_method_parameter_value_or_throw(
+                        &signature.display_name,
+                        parameter_index.unwrap_or(0) + 1,
+                        parameter_name,
+                        parameter_type,
+                        argument.value,
+                        context,
+                        values,
+                    )?
+                }
+                None => argument.value,
+            };
+            let coerced_is_temporary = coerced != argument.value;
+            let coerced_owner = RuntimeOwnerSlot::new(if coerced_is_temporary {
+                coerced
+            } else {
+                coerced.borrowed()
+            });
+            let staged_ref = with_runtime_owners(&coerced_owner, || {
+                stage_native_function_shared_ref_arg(
+                    parameter_type.as_ref(),
+                    false,
+                    coerced,
+                    parameter.type_tag == EVAL_TAG_MIXED,
+                    target,
+                    staged,
                     context,
                     values,
-                ) {
-                    Ok(value) => value,
-                    Err(status) => {
-                        return abort_native_descriptor_staging(
-                            status, staged, pending, context, values,
-                        );
+                )
+            });
+            let (marker, mut slot) = match staged_ref {
+                Ok(staged_ref) => staged_ref,
+                Err(status) => {
+                    if coerced_is_temporary {
+                        let _ = release_expr_result(coerced_owner.take(), context, values);
                     }
+                    return Err(status);
                 }
+            };
+            if let Some(slot) = &mut slot {
+                mark_descriptor_coercion_writeback(slot, coerced_is_temporary);
             }
-            None => argument.value,
-        };
-        let coerced_is_temporary = coerced != argument.value;
-        let (marker, mut slot) = match stage_native_function_shared_ref_arg(
-            parameter_type.as_ref(),
-            false,
-            coerced,
-            parameter.type_tag == EVAL_TAG_MIXED,
-            target,
-            &mut staged,
-            context,
-            values,
-        ) {
-            Ok(staged_ref) => staged_ref,
-            Err(status) => {
-                if coerced_is_temporary {
-                    let _ = release_expr_result(coerced, context, values);
-                }
-                return abort_native_descriptor_staging(status, staged, pending, context, values);
+            let argument = pending.pop_front().expect("the staged argument is still pending");
+            staged.named_keys.push(argument.name);
+            staged.values.push(marker);
+            if let Some(slot) = slot { staged.ref_slots.push(slot); }
+            if coerced_is_temporary {
+                release_expr_result(coerced_owner.take(), context, values)?;
             }
-        };
-        if let Some(slot) = &mut slot { mark_descriptor_coercion_writeback(slot, coerced_is_temporary); }
-        if coerced_is_temporary {
-            if let Err(status) = release_expr_result(coerced, context, values) {
-                let partial = BoundNativeFunctionArgs {
-                    evaluation_owners: Vec::new(),
-                    values: vec![marker],
-                    ref_slots: slot.into_iter().collect(),
-                    named_keys: vec![None],
-                };
-                let _ = cleanup_native_function_ref_args(&partial, values);
-                let _ = release_expr_result(marker, context, values);
-                return abort_native_descriptor_staging(status, staged, pending, context, values);
-            }
+            release_expr_result(argument.value, context, values)?;
         }
-        let argument = pending.pop_front().expect("the staged argument is still pending");
-        staged.named_keys.push(argument.name);
-        staged.values.push(marker);
-        if let Some(slot) = slot { staged.ref_slots.push(slot); }
-        if let Err(status) = release_expr_result(argument.value, context, values) {
-            return abort_native_descriptor_staging(status, staged, pending, context, values);
-        }
+        Ok(())
+    });
+    match prepared {
+        Ok(()) => Ok(staged),
+        Err(status) => abort_native_descriptor_staging(status, staged, pending, context, values),
     }
-    Ok(staged)
 }
 
 /// Releases partial marker state and every caller argument whose ownership was not transferred.
 fn abort_native_descriptor_staging(
     status: EvalStatus,
-    staged: BoundNativeFunctionArgs,
+    mut staged: BoundNativeFunctionArgs,
     pending: std::collections::VecDeque<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
-    let _ = cleanup_native_function_ref_args(&staged, values);
-    for value in staged
-        .values
-        .into_iter()
-        .chain(pending.into_iter().map(|argument| argument.value))
-    {
-        let _ = release_expr_result(value, context, values);
-    }
+    let owners = RuntimeOwnerBatch::new(
+        staged
+            .values
+            .drain(..)
+            .chain(pending.into_iter().map(|argument| argument.value)),
+    );
+    with_runtime_owners(&(&owners, &staged.ref_slots), || {
+        let _ = cleanup_native_function_ref_args(&staged, values);
+        let _ = owners.release(ReleaseOrder::Forward, CleanupErrorPolicy::Ignore,
+            |value| release_expr_result(value, context, values));
+    });
     Err(status)
 }
 

@@ -103,11 +103,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_base64_encode");                               // encode the subject into the concat buffer
     emitter.instruction("str x1, [sp, #32]");                                   // save the base64 source pointer
     emitter.instruction("str x2, [sp, #40]");                                   // save the base64 payload length
-    emitter.instruction("ldr x0, [sp, #24]");                                   // load the destination base
-    emitter.instruction("add x0, x0, #10");                                     // skip the encoded-word prefix
-    emitter.instruction("ldr x1, [sp, #32]");                                   // pass the base64 source pointer
-    emitter.instruction("ldr x2, [sp, #40]");                                   // pass the base64 payload length
-    emitter.bl_c("memcpy");                                                   // copy the encoded payload behind the prefix
+    elephc_memoir::strings::strcopy::emit_copy_after_prefix(emitter, 24, 32, 40, 10);
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the destination base
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the base64 payload length
     emitter.instruction("add x9, x9, #10");                                     // skip the encoded-word prefix
@@ -207,11 +203,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_base64_encode");                             // encode the subject into the concat buffer
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the base64 source pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the base64 payload length
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the destination base
-    emitter.instruction("add rdi, 10");                                         // skip the encoded-word prefix
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the base64 source pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass the base64 payload length
-    emitter.bl_c("memcpy");                                                   // copy the encoded payload behind the prefix
+    elephc_memoir::strings::strcopy::emit_copy_after_prefix(emitter, 32, 40, 48, 10);
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the destination base
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the base64 payload length
     emitter.instruction("add rcx, 10");                                         // skip the encoded-word prefix

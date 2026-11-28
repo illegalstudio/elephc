@@ -18,7 +18,7 @@ pub(super) fn emit_dispatch(emitter: &mut Emitter) {
     }
 
     // -- recognize enums before entering object recursion depth --
-    emitter.instruction("ldr x12, [x0]");                                       // load the receiver class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x0");
     abi::emit_load_symbol_to_reg(emitter, "x10", "_class_gc_desc_count", 0);
     emitter.instruction("cmp x12, x10");                                        // bounds-check the class id
     emitter.instruction("b.hs __rt_json_enum_ordinary");                        // unknown classes use the ordinary object encoder
@@ -60,7 +60,7 @@ pub(super) fn emit_dispatch(emitter: &mut Emitter) {
 
 /// Emits equivalent enum dispatch using the x86_64 internal runtime ABI.
 fn emit_x86_64(emitter: &mut Emitter) {
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the receiver class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rax");
     abi::emit_load_symbol_to_reg(emitter, "r11", "_class_gc_desc_count", 0);
     emitter.instruction("cmp r10, r11");                                        // bounds-check the class id
     emitter.instruction("jae __rt_json_enum_ordinary_x");                       // unknown classes use the ordinary object encoder

@@ -120,15 +120,16 @@ pub(in crate::interpreter) fn execute_matching_catch(
         return Ok(EvalControl::Throw(thrown));
     };
     if let Some(var_name) = &catch.var_name {
-        for replaced in set_owned_scope_cell(
+        let replaced = set_owned_scope_cell(
             context,
             scope,
             var_name.clone(),
             thrown,
             values,
-        )? {
-            values.release(replaced)?;
-        }
+        )?;
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            replaced, context, values,
+        )?;
     } else {
         values.release(thrown)?;
     }

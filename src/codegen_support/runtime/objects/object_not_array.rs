@@ -27,15 +27,13 @@
 //! - Control never returns. `__rt_throw_current` unwinds to the nearest handler, or reports the
 //!   uncaught Throwable and exits like PHP when there is none.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{
     OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX, SERIALIZATION_DENIED_PREFIX,
     SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
-};
-use crate::codegen_support::sentinels::{
-    emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
 };
 
 /// One runtime helper that throws `<prefix><Class><suffix>` as a given Throwable class.
@@ -167,20 +165,11 @@ fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow)
     emitter.instruction("bl __rt_str_persist");                                 // give the Throwable stable message ownership
     emitter.instruction("stp x1, x2, [sp]");                                    // preserve the message pair across the allocation
 
-    emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Throwable object payload
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies a throwable object
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as a runtime object
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the Throwable to its PHP object handle
-    abi::emit_load_symbol_to_reg(emitter, "x9", spec.class_id_symbol, 0);
-    emitter.instruction("str x9, [x0]");                                        // stamp the per-program Throwable class id
+    throwable_storage::emit_allocate(emitter);
+    throwable_storage::emit_class_id(emitter, spec.class_id_symbol);
     emitter.instruction("ldp x10, x11, [sp]");                                  // recover the persisted message pair
-    emitter.instruction("str x10, [x0, #8]");                                   // message pointer
-    emitter.instruction("str x11, [x0, #16]");                                  // message byte length
-    // __rt_heap_alloc recycles blocks without zeroing, so every remaining slot is written here.
-    emitter.instruction("str xzr, [x0, #24]");                                  // code = 0
-    emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous = null
+    throwable_storage::emit_message_pair(emitter, "x10", "x11");
+    throwable_storage::emit_default_fields(emitter, "x0");
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the Throwable for the unwinder
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
@@ -199,13 +188,13 @@ fn emit_object_entry_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow, labe
     emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
     emitter.instruction("add x29, sp, #32");                                    // establish a stable Throwable-construction frame
 
-    emitter.instruction("ldr x13, [x0]");                                       // keep the class id outside the symbol helper's x9 scratch
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x13", "x0");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, "x10");
     emitter.instruction("cmp x13, x10");                                        // is the class id within the dense name table?
     emitter.instruction(&format!("b.hs {fallback}"));                           // malformed ids use the generic spelling
-    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-    emitter.instruction("add x10, x10, x13, lsl #4");                           // select the 16-byte class-name row
-    emitter.instruction("ldp x11, x12, [x10]");                                 // borrow the class-name pointer and byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x10", "x13", "x14");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x11", "x12", "x10");
     emitter.instruction(&format!("cbnz x12, {ready}"));                         // a non-empty name is what PHP prints
     emitter.label(&fallback);
     abi::emit_symbol_address(emitter, "x11", "_unser_type_object");
@@ -256,21 +245,12 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the message pointer across the allocation
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the message byte length
 
-    emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    abi::emit_call_label(emitter, "__rt_heap_alloc");                           // allocate the Throwable object payload (rax = payload)
-    emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(6))); // magic + kind 6 identifies a throwable object
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
-    abi::emit_call_label(emitter, "__rt_object_handle_acquire");                // bind the Throwable to its PHP object handle
-    abi::emit_load_symbol_to_reg(emitter, "r10", spec.class_id_symbol, 0);
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // stamp the per-program Throwable class id
+    throwable_storage::emit_allocate(emitter);
+    throwable_storage::emit_class_id(emitter, spec.class_id_symbol);
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the message pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // recover the message byte length
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // message pointer
-    emitter.instruction("mov QWORD PTR [rax + 16], r11");                       // message byte length
-    // __rt_heap_alloc recycles blocks without zeroing, so every remaining slot is written here.
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // code = 0
-    emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous = null
+    throwable_storage::emit_message_pair(emitter, "r10", "r11");
+    throwable_storage::emit_default_fields(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the Throwable for the unwinder
     emitter.instruction("mov rsp, rbp");                                        // release the local frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -288,13 +268,12 @@ fn emit_object_entry_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow, label
     emitter.instruction("mov rbp, rsp");                                        // establish a Throwable-construction frame
     emitter.instruction("sub rsp, 32");                                         // reserve the message pair, keeping rsp aligned
 
-    emitter.instruction("mov r13, QWORD PTR [rdi]");                            // runtime class id
-    emitter.instruction("cmp r13, QWORD PTR [rip + _class_name_count]");        // is the class id within the dense name table?
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r13", "rdi");
+    elephc_memoir::values::class_metadata::emit_cmp_class_id_to_name_count(emitter, "r13"); // is the class id within the dense name table?
     emitter.instruction(&format!("jae {fallback}"));                            // malformed ids use the generic spelling
-    emitter.instruction("lea r10, [rip + _class_name_entries]");                // dense class-name metadata table
-    emitter.instruction("shl r13, 4");                                          // scale the class id to the 16-byte row
-    emitter.instruction("mov r11, QWORD PTR [r10 + r13]");                      // borrow the class-name pointer
-    emitter.instruction("mov r12, QWORD PTR [r10 + r13 + 8]");                  // borrow the class-name byte length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "r13", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "r11", "r12", "r10");
     emitter.instruction("test r12, r12");                                       // is the name non-empty?
     emitter.instruction(&format!("jnz {ready}"));                               // a non-empty name is what PHP prints
     emitter.label(&fallback);

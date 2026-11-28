@@ -21,6 +21,8 @@
 //!   a builtin call (`x9`–`x13`, `d0`/`d1`; `rax`/`rcx`/`rdx`/`r10`/`r11`, `xmm0`/`xmm1`),
 //!   so no register-allocated value can be destroyed by the loop.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -29,9 +31,6 @@ use crate::types::PhpType;
 
 use super::super::super::super::context::FunctionContext;
 use super::super::expect_operand;
-
-/// Byte offset of the first payload slot inside an indexed-array allocation.
-const ARRAY_DATA_OFFSET: i64 = 24;
 
 /// Selects the runtime reduction that matches a container's element storage.
 #[derive(Clone, Copy)]
@@ -379,7 +378,7 @@ fn emit_int_reduce_aarch64(
     // -- seed the reduction with the first payload slot --
     ctx.emitter.instruction("ldr x9, [x0]");                                    // x9 = the array's logical element count from its header
     ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // an empty array is PHP's ValueError, not a reduction
-    ctx.emitter.instruction(&format!("add x10, x0, #{}", ARRAY_DATA_OFFSET));   // x10 = address of the first payload slot
+    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
     ctx.emitter.instruction("ldr x11, [x10]");                                  // x11 = running result seeded with element 0
     ctx.emitter.instruction("mov x12, #1");                                     // x12 = cursor starting at the second element
     // -- fold every remaining element into the running result --
@@ -409,7 +408,7 @@ fn emit_float_reduce_aarch64(
     // -- seed the reduction with the first payload slot --
     ctx.emitter.instruction("ldr x9, [x0]");                                    // x9 = the array's logical element count from its header
     ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // an empty array is PHP's ValueError, not a reduction
-    ctx.emitter.instruction(&format!("add x10, x0, #{}", ARRAY_DATA_OFFSET));   // x10 = address of the first payload slot
+    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x0");
     ctx.emitter.instruction("ldr d0, [x10]");                                   // d0 = running result seeded with element 0
     ctx.emitter.instruction("mov x12, #1");                                     // x12 = cursor starting at the second element
     // -- fold every remaining element into the running result --
@@ -438,7 +437,7 @@ fn emit_int_reduce_x86_64(
     ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // r10 = the array's logical element count from its header
     ctx.emitter.instruction("test r10, r10");                                   // check whether the array holds any element at all
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // an empty array is PHP's ValueError, not a reduction
-    ctx.emitter.instruction(&format!("lea r11, [rax + {}]", ARRAY_DATA_OFFSET));// r11 = address of the first payload slot
+    packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
     ctx.emitter.instruction("mov rax, QWORD PTR [r11]");                        // rax = running result seeded with element 0
     ctx.emitter.instruction("mov rcx, 1");                                      // rcx = cursor starting at the second element
     // -- fold every remaining element into the running result --
@@ -468,7 +467,7 @@ fn emit_float_reduce_x86_64(
     ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // r10 = the array's logical element count from its header
     ctx.emitter.instruction("test r10, r10");                                   // check whether the array holds any element at all
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // an empty array is PHP's ValueError, not a reduction
-    ctx.emitter.instruction(&format!("lea r11, [rax + {}]", ARRAY_DATA_OFFSET));// r11 = address of the first payload slot
+    packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "rax");
     ctx.emitter.instruction("movsd xmm0, QWORD PTR [r11]");                     // xmm0 = running result seeded with element 0
     ctx.emitter.instruction("mov rcx, 1");                                      // rcx = cursor starting at the second element
     // -- fold every remaining element into the running result --

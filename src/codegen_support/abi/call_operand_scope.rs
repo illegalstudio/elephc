@@ -9,11 +9,13 @@
 //! - Temporary records are stack-aligned; return leases use stable frame records.
 //! - Exact unlink preserves newer return records when an older temporary is retired.
 //! - Records have no PHP backtrace reader and reuse the ordinary owner-slot visitor.
+//! - Memoir owns publication and exact unlink; this adapter selects placement and callbacks.
 
 use super::*;
 use crate::codegen_support::emit::Emitter;
 
-pub(crate) const CALL_OPERAND_OWNER_RECORD_BYTES: usize = 48;
+/// Shared complete record size used when reserving temporary caller storage.
+pub(crate) use elephc_memoir::owner_records::RECORD_BYTES as CALL_OPERAND_OWNER_RECORD_BYTES;
 
 /// Publishes a value in a preallocated owned-value guard before later code can throw.
 pub(crate) fn emit_guard_owned_at_stack(
@@ -22,20 +24,21 @@ pub(crate) fn emit_guard_owned_at_stack(
     cleanup: &str,
     record_offset: usize,
 ) {
-    let scratch = temp_int_reg(emitter.target);
-    emit_store_to_sp(emitter, owner,
-        record_offset + crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
-    emit_symbol_address(emitter, scratch, cleanup);
-    emit_store_to_sp(emitter, scratch, record_offset + 8);
-    emit_temporary_stack_address(emitter, int_arg_reg_name(emitter.target, 0), record_offset);
-    emit_load_int_immediate(emitter, int_arg_reg_name(emitter.target, 1), 0);
-    emit_call_label(emitter, "__rt_exception_guard_owned");
+    elephc_memoir::guarded_owners::emit_publish_at_stack(
+        emitter,
+        owner,
+        cleanup,
+        temp_int_reg(emitter.target),
+        elephc_memoir::RecordOffset::new(record_offset),
+        elephc_memoir::RecordOffset::new(crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET),
+    );
 }
 
 /// Detaches a preallocated value guard while preserving any guards published after it.
 pub(crate) fn emit_unguard_owned_at_stack(emitter: &mut Emitter, record_offset: usize) {
-    emit_temporary_stack_address(emitter, int_arg_reg_name(emitter.target, 0), record_offset);
-    emit_call_label(emitter, "__rt_exception_unguard_owned");
+    elephc_memoir::guarded_owners::emit_detach_at_stack(
+        emitter, elephc_memoir::RecordOffset::new(record_offset),
+    );
 }
 
 /// Links a caller-owned slot into the cleanup chain without consuming its current payload.
@@ -69,24 +72,12 @@ pub(crate) fn emit_push_call_reference_argument_owner(emitter: &mut Emitter, own
         "__rt_gc_operand_frame_owners", 0);
 }
 
-/// Publishes the shared owner-slot layout with an explicit cleanup discipline.
+/// Publishes a preallocated owner record using compiler-selected placement and callbacks.
 fn emit_link_owner_with_cleanup(
     emitter: &mut Emitter, owner_address: &str, cleanup: &str, visitor: &str, record_offset: usize,
 ) {
-    let scratch = secondary_scratch_reg(emitter);
-    emitter.comment("publish temporary call operand owner");
-    emit_store_to_sp(emitter, owner_address, record_offset + 16);
-    emit_load_symbol_to_reg(emitter, scratch, "_exc_call_frame_top", 0);
-    emit_store_to_sp(emitter, scratch, record_offset);
-    emit_symbol_address(emitter, scratch, cleanup);
-    emit_store_to_sp(emitter, scratch, record_offset + 8);
-    emit_load_int_immediate(emitter, scratch, 0);
-    emit_store_to_sp(emitter, scratch, record_offset + 24);
-    emit_store_to_sp(emitter, scratch, record_offset + 32);
-    emit_symbol_address(emitter, scratch, visitor);
-    emit_store_to_sp(emitter, scratch, record_offset + 40);
-    emit_temporary_stack_address(emitter, scratch, record_offset);
-    emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
+    elephc_memoir::owner_records::publish_stack(emitter, owner_address, record_offset,
+        elephc_memoir::owner_records::Context { head: "_exc_call_frame_top", cleanup, visitor });
 }
 
 /// Detaches the innermost temporary record before normal-path owner retirement can throw.
@@ -103,30 +94,18 @@ pub(crate) fn emit_unlink_call_operand_owner_at_stack(emitter: &mut Emitter, rec
     emit_unlink_record(emitter);
 }
 
-/// Publishes a pending return lease without moving the temporary-stack base.
-///
-/// A return site revisited after a nonthrowing branch can still have its record attached. Remove
-/// that identity before republishing it, so the activation chain never acquires a self-cycle.
+/// Publishes a fixed return owner using compiler-selected placement and callbacks.
 pub(crate) fn emit_link_call_operand_owner_in_frame(
     emitter: &mut Emitter,
     owner_address: &str,
     frame_offset: usize,
 ) {
-    emit_unlink_call_operand_owner_in_frame(emitter, frame_offset);
-    let record = secondary_scratch_reg(emitter);
-    let scratch = symbol_scratch_reg(emitter);
-    emit_frame_slot_address(emitter, record, frame_offset);
-    emitter.comment("publish pending reference return owner");
-    emit_store_to_address(emitter, owner_address, record, 16);
-    emit_load_symbol_to_reg(emitter, scratch, "_exc_call_frame_top", 0);
-    emit_store_to_address(emitter, scratch, record, 0);
-    emit_symbol_address(emitter, scratch, "__rt_cleanup_call_operand_owner");
-    emit_store_to_address(emitter, scratch, record, 8);
-    emit_store_zero_to_address(emitter, record, 24);
-    emit_store_zero_to_address(emitter, record, 32);
-    emit_symbol_address(emitter, scratch, "__rt_gc_operand_frame_owners");
-    emit_store_to_address(emitter, scratch, record, 40);
-    emit_store_reg_to_symbol(emitter, record, "_exc_call_frame_top", 0);
+    elephc_memoir::owner_records::link_frame(emitter, owner_address,
+        elephc_memoir::FrameOffset::new(frame_offset), elephc_memoir::owner_records::Context {
+            head: "_exc_call_frame_top",
+            cleanup: "__rt_cleanup_call_operand_owner",
+            visitor: "__rt_gc_operand_frame_owners",
+        });
 }
 
 /// Removes one stable return record without changing stack argument or result registers.
@@ -142,55 +121,9 @@ pub(crate) fn emit_unlink_call_operand_owner_at_address(emitter: &mut Emitter, a
     emit_unlink_record(emitter);
 }
 
-/// Splices the record in the secondary scratch register out of the activation chain.
-///
-/// The common LIFO path uses only the two reserved scratch registers. The uncommon search saves
-/// the tertiary scratch register, which is also a live SysV argument register, before borrowing
-/// it. Numeric labels keep each inline sequence local on ELF and Mach-O without runtime calls.
+/// Splices the selected record through Memoir's exact-identity chain operation.
 fn emit_unlink_record(emitter: &mut Emitter) {
-    let record = secondary_scratch_reg(emitter);
-    let link = symbol_scratch_reg(emitter);
-    let current = tertiary_scratch_reg(emitter);
-    emit_load_symbol_to_reg(emitter, link, "_exc_call_frame_top", 0);
-    if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 {
-        emitter.instruction(&format!("cmp {link}, {record}"));                  // keep the ordinary top-record removal on its constant-time path
-        emitter.instruction("b.ne 961f");                                       // search only when a newer stable record lies above this owner
-    } else {
-        emitter.instruction(&format!("cmp {link}, {record}"));                  // compare the head with the exact record being retired
-        emitter.instruction("jne 961f");                                        // preserve newer pending-return records through the slow path
-    }
-    emit_load_from_address(emitter, record, record, 0);
-    emit_store_reg_to_symbol(emitter, record, "_exc_call_frame_top", 0);
-    emitter.instruction(if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 {
-        "b 964f"
-    } else { "jmp 964f" });                                                     // finish the ordinary top-record removal without borrowing argument registers
-    emitter.label("961");
-    emit_reserve_temporary_stack(emitter, 16);
-    emit_store_to_sp(emitter, current, 0);
-    emit_symbol_address(emitter, link, "_exc_call_frame_top");
-    emitter.label("962");
-    emit_load_from_address(emitter, current, link, 0);
-    if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 {
-        emitter.instruction(&format!("cbz {current}, 963f"));                   // tolerate records already removed by exceptional unwinding
-        emitter.instruction(&format!("cmp {current}, {record}"));               // identify the exact older cleanup record
-        emitter.instruction("b.eq 965f");                                       // splice it out without touching newer owners
-    } else {
-        emitter.instruction(&format!("test {current}, {current}"));             // stop at the end of the live chain
-        emitter.instruction("jz 963f");                                         // permit an already-detached fixed record
-        emitter.instruction(&format!("cmp {current}, {record}"));               // compare this link with the selected record identity
-        emitter.instruction("je 965f");                                         // preserve unrelated newer cleanup records
-    }
-    emit_reg_move(emitter, link, current);
-    emitter.instruction(if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 {
-        "b 962b"
-    } else { "jmp 962b" });                                                     // continue through each activation's previous-record link
-    emitter.label("965");
-    emit_load_from_address(emitter, current, record, 0);
-    emit_store_to_address(emitter, current, link, 0);
-    emitter.label("963");
-    emit_load_temporary_stack_slot(emitter, current, 0);
-    emit_release_temporary_stack(emitter, 16);
-    emitter.label("964");
+    elephc_memoir::owner_records::unlink_record(emitter, "_exc_call_frame_top");
 }
 
 #[cfg(test)]
@@ -277,3 +210,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod memoir_tests;

@@ -48,8 +48,8 @@ pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
     emitter.label_global(label);
 
     // -- load array metadata and set up outer loop --
-    emitter.instruction("ldr x1, [x0]");                                        // x1 = array length from header
-    emitter.instruction("add x2, x0, #24");                                     // x2 = base of data region (skip header)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x1", "x0"); // x1 = array length from header
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x0");
     // -- reverse-sorted fast path: a non-increasing payload becomes sorted by reversal --
     emitter.instruction("cmp x1, #2");                                          // arrays shorter than two elements are already sorted
     emitter.instruction(&format!("b.lt {done}"));                               // nothing to do for zero or one element
@@ -132,8 +132,8 @@ fn emit_sort_int_linux_x86_64(emitter: &mut Emitter, reverse: bool) {
     emitter.comment(&format!("--- runtime: {} ---", label));
     emitter.label_global(label);
 
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // load the indexed-array logical length before starting the insertion-sort outer loop
-    emitter.instruction("lea r9, [rdi + 24]");                                  // compute the indexed-array payload base pointer once so the loop body can index slots directly
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r8", "rdi"); // load the indexed-array logical length before starting the insertion-sort outer loop
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
 
     let outer = format!("{}_outer", label);
     let inner = format!("{}_inner", label);

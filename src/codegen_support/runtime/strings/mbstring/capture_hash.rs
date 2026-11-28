@@ -11,6 +11,7 @@
 //! - Reference adapters select or promote each destination before entering this hash-only writer.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::hash_layout;
 
 #[cfg(test)]
 pub(super) mod tests;
@@ -90,12 +91,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction(if arm { "cmp x3, #4" } else { "cmp rcx, 4" });         // arrays, objects, and Mixed cells own heap storage
     branch(emitter, "lo", "jb", "write");
     emitter.label(&format!("{NAME}_release_any"));
-    prepare_release(emitter, "__rt_decref_any");
+    elephc_memoir::values::hash_write_guard::emit_stage_borrowed_release(emitter, "__rt_decref_any");
     jump(emitter, "release_guard");
     emitter.label(&format!("{NAME}_release_callable"));
-    prepare_release(emitter, "__rt_callable_descriptor_release");
+    elephc_memoir::values::hash_write_guard::emit_stage_borrowed_release(emitter, "__rt_callable_descriptor_release");
     emitter.label(&format!("{NAME}_release_guard"));
-    guarded_release(emitter);
+    elephc_memoir::values::hash_write_guard::emit_borrowed_release(emitter);
     emitter.instruction(if arm { "cmp x0, #0" } else { "test rax, rax" });      // a changed key now holds a new owner or no entry
     branch(emitter, "ne", "jne", "value_lookup");
     emitter.label(&format!("{NAME}_relookup"));
@@ -105,14 +106,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label(&format!("{NAME}_write"));
     if arm {
         emitter.instruction("ldp x9, x10, [sp, #24]");                          // recover the new owned capture payload
-        emitter.instruction("stp x9, x10, [x4, #24]");                          // complete the selected array's current entry after destruction
-        emitter.instruction("ldr x9, [sp, #40]");                               // recover the capture's concrete string or bool tag
-        emitter.instruction("str x9, [x4, #40]");                               // publish the final value type without changing key identity
+        emitter.instruction("ldr x11, [sp, #40]");                              // recover the capture's concrete string or bool tag
+        hash_layout::emit_store_entry_value(emitter, "x4", "x11", "x9", "x10");
     } else {
-        for offset in [24, 32, 40] {
-            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {offset}]")); // recover one owned capture word
-            emitter.instruction(&format!("mov QWORD PTR [r8 + {offset}], r10")); // finish the selected entry without ordinary COW
-        }
+        emitter.instruction("mov r10, QWORD PTR [rsp + 24]");                   // recover the new owned capture low word
+        emitter.instruction("mov r11, QWORD PTR [rsp + 32]");                   // recover the new owned capture high word
+        emitter.instruction("mov r9, QWORD PTR [rsp + 40]");                    // recover the capture's concrete string or bool tag
+        hash_layout::emit_store_entry_value(emitter, "r8", "r9", "r10", "r11");
     }
     jump(emitter, "finish");
     emitter.label(&format!("{NAME}_insert"));
@@ -132,30 +132,6 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("pop rbp");                                         // restore caller linkage after every callback returned
     }
     emitter.instruction("ret");                                                 // return after completing the write even when destruction threw
-}
-
-/// Spills the old payload and its release operation before linking a borrowing scope.
-fn prepare_release(emitter: &mut Emitter, symbol: &str) {
-    let arm = emitter.target.arch == Arch::AArch64;
-    emitter.instruction(if arm { "str x1, [sp, #96]" } else { "mov QWORD PTR [rsp + 96], rdi" }); // transfer the previous entry owner to this protected release
-    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r10" }, symbol);
-    emitter.instruction(if arm { "str x9, [sp, #104]" } else { "mov QWORD PTR [rsp + 104], r10" }); // retain the type-specific release operation
-}
-
-/// Keeps an observable old entry borrowed while its owner is released behind the exception boundary.
-fn guarded_release(emitter: &mut Emitter) {
-    let arm = emitter.target.arch == Arch::AArch64;
-    emitter.instruction(if arm { "add x0, sp, #56" } else { "lea rdi, [rsp + 56]" }); // supply the caller-owned five-word scope record
-    emitter.instruction(if arm { "ldr x1, [sp]" } else { "mov rsi, QWORD PTR [rsp]" }); // retain the selected stable array identity
-    emitter.instruction(if arm { "ldr x2, [sp, #8]" } else { "mov rdx, QWORD PTR [rsp + 8]" }); // borrow the current normalized key payload
-    emitter.instruction(if arm { "ldr x3, [sp, #16]" } else { "mov rcx, QWORD PTR [rsp + 16]" }); // retain integer identity or exact string length
-    abi::emit_call_label(emitter, "__rt_hash_write_guard_push");
-    emitter.instruction(if arm { "ldr x0, [sp, #104]" } else { "mov rdi, QWORD PTR [rsp + 104]" }); // recover the protected release operation
-    emitter.instruction(if arm { "ldr x1, [sp, #96]" } else { "mov rsi, QWORD PTR [rsp + 96]" }); // release the previous owner exactly once
-    emitter.instruction(if arm { "add x2, sp, #48" } else { "lea rdx, [rsp + 48]" }); // preserve pending state across recursive PHP callbacks
-    abi::emit_call_label(emitter, "__rt_cleanup_call");
-    emitter.instruction(if arm { "add x0, sp, #56" } else { "lea rdi, [rsp + 56]" }); // end this scope only after the protected release returned
-    abi::emit_call_label(emitter, "__rt_hash_write_guard_pop");
 }
 
 /// Borrows the selected hash entry using stable key bytes from this write's frame.
@@ -193,9 +169,19 @@ fn persist(emitter: &mut Emitter, offset: usize) {
 fn insert(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     emitter.instruction(if arm { "ldr x0, [sp]" } else { "mov rdi, QWORD PTR [rsp]" }); // reload the stable destination header
-    emitter.instruction(if arm { "ldr x9, [x0]" } else { "mov r10, QWORD PTR [rdi]" }); // read the current count after any destructor growth
+    hash_layout::emit_load_header_field(
+        emitter,
+        if arm { "x9" } else { "r10" },
+        if arm { "x0" } else { "rdi" },
+        hash_layout::HeaderField::Count,
+    );
     emitter.instruction(if arm { "lsl x9, x9, #2" } else { "shl r10, 2" });     // scale occupied slots for the load-factor comparison
-    emitter.instruction(if arm { "ldr x10, [x0, #8]" } else { "mov r11, QWORD PTR [rdi + 8]" }); // read the current capacity
+    hash_layout::emit_load_header_field(
+        emitter,
+        if arm { "x10" } else { "r11" },
+        if arm { "x0" } else { "rdi" },
+        hash_layout::HeaderField::Capacity,
+    );
     emitter.instruction(if arm { "add x10, x10, x10, lsl #1" } else { "imul r11, r11, 3" }); // calculate the three-quarter capacity threshold
     emitter.instruction(if arm { "cmp x9, x10" } else { "cmp r10, r11" });      // test whether insertion needs more storage
     branch(emitter, "lo", "jb", "capacity_ready");

@@ -21,6 +21,8 @@
 //! - The free slot is located BEFORE persisting, so a full table allocates
 //!   nothing.
 
+use elephc_memoir::buffers::stream_tables;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Warning PHP emits when the protocol contains a byte outside `[A-Za-z0-9+.-]`.
@@ -86,16 +88,15 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
 
     // -- one pass over _user_wrappers: reject a duplicate, remember the first free slot --
     emitter.label("__rt_swr_scan_start");
-    abi::emit_symbol_address(emitter, "x4", "_user_wrappers");
     emitter.instruction("mov x5, #0");                                          // wrapper slot index
     emitter.instruction("mov x7, #-1");                                         // first free slot, -1 until one is seen
     emitter.label("__rt_swr_scan");
-    emitter.instruction("cmp x5, #64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x5, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_swr_scanned");                               // the table has been walked end to end
-    emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
-    emitter.instruction("ldr x12, [x6]");                                       // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x6", "x5", "x4");
+    stream_tables::emit_load_registration_field(emitter, "x12", "x6", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x12, __rt_swr_free");                              // a null pointer marks an empty slot
-    emitter.instruction("ldr x13, [x6, #8]");                                   // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x13", "x6", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x13, x1");                                         // same length as the protocol being registered?
     emitter.instruction("b.ne __rt_swr_scan_next");                             // different length — cannot be the same protocol
     emitter.instruction("mov x14, #0");                                         // byte compare index
@@ -118,25 +119,11 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.label("__rt_swr_scanned");
     emitter.instruction("cmn x7, #1");                                          // did the walk find a free slot?
     emitter.instruction("b.eq __rt_swr_full");                                  // table full
-    emitter.instruction("add x6, x4, x7, lsl #5");                              // slot base of the first free slot
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x6", "x7", "x4");
 
     // -- take ownership of both strings, then store the registration --
     emitter.label("__rt_swr_store");
-    emitter.instruction("str x6, [sp, #16]");                                   // save the free slot base across the persist calls
-    emitter.instruction("str x2, [sp, #24]");                                   // save the class-name pointer across the protocol persist
-    emitter.instruction("str x3, [sp, #32]");                                   // save the class-name length across the protocol persist
-    emitter.instruction("mov x2, x1");                                          // protocol length → persist length input
-    emitter.instruction("mov x1, x0");                                          // protocol pointer → persist pointer input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned protocol bytes, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6]");                                        // owned protocol pointer
-    emitter.instruction("str x2, [x6, #8]");                                    // protocol length
-    emitter.instruction("ldr x1, [sp, #24]");                                   // class-name pointer → persist pointer input
-    emitter.instruction("ldr x2, [sp, #32]");                                   // class-name length → persist length input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned class name, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6, #16]");                                   // owned class-name pointer
-    emitter.instruction("str x2, [x6, #24]");                                   // class-name length
+    elephc_memoir::strings::owner_pair::emit_register_row(emitter);
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
     emitter.instruction("b __rt_swr_ret");                                      // share the common epilogue
 
@@ -215,19 +202,17 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
 
     // -- one pass over _user_wrappers: reject a duplicate, remember the first free slot --
     emitter.label("__rt_swr_scan_start_x86");
-    abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
     emitter.instruction("mov rax, -1");                                         // first free slot, -1 until one is seen
     emitter.label("__rt_swr_scan_x86");
-    emitter.instruction("cmp r9, 64");                                          // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r9, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                          // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_swr_scanned_x86");                            // the table has been walked end to end
-    emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r10", "r9", "r8");
+    stream_tables::emit_load_registration_field(emitter, "r11", "r10", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
     emitter.instruction("jz __rt_swr_free_x86");                                // remember it and move on
-    emitter.instruction("cmp QWORD PTR [r10 + 8], rsi");                        // same length as the protocol being registered?
+    stream_tables::emit_load_registration_field(emitter, "r10", "r10", stream_tables::RegistrationField::NameLength);
+    emitter.instruction("cmp r10, rsi");                                        // same length as the protocol being registered?
     emitter.instruction("jne __rt_swr_scan_next_x86");                          // different length — cannot be the same protocol
     emitter.instruction("xor rcx, rcx");                                        // byte compare index
     emitter.label("__rt_swr_cmp_x86");
@@ -248,25 +233,11 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_swr_scanned_x86");
     emitter.instruction("cmp rax, -1");                                         // did the walk find a free slot?
     emitter.instruction("je __rt_swr_full_x86");                                // table full
-    emitter.instruction("mov r10, rax");                                        // first free slot index
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r10", "rax", "r8");
 
     // -- take ownership of both strings, then store the registration --
     emitter.label("__rt_swr_store_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the free slot base across the persist calls
-    emitter.instruction("mov rax, rdi");                                        // protocol pointer → persist pointer input
-    emitter.instruction("mov rdx, rsi");                                        // protocol length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned protocol bytes, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // owned protocol pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                        // protocol length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // class-name pointer → persist pointer input
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // class-name length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned class name, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
-    emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // owned class-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rdx");                       // class-name length
+    elephc_memoir::strings::owner_pair::emit_register_row(emitter);
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
     emitter.instruction("jmp __rt_swr_ret_x86");                                // share the common epilogue
 

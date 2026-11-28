@@ -9,6 +9,7 @@
 //! - Declared slots and their visibility gates always take precedence over this fallback.
 //! - Hash setters consume a retained cell owner and publish COW or growth replacements.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::{abi, Arch, Emitter, Module};
 
 pub(super) const SLOT_HELPER: &str = "__elephc_eval_property_hash_slot";
@@ -24,7 +25,7 @@ pub(super) fn emit_property_hash_slot_helper(module: &Module, emitter: &mut Emit
             emitter.instruction("stp x29, x30, [sp, #16]");                     // save the caller frame and return address
             emitter.instruction("add x29, sp, #16");                            // establish the helper frame
             emitter.instruction("str x0, [sp]");                                // keep the native receiver live without transferring ownership
-            emitter.instruction("ldr x9, [x0]");                                // read its physical native class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             ("x9", "x10", "x0", "x0")
         }
         Arch::X86_64 => {
@@ -32,7 +33,7 @@ pub(super) fn emit_property_hash_slot_helper(module: &Module, emitter: &mut Emit
             emitter.instruction("mov rbp, rsp");                                // establish the helper frame
             emitter.instruction("sub rsp, 16");                                 // reserve an aligned receiver spill
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // preserve the raw object across the callback
-            emitter.instruction("mov r11, QWORD PTR [rdi]");                    // read its physical native class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
             ("r11", "r10", "rdi", "rax")
         }
     };
@@ -68,7 +69,7 @@ pub(super) fn emit_property_hash_slot_helper(module: &Module, emitter: &mut Emit
                 }
             }
         }
-        let offset = 8 + info.properties.len() * 16;
+        let offset = object_declared_slot_offset(info.properties.len());
         match module.target.arch {
             Arch::AArch64 => {
                 abi::emit_load_int_immediate(emitter, "x10", offset as i64);

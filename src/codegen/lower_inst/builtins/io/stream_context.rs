@@ -345,10 +345,7 @@ pub(super) fn store_current_result_as_stream_notification_callback(ctx: &mut Fun
         abi::emit_call_label(ctx.emitter, "__rt_web_context_notification_store");
         return;
     }
-    let addr_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, addr_reg, "_stream_notification_callback");
-    abi::emit_store_to_address(ctx.emitter, result_reg, addr_reg, 0);
+    elephc_memoir::buffers::stream_context_owners::emit_legacy_notification_store(ctx.emitter, false);
 }
 
 /// Clears `_stream_notification_callback` so later transfers do not fire stale callbacks.
@@ -358,11 +355,7 @@ pub(super) fn clear_stream_notification_callback(ctx: &mut FunctionContext<'_>) 
         abi::emit_call_label(ctx.emitter, "__rt_web_context_notification_store");
         return;
     }
-    let addr_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let zero_reg = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, addr_reg, "_stream_notification_callback");
-    abi::emit_load_int_immediate(ctx.emitter, zero_reg, 0);
-    abi::emit_store_to_address(ctx.emitter, zero_reg, addr_reg, 0);
+    elephc_memoir::buffers::stream_context_owners::emit_legacy_notification_store(ctx.emitter, true);
 }
 
 /// Lowers `stream_context_get_options(context)`.
@@ -375,7 +368,7 @@ pub(crate) fn lower_stream_context_get_options(
     let done_label = ctx.next_label("scgo_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            elephc_memoir::buffers::stream_context_owners::emit_options_address(ctx.emitter, "x9");
             ctx.emitter.instruction("ldr x0, [x9]");                            // load the persisted stream-context options pointer
             ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));       // allocate an empty hash when no context options exist
             abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -387,7 +380,7 @@ pub(crate) fn lower_stream_context_get_options(
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            elephc_memoir::buffers::stream_context_owners::emit_options_address(ctx.emitter, "r9");
             ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // load the persisted stream-context options pointer
             ctx.emitter.instruction("test rax, rax");                           // test whether a context options pointer exists
             ctx.emitter.instruction(&format!("jz {}", empty_label));            // allocate an empty hash when no context options exist

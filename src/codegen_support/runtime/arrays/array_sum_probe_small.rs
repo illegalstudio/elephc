@@ -32,7 +32,7 @@ fn emit_aarch64(e: &mut Emitter) {
     e.instruction("mov x10, #0x7fffffff");                                      // largest count whose total fits below 2^63
     e.instruction("cmp x9, x10");                                               // does the count fit the bound?
     e.instruction("b.hi __rt_array_sum_probe_small_no");                        // larger arrays keep the exact reducer
-    e.instruction("add x10, x0, #24");                                          // skip the indexed-array header to the payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(e, "x10", "x0");
     e.instruction("movi v0.2d, #0");                                            // zero the two-lane 64-bit sum
     e.instruction("movi v3.2d, #0");                                            // zero the high-dword guard
     e.instruction("mov x13, xzr");                                              // the odd tail contributes zero by default
@@ -74,7 +74,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("mov r9, 0x7fffffff");                                        // largest count whose total fits below 2^63
     e.instruction("cmp r8, r9");                                                // does the count fit the bound?
     e.instruction("ja __rt_array_sum_probe_small_no_x86");                      // larger arrays keep the exact reducer
-    e.instruction("lea r9, [rdi + 24]");                                        // skip the indexed-array header to the payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(e, "r9", "rdi");
     e.instruction("pxor xmm0, xmm0");                                           // zero the two-lane 64-bit sum
     e.instruction("pxor xmm3, xmm3");                                           // zero the high-dword guard
     e.instruction("xor edx, edx");                                              // the odd tail contributes zero by default

@@ -45,7 +45,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     // is the encoder that renders `[5 => 3]` the way PHP does, `{"5":3}` rather than `[3]`.
     // The conditional branch skips OVER an unconditional one because AArch64 cannot name an
     // external label in a conditional branch.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_json_arr_dyn_packed");                       // packed storage encodes inline below
@@ -91,9 +91,9 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
 
     // -- cache array length and packed value_type tag --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // load the current array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // load the current array length
     emitter.instruction("str x3, [sp, #24]");                                   // save the array length for the element loop
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // move the packed value_type tag into the low bits
     emitter.instruction("and x9, x9, #0x7f");                                   // isolate the packed value_type tag
     emitter.instruction("str x9, [sp, #32]");                                   // save the array element value_type tag
@@ -306,7 +306,7 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     // Same runtime-promotion probe as the AArch64 path; `__rt_json_encode_assoc` takes the
     // container in RAX and returns rax/rdx exactly as this entry does. NOTE the register:
     // every json encoder here carries the array in RAX, not rdi.
-    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rax");
     emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_json_arr_dyn_packed");                        // packed storage encodes inline below
@@ -347,11 +347,10 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // persist the updated write pointer before entering the element loop
     emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the container opens
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source array pointer (depth_enter clobbered rax)
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array length from the first field of the array header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rax"); // load the indexed-array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the array length across nested JSON helper calls
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed array kind word so the value_type tag can drive JSON dispatch
-    emitter.instruction("shr r10, 8");                                          // move the packed array value_type tag into the low bits for x86_64 dispatch
-    emitter.instruction("and r10, 0x7f");                                       // isolate the packed array value_type tag without the persistent COW flag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the packed array value_type tag across nested JSON helper calls
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the indexed-array element loop counter to zero
 

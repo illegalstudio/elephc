@@ -135,16 +135,17 @@ mod decref_array;
 mod decref_hash;
 mod decref_mixed;
 mod decref_object;
+#[cfg(test)]
 mod eval_array_references;
 pub(crate) mod gc_candidates;
 mod gc_collect_cycles;
-mod gc_host_roots;
-mod gc_collect_cycles_x86_64;
 mod gc_control;
+#[cfg(test)]
 mod gc_collect_budget;
 mod memory;
 mod gc_destructors;
-mod gc_weak_observers;
+mod published_graph;
+#[cfg(test)]
 mod gc_exceptions;
 mod gc_eval_object_children;
 mod gc_callable_children;
@@ -157,19 +158,15 @@ mod gc_note_child_ref;
 mod hash_count;
 mod hash_append;
 mod hash_append_error;
-mod hash_next_index;
+use elephc_memoir::values::hash_next_index;
 mod hash_clone_shallow;
 mod hash_chunk;
-mod hash_fnv1a;
 mod hash_free_deep;
-mod hash_get;
 mod hash_grow;
 pub(crate) mod hash_layout;
 mod hash_pin;
 mod hash_write_guard;
 mod hash_array_union;
-mod hash_key_eq;
-mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
@@ -177,7 +174,6 @@ mod hash_set_reference_layout;
 mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
-mod hash_insert_owned;
 mod hash_reindex_dense;
 mod hash_map;
 mod hash_iter;
@@ -192,7 +188,6 @@ mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
 mod heap_alloc;
-pub(crate) mod heap_live_bases;
 mod heap_grow_tail;
 mod heap_consolidate;
 mod heap_debug_check_live;
@@ -205,8 +200,10 @@ mod in_array_mixed_int;
 mod min_max_container;
 mod natsort;
 
+#[cfg(test)]
 pub(super) mod deep_cleanup;
 mod object_free_deep;
+#[cfg(test)]
 mod native_reference_source_retirement;
 mod range;
 mod incref;
@@ -486,6 +483,8 @@ pub use gc_control::emit_gc_control;
 pub use memory::emit_memory;
 /// Emits pinned destructor snapshots for both cycle collectors.
 pub use gc_destructors::emit_gc_destructors;
+/// Emits graph-wide persistent-root destructor snapshots.
+pub use published_graph::emit_published_graph_destructors;
 /// Emits eval-owned object GC edges and final-release dispatch.
 pub use gc_eval_object_children::emit_gc_eval_object_children;
 pub use gc_callable_children::emit_gc_callable_children;
@@ -495,11 +494,11 @@ pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.
 pub use gc_note_child_ref::emit_gc_note_child_ref;
 /// Emit GC note child reference helper.
-pub use hash_fnv1a::emit_hash_fnv1a;
+pub use elephc_memoir::values::hash_fnv1a::emit_hash_fnv1a;
 /// Emit FNV-1a hash helper.
 pub use hash_free_deep::emit_hash_free_deep;
 /// Emit deep hash free helper.
-pub use hash_get::emit_hash_get;
+pub use elephc_memoir::values::hash_get::emit_hash_get;
 /// Emit hash get helper.
 pub use hash_grow::emit_hash_grow;
 pub use hash_pin::emit_hash_pin;
@@ -507,9 +506,9 @@ pub use hash_write_guard::emit_hash_write_guards;
 /// Emit hash grow helper.
 pub use hash_array_union::emit_hash_array_union;
 /// Emit hash array union helper.
-pub use hash_key_eq::emit_hash_key_eq;
+pub use elephc_memoir::values::hash_key_eq::emit_hash_key_eq;
 /// Emit hash key equality check.
-pub use hash_key_hash::emit_hash_key_hash;
+pub use elephc_memoir::values::hash_key_hash::emit_hash_key_hash;
 /// Emit hash key hash computation.
 pub use hash_normalize_key::emit_hash_normalize_key;
 /// Emit hash key normalization helper.
@@ -517,7 +516,7 @@ pub use hash_may_have_cyclic_values::emit_hash_may_have_cyclic_values;
 /// Emit cyclic value detection helper.
 pub use hash_ensure_unique::emit_hash_ensure_unique;
 /// Emit hash uniqueness enforcement helper.
-pub use hash_insert_owned::emit_hash_insert_owned;
+pub use elephc_memoir::values::hash_insert_owned::emit_hash_insert_owned;
 /// Emit owned hash insert helper.
 pub use hash_iter::emit_hash_iter;
 /// Emit hash iterator helper.
@@ -541,8 +540,6 @@ pub use hash_unset::emit_hash_unset;
 pub use heap_alloc::emit_heap_alloc;
 /// Emit the bin-merging consolidation pass and the bin reset helper.
 pub use heap_consolidate::emit_heap_consolidate;
-/// Bytes of the exact size-class bin table the runtime data reserves.
-pub(crate) use heap_consolidate::{heap_bin_mark_bytes, HEAP_BIN_TABLE_BYTES};
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;
 /// Emit heap debug live check helper.
@@ -646,3 +643,12 @@ pub use usort_str::emit_usort_str;
 
 pub use gc_frame_children::emit_gc_frame_children;
 pub use gc_frame_slots::emit_gc_frame_slots;
+
+#[cfg(test)]
+mod memoir_extraction_tests;
+
+#[cfg(test)]
+mod memoir_reference_tests;
+
+#[cfg(test)]
+mod memoir_conditional_owner_tests;

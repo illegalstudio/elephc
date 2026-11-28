@@ -117,10 +117,7 @@ fn lower_scoped_bind(
     abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
     // -- retain the runtime helper's capture owners and replace only immutable entry metadata --
     abi::emit_load_temporary_stack_slot(ctx.emitter, candidate, 32);
-    for offset in (0..callable_descriptor::CALLABLE_DESC_STATIC_SIZE).step_by(8) {
-        abi::emit_load_from_address(ctx.emitter, entry, candidate, offset);
-        abi::emit_store_to_address(ctx.emitter, entry, result, offset);
-    }
+    elephc_memoir::callables::storage::emit_copy_runtime_header(ctx.emitter, result, candidate, entry);
     abi::emit_release_temporary_stack(ctx.emitter, 64);
     store_if_result(ctx, inst)
 }

@@ -255,7 +255,11 @@ fn foreign_handler_copy_metadata_is_idempotent_and_drains_cell_pins() {
     assert!(foreign_context.pcntl_foreign_callable_owner(copied).is_some());
 
     let releases_before = values.releases.len();
-    foreign_context.release_pcntl_foreign_callables(&mut values);
+    let pending = foreign_context.release_pcntl_foreign_callables(None, |callback, pending| {
+        values.release(callback).expect("release the foreign callable pin");
+        pending
+    });
+    assert!(pending.is_none());
     assert_eq!(values.releases.len(), releases_before + 2);
     assert!(foreign_context.pcntl_foreign_callable_owner(handler).is_none());
     assert!(foreign_context.pcntl_foreign_callable_owner(copied).is_none());

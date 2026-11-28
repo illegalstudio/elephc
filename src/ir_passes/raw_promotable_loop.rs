@@ -123,6 +123,15 @@ fn expendable_cells(
     plan: &Plan,
 ) -> (HashSet<LocalSlotId>, HashSet<ValueId>) {
     let mut slots: HashSet<LocalSlotId> = plan.updates.iter().map(|update| update.slot).collect();
+    // The copied fast path deliberately omits every complete transient owner scope on its
+    // straight path. Their mixed-fallback slots therefore belong to this rewrite just like
+    // the arithmetic results below, while slots outside the copied path remain protected.
+    slots.extend(
+        super::transient_owner_scopes::collect(function)
+            .into_iter()
+            .filter(|scope| plan.path.contains(&scope.block))
+            .map(|scope| scope.slot),
+    );
     let mut values = HashSet::new();
     for block in &function.blocks {
         let inside = lp.contains(block.id);
@@ -300,6 +309,11 @@ enum Guarded {
 
 /// Recognizes one header-tested straight-line loop of add, subtract, and multiply.
 fn analyze(function: &Function, lp: &NaturalLoop, dominance: &DominanceInfo) -> Option<Plan> {
+    let transient_owners = super::transient_owner_scopes::collect(function);
+    let transient_operations: HashSet<_> = transient_owners
+        .iter()
+        .flat_map(super::transient_owner_scopes::TransientOwnerScope::operations)
+        .collect();
     let preheader = lp.preheader?;
     let header = function.block(lp.header)?;
     let Terminator::Br { target, args: header_args } = function.block(preheader)?.terminator.clone()? else {
@@ -338,7 +352,7 @@ fn analyze(function: &Function, lp: &NaturalLoop, dominance: &DominanceInfo) -> 
     if !header.params.iter().all(|param| is_raw_int(function, *param)) {
         return None;
     }
-    if path.iter().any(|block| !allowed_block(function, *block)) {
+    if path.iter().any(|block| !allowed_block(function, *block, &transient_operations)) {
         return None;
     }
     let exit_params = exit_params(function, lp, &header.params, exit)?;
@@ -368,7 +382,9 @@ fn analyze(function: &Function, lp: &NaturalLoop, dominance: &DominanceInfo) -> 
         (Op::ICmp, Some(Immediate::CmpPredicate(predicate))) => *predicate,
         _ => return None,
     };
-    let stores = stores_in(function, &path, lp.header)?;
+    let transient_stores = transient_owners.iter().map(|scope| scope.store).collect();
+    let stores = stores_in(function, &path, lp.header, &transient_stores);
+    let stores = stores?;
     // Each update can overflow on its own, so the copy has one block chain per reachable
     // set of promoted locals: up to `n * 2^(n-1)` integer updates for `n` stores.
     let stored: HashSet<_> = stores.iter().map(|store| store.0).collect();
@@ -404,7 +420,8 @@ fn analyze(function: &Function, lp: &NaturalLoop, dominance: &DominanceInfo) -> 
         .iter()
         .enumerate()
         .map(|(index, (slot, value, _))| parse_update(&ctx, index, *slot, *value))
-        .collect::<Option<Vec<_>>>()?;
+        .collect::<Option<Vec<_>>>();
+    let updates = updates?;
     // The header compare runs before every update of its iteration.
     let left = classify(&ctx, compare.operands[0], 0)?;
     let right = classify(&ctx, compare.operands[1], 0)?;
@@ -590,11 +607,18 @@ fn exit_params(
 }
 
 /// Returns true when every instruction in the block is on the fast-path allowlist.
-fn allowed_block(function: &Function, block: BlockId) -> bool {
+fn allowed_block(
+    function: &Function,
+    block: BlockId,
+    transient_operations: &HashSet<InstId>,
+) -> bool {
     function.blocks[block.as_raw() as usize]
         .instructions
         .iter()
-        .all(|id| allowed(function.instructions[id.as_raw() as usize].op))
+        .all(|id| {
+            transient_operations.contains(id)
+                || allowed(function.instructions[id.as_raw() as usize].op)
+        })
 }
 
 /// Operations the fast path may skip because the mixed fallback still executes them.
@@ -657,6 +681,7 @@ fn stores_in(
     function: &Function,
     path: &[BlockId],
     header: BlockId,
+    transient_stores: &HashSet<InstId>,
 ) -> Option<Vec<(LocalSlotId, ValueId, usize)>> {
     let mut stores = Vec::new();
     let mut position = 0usize;
@@ -666,6 +691,9 @@ fn stores_in(
             position += 1;
             let inst = &function.instructions[id.as_raw() as usize];
             if inst.op != Op::StoreLocal {
+                continue;
+            }
+            if transient_stores.contains(id) {
                 continue;
             }
             if *block == header {

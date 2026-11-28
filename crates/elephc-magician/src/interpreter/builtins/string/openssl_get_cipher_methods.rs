@@ -14,6 +14,7 @@ eval_builtin! {
     values: Openssl,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 
 /// Evaluates positional `openssl_get_cipher_methods()` expressions.
@@ -77,13 +78,11 @@ pub(in crate::interpreter) fn eval_openssl_get_cipher_methods_values_result(
     if methods.len() != count {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut result = values.array_new(methods.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, methods.len())?;
     for (index, method) in methods.iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let method = values.string_bytes_value(method)?;
-        result = values.array_set(result, key, method)?;
+        result.index(index, |values| values.string_bytes_value(method))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns whether the size probe produced the bridge's expected retry status.

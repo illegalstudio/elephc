@@ -8,6 +8,7 @@
 //! - Method and property metadata use the existing table strides.
 
 use super::*;
+use elephc_memoir::values::reflection_metadata::{self, MemberField};
 
 /// Emits the x86_64 eval hook that returns AOT ReflectionMethod predicate flags.
 pub(super) fn emit_x86_64_eval_reflection_method_flags(emitter: &mut Emitter) {
@@ -32,35 +33,35 @@ pub(super) fn emit_x86_64_eval_reflection_method_flags(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, r10");                                        // have all method metadata rows been scanned?
     emitter.instruction("jae __elephc_eval_reflection_method_flags_miss_x86");  // no row matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::ClassNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
     emitter.instruction("jne __elephc_eval_reflection_method_flags_skip_x86");  // length mismatch means the class cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::ClassName);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
     emitter.instruction("jne __elephc_eval_reflection_method_flags_skip_x86");  // class mismatch means the row cannot match
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the method-name compare
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored method-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::MemberNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested method-name lengths
     emitter.instruction("jne __elephc_eval_reflection_method_flags_skip_x86");  // length mismatch means the method cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the method-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested method-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested method-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // pass the stored method-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::MemberName);
     emitter.instruction("call __rt_strcasecmp");                                // compare method names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the method-name compare
     emitter.instruction("test rax, rax");                                       // did the requested method name match this row?
     emitter.instruction("jne __elephc_eval_reflection_method_flags_skip_x86");  // method mismatch means scanning must continue
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched method metadata row
-    emitter.instruction("mov rax, QWORD PTR [r10 + 32]");                       // return the row's ReflectionMethod predicate flags
+    reflection_metadata::emit_load_member_field(emitter, "rax", "r10", MemberField::Flags);
     emitter.instruction("jmp __elephc_eval_reflection_method_flags_done_x86");  // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_flags_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
-    emitter.instruction("add r10, 56");                                         // advance to the next 56-byte method metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
     emitter.instruction("jmp __elephc_eval_reflection_method_flags_loop_x86");  // continue scanning method metadata rows
@@ -95,38 +96,38 @@ pub(super) fn emit_x86_64_eval_reflection_method_declaring_class(emitter: &mut E
     emitter.instruction("cmp r11, r10");                                        // have all method metadata rows been scanned?
     emitter.instruction("jae __elephc_eval_reflection_method_declaring_class_miss_x86"); // no row matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::ClassNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
     emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // length mismatch means the class cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::ClassName);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
     emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // class mismatch means the row cannot match
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the method-name compare
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored method-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::MemberNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested method-name lengths
     emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // length mismatch means the method cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the method-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested method-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested method-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // pass the stored method-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::MemberName);
     emitter.instruction("call __rt_strcasecmp");                                // compare method names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the method-name compare
     emitter.instruction("test rax, rax");                                       // did the requested method name match this row?
     emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // method mismatch means scanning must continue
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched method metadata row
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 40]");                       // load the declaring class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 48]");                       // load the declaring class-name length
+    reflection_metadata::emit_load_member_field(emitter, "rdi", "r10", MemberField::DeclaringClass);
+    reflection_metadata::emit_load_member_field(emitter, "rsi", "r10", MemberField::DeclaringClassLength);
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // box the declaring class name for Rust
     emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_done_x86"); // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_declaring_class_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
-    emitter.instruction("add r10, 56");                                         // advance to the next 56-byte method metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
     emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_loop_x86"); // continue scanning method metadata rows
@@ -161,38 +162,38 @@ pub(super) fn emit_x86_64_eval_reflection_property_declaring_class(emitter: &mut
     emitter.instruction("cmp r11, r10");                                        // have all property metadata rows been scanned?
     emitter.instruction("jae __elephc_eval_reflection_property_declaring_class_miss_x86"); // no row matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::ClassNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
     emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // length mismatch means the class cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::ClassName);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
     emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // class mismatch means the row cannot match
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the property-name compare
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored property-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::MemberNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested property-name lengths
     emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // length mismatch means the property cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the property-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested property-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested property-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // pass the stored property-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::MemberName);
     emitter.instruction("call __rt_strcasecmp");                                // compare property names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the property-name compare
     emitter.instruction("test rax, rax");                                       // did the requested property name match this row?
     emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // property mismatch means scanning must continue
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched property metadata row
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 40]");                       // load the declaring class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 48]");                       // load the declaring class-name length
+    reflection_metadata::emit_load_member_field(emitter, "rdi", "r10", MemberField::DeclaringClass);
+    reflection_metadata::emit_load_member_field(emitter, "rsi", "r10", MemberField::DeclaringClassLength);
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // box the declaring class name for Rust
     emitter.instruction("jmp __elephc_eval_reflection_property_declaring_class_done_x86"); // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_property_declaring_class_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
-    emitter.instruction("add r10, 56");                                         // advance to the next 56-byte property metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
     emitter.instruction("jmp __elephc_eval_reflection_property_declaring_class_loop_x86"); // continue scanning property metadata rows
@@ -227,35 +228,35 @@ pub(super) fn emit_x86_64_eval_reflection_property_flags(emitter: &mut Emitter) 
     emitter.instruction("cmp r11, r10");                                        // have all property metadata rows been scanned?
     emitter.instruction("jae __elephc_eval_reflection_property_flags_miss_x86"); // no row matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::ClassNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
     emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); // length mismatch means the class cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::ClassName);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
     emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); // class mismatch means the row cannot match
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the property-name compare
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored property-name length
+    reflection_metadata::emit_load_member_field(emitter, "rcx", "r10", MemberField::MemberNameLength);
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested property-name lengths
     emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); // length mismatch means the property cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the property-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested property-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested property-name length
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // pass the stored property-name pointer
+    reflection_metadata::emit_load_member_field(emitter, "rdx", "r10", MemberField::MemberName);
     emitter.instruction("call __rt_str_eq");                                    // compare property names with PHP case-sensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the property-name compare
     emitter.instruction("test rax, rax");                                       // did the requested property name match this row?
     emitter.instruction("jz __elephc_eval_reflection_property_flags_skip_x86"); // property mismatch means scanning must continue
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched property metadata row
-    emitter.instruction("mov rax, QWORD PTR [r10 + 32]");                       // return the row's ReflectionProperty predicate flags
+    reflection_metadata::emit_load_member_field(emitter, "rax", "r10", MemberField::Flags);
     emitter.instruction("jmp __elephc_eval_reflection_property_flags_done_x86"); // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_property_flags_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
-    emitter.instruction("add r10, 56");                                         // advance to the next 56-byte property metadata row
+    reflection_metadata::emit_advance_member_row(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
     emitter.instruction("jmp __elephc_eval_reflection_property_flags_loop_x86"); // continue scanning property metadata rows

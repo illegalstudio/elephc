@@ -26,6 +26,159 @@ fn assert_clean_run(source: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// An assignment remains visible to its catch even when the displaced destructor throws.
+#[test]
+fn test_memoir_replacement_publishes_local_before_throwing_destructor() {
+    assert_clean_run(
+        r#"<?php
+class LocalOwner {
+    public function __construct(public int $id) {}
+    public function __destruct() {
+        if ($this->id === 1) { throw new Exception("old owner"); }
+    }
+}
+function replace_local(): void {
+    $owner = new LocalOwner(1);
+    try {
+        $owner = new LocalOwner(2);
+    } catch (Exception $e) {
+        echo "caught|";
+    }
+    echo "after=", $owner->id, "|";
+}
+replace_local();
+"#,
+        "caught|after=2|",
+    );
+}
+
+/// Declared properties and function statics expose the replacement and keep a reentrant write.
+#[test]
+fn test_memoir_replacement_preserves_reentrant_stores() {
+    assert_clean_run(
+        r#"<?php
+class OwnerSlot {
+    public ?InstanceOwner $current = null;
+    public static ?StaticOwner $shared = null;
+}
+class InstanceOwner {
+    public function __construct(public int $id, public ?OwnerSlot $slot = null) {}
+    public function __destruct() {
+        if ($this->id === 1) {
+            echo "instance=", $this->slot->current->id, "|";
+            $this->slot->current = new InstanceOwner(3);
+        }
+    }
+}
+class StaticOwner {
+    public function __construct(public int $id, public bool $local = false) {}
+    public function __destruct() {
+        if ($this->id === 1) {
+            if ($this->local) {
+                echo "local=", owner_static(0)->id, "|";
+                owner_static(3);
+            } else {
+                echo "static=", OwnerSlot::$shared->id, "|";
+                OwnerSlot::$shared = new StaticOwner(3);
+            }
+        }
+    }
+}
+function owner_static(int $id): StaticOwner {
+    static $owner = null;
+    if ($id !== 0) { $owner = new StaticOwner($id, true); }
+    return $owner;
+}
+$slot = new OwnerSlot();
+$slot->current = new InstanceOwner(1, $slot);
+$slot->current = new InstanceOwner(2);
+echo $slot->current->id, "|";
+OwnerSlot::$shared = new StaticOwner(1);
+OwnerSlot::$shared = new StaticOwner(2);
+echo OwnerSlot::$shared->id, "|";
+owner_static(1);
+echo owner_static(2)->id, "|";
+"#,
+        "instance=2|3|static=2|3|local=2|3|",
+    );
+}
+
+/// Shutdown keeps an object-valued static property visible and drains its replacement.
+#[test]
+fn test_memoir_replacement_drains_static_property_at_shutdown() {
+    assert_clean_run(
+        r#"<?php
+class ShutdownPropertyOwner {
+    public static ShutdownPropertyOwner $root;
+    public function __construct(public int $id) {}
+    public function __destruct() {
+        if ($this->id === 2) {
+            echo "saw=", self::$root->id, "|";
+            self::$root = new ShutdownPropertyOwner(3);
+        } else {
+            echo "retired=", $this->id, "|";
+        }
+    }
+}
+ShutdownPropertyOwner::$root = new ShutdownPropertyOwner(2);
+echo "body|";
+"#,
+        "body|saw=2|retired=3|",
+    );
+}
+
+/// Shutdown drains a new owner published by the destructor of a function static.
+#[test]
+fn test_memoir_replacement_drains_static_local_at_shutdown() {
+    assert_clean_run(
+        r#"<?php
+class ShutdownLocalOwner {
+    public function __construct(public int $id) {}
+    public function __destruct() {
+        if ($this->id === 2) {
+            echo "saw=", shutdown_local(0)->id, "|";
+            shutdown_local(3);
+        } else {
+            echo "retired=", $this->id, "|";
+        }
+    }
+}
+function shutdown_local(int $id): ShutdownLocalOwner {
+    static $root = null;
+    if ($id !== 0) { $root = new ShutdownLocalOwner($id); }
+    return $root;
+}
+shutdown_local(2);
+echo "body|";
+"#,
+        "body|saw=2|retired=3|",
+    );
+}
+
+/// A later static property's destructor can repopulate a function static already drained.
+#[test]
+fn test_memoir_replacement_revisits_earlier_shutdown_root() {
+    assert_clean_run(
+        r#"<?php
+class RecreatedRoot {
+    public function __destruct() { echo "retired|"; }
+}
+class RootCreator {
+    public static RootCreator $root;
+    public function __destruct() { earlier_root(true); }
+}
+function earlier_root(bool $create): void {
+    static $owner = null;
+    if ($create) { $owner = new RecreatedRoot(); }
+}
+earlier_root(false);
+RootCreator::$root = new RootCreator();
+echo "body|";
+"#,
+        "body|retired|",
+    );
+}
+
 /// A destructor that calls a method runs to completion while an exception leaves its owner.
 ///
 /// This is the reported program verbatim. The destructor ran and so did the method, then the

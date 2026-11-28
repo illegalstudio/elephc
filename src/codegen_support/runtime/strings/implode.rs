@@ -36,9 +36,16 @@
 //!      no scratch at all and hands the whole buffer back to the cast by restoring the entry
 //!      offset.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
+
+use elephc_memoir::strings::implode_buffer::{
+    emit_implode_ensure_room_aarch64, emit_implode_ensure_room_x86_64,
+    emit_implode_publish_offset_aarch64, emit_implode_publish_offset_x86_64,
+};
 
 /// Destination headroom guaranteed before a nested `__rt_mixed_cast_string`.
 ///
@@ -53,141 +60,6 @@ use crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
 /// sign is 20.
 const MIXED_CAST_HEADROOM: usize = 64;
 
-/// Emits the AArch64 "make room for `x15` more destination bytes" sequence.
-///
-/// Compares the bytes already written plus the pending write against the destination's
-/// capacity and, when they no longer fit, moves the whole accumulation into a larger owned
-/// block through `__rt_concat_grow`. The doubling keeps a long join from reallocating per
-/// element; taking the exact requirement instead when it is larger keeps one oversized element
-/// from needing a second growth of its own.
-///
-/// Reads `x15` (pending byte count) and `x9` (live cursor). Preserves `x1`, `x2`, `x9`, `x10`
-/// and `x11` across the growth call, and relocates `x9` into the grown buffer. Every other
-/// caller-saved register is clobbered, so callers reload what they still need — `x3` in
-/// particular.
-fn emit_implode_ensure_room_aarch64(emitter: &mut Emitter, site: &str) {
-    let skip = format!("__rt_implode_room_ok_{}", site);
-    emitter.instruction("ldr x13, [sp, #24]");                                  // destination base
-    emitter.instruction("sub x14, x9, x13");                                    // bytes already written into it
-    emitter.instruction("add x15, x14, x15");                                   // capacity this write would need
-    emitter.instruction("ldr x12, [sp, #80]");                                  // current destination capacity
-    emitter.instruction("cmp x15, x12");                                        // does the pending write still fit?
-    emitter.instruction(&format!("b.ls {}", skip));                             // room already reserved: copy straight in
-    emitter.instruction("lsl x12, x12, #1");                                    // double the destination capacity
-    emitter.instruction("cmp x12, x15");                                        // is the doubled capacity already enough?
-    emitter.instruction("csel x12, x12, x15, hi");                              // otherwise take exactly what this write needs
-    emitter.instruction("str x12, [sp, #80]");                                  // save the grown capacity
-    emitter.instruction("str x14, [sp, #56]");                                  // bytes to preserve, and the cursor offset to restore
-    emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across the growth call
-    emitter.instruction("str x11, [sp, #72]");                                  // preserve loop index across the growth call
-    emitter.instruction("str x1, [sp, #96]");                                   // preserve the pending source pointer
-    emitter.instruction("str x2, [sp, #104]");                                  // preserve the pending source length
-    emitter.instruction("mov x0, x13");                                         // current buffer
-    emitter.instruction("mov x1, x14");                                         // bytes to preserve
-    emitter.instruction("mov x2, x12");                                         // new capacity
-    emitter.instruction("bl __rt_concat_grow");                                 // move the join into a larger owned block
-    emitter.instruction("str x0, [sp, #24]");                                   // record the grown destination base
-    emitter.instruction("ldr x14, [sp, #56]");                                  // bytes preserved
-    emitter.instruction("add x9, x0, x14");                                     // cursor at the same offset inside the grown buffer
-    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length
-    emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index
-    emitter.instruction("ldr x1, [sp, #96]");                                   // restore the pending source pointer
-    emitter.instruction("ldr x2, [sp, #104]");                                  // restore the pending source length
-    emitter.label(&skip);
-}
-
-/// Emits the AArch64 sequence that publishes `_concat_off` for whichever storage the join
-/// currently occupies.
-///
-/// A SCRATCH destination reserves everything written so far against the shared buffer, which
-/// is what stops a nested `__rt_ftoa` from formatting over bytes already joined. A GROWN
-/// destination occupies no scratch at all, so it restores the offset the call started from and
-/// leaves the whole buffer to the cast.
-///
-/// `x9` must hold the live cursor. Clobbers `x12`-`x15`.
-fn emit_implode_publish_offset_aarch64(emitter: &mut Emitter, site: &str) {
-    let cap = emitter.concat_capacity;
-    let grown = format!("__rt_implode_off_grown_{}", site);
-    let store = format!("__rt_implode_off_store_{}", site);
-    emitter.instruction("ldr x13, [sp, #24]");                                  // destination base
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_concat_buf");
-    emitter.instruction("sub x15, x13, x14");                                   // candidate scratch offset of the destination
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // concat scratch capacity in bytes
-    emitter.instruction("cmp x15, x12");                                        // is the destination outside the scratch window (unsigned: heap wraps high)?
-    emitter.instruction(&format!("b.hs {}", grown));                            // a grown join holds no scratch
-    emitter.instruction("sub x14, x9, x14");                                    // absolute offset of the live destination cursor
-    emitter.instruction(&format!("b {}", store));                               // publish the reservation the nested cast must not cross
-    emitter.label(&grown);
-    emitter.instruction("ldr x14, [sp, #88]");                                  // restore the offset this call started from
-    emitter.label(&store);
-    emitter.instruction("ldr x13, [sp, #32]");                                  // concat offset variable address
-    emitter.instruction("str x14, [x13]");                                      // publish it
-}
-
-/// Emits the x86_64 "make room for `r9` more destination bytes" sequence.
-///
-/// The x86_64 mirror of [`emit_implode_ensure_room_aarch64`], with the same contract: reads the
-/// pending byte count from `r9` and the live cursor from `r10`, preserves `r8`/`r9`/`r10`
-/// across the growth call, and relocates `r10` into the grown buffer. The array length and loop
-/// cursor already live in spill slots on this target, so they need no saving.
-fn emit_implode_ensure_room_x86_64(emitter: &mut Emitter, site: &str) {
-    let skip = format!("__rt_implode_room_ok_{}", site);
-    let have_cap = format!("__rt_implode_room_cap_{}", site);
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // destination base
-    emitter.instruction("mov rdx, r10");                                        // live cursor
-    emitter.instruction("sub rdx, rcx");                                        // bytes already written into it
-    emitter.instruction("mov r11, rdx");                                        // start from the bytes already written
-    emitter.instruction("add r11, r9");                                         // capacity this write would need
-    emitter.instruction("cmp r11, QWORD PTR [rbp - 80]");                       // does the pending write still fit?
-    emitter.instruction(&format!("jbe {}", skip));                              // room already reserved: copy straight in
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // current destination capacity
-    emitter.instruction("shl rax, 1");                                          // double it
-    emitter.instruction("cmp rax, r11");                                        // is the doubled capacity already enough?
-    emitter.instruction(&format!("ja {}", have_cap));                           // keep the doubled capacity
-    emitter.instruction("mov rax, r11");                                        // otherwise take exactly what this write needs
-    emitter.label(&have_cap);
-    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the grown capacity
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash the preserved byte count in the cursor slot
-    emitter.instruction("mov QWORD PTR [rbp - 96], r8");                        // preserve the pending source pointer
-    emitter.instruction("mov QWORD PTR [rbp - 104], r9");                       // preserve the pending source length
-    emitter.instruction("mov rsi, rax");                                        // new capacity
-    emitter.instruction("mov rdi, rdx");                                        // bytes to preserve
-    emitter.instruction("mov rax, rcx");                                        // current buffer
-    emitter.instruction("call __rt_concat_grow");                               // move the join into a larger owned block
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // record the grown destination base
-    emitter.instruction("mov r10, rax");                                        // rebuild the cursor from the grown base
-    emitter.instruction("add r10, QWORD PTR [rbp - 40]");                       // ... at the same offset the preserved bytes reach
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // restore the cursor slot
-    emitter.instruction("mov r8, QWORD PTR [rbp - 96]");                        // restore the pending source pointer
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // restore the pending source length
-    emitter.label(&skip);
-}
-
-/// Emits the x86_64 sequence that publishes `_concat_off` for whichever storage the join
-/// currently occupies. The x86_64 mirror of [`emit_implode_publish_offset_aarch64`].
-///
-/// `r10` must hold the live cursor. Clobbers `rcx`, `rdx`, `r8` and `r9`.
-fn emit_implode_publish_offset_x86_64(emitter: &mut Emitter, site: &str) {
-    let cap = emitter.concat_capacity;
-    let grown = format!("__rt_implode_off_grown_{}", site);
-    let store = format!("__rt_implode_off_store_{}", site);
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // destination base
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf");
-    emitter.instruction("mov rdx, rcx");                                        // copy the base before converting it to a scratch offset
-    emitter.instruction("sub rdx, r8");                                         // candidate scratch offset of the destination
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", cap as i64); // load the shared scratch capacity
-    emitter.instruction("cmp rdx, r9");                                         // is the destination outside the scratch window (unsigned: heap wraps high)?
-    emitter.instruction(&format!("jae {}", grown));                             // a grown join holds no scratch
-    emitter.instruction("mov r9, r10");                                         // copy the live cursor before converting it to an absolute offset
-    emitter.instruction("sub r9, r8");                                          // absolute offset of the live destination cursor
-    emitter.instruction(&format!("jmp {}", store));                             // publish the reservation the nested cast must not cross
-    emitter.label(&grown);
-    emitter.instruction("mov r9, QWORD PTR [rbp - 88]");                        // restore the offset this call started from
-    emitter.label(&store);
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish it
-}
-
 /// Emits the `__rt_implode` runtime helper for joining array elements with a glue string.
 /// Dispatches to platform-specific implementations (x86_64 Linux vs ARM64).
 ///
@@ -199,7 +71,6 @@ fn emit_implode_publish_offset_x86_64(emitter: &mut Emitter, site: &str) {
 /// The result is written into the shared concat buffer and _concat_off is updated
 /// to reflect the bytes consumed by this call.
 pub fn emit_implode(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     super::implode_cast::emit_implode_element_cast(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_implode_linux_x86_64(emitter);
@@ -211,7 +82,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.label_global("__rt_implode");
 
     // -- the generic entry reads the element layout from the array header --
-    emitter.instruction("ldr x4, [x3, #-8]");                                   // load packed indexed-array metadata for element layout dispatch
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x3");
     emitter.instruction("lsr x4, x4, #8");                                      // move the indexed-array value_type tag into the low bits
     emitter.instruction("and x4, x4, #0x7f");                                   // isolate the indexed-array element value_type tag
     // An explicit branch, not a fall-through: the typed entry is its own global symbol, so on
@@ -230,19 +101,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    emitter.instruction("str x8, [sp, #88]");                                   // remember the entry offset: a grown join restores it, holding no scratch
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
-    emitter.instruction("str x9, [sp, #24]");                                   // save result start pointer
-    emitter.instruction("str x6, [sp, #32]");                                   // save offset variable address
-    // The destination starts as the scratch tail and grows out of it on demand, so the
-    // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // total concat scratch capacity in bytes
-    emitter.instruction("subs x12, x12, x8");                                   // room left in the scratch buffer from the entry offset
-    emitter.instruction("csel x12, x12, xzr, pl");                              // a full (or over-full) scratch starts this join at zero capacity
-    emitter.instruction("str x12, [sp, #80]");                                  // save the destination capacity
+    elephc_memoir::strings::implode_buffer::emit_open_aarch64(emitter);
 
     // -- load array length and initialize index --
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload array pointer
@@ -289,7 +148,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_implode_tagged_scalar_elem");                // render payload/tag slots as int or empty null
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16
     emitter.instruction("add x12, x3, x12");                                    // add to array base
-    emitter.instruction("add x12, x12, #24");                                   // skip 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x1, [x12]");                                       // load element string pointer
     emitter.instruction("ldr x2, [x12, #8]");                                   // load element string length
     emitter.instruction("b __rt_implode_copy_value");                           // copy the loaded string payload into the result buffer
@@ -297,7 +156,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.label("__rt_implode_tagged_scalar_elem");
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16 for tagged scalar slots
     emitter.instruction("add x12, x3, x12");                                    // add the tagged slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x13, [x12, #8]");                                  // load the runtime tag beside the nullable integer payload
     emitter.instruction(&format!("cmp x13, #{}", TAGGED_SCALAR_TAG_NULL));      // is this tagged nullable integer PHP null?
     emitter.instruction("b.eq __rt_implode_tagged_scalar_null");                // null contributes an empty string
@@ -306,7 +165,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer after possible growth
     emitter.instruction("lsl x12, x11, #4");                                    // recompute the tagged scalar slot offset
     emitter.instruction("add x12, x3, x12");                                    // add the slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip the array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x0, [x12]");                                       // load the non-null integer payload
     emitter.instruction("str x9, [sp, #56]");                                   // preserve the live result cursor across formatting
     emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across formatting
@@ -334,7 +193,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer the growth call clobbered
     emitter.instruction("lsl x12, x11, #3");                                    // compute byte offset: index * 8 for Mixed pointer slots
     emitter.instruction("add x12, x3, x12");                                    // add the Mixed slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x0, [x12]");                                       // load the boxed Mixed element pointer
     emitter.instruction("str x9, [sp, #56]");                                   // save destination cursor across the mixed string cast
     emitter.instruction("str x10, [sp, #64]");                                  // save array length across the mixed string cast
@@ -470,7 +329,7 @@ fn emit_x86_64_scalar_slot_address(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a raw scalar slot offset
     emitter.instruction("shl rcx, 3");                                          // convert the loop cursor into the 8-byte scalar slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current scalar slot
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current scalar slot after the fixed array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
 }
 
 /// Reserves `MIXED_CAST_HEADROOM` destination bytes on x86_64, then re-addresses the current
@@ -501,7 +360,7 @@ fn emit_x86_64_scalar_copy_setup(emitter: &mut Emitter) {
 fn emit_aarch64_scalar_slot_address(emitter: &mut Emitter) {
     emitter.instruction("lsl x12, x11, #3");                                    // compute byte offset: index * 8 for raw scalar slots
     emitter.instruction("add x12, x3, x12");                                    // add the scalar slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
 }
 
 /// Reserves `MIXED_CAST_HEADROOM` destination bytes on AArch64, then re-addresses the current
@@ -546,15 +405,13 @@ fn emit_aarch64_scalar_format_into(emitter: &mut Emitter, formatter: &str) {
 ///
 /// The result is written into the shared concat buffer and _concat_off is updated.
 fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     emitter.blank();
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
 
     // -- the generic entry reads the element layout from the array header --
-    emitter.instruction("mov rcx, QWORD PTR [rdx - 8]");                        // load packed indexed-array metadata for element layout dispatch
-    emitter.instruction("shr rcx, 8");                                          // move the indexed-array value_type tag into the low bits
-    emitter.instruction("and rcx, 0x7f");                                       // isolate the indexed-array element value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rcx", "rdx");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rcx", "rcx");
     emitter.instruction("jmp __rt_implode_typed");                              // continue in the shared join body (a separate symbol, never a fall-through)
 
     // -- typed entry: rcx = element value_type chosen by the caller --
@@ -567,22 +424,8 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the implode output start pointer
-    emitter.instruction("mov QWORD PTR [rbp - 88], r9");                        // remember the entry offset: a grown join restores it, holding no scratch
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r10, [r10 + r9]");                                 // compute the current concat-buffer destination pointer for the implode output
-    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the implode result start pointer so the final string result can reference the copied bytes
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue and element copy loops
-    // The destination starts as the scratch tail and grows out of it on demand, so the
-    // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rcx", cap as i64); // total concat scratch capacity in bytes
-    emitter.instruction("sub rcx, r9");                                         // room left in the scratch buffer from the entry offset
-    emitter.instruction("jns __rt_implode_capacity_ready");                     // a full (or over-full) scratch starts this join at zero capacity
-    emitter.instruction("xor ecx, ecx");                                        // clamp the remaining capacity at zero
-    emitter.label("__rt_implode_capacity_ready");
-    emitter.instruction("mov QWORD PTR [rbp - 80], rcx");                       // save the destination capacity
-    emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the implode loop
+    elephc_memoir::strings::implode_buffer::emit_open_x86_64(emitter);
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r11", "rdx"); // load the indexed-array logical length once before entering the implode loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first element
 
@@ -629,7 +472,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the indexed-array loop cursor before scaling it into a string-slot byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the indexed-array loop cursor into the 16-byte offset of the current string slot
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current string slot
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current indexed-array string slot after the fixed array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the current indexed-array string pointer before copying the element bytes
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // load the current indexed-array string length before copying the element bytes
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor before copying the element bytes
@@ -639,7 +482,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
     emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the tagged slot address after the array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction(&format!("cmp QWORD PTR [rcx + 8], {}", TAGGED_SCALAR_TAG_NULL)); // is the nullable integer payload PHP null?
     emitter.instruction("je __rt_implode_tagged_scalar_null_x");                // null contributes an empty string
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // live destination cursor for the headroom check
@@ -650,7 +493,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
     emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // recompute the tagged slot address after the array header
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the non-null integer payload
     emitter.instruction("mov rdi, rax");                                        // pass the tagged integer to the destination formatter
     emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
@@ -676,7 +519,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the indexed-array loop cursor before scaling it to a Mixed slot offset
     emitter.instruction("shl rcx, 3");                                          // convert the indexed-array loop cursor into the 8-byte Mixed slot offset
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current Mixed slot
-    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current indexed-array Mixed slot
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(emitter, "rcx", "r8", "rcx");
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the boxed Mixed element pointer for string casting
     // Publish the LIVE destination cursor as `_concat_off` before the nested cast. `__rt_ftoa`
     // (and `__rt_itoa`) format into `_concat_buf` at `_concat_off`; leaving the offset parked at

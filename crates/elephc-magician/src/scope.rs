@@ -15,13 +15,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
-
-/// Records whether a scope entry owns or borrows its runtime cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScopeCellOwnership {
-    Borrowed,
-    Owned,
-}
+use elephc_memoir::runtime_owners::{RuntimeOwnerBatch, RuntimeOwnerSlot, RuntimeOwners};
+pub use elephc_memoir::runtime_owners::RuntimeCellOwnership as ScopeCellOwnership;
 
 /// Tracks the observable PHP state associated with one named scope cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,9 +133,97 @@ impl ScopeEntry {
     }
 }
 
+/// Keeps one scope cell in Memoir-owned storage beside Magician's PHP metadata.
+struct StoredScopeEntry {
+    cell: RuntimeOwnerSlot,
+    flags: ScopeEntryFlags,
+    generation: u64,
+}
+
+impl StoredScopeEntry {
+    /// Creates storage for one visible scope cell.
+    fn present(
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+        generation: u64,
+    ) -> Self {
+        Self::with_flags(cell, ScopeEntryFlags::present(ownership), generation)
+    }
+
+    /// Creates storage for one visible member of a PHP reference group.
+    fn reference(
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+        generation: u64,
+    ) -> Self {
+        Self::with_flags(cell, ScopeEntryFlags::reference(ownership), generation)
+    }
+
+    /// Creates an unset marker without publishing any cleanup obligation.
+    fn unset(generation: u64) -> Self {
+        Self::with_flags(
+            RuntimeCellHandle::from_raw(std::ptr::null_mut()),
+            ScopeEntryFlags::unset(),
+            generation,
+        )
+    }
+
+    /// Stores an owned lease or an explicitly borrowed observation in Memoir.
+    fn with_flags(
+        cell: RuntimeCellHandle,
+        flags: ScopeEntryFlags,
+        generation: u64,
+    ) -> Self {
+        Self {
+            cell: RuntimeOwnerSlot::for_ownership(cell, flags.ownership),
+            flags,
+            generation,
+        }
+    }
+
+    /// Returns a borrowed identity view of the stored cell.
+    fn cell(&self) -> RuntimeCellHandle {
+        self.cell.borrowed()
+    }
+
+    /// Returns the PHP metadata associated with the stored cell.
+    const fn flags(&self) -> ScopeEntryFlags {
+        self.flags
+    }
+
+    /// Returns a public read-only snapshot without copying its cleanup obligation.
+    fn snapshot(&self) -> ScopeEntry {
+        ScopeEntry {
+            cell: self.cell(),
+            flags: self.flags,
+            generation: self.generation,
+        }
+    }
+
+    /// Clears the dirty bit after native synchronization.
+    fn mark_clean(&mut self) {
+        self.flags.dirty = false;
+    }
+
+    /// Refreshes reference metadata without recreating the stored cleanup obligation.
+    fn mark_changed(&mut self, by_ref: bool, generation: u64) {
+        self.flags.present = true;
+        self.flags.dirty = true;
+        self.flags.unset = false;
+        self.flags.by_ref = by_ref;
+        self.generation = generation;
+    }
+
+    /// Detaches the cleanup obligation when this entry owns its visible cell.
+    fn into_owned_cell(self) -> Option<RuntimeCellHandle> {
+        (self.flags.is_visible() && self.flags.ownership == ScopeCellOwnership::Owned)
+            .then(|| self.cell.take())
+    }
+}
+
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
-    entries: HashMap<String, ScopeEntry>,
+    entries: HashMap<String, StoredScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_detached_names: HashSet<String>,
@@ -228,7 +311,7 @@ impl ElephcEvalScope {
         self.bump_generation();
         let previous = self.entries.insert(
             name.into(),
-            ScopeEntry::present(cell, ownership, self.generation),
+            StoredScopeEntry::present(cell, ownership, self.generation),
         );
         owned_cell_except(previous, cell)
     }
@@ -242,13 +325,14 @@ impl ElephcEvalScope {
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
         self.aot_visible_names.insert(name.clone());
-        let previous = self.entries.get(&name).copied().filter(|entry| {
-            entry.flags().is_visible() && entry.flags().ownership == ScopeCellOwnership::Owned
-        }).map(ScopeEntry::cell);
-        self.set(name, cell, ownership);
+        self.bump_generation();
+        let previous = self.entries.insert(
+            name,
+            StoredScopeEntry::present(cell, ownership, self.generation),
+        );
         // Native reload acquired its own lease. Republishing that same address must
         // retire the former scope owner instead of losing it when the flags change.
-        previous
+        owned_cell(previous)
     }
 
     /// Stores a variable while preserving existing PHP reference aliases.
@@ -259,15 +343,15 @@ impl ElephcEvalScope {
         ownership: ScopeCellOwnership,
     ) -> Vec<RuntimeCellHandle> {
         let name = name.into();
-        let Some(entry) = self.entries.get(&name).copied() else {
+        let Some(entry) = self.entries.get(&name) else {
             return self.set(name, cell, ownership).into_iter().collect();
         };
         if !entry.flags().is_visible() || !entry.flags().by_ref {
             return self.set(name, cell, ownership).into_iter().collect();
         }
 
-        self.bump_generation();
         let old_cell = entry.cell();
+        self.bump_generation();
         let mut replaced = Vec::new();
         for (entry_name, entry) in &mut self.entries {
             let flags = entry.flags();
@@ -278,14 +362,14 @@ impl ElephcEvalScope {
                 && old_cell != cell
                 && !replaced.contains(&old_cell)
             {
-                replaced.push(old_cell);
+                replaced.push(entry.cell.take());
             }
             let next_ownership = if entry_name == &name {
                 ownership
             } else {
                 ScopeCellOwnership::Borrowed
             };
-            *entry = ScopeEntry::reference(cell, next_ownership, self.generation);
+            *entry = StoredScopeEntry::reference(cell, next_ownership, self.generation);
         }
         replaced
     }
@@ -308,7 +392,7 @@ impl ElephcEvalScope {
         });
         let mut replaced = self.set_respecting_references(name, cell, ScopeCellOwnership::Owned);
         if same_owner {
-            replaced.push(cell);
+            replaced.push(cell.for_ownership(ScopeCellOwnership::Owned));
         }
         replaced
     }
@@ -327,27 +411,26 @@ impl ElephcEvalScope {
         let source_entry = self
             .entries
             .get(&source)
-            .copied()
-            .filter(|entry| entry.flags().is_visible());
-        let (cell, source_ownership) = source_entry
-            .map_or((default_cell, default_ownership), |entry| {
+            .filter(|entry| entry.flags().is_visible())
+            .map(|entry| {
                 (entry.cell(), entry.flags().ownership)
             });
+        let (cell, source_ownership) = source_entry.unwrap_or((default_cell, default_ownership));
         if target == source {
             let previous = self.entries.insert(
                 source,
-                ScopeEntry::reference(cell, source_ownership, self.generation),
+                StoredScopeEntry::reference(cell, source_ownership, self.generation),
             );
             return owned_cell_except(previous, cell).into_iter().collect();
         }
 
         let previous_source = self.entries.insert(
             source,
-            ScopeEntry::reference(cell, source_ownership, self.generation),
+            StoredScopeEntry::reference(cell, source_ownership, self.generation),
         );
         let previous_target = self.entries.insert(
             target,
-            ScopeEntry::reference(cell, ScopeCellOwnership::Borrowed, self.generation),
+            StoredScopeEntry::reference(cell, ScopeCellOwnership::Borrowed, self.generation),
         );
         owned_cells_except([previous_source, previous_target], cell)
     }
@@ -371,7 +454,7 @@ impl ElephcEvalScope {
         self.reference_targets.remove(&name);
         let previous = self
             .entries
-            .insert(name, ScopeEntry::unset(self.generation));
+            .insert(name, StoredScopeEntry::unset(self.generation));
         owned_cell(previous)
     }
 
@@ -383,7 +466,7 @@ impl ElephcEvalScope {
         let name = name.into();
         self.native_storage_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
-        let Some(entry) = self.entries.get(&name).copied() else {
+        let Some(entry) = self.entries.get(&name) else {
             return self.unset(name);
         };
         if !entry.flags().is_visible() || !entry.flags().by_ref {
@@ -403,8 +486,11 @@ impl ElephcEvalScope {
                 {
                     continue;
                 }
-                *entry =
-                    ScopeEntry::reference(old_cell, ScopeCellOwnership::Owned, self.generation);
+                *entry = StoredScopeEntry::reference(
+                    old_cell,
+                    ScopeCellOwnership::Owned,
+                    self.generation,
+                );
                 transferred = true;
                 break;
             }
@@ -412,7 +498,7 @@ impl ElephcEvalScope {
         self.reference_targets.remove(&name);
         let previous = self
             .entries
-            .insert(name, ScopeEntry::unset(self.generation));
+            .insert(name, StoredScopeEntry::unset(self.generation));
         if transferred {
             None
         } else {
@@ -427,18 +513,14 @@ impl ElephcEvalScope {
         for (entry_name, entry) in &mut self.entries {
             let flags = entry.flags();
             if flags.is_visible() && entry.cell() == cell && (entry_name == name || flags.by_ref) {
-                *entry = if flags.by_ref {
-                    ScopeEntry::reference(cell, flags.ownership, self.generation)
-                } else {
-                    ScopeEntry::present(cell, flags.ownership, self.generation)
-                };
+                entry.mark_changed(flags.by_ref, self.generation);
             }
         }
     }
 
     /// Returns the entry for a named variable, including unset markers.
     pub fn entry(&self, name: &str) -> Option<ScopeEntry> {
-        self.entries.get(name).copied()
+        self.entries.get(name).map(StoredScopeEntry::snapshot)
     }
 
     /// Returns the visible runtime cell for a named variable, excluding unset markers.
@@ -464,7 +546,9 @@ impl ElephcEvalScope {
 
     /// Borrows scope entries without allocating or changing their ownership and reference flags.
     pub(crate) fn entries_iter(&self) -> impl Iterator<Item = (&str, ScopeEntry)> {
-        self.entries.iter().map(|(name, entry)| (name.as_str(), *entry))
+        self.entries
+            .iter()
+            .map(|(name, entry)| (name.as_str(), entry.snapshot()))
     }
 
     /// Returns visible scope entries in stable variable-name order.
@@ -537,20 +621,19 @@ impl ElephcEvalScope {
     /// The callback must perform only collector bookkeeping and cannot mutate scope storage.
     pub(crate) fn visit_owned_cell_slots(&self, mut visit: impl FnMut(*const *mut crate::value::RuntimeCell)) {
         for entry in self.entries.values() {
-            if entry.flags.is_visible() && entry.flags.ownership == ScopeCellOwnership::Owned {
-                visit(entry.cell.owner_slot());
-            }
+            entry.cell.visit_owned_slots(&mut visit);
         }
     }
 
     /// Removes every entry and returns runtime cells owned by the scope.
-    pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
+    pub fn drain_owned_cells(&mut self) -> RuntimeOwnerBatch {
         self.aot_visible_names.clear();
         self.reference_targets.clear();
-        self.entries
-            .drain()
-            .filter_map(|(_, entry)| owned_cell(Some(entry)))
-            .collect()
+        RuntimeOwnerBatch::new(
+            self.entries
+                .drain()
+                .filter_map(|(_, entry)| entry.into_owned_cell()),
+        )
     }
 
     /// Advances the generation counter for a scope mutation.
@@ -560,15 +643,13 @@ impl ElephcEvalScope {
 }
 
 /// Returns the owned cell for a visible owned entry, if one exists.
-fn owned_cell(entry: Option<ScopeEntry>) -> Option<RuntimeCellHandle> {
-    let entry = entry?;
-    let flags = entry.flags();
-    (flags.is_visible() && flags.ownership == ScopeCellOwnership::Owned).then_some(entry.cell())
+fn owned_cell(entry: Option<StoredScopeEntry>) -> Option<RuntimeCellHandle> {
+    entry?.into_owned_cell()
 }
 
 /// Returns an owned cell unless it is the same handle as the newly stored cell.
 fn owned_cell_except(
-    entry: Option<ScopeEntry>,
+    entry: Option<StoredScopeEntry>,
     replacement: RuntimeCellHandle,
 ) -> Option<RuntimeCellHandle> {
     owned_cell(entry).filter(|cell| *cell != replacement)
@@ -576,7 +657,7 @@ fn owned_cell_except(
 
 /// Returns owned cells from replaced entries unless they match the replacement.
 fn owned_cells_except(
-    entries: impl IntoIterator<Item = Option<ScopeEntry>>,
+    entries: impl IntoIterator<Item = Option<StoredScopeEntry>>,
     replacement: RuntimeCellHandle,
 ) -> Vec<RuntimeCellHandle> {
     let mut cells = Vec::new();

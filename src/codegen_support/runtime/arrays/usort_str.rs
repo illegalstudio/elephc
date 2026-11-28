@@ -49,10 +49,9 @@ pub fn emit_usort_str(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #48]");                                   // save the comparator address for every inner-loop call
     emitter.instruction("str x2, [sp, #56]");                                   // save the optional comparator capture environment pointer
-    emitter.instruction("ldr x9, [x1]");                                        // x9 = array length from the header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // x9 = array length from the header
     emitter.instruction("str x9, [sp, #0]");                                    // save the array length
-    emitter.instruction("add x9, x1, #24");                                     // x9 = base of the data region (skip header)
-    emitter.instruction("str x9, [sp, #8]");                                    // save the data base
+    emitter.instruction("str x1, [sp, #8]");                                    // save the packed array base
     emitter.instruction("mov x9, #1");                                          // outer-loop index i = 1
     emitter.instruction("str x9, [sp, #16]");                                   // save i
 
@@ -62,9 +61,13 @@ pub fn emit_usort_str(emitter: &mut Emitter) {
     emitter.instruction("cmp x3, x1");                                          // compare i with the array length
     emitter.instruction("b.ge __rt_usort_str_done");                            // i >= length: sorting complete
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the data base
-    emitter.instruction("add x9, x2, x3, lsl #4");                              // x9 = &data[i] (16-byte string slots)
-    emitter.instruction("ldr x4, [x9]");                                        // keyptr = data[i] string pointer
-    emitter.instruction("ldr x5, [x9, #8]");                                    // keylen = data[i] string length
+    emitter.instruction("lsl x9, x3, #4");                                      // convert i into a 16-byte string-slot offset
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word(
+        emitter, "x4", "x2", "x9",
+    );
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word_delta(
+        emitter, "x5", "x2", "x9", 1,
+    );
     emitter.instruction("str x4, [sp, #24]");                                   // save keyptr across comparator calls
     emitter.instruction("str x5, [sp, #32]");                                   // save keylen across comparator calls
     emitter.instruction("sub x6, x3, #1");                                      // j = i - 1 (scan the sorted prefix)
@@ -75,9 +78,13 @@ pub fn emit_usort_str(emitter: &mut Emitter) {
     emitter.instruction("cmp x6, #0");                                          // is j below the start of the array?
     emitter.instruction("b.lt __rt_usort_str_insert");                          // insertion point reached
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the data base
-    emitter.instruction("add x9, x2, x6, lsl #4");                              // x9 = &data[j]
-    emitter.instruction("ldr x0, [x9]");                                        // comparator arg a: data[j] string pointer
-    emitter.instruction("ldr x1, [x9, #8]");                                    // comparator arg a: data[j] string length
+    emitter.instruction("lsl x9, x6, #4");                                      // convert j into a 16-byte string-slot offset
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word(
+        emitter, "x0", "x2", "x9",
+    );
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word_delta(
+        emitter, "x1", "x2", "x9", 1,
+    );
     emitter.instruction("ldr x2, [sp, #24]");                                   // comparator arg b: keyptr
     emitter.instruction("ldr x3, [sp, #32]");                                   // comparator arg b: keylen
     emitter.instruction("ldr x4, [sp, #56]");                                   // pass the capture environment after the compared string pair
@@ -87,11 +94,19 @@ pub fn emit_usort_str(emitter: &mut Emitter) {
     emitter.instruction("b.le __rt_usort_str_insert");                          // ordered: insert here, which keeps equal elements stable
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload j for the shift
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the data base
-    emitter.instruction("add x9, x2, x6, lsl #4");                              // x9 = &data[j]
-    emitter.instruction("ldr x10, [x9]");                                       // data[j] string pointer
-    emitter.instruction("ldr x11, [x9, #8]");                                   // data[j] string length
-    emitter.instruction("str x10, [x9, #16]");                                  // data[j+1] pointer = data[j] pointer
-    emitter.instruction("str x11, [x9, #24]");                                  // data[j+1] length = data[j] length
+    emitter.instruction("lsl x9, x6, #4");                                      // convert j into a 16-byte string-slot offset
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word(
+        emitter, "x10", "x2", "x9",
+    );
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word_delta(
+        emitter, "x11", "x2", "x9", 1,
+    );
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "x2", "x9", "x10", "x12", 2,
+    );
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "x2", "x9", "x11", "x12", 3,
+    );
     emitter.instruction("sub x6, x6, #1");                                      // j -= 1 (continue scanning left)
     emitter.instruction("str x6, [sp, #40]");                                   // save j
     emitter.instruction("b __rt_usort_str_inner");                              // continue the inner loop
@@ -100,11 +115,15 @@ pub fn emit_usort_str(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload j
     emitter.instruction("add x12, x6, #1");                                     // insertion index j + 1
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the data base
-    emitter.instruction("add x9, x2, x12, lsl #4");                             // x9 = &data[j+1]
+    emitter.instruction("lsl x9, x12, #4");                                     // convert j + 1 into a 16-byte string-slot offset
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload keyptr
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload keylen
-    emitter.instruction("str x10, [x9]");                                       // data[j+1] pointer = keyptr
-    emitter.instruction("str x11, [x9, #8]");                                   // data[j+1] length = keylen
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "x2", "x9", "x10", "x13", 0,
+    );
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "x2", "x9", "x11", "x13", 1,
+    );
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload i
     emitter.instruction("add x3, x3, #1");                                      // advance the outer-loop index
     emitter.instruction("str x3, [sp, #16]");                                   // save i
@@ -136,10 +155,9 @@ fn emit_usort_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve the insertion-sort state slots and keep rsp 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the comparator address for every inner-loop call
     emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the optional comparator capture environment pointer
-    emitter.instruction("mov r8, QWORD PTR [rsi]");                             // r8 = array length from the header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r8", "rsi"); // r8 = array length from the header
     emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save the array length
-    emitter.instruction("lea r8, [rsi + 24]");                                  // r8 = base of the data region (skip header)
-    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // save the data base
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the packed array base
     emitter.instruction("mov r8, 1");                                           // outer-loop index i = 1
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save i
 
@@ -149,10 +167,14 @@ fn emit_usort_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_usort_str_done_linux_x86_64");                // i >= length: sorting complete
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the data base
     emitter.instruction("shl r10, 4");                                          // i * 16 (16-byte string slots)
-    emitter.instruction("add r9, r10");                                         // r9 = &data[i]
-    emitter.instruction("mov rax, QWORD PTR [r9]");                             // keyptr = data[i] string pointer
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the packed array base
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word(
+        emitter, "rax", "r9", "r10",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save keyptr across comparator calls
-    emitter.instruction("mov rax, QWORD PTR [r9 + 8]");                         // keylen = data[i] string length
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word_delta(
+        emitter, "rax", "r9", "r10", 1,
+    );
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save keylen across comparator calls
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unscaled outer-loop index
     emitter.instruction("sub r10, 1");                                          // j = i - 1 (scan the sorted prefix)
@@ -163,9 +185,13 @@ fn emit_usort_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 0");                                           // is j below the start of the array?
     emitter.instruction("jl __rt_usort_str_insert_linux_x86_64");               // insertion point reached
     emitter.instruction("shl r9, 4");                                           // j * 16 (16-byte string slots)
-    emitter.instruction("add r9, QWORD PTR [rbp - 16]");                        // r9 = &data[j]
-    emitter.instruction("mov rdi, QWORD PTR [r9]");                             // comparator arg a: data[j] string pointer
-    emitter.instruction("mov rsi, QWORD PTR [r9 + 8]");                         // comparator arg a: data[j] string length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the packed array base
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word(
+        emitter, "rdi", "r10", "r9",
+    );
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word_delta(
+        emitter, "rsi", "r10", "r9", 1,
+    );
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // comparator arg b: keyptr
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // comparator arg b: keylen
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // pass the capture environment after the compared string pair
@@ -175,11 +201,19 @@ fn emit_usort_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jle __rt_usort_str_insert_linux_x86_64");              // ordered: insert here, which keeps equal elements stable
     emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload j for the shift
     emitter.instruction("shl r9, 4");                                           // j * 16 (16-byte string slots)
-    emitter.instruction("add r9, QWORD PTR [rbp - 16]");                        // r9 = &data[j]
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // data[j] string pointer
-    emitter.instruction("mov rax, QWORD PTR [r9 + 8]");                         // data[j] string length
-    emitter.instruction("mov QWORD PTR [r9 + 16], r10");                        // data[j+1] pointer = data[j] pointer
-    emitter.instruction("mov QWORD PTR [r9 + 24], rax");                        // data[j+1] length = data[j] length
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the packed array base
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word(
+        emitter, "r10", "r11", "r9",
+    );
+    elephc_memoir::values::packed_slots::emit_load_packed_byte_offset_word_delta(
+        emitter, "rax", "r11", "r9", 1,
+    );
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "r11", "r9", "r10", "rcx", 2,
+    );
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "r11", "r9", "rax", "rcx", 3,
+    );
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the unscaled inner-loop index
     emitter.instruction("sub r10, 1");                                          // j -= 1 (continue scanning left)
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save j
@@ -189,11 +223,15 @@ fn emit_usort_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload j
     emitter.instruction("add r9, 1");                                           // insertion index j + 1
     emitter.instruction("shl r9, 4");                                           // (j + 1) * 16
-    emitter.instruction("add r9, QWORD PTR [rbp - 16]");                        // r9 = &data[j+1]
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the packed array base
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload keyptr
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // data[j+1] pointer = keyptr
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "r11", "r9", "r10", "rax", 0,
+    );
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload keylen
-    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // data[j+1] length = keylen
+    elephc_memoir::values::packed_slots::emit_store_packed_byte_offset_word_delta(
+        emitter, "r11", "r9", "r10", "rax", 1,
+    );
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload i
     emitter.instruction("add r10, 1");                                          // advance the outer-loop index
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save i

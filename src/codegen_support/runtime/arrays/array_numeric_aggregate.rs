@@ -10,9 +10,8 @@
 //! - PHP 8.3 warnings do not change the legacy fallback for strings and resources.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels};
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 144;
 const HANDLER: usize = FRAME - 16;
@@ -75,11 +74,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     }
     install_boundary(emitter, prefix);
     abi::load_at_offset(emitter, result, BORROWED);
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rsi, rdx");                                    // adapt the snapshot constructor's high-word argument
-    }
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    elephc_memoir::values::mixed_from_value::emit_snapshot_borrowed_cell(emitter);
     abi::store_at_offset(emitter, result, SOURCE);
     abi::emit_load_int_immediate(emitter, result, 0);
     abi::emit_load_int_immediate(emitter, low, i64::from(product));
@@ -117,7 +112,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     emitter.label(&format!("{prefix}_object"));
     if emitter.target.arch == Arch::AArch64 {
         abi::load_at_offset(emitter, "x0", ENTRY - 8);                        // load the object pointer from the unboxed entry payload
-        emitter.instruction("ldr x9, [x0]");                                    // load the object's runtime class id
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
         abi::emit_symbol_address(emitter, "x10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
         emitter.instruction("ldr x10, [x10, x9, lsl #3]");                      // read this class's numeric cast adapter
         emitter.instruction(&format!("cbz x10, {prefix}_unsupported"));         // classes without a cast keep the warning path
@@ -132,7 +127,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
         abi::emit_jump(emitter, &format!("{prefix}_combine"));                 // add the cast number to the running total
     } else {
         emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                   // load the object pointer from the unboxed entry payload
-        emitter.instruction("mov r9, QWORD PTR [rdi]");                         // load the object's runtime class id
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rdi");
         abi::emit_symbol_address(emitter, "r10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
         emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");               // read this class's numeric cast adapter
         emitter.instruction("test r10, r10");                                   // does this class provide a numeric cast?
@@ -210,36 +205,35 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
     abi::load_at_offset(emitter, abi::int_result_reg(emitter), PAYLOAD);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x0, #-8]");                           // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
             emitter.instruction("and w9, w9, #0xff");                           // isolate the storage kind
             emitter.instruction("cmp w9, #2");                                  // kind 2 = indexed packed array
             emitter.instruction(&format!("b.ne {generic}"));                    // other storage keeps the generic fold
-            emitter.instruction("ldr x9, [x0, #-8]");                           // reload the metadata for the value type
-            emitter.instruction("ubfx x9, x9, #8, #7");                         // isolate the element value type
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
+            elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x9", "x9");
             emitter.instruction(&format!("cbnz x9, {generic}"));                // only int-shaped slots take the fast path
-            emitter.instruction("ldr x9, [x0, #16]");                           // load the element size
+            elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x9");
             emitter.instruction("cmp x9, #8");                                  // int slots are one 8-byte word
             emitter.instruction(&format!("b.ne {generic}"));                    // widened slots keep the generic fold
-            emitter.instruction("ldr x2, [x0]");                                // exclusive end = array length
+            elephc_memoir::values::packed_slots::emit_load_length(emitter, "x2", "x0"); // exclusive end = array length
             emitter.instruction("mov x1, #0");                                  // start at the first element
             emitter.instruction("mov x3, #0");                                  // the empty seed is int zero
             abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
             emitter.instruction("and r10d, 0xff");                              // isolate the storage kind
             emitter.instruction("cmp r10d, 2");                                 // kind 2 = indexed packed array
             emitter.instruction(&format!("jne {generic}"));                     // other storage keeps the generic fold
-            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // reload the metadata for the value type
-            emitter.instruction("shr r10, 8");                                  // move the value type into the low bits
-            emitter.instruction("and r10d, 0x7f");                              // ignore the persistent COW flag
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10d");
             emitter.instruction(&format!("jnz {generic}"));                     // only int-shaped slots take the fast path
-            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the element size
+            elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rax", "r10");
             emitter.instruction("cmp r10, 8");                                  // int slots are one 8-byte word
             emitter.instruction(&format!("jne {generic}"));                     // widened slots keep the generic fold
             emitter.instruction("mov rdi, rax");                                // pass the packed array
             emitter.instruction("xor esi, esi");                                // start at the first element
-            emitter.instruction("mov rdx, QWORD PTR [rax]");                    // exclusive end = array length
+            elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdx", "rax"); // exclusive end = array length
             emitter.instruction("xor ecx, ecx");                                // the empty seed is int zero
             abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
         }
@@ -268,17 +262,25 @@ fn emit_unsupported_warning(emitter: &mut Emitter, prefix: &str, product: bool) 
     branch(emitter, "ne", "ne", &fallback);
     abi::load_at_offset(emitter, result, ENTRY - 8);
     ins(emitter, "ldr x13, [x0]", "mov r8, QWORD PTR [rax]");
-    abi::emit_load_symbol_to_reg(emitter, result, "_class_name_count", 0);
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(emitter, result);
     ins(emitter, "cmp x13, x0", "cmp r8, rax");
     branch(emitter, "hs", "ae", &fallback);
-    abi::emit_symbol_address(emitter, abi::secondary_scratch_reg(emitter), "_class_name_entries");
-    ins(emitter, "add x10, x10, x13, lsl #4", "shl r8, 4");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("add r10, r8");                                     // address the current object's dense class-name row
-    }
+    let table = abi::secondary_scratch_reg(emitter);
     let (ptr, len) = warning_regs(emitter);
-    abi::emit_load_from_address(emitter, ptr, abi::secondary_scratch_reg(emitter), 0);
-    abi::emit_load_from_address(emitter, len, abi::secondary_scratch_reg(emitter), 8);
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, table);
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(
+        emitter,
+        table,
+        table,
+        if emitter.target.arch == Arch::AArch64 { "x13" } else { "r8" },
+        ptr,
+    );
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(
+        emitter,
+        ptr,
+        len,
+        table,
+    );
     abi::emit_reg_move(emitter, result, len);
     abi::emit_branch_if_int_result_zero(emitter, &fallback);
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
@@ -357,44 +359,26 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
 
 /// Installs a resumable owner boundary before allocation or warning dispatch.
 fn install_boundary(emitter: &mut Emitter, prefix: &str) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, slot) in [
-        ("_exc_value", PREVIOUS), ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, slot);
-    }
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // preserve the snapshot and partial number when a warning handler throws
-    abi::emit_branch_if_int_result_nonzero(emitter, &format!("{prefix}_caught"));
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        &format!("{prefix}_caught"),
+    );
 }
 
 /// Restores the enclosing exception handler and diagnostic depth.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, slot) in [("_exc_handler_top", HANDLER), ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET)] {
-        abi::load_at_offset(emitter, result, slot);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears one root without clobbering a loaded owner or exception-chain argument.
 fn clear_slot(emitter: &mut Emitter, slot: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, slot);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(slot));
 }
 
 /// Retires a boxed owner after clearing its root, including when cleanup later resumes.
 fn release_slot(emitter: &mut Emitter, slot: usize) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), slot);
-    clear_slot(emitter, slot);
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(slot), "__rt_decref_mixed");
 }
 
 /// Returns the low payload register of the Mixed unbox ABI.

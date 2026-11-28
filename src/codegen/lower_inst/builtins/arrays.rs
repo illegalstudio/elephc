@@ -10,6 +10,7 @@
 //!   dispatch to refcount-aware runtime variants when payloads own heap values.
 //! - Associative key filters require hash operands because their runtime helpers copy hash entries.
 
+use elephc_memoir::values::array_splice_insert as splice_storage;
 use crate::codegen::platform::Arch;
 use crate::codegen::{
     abi, callable_descriptor, callable_dispatch, emit_box_current_owned_value_as_mixed,
@@ -253,14 +254,10 @@ fn emit_mixed_splice_replacement_insert(
     if !replacement.inserts_values() {
         return Ok(());
     }
-    let (removed_reg, at_reg) = splice_result_regs(ctx);
-    let (_dst_reg, index_reg, replacement_reg) = splice_insert_arg_regs(ctx);
     let cell_reg = abi::secondary_scratch_reg(ctx.emitter);
-    // Temporary layout after both pushes: [0] = replacement array, [16] = removed array,
-    // [24] = normalized insertion index.
-    abi::emit_push_reg_pair(ctx.emitter, removed_reg, at_reg);
+    splice_storage::emit_save_removal(ctx.emitter);
     emit_splice_replacement_pointer(ctx, replacement)?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    splice_storage::emit_save_replacement(ctx.emitter);
     ctx.load_value_to_reg(array, cell_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -270,8 +267,7 @@ fn emit_mixed_splice_replacement_insert(
             ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // read the converted indexed array out of the Mixed cell
         }
     }
-    abi::emit_load_temporary_stack_slot(ctx.emitter, index_reg, 24);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, replacement_reg, 0);
+    splice_storage::emit_load_replacement_args(ctx.emitter);
     emit_splice_boxing_tag(ctx, replacement);
     abi::emit_call_label(
         ctx.emitter,
@@ -280,20 +276,16 @@ fn emit_mixed_splice_replacement_insert(
     ctx.load_value_to_reg(array, cell_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [x10, #8]");                       // republish the possibly-relocated indexed array into the Mixed cell
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "x0", "x10");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // republish the possibly-relocated indexed array into the Mixed cell
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "rax", "r10");
         }
     }
     if replacement.owns_temporary_array() {
-        // `__rt_heap_free` reads its pointer from the INT RESULT register on both targets
-        // (`x0`/`rax`), not from the first argument register — those differ on x86_64.
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        splice_storage::emit_free_replacement_shell(ctx.emitter);
     }
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    splice_storage::emit_finish_staging(ctx.emitter);
     Ok(())
 }
 
@@ -326,16 +318,12 @@ fn emit_splice_replacement_insert(
         return Ok(());
     }
     receiver.require_writable("array_splice replacement")?;
-    let (removed_reg, at_reg) = splice_result_regs(ctx);
-    let (dst_reg, index_reg, replacement_reg) = splice_insert_arg_regs(ctx);
-    // Temporary layout after both pushes: [0] = replacement array, [16] = removed array,
-    // [24] = normalized insertion index.
-    abi::emit_push_reg_pair(ctx.emitter, removed_reg, at_reg);
+    let dst_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    splice_storage::emit_save_removal(ctx.emitter);
     emit_splice_replacement_pointer(ctx, replacement)?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    splice_storage::emit_save_replacement(ctx.emitter);
     ctx.load_value_to_reg(array, dst_reg)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, index_reg, 24);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, replacement_reg, 0);
+    splice_storage::emit_load_replacement_args(ctx.emitter);
     emit_splice_boxing_tag(ctx, replacement);
     abi::emit_call_label(
         ctx.emitter,
@@ -343,14 +331,10 @@ fn emit_splice_replacement_insert(
     );
     ctx.store_result_value(array)?;
     if replacement.owns_temporary_array() {
-        // `__rt_heap_free` reads its pointer from the INT RESULT register on both targets
-        // (`x0`/`rax`), not from the first argument register — those differ on x86_64.
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        splice_storage::emit_free_replacement_shell(ctx.emitter);
     }
     receiver.store_back(ctx, array, receiver_ty)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    splice_storage::emit_finish_staging(ctx.emitter);
     Ok(())
 }
 
@@ -453,14 +437,32 @@ fn emit_splice_replacement_pointer(
             abi::emit_pop_reg(ctx.emitter, scratch);
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction("str x10, [x0, #24]");              // store the scalar replacement into the one-element array
+                    elephc_memoir::values::packed_slots::emit_store_packed_word(
+                        ctx.emitter,
+                        "x0",
+                        "x10",
+                        0,
+                    );
                     ctx.emitter.instruction("mov x10, #1");                     // the synthesized replacement array holds exactly one element
-                    ctx.emitter.instruction("str x10, [x0]");                   // publish the one-element logical length
+                    elephc_memoir::values::packed_slots::emit_publish_length(
+                        ctx.emitter,
+                        "x0",
+                        "x10",
+                    );
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");   // store the scalar replacement into the one-element array
+                    elephc_memoir::values::packed_slots::emit_store_packed_word(
+                        ctx.emitter,
+                        "rax",
+                        "r10",
+                        0,
+                    );
                     ctx.emitter.instruction("mov r10, 1");                      // the synthesized replacement array holds exactly one element
-                    ctx.emitter.instruction("mov QWORD PTR [rax], r10");        // publish the one-element logical length
+                    elephc_memoir::values::packed_slots::emit_publish_length(
+                        ctx.emitter,
+                        "rax",
+                        "r10",
+                    );
                 }
             }
             Ok(())
@@ -797,24 +799,6 @@ fn sort_receiver_is_hash(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     ))
 }
 
-/// The `__rt_array_splice_insert*` argument registers: destination, index, replacement.
-fn splice_insert_arg_regs(
-    ctx: &FunctionContext<'_>,
-) -> (&'static str, &'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x0", "x1", "x2"),
-        Arch::X86_64 => ("rdi", "rsi", "rdx"),
-    }
-}
-
-/// The registers `__rt_array_splice*` leaves the removed array and the insertion index in.
-fn splice_result_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x0", "x1"),
-        Arch::X86_64 => ("rax", "rdx"),
-    }
-}
-
 /// Wraps a bare string replacement in a one-element 16-byte-slot indexed array.
 ///
 /// The shell holds the caller's borrowed pointer/length pair: `__rt_array_splice_insert_str`
@@ -833,18 +817,45 @@ fn emit_splice_one_element_string_array(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldp x10, x11, [sp], #16");                 // pop the borrowed string pointer/length pair after the constructor
-            ctx.emitter.instruction("stp x10, x11, [x0, #24]");                 // store the borrowed pair into the one-element string array
-            ctx.emitter.instruction("mov x10, #1");                             // the synthesized replacement array holds exactly one element
-            ctx.emitter.instruction("str x10, [x0]");                           // publish the one-element logical length
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "x0",
+                "x10",
+                0,
+            );
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "x0",
+                "x11",
+                1,
+            );
+            elephc_memoir::values::packed_slots::emit_publish_length_immediate(
+                ctx.emitter,
+                "x0",
+                1,
+            );
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the borrowed string pointer after the constructor
             ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");            // reload the borrowed string length after the constructor
             ctx.emitter.instruction("add rsp, 16");                             // release the borrowed string pointer/length staging slot
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");           // store the borrowed string pointer into the one-element string array
-            ctx.emitter.instruction("mov QWORD PTR [rax + 32], r11");           // store the borrowed string length into the one-element string array
-            ctx.emitter.instruction("mov r10, 1");                              // the synthesized replacement array holds exactly one element
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // publish the one-element logical length
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "rax",
+                "r10",
+                0,
+            );
+            elephc_memoir::values::packed_slots::emit_store_packed_word(
+                ctx.emitter,
+                "rax",
+                "r11",
+                1,
+            );
+            elephc_memoir::values::packed_slots::emit_publish_length_immediate(
+                ctx.emitter,
+                "rax",
+                1,
+            );
         }
     }
     Ok(())

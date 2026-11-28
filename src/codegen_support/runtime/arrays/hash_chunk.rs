@@ -81,9 +81,9 @@ pub fn emit_hash_chunk(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #32]");                                   // is a chunk already open?
     emitter.instruction("cbnz x9, __rt_hash_chunk_have_chunk");                 // yes: keep filling it
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source hash to read its header
-    emitter.instruction("ldr x1, [x9, #16]");                                   // inherit the source hash's value_type word
+    hash_layout::emit_load_header_field(emitter, "x1", "x9", HeaderField::ValueType);
     emitter.instruction("ldr x0, [sp, #8]");                                    // the requested chunk size is only an UPPER bound
-    emitter.instruction("ldr x12, [x9, #0]");                                   // entries the source actually holds
+    hash_layout::emit_load_header_field(emitter, "x12", "x9", HeaderField::Count);
     emitter.instruction("cmp x0, x12");                                         // is the requested size larger than the whole source?
     emitter.instruction("csel x0, x0, x12, ls");                                // size the chunk for what can really enter it
     emitter.instruction("bl __rt_hash_new");                                    // allocate this chunk's hash, x0 = chunk
@@ -212,9 +212,9 @@ fn emit_hash_chunk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // is a chunk already open?
     emitter.instruction("jne __rt_hash_chunk_have_chunk");                      // yes: keep filling it
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source hash to read its header
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // inherit the source hash's value_type word
+    hash_layout::emit_load_header_field(emitter, "rsi", "r10", HeaderField::ValueType);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the requested chunk size is only an UPPER bound
-    emitter.instruction("mov r11, QWORD PTR [r10 + 0]");                        // entries the source actually holds
+    hash_layout::emit_load_header_field(emitter, "r11", "r10", HeaderField::Count);
     emitter.instruction("cmp rdi, r11");                                        // is the requested size larger than the whole source?
     emitter.instruction("cmova rdi, r11");                                      // size the chunk for what can really enter it
     emitter.instruction("call __rt_hash_new");                                  // allocate this chunk's hash, rax = chunk
@@ -342,3 +342,4 @@ mod tests {
         }
     }
 }
+use elephc_memoir::hash_layout::{self, HeaderField};

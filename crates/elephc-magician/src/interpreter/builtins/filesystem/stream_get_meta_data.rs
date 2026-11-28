@@ -14,6 +14,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 use super::*;
 
@@ -48,52 +49,17 @@ pub(in crate::interpreter) fn eval_stream_get_meta_data_result(
     let Some(meta) = context.stream_resources().meta_data(id) else {
         return values.bool_value(false);
     };
-    let mut result = values.assoc_new(9)?;
-    result = eval_stream_meta_set_bool(result, "timed_out", false, values)?;
-    result = eval_stream_meta_set_bool(result, "blocked", true, values)?;
-    result = eval_stream_meta_set_bool(result, "eof", meta.eof, values)?;
-    result = eval_stream_meta_set_string(result, "wrapper_type", "plainfile", values)?;
-    result = eval_stream_meta_set_string(result, "stream_type", "STDIO", values)?;
-    result = eval_stream_meta_set_string(result, "mode", &meta.mode, values)?;
-    result = eval_stream_meta_set_int(result, "unread_bytes", 0, values)?;
-    result = eval_stream_meta_set_bool(result, "seekable", true, values)?;
-    eval_stream_meta_set_string(result, "uri", &meta.uri, values)
-}
-
-/// Inserts a boolean field into the stream metadata array.
-fn eval_stream_meta_set_bool(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: bool,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    let value = values.bool_value(value)?;
-    values.array_set(array, key, value)
-}
-
-/// Inserts an integer field into the stream metadata array.
-fn eval_stream_meta_set_int(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: i64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    let value = values.int(value)?;
-    values.array_set(array, key, value)
-}
-
-/// Inserts a string field into the stream metadata array.
-fn eval_stream_meta_set_string(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: &str,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    let value = values.string(value)?;
-    values.array_set(array, key, value)
+    let mut result = EvalArrayBuilder::assoc(values, 9)?;
+    result.string("timed_out", |values| values.bool_value(false))?;
+    result.string("blocked", |values| values.bool_value(true))?;
+    result.string("eof", |values| values.bool_value(meta.eof))?;
+    result.string("wrapper_type", |values| values.string("plainfile"))?;
+    result.string("stream_type", |values| values.string("STDIO"))?;
+    result.string("mode", |values| values.string(&meta.mode))?;
+    result.string("unread_bytes", |values| values.int(0))?;
+    result.string("seekable", |values| values.bool_value(true))?;
+    result.string("uri", |values| values.string(&meta.uri))?;
+    Ok(result.finish())
 }
 
 /// Evaluates PHP `stream_get_meta_data($stream)` over one eval expression.

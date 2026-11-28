@@ -62,14 +62,32 @@ macro_rules! impl_collection_call_ops {
         array: RuntimeCellHandle,
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        let value = Self::handle(unsafe { __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr()) })?;
-        if self.is_reference(value)? {
-            let result = self.copy_value(value);
-            self.release(value)?;
-            result
-        } else {
-            Ok(value)
-        }
+        let value = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(Self::handle(unsafe {
+            __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr())
+        })?);
+        crate::runtime_hooks::owner_frames::with_runtime_owners(&value, || {
+            match self.is_reference(value.borrowed()) {
+                Ok(false) => Ok(value.take()),
+                Ok(true) => {
+                    let result = self.copy_value(value.borrowed())
+                        .map(crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new);
+                    crate::runtime_hooks::owner_frames::with_runtime_owners(
+                        &result.as_ref().ok(),
+                        || {
+                            let cleanup = self.release(value.take());
+                            match &result {
+                                Ok(result) => result.finish(cleanup, |result| self.release(result)),
+                                Err(status) => {
+                                    let _ = cleanup;
+                                    Err(*status)
+                                }
+                            }
+                        },
+                    )
+                }
+                Err(status) => value.finish(Err(status), |value| self.release(value)),
+            }
+        })
     }
 
     /// Retains the stored boxed slot for argument binding without detaching its reference identity.
@@ -101,14 +119,32 @@ macro_rules! impl_collection_call_ops {
 
     /// Copies an insertion-order element without conflating numeric string and integer keys.
     fn array_iter_value(&mut self, array: RuntimeCellHandle, position: usize) -> Result<RuntimeCellHandle, EvalStatus> {
-        let value = Self::handle(unsafe { __elephc_eval_value_array_iter_value(array.as_ptr(), position as u64) })?;
-        if self.is_reference(value)? {
-            let result = self.copy_value(value);
-            self.release(value)?;
-            result
-        } else {
-            Ok(value)
-        }
+        let value = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(Self::handle(unsafe {
+            __elephc_eval_value_array_iter_value(array.as_ptr(), position as u64)
+        })?);
+        crate::runtime_hooks::owner_frames::with_runtime_owners(&value, || {
+            match self.is_reference(value.borrowed()) {
+                Ok(false) => Ok(value.take()),
+                Ok(true) => {
+                    let result = self.copy_value(value.borrowed())
+                        .map(crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new);
+                    crate::runtime_hooks::owner_frames::with_runtime_owners(
+                        &result.as_ref().ok(),
+                        || {
+                            let cleanup = self.release(value.take());
+                            match &result {
+                                Ok(result) => result.finish(cleanup, |result| self.release(result)),
+                                Err(status) => {
+                                    let _ = cleanup;
+                                    Err(*status)
+                                }
+                            }
+                        },
+                    )
+                }
+                Err(status) => value.finish(Err(status), |value| self.release(value)),
+            }
+        })
     }
 
     /// Detaches the array's boxed value while retaining its payload for ordinary COW writes.
@@ -254,14 +290,14 @@ macro_rules! impl_collection_call_ops {
         &mut self,
         object_identity: u64,
         property: &str,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&elephc_memoir::owner_layout::MagicSetGuard>,
     ) -> Result<bool, EvalStatus> {
         Ok(unsafe {
             __elephc_eval_magic_set_guard_push(
                 object_identity,
                 property.as_ptr(),
                 property.len() as u64,
-                node.as_mut_ptr(),
+                node.as_ptr(),
             ) != 0
         })
     }
@@ -269,9 +305,9 @@ macro_rules! impl_collection_call_ops {
     /// Unlinks the eval-owned node before its Rust stack storage leaves scope.
     fn native_magic_set_guard_pop(
         &mut self,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&elephc_memoir::owner_layout::MagicSetGuard>,
     ) -> Result<(), EvalStatus> {
-        unsafe { __elephc_eval_magic_set_guard_pop(node.as_mut_ptr()); }
+        unsafe { __elephc_eval_magic_set_guard_pop(node.as_ptr()); }
         Ok(())
     }
 

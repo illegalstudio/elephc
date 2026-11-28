@@ -26,7 +26,13 @@ pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
             crate::codegen::stack_numeric::scalar_numeric(&metadata.ir_type, &metadata.php_type)
         });
         if seed && ctx.local_slot_is_raw(slot) {
-            return super::arithmetic::stack_cell::store_seed(ctx, slot, value, cell);
+            return super::arithmetic::stack_cell::store_seed(
+                ctx,
+                slot,
+                value,
+                cell,
+                inst.replaces_local_owner(),
+            );
         }
     }
     // Parking a call operand can happen after a sibling scratch string was evaluated.
@@ -34,7 +40,11 @@ pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let reset_concat_after_store = ctx.local_kind(slot)? == LocalKind::PhpLocal
         && inst.span.is_some_and(|span| span.line > 0)
         && value_is_acquire_of_str_concat(ctx, value)?;
-    ctx.store_value_to_local(slot, value)?;
+    if inst.replaces_local_owner() {
+        ctx.replace_value_in_local(slot, value)?;
+    } else {
+        ctx.store_value_to_local(slot, value)?;
+    }
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
     }
@@ -461,11 +471,11 @@ pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instr
     ctx.emitter.label(&owned);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     ctx.emitter.label(&publish);
-    let previous = abi::secondary_scratch_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, previous, owner_offset);
-    // Publish the retained replacement before retirement can run a throwing destructor.
-    abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), owner_offset);
-    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), previous);
+    elephc_memoir::symbol_owners::emit_publish_owner(
+        ctx.emitter,
+        |emitter, previous| abi::load_at_offset(emitter, previous, owner_offset),
+        |emitter| abi::store_at_offset(emitter, abi::int_result_reg(emitter), owner_offset),
+    );
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
     Ok(())
 }
@@ -603,18 +613,43 @@ fn emit_refcounted_local_slot_retirement(
     abi::load_at_offset(ctx.emitter, result, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    emit_loaded_local_owner_retirement(ctx, slot, ty, &done)
+}
+
+/// Retires the owner detached by a local publication, propagating any new destructor exception.
+/// A frame-only numeric slot displaced another cell owned by the same frame, so it has no
+/// independent runtime owner to retire.
+pub(in crate::codegen) fn retire_displaced_local_owner(
+    ctx: &mut FunctionContext<'_>, slot: LocalSlotId, ty: &PhpType,
+) -> Result<()> {
+    if ctx.numeric_frame_only_slots.contains(&slot) {
+        return Ok(());
+    }
+    if *ty == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        return Ok(());
+    }
+    let done = ctx.next_label("replace_local_owner_done");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    emit_loaded_local_owner_retirement(ctx, slot, ty, &done)
+}
+
+/// Releases the loaded owner, using the cheaper direct path for destructor-free Mixed values.
+fn emit_loaded_local_owner_retirement(
+    ctx: &mut FunctionContext<'_>, slot: LocalSlotId, ty: &PhpType, done: &str,
+) -> Result<()> {
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         if mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
             abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            ctx.emitter.label(&done);
+            ctx.emitter.label(done);
             return Ok(());
         }
-        emit_mixed_local_slot_retirement(ctx, &done);
+        emit_mixed_local_slot_retirement(ctx, done);
         return Ok(());
     }
     abi::emit_decref_preserving_exception(ctx.emitter, ty);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
-    ctx.emitter.label(&done);
+    ctx.emitter.label(done);
     Ok(())
 }
 
@@ -701,27 +736,16 @@ fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
     let result = abi::int_result_reg(ctx.emitter);
     let tag = abi::secondary_scratch_reg(ctx.emitter);
     let scalar = ctx.next_label("release_local_slot_scalar_mixed");
-    crate::codegen_support::sentinels::emit_branch_if_null_container(
+    let protected = ctx.next_label("release_local_slot_protected_mixed");
+    elephc_memoir::cleanup_fast_paths::scalar_mixed::emit_local_retirement_gate(
         ctx.emitter,
         result,
         tag,
+        &scalar,
+        &protected,
         done,
     );
-    abi::emit_load_from_address(ctx.emitter, tag, result, 0);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {tag}, #3"));                 // classify int, string, float, and bool Mixed payloads
-            ctx.emitter.instruction(&format!("b.ls {scalar}"));                 // bypass the throwing-cleanup boundary for scalar tags 0 through 3
-            ctx.emitter.instruction(&format!("cmp {tag}, #8"));                 // classify the canonical null Mixed payload
-            ctx.emitter.instruction(&format!("b.eq {scalar}"));                 // null owns no destructor-capable child
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {tag}, 3"));                  // classify int, string, float, and bool Mixed payloads
-            ctx.emitter.instruction(&format!("jbe {scalar}"));                  // bypass the throwing-cleanup boundary for scalar tags 0 through 3
-            ctx.emitter.instruction(&format!("cmp {tag}, 8"));                  // classify the canonical null Mixed payload
-            ctx.emitter.instruction(&format!("je {scalar}"));                   // null owns no destructor-capable child
-        }
-    }
+    ctx.emitter.label(&protected);
     abi::emit_decref_preserving_exception(ctx.emitter, &PhpType::Mixed);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
     abi::emit_jump(ctx.emitter, done);
@@ -947,51 +971,55 @@ pub(in crate::codegen) fn publish_current_ref_cell_value(
         );
     }
     if retires_previous {
-        abi::emit_load_from_address(ctx.emitter, old_reg, pointer_reg, 0);
         pop_ref_cell_store_value(ctx, &target_ty);
     }
-    match target_ty {
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_store_to_address(ctx.emitter, ptr_reg, pointer_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, len_reg, pointer_reg, 8);
-        }
-        PhpType::Float => {
-            abi::emit_store_to_address(
-                ctx.emitter,
-                abi::float_result_reg(ctx.emitter),
+    let publish = |emitter: &mut crate::codegen::emit::Emitter| {
+        match target_ty {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+                abi::emit_store_to_address(emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_store_to_address(emitter, len_reg, pointer_reg, 8);
+            }
+            PhpType::Float => {
+                abi::emit_store_to_address(
+                    emitter,
+                    abi::float_result_reg(emitter),
+                    pointer_reg,
+                    0,
+                );
+            }
+            PhpType::TaggedScalar => {
+                abi::emit_store_to_address(
+                    emitter,
+                    abi::int_result_reg(emitter),
+                    pointer_reg,
+                    0,
+                );
+                abi::emit_store_to_address(
+                    emitter,
+                    crate::codegen::sentinels::tagged_scalar_tag_reg(emitter),
+                    pointer_reg,
+                    8,
+                );
+            }
+            // A boxed Mixed payload occupies ONE word, and that is all this store may touch. The
+            // pointer is not always a two-word managed cell: a by-reference parameter receives the
+            // bare address of the caller's frame slot, so clearing a second word there wrote a zero
+            // over the caller's next local. For example, `f($left, $right)` with two written
+            // `&$array` parameters nulled `$left`. Managed cells keep their second word cleared, so
+            // there was nothing to clear for them either.
+            _ => abi::emit_store_to_address(
+                emitter,
+                abi::int_result_reg(emitter),
                 pointer_reg,
                 0,
-            );
+            ),
         }
-        PhpType::TaggedScalar => {
-            abi::emit_store_to_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-            abi::emit_store_to_address(
-                ctx.emitter,
-                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
-                pointer_reg,
-                8,
-            );
-        }
-        // A boxed Mixed payload occupies ONE word, and that is all this store may touch. The
-        // pointer is not always a two-word managed cell: a by-reference parameter receives the
-        // bare address of the caller's frame slot, so clearing a second word there wrote a zero
-        // over the caller's NEXT local — `f($left, $right)` with two written `&$array` params
-        // nulled `$left`. Managed cells keep their second word cleared from construction, so
-        // there was nothing to clear for them either.
-        _ => abi::emit_store_to_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            pointer_reg,
-            0,
-        ),
-    }
+    };
     if retires_previous {
+        elephc_memoir::symbol_owners::emit_publish_address_owner(
+            ctx.emitter, pointer_reg, 0, publish,
+        );
         // An ordinary identical-pointer publication can reuse the cell's existing owner.
         // A mixed-key helper acquired an independent owner before the call, so its publication
         // must retire the old owner even when a reference-marker update bypasses COW.
@@ -1000,7 +1028,7 @@ pub(in crate::codegen) fn publish_current_ref_cell_value(
         if let Some(published) = &published {
             abi::emit_load_from_address(
                 ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
+                old_reg,
                 pointer_reg,
                 0,
             );
@@ -1025,7 +1053,6 @@ pub(in crate::codegen) fn publish_current_ref_cell_value(
         }
         // Publish before retirement because object/callable cleanup can execute PHP code.
         // Both raw Mixed aliases and descriptor-7 managed cells store the same boxed pointer.
-        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), old_reg);
         if target_ty == PhpType::Str {
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         } else {
@@ -1033,6 +1060,8 @@ pub(in crate::codegen) fn publish_current_ref_cell_value(
             abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
         }
         if let Some(published) = published { ctx.emitter.label(&published); }
+    } else {
+        publish(ctx.emitter);
     }
     Ok(())
 }

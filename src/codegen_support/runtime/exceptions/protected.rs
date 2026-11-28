@@ -9,7 +9,9 @@
 //! - Handler, activation, diagnostic suppression, and GC suppression are restored on both returns.
 //! - A pending throwable returns status two; recursive deep-free completion needs separate GC handling.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::activation_records;
+
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
 
 /// Emits an exception-contained callback around a body using the retained C input slots.
@@ -37,13 +39,10 @@ fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_statu
     emitter.instruction("add x29, sp, #272");                                   // establish a stable protected callback frame
     emitter.instruction("stp x0, x1, [sp, #224]");                              // retain the first two callback-specific C arguments
     emitter.instruction("stp x2, x3, [sp, #240]");                              // retain byte/output pointers and optional message length
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
-        abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
-        emitter.instruction(&format!("str x10, [sp, #{offset}]"));              // preserve the caller's exception, suppression, or GC state
-    }
+    activation_records::emit_save_runtime_try_prefix(emitter, "x10");
+    activation_records::emit_save_gc_release_suppression(emitter, "x10", 256);
     emitter.instruction("mov x10, sp");                                         // publish this stack record as the PHP exception boundary
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // address the platform jump buffer inside the handler record
     emitter.save_exception_handler();
     emitter.instruction(&format!("cbnz x0, {name}_throw"));                     // convert PHP longjmp into a returned callback status
@@ -55,11 +54,8 @@ fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_statu
     emitter.label(&format!("{name}_throw"));
     emitter.instruction("mov x0, #2");                                          // preserve the throwable already published by the PHP unwinder
     emitter.label(&format!("{name}_done"));
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
-        emitter.instruction(&format!("ldr x10, [sp, #{offset}]"));              // recover the state captured before any nested callback
-        abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
-    }
+    activation_records::emit_restore_runtime_try_prefix(emitter, "x10");
+    activation_records::emit_restore_gc_release_suppression(emitter, "x10", 256);
     emitter.instruction("ldp x29, x30, [sp, #272]");                            // restore the original C caller after callback cleanup
     emitter.instruction("add sp, sp, #288");                                    // release the complete exception boundary and callback spills
     emitter.instruction("ret");                                                 // return success or PendingThrowable without unwinding through Rust
@@ -73,13 +69,10 @@ fn x86_64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status
     for (offset, register) in [(224, "rdi"), (232, "rsi"), (240, "rdx"), (248, "rcx")] {
         emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], {register}")); // retain each incoming C argument before setjmp clobbers registers
     }
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
-        abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
-        emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], r10"));   // preserve the caller's exception, suppression, or GC state
-    }
+    activation_records::emit_save_runtime_try_prefix(emitter, "r10");
+    activation_records::emit_save_gc_release_suppression(emitter, "r10", 256);
     emitter.instruction("mov r10, rsp");                                        // publish this stack record as the protected PHP handler
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction(&format!("lea rdi, [rsp + {TRY_HANDLER_JMP_BUF_OFFSET}]")); // address the platform jump buffer through the first C argument
     emitter.save_exception_handler();
     emitter.instruction("test eax, eax");                                       // distinguish initial callback execution from an escaping PHP throw
@@ -92,11 +85,8 @@ fn x86_64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status
     emitter.label(&format!("{name}_throw"));
     emitter.instruction("mov eax, 2");                                          // retain the native unwinder's published pending throwable
     emitter.label(&format!("{name}_done"));
-    for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
-        emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {offset}]"));   // recover each state captured before nested PHP execution
-        abi::emit_store_reg_to_symbol(emitter, "r10", symbol, 0);
-    }
+    activation_records::emit_restore_runtime_try_prefix(emitter, "r10");
+    activation_records::emit_restore_gc_release_suppression(emitter, "r10", 256);
     emitter.instruction("leave");                                               // discard the full handler and restore the C caller frame
     emitter.instruction("ret");                                                 // return success or PendingThrowable without crossing Rust via longjmp
 }

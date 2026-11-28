@@ -7,7 +7,9 @@
 //! Key details:
 //! - Heap layout, refcount retention, and dynamic hash cloning remain ABI-stable.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::*;
+use elephc_memoir::values::object_clone_slots::{emit_direct_slot, SlotOwner};
 
 /// Emits allocation, class-id stamping, and declared-property slot initialization.
 pub(in crate::codegen::lower_inst) fn emit_object_allocation(
@@ -19,45 +21,33 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     owned_reference_property_offsets: &[(usize, PhpType, bool)],
 ) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
-    let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
     let creation_line_offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset_by_id(
         class_id, &ctx.module.class_infos,
     );
-    let payload_size = dynamic_properties_offset + dynamic_properties_bytes + usize::from(creation_line_offset.is_some()) * 8;
+    let payload_size = elephc_memoir::values::object_storage::declared_object_bytes(
+        property_count, allow_dynamic_properties, creation_line_offset.is_some(),
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("mov x0, #{}", payload_size)); // request object payload storage for the class id and property slots
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+                .instruction(&format!("mov x0, #{}", payload_size));            // request object payload storage for the class id and property slots
+            elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
-            ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x10", "x0");
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(                                   // materialize the x86_64 object heap kind word
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+                .instruction(&format!("mov rax, {}", payload_size));            // request object payload storage for the class id and property slots
+            elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
     if let Some(offset) = creation_line_offset {
         abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
     }
-    for index in 0..property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(ctx.emitter, object_reg, property_count);
     if !uninitialized_marker_offsets.is_empty() {
         let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
         abi::emit_load_int_immediate(
@@ -135,7 +125,7 @@ pub(super) fn emit_owned_reference_property_cell(
 
 /// Returns the byte offset of the dynamic-property hash pointer for this layout.
 pub(super) fn dynamic_property_hash_offset(property_count: usize) -> usize {
-    8 + property_count * 16
+    object_declared_slot_offset(property_count)
 }
 
 /// Returns property slot offsets whose copied low word must be retained for the cloned owner.
@@ -148,7 +138,7 @@ pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usiz
             if class_info.property_slot_is_reference(index, property) {
                 return None;
             }
-            property_clone_needs_retain(php_type).then_some(8 + index * 16)
+            property_clone_needs_retain(php_type).then_some(object_declared_slot_offset(index))
         })
         .collect()
 }
@@ -169,55 +159,19 @@ pub(super) fn emit_clone_declared_property_slots(
     owned_references: &[(usize, PhpType, bool)],
 ) {
     for index in 0..property_count {
-        let offset = 8 + index * 16;
-        emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
-        if owned_references
+        let offset = object_declared_slot_offset(index);
+        let owner = if owned_references
             .iter()
             .any(|(owned_offset, _, _)| *owned_offset == offset)
         {
-            let result = abi::int_result_reg(ctx.emitter);
-            abi::emit_push_reg(ctx.emitter, source_reg);
-            abi::emit_push_reg(ctx.emitter, dest_reg);
-            abi::emit_load_from_address(ctx.emitter, result, dest_reg, offset);
-            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_clone");
-            abi::emit_pop_reg(ctx.emitter, dest_reg);
-            abi::emit_pop_reg(ctx.emitter, source_reg);
-            abi::emit_store_to_address(ctx.emitter, result, dest_reg, offset);
+            SlotOwner::Reference
         } else if retained_offsets.contains(&offset) {
-            emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
-        }
+            SlotOwner::Retain
+        } else {
+            SlotOwner::Plain
+        };
+        emit_direct_slot(ctx.emitter, source_reg, dest_reg, offset, owner);
     }
-}
-
-/// Copies one 16-byte declared-property slot from the source object to the clone.
-pub(super) fn emit_copy_property_slot(
-    ctx: &mut FunctionContext<'_>,
-    source_reg: &str,
-    dest_reg: &str,
-    offset: usize,
-) {
-    let low_reg = abi::int_result_reg(ctx.emitter);
-    let high_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, low_reg, source_reg, offset);
-    abi::emit_load_from_address(ctx.emitter, high_reg, source_reg, offset + 8);
-    abi::emit_store_to_address(ctx.emitter, low_reg, dest_reg, offset);
-    abi::emit_store_to_address(ctx.emitter, high_reg, dest_reg, offset + 8);
-}
-
-/// Retains the copied low-word pointer for string, array, hash, object, or Mixed slots.
-pub(super) fn emit_retain_cloned_property_pointer(
-    ctx: &mut FunctionContext<'_>,
-    source_reg: &str,
-    dest_reg: &str,
-    offset: usize,
-) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, source_reg);
-    abi::emit_push_reg(ctx.emitter, dest_reg);
-    abi::emit_load_from_address(ctx.emitter, result_reg, dest_reg, offset);
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    abi::emit_pop_reg(ctx.emitter, dest_reg);
-    abi::emit_pop_reg(ctx.emitter, source_reg);
 }
 
 /// Replaces the constructor-seeded dynamic-property hash with a shallow clone of the source hash.

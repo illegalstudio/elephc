@@ -25,6 +25,8 @@
 //! - `__rt_hash_set_owned_refusal` keeps ordinary COW and retires only the separate helper
 //!   owner when a mixed-key storeback refuses a nullable-reference assignment.
 
+use elephc_memoir::{hash_layout::EntryField, values::hash_bucket};
+
 use crate::codegen_support::abi;
 use crate::codegen_support::callable_invoker_args::{INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE};
 use crate::codegen_support::emit::Emitter;
@@ -91,127 +93,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_ready");
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash_table_ptr
 
-    // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --
-    emitter.instruction("ldr x5, [x0]");                                        // x5 = count
-    emitter.instruction("ldr x6, [x0, #8]");                                    // x6 = capacity
-    emitter.instruction("lsl x7, x5, #2");                                      // x7 = count * 4
-    emitter.instruction("mov x8, #3");                                          // multiplier
-    emitter.instruction("mul x8, x6, x8");                                      // x8 = capacity * 3
-    emitter.instruction("cmp x7, x8");                                          // count*4 >= capacity*3?
-    emitter.instruction("b.lt __rt_hash_set_no_grow");                          // skip growth if under threshold
-
-    // -- grow the hash table --
-    emitter.instruction("bl __rt_hash_grow");                                   // x0 = new table (doubled capacity)
-    emitter.instruction("str x0, [sp, #0]");                                    // update saved table pointer
-
-    emitter.label("__rt_hash_set_no_grow");
-
-    // -- hash the key --
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload incoming key_ptr
-    emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_len
-    emitter.instruction("bl __rt_hash_key_hash");                               // compute the typed key hash, result in x0
-
-    // -- compute slot index: hash % capacity --
-    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
-    emitter.instruction("ldr x6, [x5, #8]");                                    // x6 = capacity from header
-    emitter.instruction("udiv x7, x0, x6");                                     // x7 = hash / capacity
-    emitter.instruction("msub x8, x7, x6, x0");                                 // x8 = hash - (hash/capacity)*capacity = hash % capacity
-
-    // -- linear probe loop --
-    emitter.instruction("str x8, [sp, #48]");                                   // save initial probe index
-    emitter.instruction("mov x10, #0");                                         // x10 = probe count (to detect full table)
-
-    emitter.label("__rt_hash_set_probe");
-    emitter.instruction("cmp x10, x6");                                         // check if we've probed all slots
-    emitter.instruction("b.ge __rt_hash_set_done");                             // if probed all, table is full (shouldn't happen)
-
-    // -- compute entry address: entries + index * 64 --
-    emitter.instruction("ldr x9, [sp, #48]");                                   // load current probe index
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-
-    // -- check occupied field --
-    emitter.instruction("ldr x13, [x12]");                                      // x13 = occupied flag of this entry
-    emitter.instruction("cmp x13, #1");                                         // check if slot is occupied
-    emitter.instruction("b.ne __rt_hash_set_insert");                           // if empty (0) or tombstone (2), insert here
-
-    // -- slot is occupied: compare keys to check for update --
-    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = our key_ptr
-    emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = our key_len
-    emitter.instruction("ldr x3, [x12, #8]");                                   // x3 = existing key_ptr in entry
-    emitter.instruction("ldr x4, [x12, #16]");                                  // x4 = existing key_len in entry
-    emitter.instruction("bl __rt_hash_key_eq");                                 // compare normalized typed keys, x0=1 if equal
-
-    // -- restore probe state after str_eq --
-    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
-    emitter.instruction("ldr x6, [x5, #8]");                                    // reload capacity
-    emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index
-
-    // -- recompute entry address after call clobbered registers --
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-
-    emitter.instruction("cbnz x0, __rt_hash_set_update");                       // if keys match, update existing entry
-
-    // -- keys don't match, advance to next slot --
-    emitter.instruction("add x9, x9, #1");                                      // index += 1
-    emitter.instruction("udiv x7, x9, x6");                                     // x7 = index / capacity
-    emitter.instruction("msub x9, x7, x6, x9");                                 // x9 = index % capacity (wrap around)
-    emitter.instruction("str x9, [sp, #48]");                                   // save updated probe index
-
-    // -- increment probe count and continue --
-    emitter.instruction("add x10, x10, #1");                                    // probe_count += 1
-    emitter.instruction("b __rt_hash_set_probe");                               // try next slot
-
-    // -- insert into empty/tombstone slot --
-    emitter.label("__rt_hash_set_insert");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload inserted key_ptr
-    emitter.instruction("ldr x2, [sp, #16]");                                   // reload inserted key_len
-    emitter.instruction("cmn x2, #1");                                          // check whether the inserted key is an integer key
-    emitter.instruction("b.eq __rt_hash_set_key_ready");                        // integer keys are stored inline and do not need persistence
-    emitter.instruction("bl __rt_str_persist");                                 // persist inserted string key into heap storage
-    emitter.instruction("str x1, [sp, #8]");                                    // save persistent key pointer for slot write
-    emitter.instruction("str x2, [sp, #16]");                                   // save persistent key length for slot write
-    emitter.label("__rt_hash_set_key_ready");
-    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
-    emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after helper call
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-    emitter.instruction("mov x13, #1");                                         // occupied = 1
-    emitter.instruction("str x13, [x12]");                                      // set entry as occupied
-    emitter.instruction("ldr x13, [sp, #8]");                                   // load persistent key_ptr
-    emitter.instruction("str x13, [x12, #8]");                                  // store key_ptr in entry
-    emitter.instruction("ldr x13, [sp, #16]");                                  // load key_len
-    emitter.instruction("str x13, [x12, #16]");                                 // store key_len in entry
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load value_lo
-    emitter.instruction("str x13, [x12, #24]");                                 // store value_lo in entry
-    emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi
-    emitter.instruction("str x13, [x12, #32]");                                 // store value_hi in entry
-    emitter.instruction("ldr x13, [sp, #40]");                                  // load value_tag
-    emitter.instruction("str x13, [x12, #40]");                                 // store value_tag in entry
-    emitter.instruction("ldr x14, [x5, #32]");                                  // load the previous tail slot for insertion-order linking
-    emitter.instruction("str x14, [x12, #48]");                                 // store prev = old tail on the new entry
-    emitter.instruction("mov x15, #-1");                                        // sentinel index for end of the insertion-order chain
-    emitter.instruction("str x15, [x12, #56]");                                 // store next = none on the new tail entry
-    emitter.instruction("ldr x15, [x5, #24]");                                  // load the current head slot
-    emitter.instruction("cmp x15, #-1");                                        // is this the first insertion into the table?
-    emitter.instruction("b.ne __rt_hash_set_link_tail");                        // existing tables append after the previous tail
-    emitter.instruction("str x9, [x5, #24]");                                   // initialize head = inserted slot
-    emitter.instruction("str x9, [x5, #32]");                                   // initialize tail = inserted slot
-    emitter.instruction("b __rt_hash_set_insert_header");                       // skip the tail-link update for the first entry
-    emitter.label("__rt_hash_set_link_tail");
-    emitter.instruction("mov x16, #64");                                        // x16 = hash entry size for tail-slot addressing
-    hash_layout::emit_entry_address(emitter, "x17", "x5", "x14");
-    emitter.instruction("str x9, [x17, #56]");                                  // link old tail.next = inserted slot
-    emitter.instruction("str x9, [x5, #32]");                                   // update tail = inserted slot
-    emitter.label("__rt_hash_set_insert_header");
-
-    // -- increment count --
-    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
-    emitter.instruction("ldr x13, [x5]");                                       // load current count
-    emitter.instruction("add x13, x13, #1");                                    // count += 1
-    emitter.instruction("str x13, [x5]");                                       // store updated count
-    super::hash_next_index::record_insert(emitter, "x5", "x12", "__rt_hash_set");
+    elephc_memoir::values::hash_bucket_write::emit_aarch64(emitter);
     emitter.instruction("b __rt_hash_set_done");                                // done inserting
 
     // -- update existing entry's value --
@@ -224,10 +106,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #48]");                                   // recover the previously selected slot index
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("cbz x0, __rt_hash_set_write_value");                   // replace the borrowing entry without releasing its old value twice
-    emitter.instruction("ldr x13, [x12, #40]");                                 // load the overwritten entry's per-entry value_tag
+    hash_layout::emit_load_entry_field(emitter, "x13", "x12", EntryField::ValueTag);
     emitter.instruction("cmp x13, #7");                                         // can this Mixed entry contain an invoker reference marker?
     emitter.instruction("b.ne __rt_hash_set_check_reference");                  // concrete entries cannot contain the boxed marker shape
-    emitter.instruction("ldr x14, [x12, #24]");                                 // load the existing boxed Mixed payload
+    hash_layout::emit_load_entry_field(emitter, "x14", "x12", EntryField::ValueLow);
     emitter.instruction("cbz x14, __rt_hash_set_check_reference");              // a null Mixed handle is an ordinary overwrite
     emitter.instruction("ldr x15, [x14]");                                      // inspect the boxed Mixed runtime tag
     emitter.instruction(&format!("cmp x15, #{}", INVOKER_ARG_REF_CELL_TAG));    // does this box alias caller storage for a ref argument?
@@ -250,21 +132,17 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // The release can run a destructor that reads, grows or replaces this very table, so the
     // entry must already hold the replacement and nothing may touch the table afterwards.
     emitter.label("__rt_hash_set_release_any");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // keep the previous heap-backed value pointer for the release below
-    emit_publish_replacement_aarch64(emitter);
-    emitter.instruction("bl __rt_decref_any");                                  // release the overwritten payload through the uniform dispatcher
+    hash_bucket::emit_replace_and_release(emitter, "__rt_decref_any");
     emitter.instruction("b __rt_hash_set_done");                                // the entry already holds the replacement
 
     emitter.label("__rt_hash_set_release_callable");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // keep the previous callable descriptor pointer for the release below
-    emit_publish_replacement_aarch64(emitter);
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the overwritten callable descriptor
+    hash_bucket::emit_replace_and_release(emitter, "__rt_callable_descriptor_release");
     emitter.instruction("b __rt_hash_set_done");                                // the entry already holds the replacement
 
     // -- write through a boxed descriptor-invoker marker stored in a Mixed hash entry --
     persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write");
-    emitter.instruction("ldr x15, [x14, #16]");                                 // load the caller storage's runtime representation tag
+    elephc_memoir::layout::emit_load_mixed_high(emitter, "x15", "x14");
     emitter.instruction("cmp x15, #7");                                         // does the caller local hold a boxed Mixed handle?
     emitter.instruction("b.ne __rt_hash_set_invoker_reference_raw");            // concrete caller slots receive their native payload words
     emitter.instruction("ldr x13, [sp, #40]");                                  // load the replacement runtime value tag
@@ -279,26 +157,24 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload the hash table after optional boxing
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the current probe index
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-    emitter.instruction("ldr x14, [x12, #24]");                                 // reload the boxed invoker marker
-    emitter.instruction("ldr x14, [x14, #8]");                                  // load the caller's Mixed storage address
+    hash_layout::emit_load_entry_field(emitter, "x14", "x12", EntryField::ValueLow);
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "x14", "x14");
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "x14", "x13", "x15", "__rt_hash_set_invoker_phpref_payload",
     );
-    emitter.instruction("ldr x0, [x14]");                                       // save the previous boxed Mixed owner for release
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load the owned replacement box
-    emitter.instruction("str x13, [x14]");                                      // publish the replacement before a destructor can throw
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "x14", "x13", "[sp, #24]", None,
+    );
     emitter.instruction("bl __rt_decref_mixed");                                // retire the previous caller-local Mixed owner
     emitter.instruction("b __rt_hash_set_done");                                // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw");
     emitter.instruction(&format!("cmp x15, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged");         // decode boxed replacements before publishing both words
-    emitter.instruction("ldr x14, [x14, #8]");                                  // load the concrete caller-storage address
-    emitter.instruction("ldr x0, [x14]");                                       // retain the previous low payload for optional release
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load replacement value_lo
-    emitter.instruction("str x13, [x14]");                                      // publish replacement value_lo through the marker
-    emitter.instruction("ldr x13, [sp, #32]");                                  // load replacement value_hi
-    emitter.instruction("str x13, [x14, #8]");                                  // publish replacement value_hi through the marker
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "x14", "x14");
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "x14", "x13", "[sp, #24]", Some("[sp, #32]"),
+    );
     emitter.instruction("cmp x15, #1");                                         // strings own their low payload
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_release_any");    // release the overwritten string after publication
     emitter.instruction("cmp x15, #10");                                        // callable descriptors use their dedicated release helper
@@ -316,7 +192,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_done");                                // return the unchanged argument hash
 
     emitter.label("__rt_hash_set_invoker_reference_tagged");
-    emitter.instruction("ldr x14, [x14, #8]");                                  // address the caller's inline tagged-scalar slot
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "x14", "x14");
     emitter.instruction("ldr x0, [sp, #40]");                                   // inspect the replacement PHP representation
     emitter.instruction("cmp x0, #7");                                          // a Mixed replacement owns a box that must be decoded
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged_box");     // preserve the boxed value until both words are published
@@ -331,8 +207,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid");
     emitter.instruction("ldr x1, [sp, #24]");                                   // load the direct nullable-integer payload
-    emitter.instruction("str x1, [x14]");                                       // publish the scalar payload
-    emitter.instruction("str x0, [x14, #8]");                                   // publish its actual PHP tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "x14", "x1", "x0");
     emitter.instruction("b __rt_hash_set_done");                                // the marker remains owned by the argument hash
     emitter.label("__rt_hash_set_invoker_reference_tagged_box");
     emitter.instruction("ldr x0, [sp, #24]");                                   // load the replacement box owned by this write
@@ -347,8 +222,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid");
     abi::emit_load_temporary_stack_slot(emitter, "x14", 8);
-    emitter.instruction("str x1, [x14]");                                       // publish the unboxed scalar payload
-    emitter.instruction("str x0, [x14, #8]");                                   // publish the unboxed null or integer tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "x14", "x1", "x0");
     abi::emit_pop_reg_pair(emitter, "x0", "x14");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
     emitter.instruction("b __rt_hash_set_done");                                // retire the consumed box without changing marker identity
@@ -368,16 +242,13 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after the boxing helper
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after the boxing helper
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // load the managed reference cell this entry owns
-    emitter.instruction("str x0, [sp, #56]");                                   // save the cell across the payload release
-    emitter.instruction("bl __rt_reference_cell_value_release");                // release the value the reference set currently holds
-    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the managed reference cell
+    hash_layout::emit_load_entry_field(emitter, "x9", "x12", EntryField::ValueLow);
     emitter.instruction("ldr x13, [sp, #24]");                                  // load the boxed replacement payload
-    emitter.instruction("str x13, [x0]");                                       // publish the replacement to every alias in the reference set
+    elephc_memoir::reference_cells::emit_replace_boxed_child(emitter, "x9", "x13", "x10");
     emitter.instruction("b __rt_hash_set_done");                                // value_lo, value_hi and value_tag keep describing the cell
 
     emitter.label("__rt_hash_set_write_value");
-    emit_publish_replacement_aarch64(emitter);
+    hash_bucket::emit_publish_payload(emitter);
 
     // -- tear down stack frame and return --
     emitter.label("__rt_hash_set_done");
@@ -387,19 +258,6 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emit_hash_set_value_aarch64(emitter);
-}
-
-/// Writes the saved replacement payload and tag into the ARM64 entry addressed by `x12`.
-///
-/// Leaves `x0` untouched so an update can carry the overwritten payload across the store and
-/// release it only after the entry holds the replacement.
-fn emit_publish_replacement_aarch64(emitter: &mut Emitter) {
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load value_lo
-    emitter.instruction("str x13, [x12, #24]");                                 // update value_lo in entry
-    emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi
-    emitter.instruction("str x13, [x12, #32]");                                 // update value_hi in entry
-    emitter.instruction("ldr x13, [sp, #40]");                                  // load value_tag
-    emitter.instruction("str x13, [x12, #40]");                                 // update value_tag in entry
 }
 
 /// Emits the ARM64 `__rt_hash_set_value`, the bucket-replacing sibling of `__rt_hash_set`.
@@ -429,14 +287,9 @@ fn emit_hash_set_value_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload key_hi for the entry probe
     emitter.instruction("bl __rt_hash_get");                                    // x0 = found, x4 = matching entry address
     emitter.instruction("cbz x0, __rt_hash_set_value_forward");                 // a missing key is an ordinary insert
-    emitter.instruction("ldr x9, [x4, #40]");                                   // load the existing entry's runtime value tag
+    hash_layout::emit_load_entry_field(emitter, "x9", "x4", EntryField::ValueTag);
     persistent_references::emit_value_detach_probe(emitter);
-    emitter.instruction("ldr x0, [x4, #24]");                                   // load the managed reference cell this entry owns
-    emitter.instruction("str xzr, [x4, #24]");                                  // retire the detached payload before releasing it
-    emitter.instruction("str xzr, [x4, #32]");                                  // reference entries carry no high payload word
-    emitter.instruction("mov x9, #8");                                          // runtime value tag 8 = null
-    emitter.instruction("str x9, [x4, #40]");                                   // the slot reads as null until the replacement lands
-    emitter.instruction("bl __rt_decref_any");                                  // drop this table's ownership of the reference cell
+    hash_bucket::emit_detach_reference_owner(emitter);
     emitter.label("__rt_hash_set_value_forward");
     emitter.instruction("ldr x0, [sp, #40]");                                   // forward the unique table pointer
     emitter.instruction("ldr x1, [sp, #0]");                                    // forward key_lo
@@ -499,99 +352,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_x86_ready");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash-table pointer that subsequent probe logic must mutate
 
-    // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the current live-entry count
-    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the current table capacity
-    emitter.instruction("mov r12, r10");                                        // copy count before scaling it
-    emitter.instruction("shl r12, 2");                                          // scaled_count = count * 4
-    emitter.instruction("lea r13, [r11 + r11 * 2]");                            // scaled_capacity = capacity * 3
-    emitter.instruction("cmp r12, r13");                                        // has the table reached the growth threshold?
-    emitter.instruction("jl __rt_hash_set_no_grow_x");                          // skip growth while under the load threshold
-    emitter.instruction("mov rdi, rax");                                        // pass the unique table to the grow helper
-    emitter.instruction("call __rt_hash_grow");                                 // double the hash table capacity before probing
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the grown table pointer
-    emitter.label("__rt_hash_set_no_grow_x");
-
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the incoming key low word after the copy-on-write helper clobbered caller-saved argument registers
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the incoming key high word after the copy-on-write helper clobbered caller-saved argument registers
-    emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the normalized inserted key
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the hash helper returns
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the table capacity for the modulo operation and linear-probe loop
-    emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
-    emitter.instruction("div r11");                                             // compute hash % capacity using the SysV integer divide remainder register
-    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save the initial probe index so the loop can survive helper calls
-
-    emitter.label("__rt_hash_set_probe");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer at the top of every probe iteration
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index before deriving the slot address
-    hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("mov r13, QWORD PTR [r12]");                            // load the occupied marker for the probed hash-entry slot
-    emitter.instruction("cmp r13, 1");                                          // check whether the current probe landed on an occupied entry
-    emitter.instruction("jne __rt_hash_set_insert");                            // empty or tombstone entries can be claimed immediately for insertion
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the incoming key pointer to the x86_64 string-equality helper
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the incoming key length to the x86_64 string-equality helper
-    emitter.instruction("mov rdx, QWORD PTR [r12 + 8]");                        // pass the stored entry key pointer to the equality helper
-    emitter.instruction("mov rcx, QWORD PTR [r12 + 16]");                       // pass the stored entry key length to the equality helper
-    emitter.instruction("call __rt_hash_key_eq");                               // compare the existing normalized key with the inserted key before deciding between update and probe
-    emitter.instruction("test rax, rax");                                       // check whether the probed slot already stores the same logical key
-    emitter.instruction("jne __rt_hash_set_update");                            // overwrite the existing payload instead of probing further when the keys match
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the equality helper clobbered caller-saved registers
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // reload the table capacity before advancing the linear-probe cursor
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the current probe index before incrementing it
-    emitter.instruction("add rdx, 1");                                          // advance to the next linear-probe slot after a key mismatch
-    emitter.instruction("cmp rdx, r11");                                        // detect wraparound once the probe index reaches the table capacity
-    emitter.instruction("jb __rt_hash_set_store_probe");                        // keep the incremented probe index when the cursor remains in bounds
-    emitter.instruction("xor edx, edx");                                        // wrap the probe cursor back to slot zero once the end of the table is reached
-
-    emitter.label("__rt_hash_set_store_probe");
-    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // persist the updated probe index before the next loop iteration
-    emitter.instruction("jmp __rt_hash_set_probe");                             // continue probing until an empty slot or existing matching key is found
-
-    emitter.label("__rt_hash_set_insert");
-    emitter.instruction("mov QWORD PTR [r12], 1");                              // mark the selected entry slot as occupied before filling its payload fields
-    emitter.instruction("mov QWORD PTR [rbp - 64], r12");                       // preserve the selected entry pointer across the string-persist helper call for computed keys
-    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // check whether the inserted key is an integer key
-    emitter.instruction("je __rt_hash_set_key_ready");                          // integer keys are stored inline and do not need persistence
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the inserted key pointer into the x86_64 string helper input register
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // move the inserted key length into the paired x86_64 string helper register
-    emitter.instruction("call __rt_str_persist");                               // duplicate the inserted key so hash-table storage does not alias transient concat-buffer bytes
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the owned key pointer for the selected hash entry
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the owned key length for the selected hash entry
-    emitter.label("__rt_hash_set_key_ready");
-    emitter.instruction("mov r12, QWORD PTR [rbp - 64]");                       // restore the selected entry pointer after persisting the inserted key
-    emitter.instruction("mov r13, QWORD PTR [rbp - 16]");                       // reload the normalized key low word for storage in the selected hash entry
-    emitter.instruction("mov QWORD PTR [r12 + 8], r13");                        // store the owned string pointer or integer payload into the selected hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload the normalized key high word for storage in the selected hash entry
-    emitter.instruction("mov QWORD PTR [r12 + 16], r13");                       // store the string length or integer sentinel into the selected hash entry
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the string-persist helper clobbered caller-saved registers
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the low payload word that belongs to the inserted hash value
-    emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // store the low payload word into the hash entry payload area
-    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the high payload word that belongs to the inserted hash value
-    emitter.instruction("mov QWORD PTR [r12 + 32], r13");                       // store the high payload word into the hash entry payload area
-    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the runtime value tag that describes the inserted payload
-    emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // store the runtime value tag into the selected hash entry
-    emitter.instruction("mov r13, QWORD PTR [r10 + 32]");                       // load the previous insertion-order tail slot from the hash header
-    emitter.instruction("mov QWORD PTR [r12 + 48], r13");                       // link the new entry back to the previous tail slot
-    emitter.instruction("mov r14, -1");                                         // materialize the end-of-chain sentinel for the inserted tail entry
-    emitter.instruction("mov QWORD PTR [r12 + 56], r14");                       // initialize the new entry next-pointer as the tail sentinel
-    emitter.instruction("cmp r13, -1");                                         // detect the first insertion so the hash header head/tail can be initialized together
-    emitter.instruction("jne __rt_hash_set_link_tail");                         // existing tables need an extra step to wire the previous tail forward to the inserted slot
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index to seed the insertion-order head pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // header[24]: initialize the insertion-order head for the first occupied entry
-    emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // header[32]: initialize the insertion-order tail for the first occupied entry
-    emitter.instruction("jmp __rt_hash_set_bump_count");                        // skip the previous-tail forward-link update on the very first insertion
-
-    emitter.label("__rt_hash_set_link_tail");
-    hash_layout::emit_entry_address(emitter, "r14", "r10", "r13");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index for the previous-tail forward-link store
-    emitter.instruction("mov QWORD PTR [r14 + 56], r11");                       // update the previous tail entry to point at the inserted slot as its logical successor
-    emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // publish the inserted slot as the new insertion-order tail in the hash header
-
-    emitter.label("__rt_hash_set_bump_count");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current live-entry count from the hash header before incrementing it
-    emitter.instruction("add r11, 1");                                          // increment the live-entry count after claiming a previously empty hash slot
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // store the updated live-entry count back into the hash header
-    super::hash_next_index::record_insert(emitter, "r10", "r12", "__rt_hash_set");
+    elephc_memoir::values::hash_bucket_write::emit_x86_64(emitter);
     emitter.instruction("mov rax, r10");                                        // return the original hash-table pointer after a successful insertion
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the hash-set helper
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the hash-set helper
@@ -607,10 +368,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_write_guard_claim");                    // avoid releasing an owner already consumed by an outer construction write
     emitter.instruction("test rax, rax");                                       // determine whether this update owns its previous value
     emitter.instruction("jz __rt_hash_set_write_value_x");                      // retain the callee-saved selected entry while skipping duplicate release
-    emitter.instruction("mov r13, QWORD PTR [r12 + 40]");                       // load the overwritten entry's runtime value tag before replacing it
+    hash_layout::emit_load_entry_field(emitter, "r13", "r12", EntryField::ValueTag);
     emitter.instruction("cmp r13, 7");                                          // can this Mixed entry contain an invoker reference marker?
     emitter.instruction("jne __rt_hash_set_check_reference_x");                 // concrete entries cannot contain the boxed marker shape
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // load the existing boxed Mixed payload
+    hash_layout::emit_load_entry_field(emitter, "r14", "r12", EntryField::ValueLow);
     emitter.instruction("test r14, r14");                                       // guard the boxed marker dereference
     emitter.instruction("jz __rt_hash_set_check_reference_x");                  // a null Mixed handle is an ordinary overwrite
     let boxed_marker_compare = format!("cmp QWORD PTR [r14], {}", INVOKER_ARG_REF_CELL_TAG);
@@ -634,22 +395,16 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     // The release can run a destructor that reads, grows or replaces this very table, so the
     // entry must already hold the replacement and nothing may touch the table afterwards.
     emitter.label("__rt_hash_set_release_any_x");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // keep the overwritten heap-backed payload for the release below
-    emit_publish_replacement_x86_64(emitter);
-    emitter.instruction("mov rax, r14");                                        // pass the overwritten payload to the uniform release dispatcher
-    emitter.instruction("call __rt_decref_any");                                // release the overwritten hash value after storing the replacement
+    hash_bucket::emit_replace_and_release(emitter, "__rt_decref_any");
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the entry already holds the replacement
 
     emitter.label("__rt_hash_set_release_callable_x");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // keep the overwritten callable descriptor for the release below
-    emit_publish_replacement_x86_64(emitter);
-    emitter.instruction("mov rax, r14");                                        // pass the overwritten descriptor to the descriptor release helper
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the overwritten callable descriptor after storing the replacement
+    hash_bucket::emit_replace_and_release(emitter, "__rt_callable_descriptor_release");
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the entry already holds the replacement
 
     persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write_x");
-    emitter.instruction("mov r13, QWORD PTR [r14 + 16]");                       // load the caller storage's runtime representation tag
+    elephc_memoir::layout::emit_load_mixed_high(emitter, "r13", "r14");
     emitter.instruction("cmp r13, 7");                                          // does the caller local hold a boxed Mixed handle?
     emitter.instruction("jne __rt_hash_set_invoker_reference_raw_x");           // concrete caller slots receive their native payload words
     emitter.instruction("cmp QWORD PTR [rbp - 48], 7");                         // is the replacement already an owned boxed Mixed cell?
@@ -663,26 +418,24 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash table after optional boxing
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // reload the boxed invoker marker
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the caller's Mixed storage address
+    hash_layout::emit_load_entry_field(emitter, "r14", "r12", EntryField::ValueLow);
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "r14", "r14");
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "r14", "r10", "r11", "__rt_hash_set_invoker_phpref_payload_x",
     );
-    emitter.instruction("mov rax, QWORD PTR [r14]");                            // save the previous boxed Mixed owner for release
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the owned replacement box
-    emitter.instruction("mov QWORD PTR [r14], r13");                            // publish the replacement before a destructor can throw
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "r14", "r13", "[rbp - 32]", None,
+    );
     emitter.instruction("call __rt_decref_mixed");                              // retire the previous caller-local Mixed owner
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw_x");
     emitter.instruction(&format!("cmp r13, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
     emitter.instruction("je __rt_hash_set_invoker_reference_tagged_x");         // decode boxed replacements before publishing both words
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the concrete caller-storage address
-    emitter.instruction("mov rax, QWORD PTR [r14]");                            // retain the previous low payload for optional release
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // load replacement value_lo
-    emitter.instruction("mov QWORD PTR [r14], r11");                            // publish replacement value_lo through the marker
-    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // load replacement value_hi
-    emitter.instruction("mov QWORD PTR [r14 + 8], r11");                        // publish replacement value_hi through the marker
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "r14", "r14");
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "r14", "r11", "[rbp - 32]", Some("[rbp - 40]"),
+    );
     emitter.instruction("cmp r13, 1");                                          // strings own their low payload
     emitter.instruction("je __rt_hash_set_invoker_reference_release_any_x");    // release the overwritten string after publication
     emitter.instruction("cmp r13, 10");                                         // callable descriptors use their dedicated release helper
@@ -700,7 +453,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // return the unchanged argument hash
 
     emitter.label("__rt_hash_set_invoker_reference_tagged_x");
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // address the caller's inline tagged-scalar slot
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "r14", "r14");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // inspect the replacement PHP representation
     emitter.instruction("cmp rax, 7");                                          // a Mixed replacement owns a box that must be decoded
     emitter.instruction("je __rt_hash_set_invoker_reference_tagged_box_x");     // preserve the boxed value until both words are published
@@ -715,8 +468,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the direct nullable-integer payload
-    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the scalar payload
-    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish its actual PHP tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "r14", "rdi", "rax");
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the marker remains owned by the argument hash
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the replacement box owned by this write
@@ -731,8 +483,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid_x");
     abi::emit_load_temporary_stack_slot(emitter, "r14", 8);
-    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the unboxed scalar payload
-    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish the unboxed null or integer tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "r14", "rdi", "rax");
     abi::emit_pop_reg_pair(emitter, "rax", "r14");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // retire the consumed box without changing marker identity
@@ -751,12 +502,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the boxing helper
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // load the managed reference cell this entry owns
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the cell across the payload release
-    emitter.instruction("call __rt_reference_cell_value_release");              // release the value the reference set currently holds
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the managed reference cell
+    hash_layout::emit_load_entry_field(emitter, "r10", "r12", EntryField::ValueLow);
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the boxed replacement payload
-    emitter.instruction("mov QWORD PTR [rax], r13");                            // publish the replacement to every alias in the reference set
+    elephc_memoir::reference_cells::emit_replace_boxed_child(emitter, "r10", "r13", "r11");
     emitter.label("__rt_hash_set_reference_done_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after a write-through
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the write-through path
@@ -767,7 +515,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // value_lo, value_hi and value_tag keep describing the cell
 
     emitter.label("__rt_hash_set_write_value_x");
-    emit_publish_replacement_x86_64(emitter);
+    hash_bucket::emit_publish_payload(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after an in-place value update
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the update path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the update path
@@ -777,19 +525,6 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller with the existing hash-table pointer in rax
 
     emit_hash_set_value_linux_x86_64(emitter);
-}
-
-/// Writes the saved replacement payload and tag into the x86_64 entry addressed by `r12`.
-///
-/// Uses only `r13` as scratch so an update can carry the overwritten payload in `r14` across
-/// the store and release it only after the entry holds the replacement.
-fn emit_publish_replacement_x86_64(emitter: &mut Emitter) {
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the replacement low payload word for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // overwrite the stored low payload word in the existing hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the replacement high payload word for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 32], r13");                       // overwrite the stored high payload word in the existing hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // overwrite the stored runtime value tag in the existing hash entry
 }
 
 /// Emits the x86_64 `__rt_hash_set_value`, mirroring [`emit_hash_set_value_aarch64`].
@@ -814,11 +549,7 @@ fn emit_hash_set_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the destination already contain this key?
     emitter.instruction("jz __rt_hash_set_value_forward_x");                    // a missing key is an ordinary insert
     persistent_references::emit_value_detach_probe(emitter);
-    emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the managed reference cell this entry owns
-    emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // retire the detached payload before releasing it
-    emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // reference entries carry no high payload word
-    emitter.instruction("mov QWORD PTR [r8 + 40], 8");                          // the slot reads as null until the replacement lands
-    emitter.instruction("call __rt_decref_any");                                // drop this table's ownership of the reference cell
+    hash_bucket::emit_detach_reference_owner(emitter);
     emitter.label("__rt_hash_set_value_forward_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // forward the unique table pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // forward key_lo

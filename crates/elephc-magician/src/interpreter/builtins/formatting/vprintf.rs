@@ -41,10 +41,11 @@ pub(in crate::interpreter) fn eval_vprintf_result(
         return Err(EvalStatus::RuntimeFatal);
     };
     let format = values.string_bytes(*format)?;
-    let format_args = super::vsprintf::eval_sprintf_argument_array_values(*array, values)?;
-    let output = super::sprintf::eval_sprintf_bytes(&format, &format_args, context, values)?;
-    let len = i64::try_from(output.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let output = values.string_bytes_value(&output)?;
-    values.echo(output)?;
-    values.int(len)
+    super::vsprintf::with_sprintf_array_args(*array, context, values, |args, context, values| {
+        let output = super::sprintf::eval_sprintf_bytes(&format, args, context, values)?;
+        let len = i64::try_from(output.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let output = values.string_bytes_value(&output)?;
+        with_eval_value_lease(output, context, values, |output, _, values| values.echo(output))?;
+        values.int(len)
+    })
 }

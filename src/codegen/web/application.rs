@@ -22,21 +22,18 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     roots::emit(emitter, module, data);
     let visited = emitter.target.extern_symbol("__elephc_web_gc_visited");
     emitter.label_global(&visited);
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_gc_candidates_visited", 0);
-    let proof_count = if emitter.target.arch == Arch::AArch64 { "x9" } else { "r10" };
-    abi::emit_load_symbol_to_reg(emitter, proof_count, "_gc_proofs_visited", 0);
-    emitter.instruction(if emitter.target.arch == Arch::AArch64 { "add x0, x0, x9" } else { "add rax, r10" }); // include cache construction and current-path validation in measured GC work
+    elephc_memoir::gc_candidates::emit_load_application_work(emitter);
     abi::emit_return(emitter);
     let cost = emitter.target.extern_symbol("__elephc_web_gc_rebuild_cost");
     emitter.label_global(&cost);
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_gc_proofs_cost", 0);
+    elephc_memoir::gc_candidates::emit_load_rebuild_cost(emitter);
     abi::emit_return(emitter);
     let cache = emitter.target.extern_symbol("elephc_web_application_cache_roots");
     emitter.label_global(&cache);
     abi::emit_frame_prologue(emitter, 16);
     abi::emit_call_label(emitter, "__rt_gc_proofs_refresh");
     abi::emit_call_label(emitter, "__rt_gc_clear_candidate_anchors");
-    abi::emit_store_zero_to_symbol(emitter, "_gc_candidates_gathering", 0);
+    elephc_memoir::gc_candidates::emit_finish_host_refresh(emitter);
     abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
     resources::emit(emitter);
@@ -60,7 +57,7 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     ] {
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }
-    abi::emit_store_imm_to_symbol(emitter, "_gc_enabled", 0, 1);
+    elephc_memoir::gc_control::emit_enable_automatic_collection(emitter);
     if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
         abi::emit_call_label(emitter, "__rt_mbstring_request_reset");
     }
@@ -82,29 +79,58 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     cleanup.call(emitter, "__rt_web_ambient_reset", false);
     for name in superglobals::SUPERGLOBALS {
         let symbol = ir_global_symbol(name);
-        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), &symbol, 0);
-        abi::store_at_offset(emitter, abi::int_result_reg(emitter), 24);
-        // Keep every typed Hash slot valid while destructors can read or write superglobals.
-        abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
-        abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 7);
-        abi::emit_call_label(emitter, "__rt_hash_new");
-        abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), &symbol, 0);
-        abi::load_at_offset(emitter, abi::int_result_reg(emitter), 24);
+        elephc_memoir::symbol_owners::emit_publish_owner(
+            emitter,
+            |emitter, previous| abi::emit_load_symbol_to_reg(emitter, previous, &symbol, 0),
+            |emitter| {
+                // Keep every typed Hash slot valid while destructors read or replace superglobals.
+                abi::emit_load_int_immediate(
+                    emitter,
+                    abi::int_arg_reg_name(emitter.target, 0),
+                    0,
+                );
+                abi::emit_load_int_immediate(
+                    emitter,
+                    abi::int_arg_reg_name(emitter.target, 1),
+                    7,
+                );
+                abi::emit_call_label(emitter, "__rt_hash_new");
+                abi::emit_store_reg_to_symbol(
+                    emitter,
+                    abi::int_result_reg(emitter),
+                    &symbol,
+                    0,
+                );
+            },
+        );
         cleanup.call(emitter, "__rt_decref_hash", false);
     }
-    for symbol in ["_cstr_base", "_cstr2_base", "_print_r_ptr"] {
-        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-        cleanup.call(emitter, "__rt_heap_free_safe", false);
+    for (index, symbol) in elephc_memoir::interop::cstr_scratch::base_symbols().enumerate() {
+        elephc_memoir::symbol_owners::emit_drain_symbol_owner(
+            emitter,
+            symbol,
+            &format!("__rt_web_application_cstr_scratch_{index}"),
+            elephc_memoir::symbol_owners::PublishedDestructor::None,
+            |emitter| abi::emit_store_zero_to_symbol(emitter, symbol, 0),
+            |emitter| cleanup.call(emitter, "__rt_heap_free_safe", false),
+        );
     }
+    elephc_memoir::strings::capture_buffer::emit_take_raw_buffer(emitter);
+    cleanup.call(emitter, "__rt_heap_free_safe", false);
     emit_cstr_buffer_reset(emitter);
     emit_print_r_capture_reset(emitter);
+    if module.required_runtime_features.eval_bridge {
+        cleanup.call(emitter, super::DISCARD_EVAL_OUTPUT, false);
+    }
     emit_output_buffer_reset(emitter);
     // Collector callbacks need the real owner graph after every request root is detached.
     cleanup.finish(emitter);
     cleanup.call(emitter, "__rt_gc_collect_cycles_explicit", false);
     cleanup.call(emitter, "__rt_gc_proofs_refresh_pending", false);
     cleanup.call(emitter, "__rt_web_inventory_prune", false);
+    if module.required_runtime_features.eval_bridge {
+        cleanup.call(emitter, super::DISCARD_EVAL_OUTPUT, false);
+    }
     cleanup.finish(emitter);
     let done = "__rt_web_application_request_clean";
     abi::emit_branch_if_int_result_zero(emitter, done);
@@ -143,8 +169,10 @@ mod tests {
                 link_libs: vec![],
             });
             module.data.global_names.push("probe".into());
+            let mut data = DataSection::new();
+            data.add_comm(ir_global_symbol("probe"), 8);
             let mut emitter = Emitter::new(target);
-            emit(&mut emitter, &module, &DataSection::new());
+            emit(&mut emitter, &module, &data);
             let assembly = emitter.output();
             let entry = assembly.find(&format!("{}:\n", target.extern_symbol("elephc_web_application_shutdown_cleanup"))).unwrap();
             let shutdown = &assembly[entry..];

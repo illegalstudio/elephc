@@ -24,11 +24,10 @@
 //!   hooks are honored, and `$this->params` is seeded before `onCreate()`.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::buffers::{stream_scratch, stream_tables};
 
 mod attach;
 pub use attach::emit_stream_filter_attach_user;
-
-const USER_FILTER_REGISTRATIONS_CAP: u32 = 128;
 
 /// `__rt_stream_filter_register`: scan `_user_filter_registry` for the
 /// first empty slot, store the (filter_name, class_name) tuple, and
@@ -58,33 +57,18 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
-    abi::emit_symbol_address(emitter, "x4", "_user_filter_registry");
     emitter.instruction("mov x5, #0");                                          // filter slot index
     emitter.label("__rt_sfr_scan");
-    emitter.instruction(&format!("cmp x5, #{USER_FILTER_REGISTRATIONS_CAP}"));  // is the filter registry full?
+    emitter.instruction(&format!("cmp x5, #{}", stream_tables::FILTER_REGISTRATION_CAPACITY));  // is the filter registry full?
     emitter.instruction("b.ge __rt_sfr_full");                                  // no empty slot remains
-    emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
-    emitter.instruction("ldr x7, [x6]");                                        // load the slot's filter-name pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_FILTER_REGISTRY, emitter, "x6", "x5", "x4");
+    stream_tables::emit_load_registration_field(emitter, "x7", "x6", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x7, __rt_sfr_store");                              // a null pointer marks an empty slot
     emitter.instruction("add x5, x5, #1");                                      // advance the slot index
     emitter.instruction("b __rt_sfr_scan");                                     // continue scanning
 
     emitter.label("__rt_sfr_store");
-    emitter.instruction("str x6, [sp, #16]");                                   // save the free slot base across the persist calls
-    emitter.instruction("str x2, [sp, #24]");                                   // save the class-name pointer across the filter-name persist
-    emitter.instruction("str x3, [sp, #32]");                                   // save the class-name length across the filter-name persist
-    emitter.instruction("mov x2, x1");                                          // filter-name length → persist length input
-    emitter.instruction("mov x1, x0");                                          // filter-name pointer → persist pointer input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned filter name, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6]");                                        // owned filter-name pointer
-    emitter.instruction("str x2, [x6, #8]");                                    // filter-name length
-    emitter.instruction("ldr x1, [sp, #24]");                                   // class-name pointer → persist pointer input
-    emitter.instruction("ldr x2, [sp, #32]");                                   // class-name length → persist length input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned class name, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6, #16]");                                   // owned class-name pointer
-    emitter.instruction("str x2, [x6, #24]");                                   // class-name length
+    elephc_memoir::strings::owner_pair::emit_register_row(emitter);
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
     emitter.instruction("b __rt_sfr_ret");                                      // share the common epilogue
 
@@ -109,36 +93,19 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // frame for the two string-persist calls
 
-    abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
     emitter.label("__rt_sfr_scan_x86");
-    emitter.instruction(&format!("cmp r9, {}", USER_FILTER_REGISTRATIONS_CAP)); // is the filter registry full?
+    emitter.instruction(&format!("cmp r9, {}", stream_tables::FILTER_REGISTRATION_CAPACITY)); // is the filter registry full?
     emitter.instruction("jge __rt_sfr_full_x86");                               // no empty slot remains
-    emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the slot's filter-name pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_FILTER_REGISTRY, emitter, "r10", "r9", "r8");
+    stream_tables::emit_load_registration_field(emitter, "r11", "r10", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
     emitter.instruction("jz __rt_sfr_store_x86");                               // store here
     emitter.instruction("inc r9");                                              // advance the slot index
     emitter.instruction("jmp __rt_sfr_scan_x86");                               // continue scanning
 
     emitter.label("__rt_sfr_store_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the free slot base across the persist calls
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the class-name pointer across the filter-name persist
-    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the class-name length across the filter-name persist
-    emitter.instruction("mov rax, rdi");                                        // filter-name pointer → persist pointer input
-    emitter.instruction("mov rdx, rsi");                                        // filter-name length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned filter name, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // owned filter-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                        // filter-name length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // class-name pointer → persist pointer input
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // class-name length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned class name, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
-    emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // owned class-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rdx");                       // class-name length
+    elephc_memoir::strings::owner_pair::emit_register_row_with_live_second_pair(emitter);
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
     emitter.instruction("jmp __rt_sfr_ret_x86");                                // share the common epilogue
 
@@ -171,15 +138,14 @@ pub fn emit_resolve_user_filter_id(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resolve_user_filter_id ---");
     emitter.label_global("__rt_resolve_user_filter_id");
 
-    abi::emit_symbol_address(emitter, "x4", "_user_filter_registry");
     emitter.instruction("mov x5, #0");                                          // filter slot index
     emitter.label("__rt_rufi_scan");
-    emitter.instruction(&format!("cmp x5, #{USER_FILTER_REGISTRATIONS_CAP}"));  // scanned every registry slot?
+    emitter.instruction(&format!("cmp x5, #{}", stream_tables::FILTER_REGISTRATION_CAPACITY));  // scanned every registry slot?
     emitter.instruction("b.ge __rt_rufi_miss");                                 // no match found
-    emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
-    emitter.instruction("ldr x7, [x6]");                                        // stored filter-name pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_FILTER_REGISTRY, emitter, "x6", "x5", "x4");
+    stream_tables::emit_load_registration_field(emitter, "x7", "x6", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x7, __rt_rufi_next");                              // skip empty slots
-    emitter.instruction("ldr x8, [x6, #8]");                                    // stored filter-name length
+    stream_tables::emit_load_registration_field(emitter, "x8", "x6", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x8, x1");                                          // do the lengths match?
     emitter.instruction("b.ne __rt_rufi_next");                                 // length mismatch — try the next slot
 
@@ -221,6 +187,7 @@ pub fn emit_resolve_user_filter_id(emitter: &mut Emitter) {
 ///         Simple callbacks transfer owned returns and persist borrowed returns.
 ///         The brigade path returns its non-heap output scratch buffer.
 pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
+    stream_scratch::emit_acquire_filter_input(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_apply_user_stream_filter_linux_x86_64(emitter);
         return;
@@ -237,19 +204,28 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
     // -- look up the cached instance: _user_filter_instances[fd*2 + dir] --
     emitter.instruction("add x4, x0, x0");                                      // fd*2
     emitter.instruction("add x4, x4, x3");                                      // fd*2 + dir
-    abi::emit_symbol_address(emitter, "x5", "_user_filter_instances");
-    emitter.instruction("ldr x0, [x5, x4, lsl #3]");                            // obj = instances[slot] (loaded into the method's $this register)
+    stream_tables::emit_load_filter_instance(emitter, "x0", "x4", "x5");
     emitter.instruction("cbz x0, __rt_aufs_passthrough");                       // no instance attached → pass the buffer through unchanged
 
     // -- look up the filter() method pointer in the class's user-filter vtable --
-    emitter.instruction("ldr x6, [x0]");                                        // class_id at the head of the obj
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x6", "x0");
     abi::emit_symbol_address(emitter, "x7", "_user_filter_vtable_ptrs");
     emitter.instruction("ldr x7, [x7, x6, lsl #3]");                            // per-class user-filter vtable
-    emitter.instruction("ldr x8, [x7]");                                        // slot 0 = filter() method pointer
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "x8",
+        "x7",
+        stream_tables::UserFilterVtableField::Filter,
+    );
     emitter.instruction("cbz x8, __rt_aufs_passthrough");                       // class did not implement filter() → pass through
 
     // -- check slot 3 (arity flag). 1 = PHP-canonical 4-arg brigade dispatch.
-    emitter.instruction("ldr x9, [x7, #24]");                                   // slot 3 = brigade-arity flag (0 = simple-string, 1 = brigade)
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "x9",
+        "x7",
+        stream_tables::UserFilterVtableField::BrigadeArity,
+    );
     emitter.instruction("cbz x9, __rt_aufs_simple");                            // flag=0 → fall through to the existing simple-string path
     emitter.instruction("mov x3, x8");                                          // method_ptr → 4th arg of brigade_invoke
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore caller frame before tail-call
@@ -257,33 +233,21 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("b __rt_user_filter_brigade_invoke");                   // tail-call the brigade dispatcher with (x0=obj, x1=buf, x2=len, x3=method)
 
     emitter.label("__rt_aufs_simple");
-    // -- copy the input bytes into _stream_filter_buf so the method's concat_buf
-    //    writes don't overlap with its input (the fread path's bytes live in
-    //    concat_buf, and the method's prologue typically rewinds _concat_off). --
-    abi::emit_symbol_address(emitter, "x9", "_stream_filter_buf");
-    emitter.instruction("mov x10, #0");                                         // byte copy index
-    emitter.label("__rt_aufs_copy");
-    emitter.instruction("cmp x10, x2");                                         // copied every byte?
-    emitter.instruction("b.ge __rt_aufs_copy_done");                            // full input copied
-    emitter.instruction("ldrb w11, [x1, x10]");                                 // load a source byte
-    emitter.instruction("strb w11, [x9, x10]");                                 // store into the isolated scratch buffer
-    emitter.instruction("add x10, x10, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_aufs_copy");                                    // continue copying
-    emitter.label("__rt_aufs_copy_done");
-    emitter.instruction("mov x1, x9");                                          // method receives the scratch-buffer pointer as its $data ptr
+    stream_scratch::emit_stage_callback_input(emitter, "x8");
 
     // -- call filter($this=x0, string=x1/x2) → returns string in x1/x2 --
     emitter.instruction("blr x8");                                              // invoke the user filter method
     abi::emit_branch_if_php_return_owned(emitter, "__rt_aufs_owned");
     abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.label("__rt_aufs_owned");
+    stream_scratch::emit_finish_callback_input(emitter);
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the post-filter string in x1/x2
 
     emitter.label("__rt_aufs_passthrough");
     // An absent callback still returns independently releasable bytes.
-    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::emit_call_label(emitter, "__rt_filter_acquire_input");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the original buf/len unchanged
@@ -302,20 +266,29 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, rdi");                                         // fd
     emitter.instruction("add r9, r9");                                          // fd*2
     emitter.instruction("add r9, rcx");                                         // fd*2 + dir
-    abi::emit_symbol_address(emitter, "r10", "_user_filter_instances");         // load runtime data address
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = instances[slot] (loaded into the method's $this register)
+    stream_tables::emit_load_filter_instance(emitter, "rdi", "r9", "r10");
     emitter.instruction("test rdi, rdi");                                       // any instance attached?
     emitter.instruction("jz __rt_aufs_passthrough_x86");                        // no instance → pass the buffer through unchanged
 
     // -- look up the filter() method pointer in the class's user-filter vtable --
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // class_id at the head of the obj
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     abi::emit_symbol_address(emitter, "r10", "_user_filter_vtable_ptrs");       // load runtime data address
     emitter.instruction("mov r10, QWORD PTR [r10 + r11 * 8]");                  // per-class user-filter vtable
-    emitter.instruction("mov r8, QWORD PTR [r10]");                             // slot 0 = filter() method pointer
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "r8",
+        "r10",
+        stream_tables::UserFilterVtableField::Filter,
+    );
     emitter.instruction("test r8, r8");                                         // class did not implement filter()?
     emitter.instruction("jz __rt_aufs_passthrough_x86");                        // pass through if so
     // -- slot 3 (arity flag): non-zero means PHP-canonical 4-arg brigade dispatch.
-    emitter.instruction("mov r9, QWORD PTR [r10 + 24]");                        // slot 3 = brigade arity flag
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "r9",
+        "r10",
+        stream_tables::UserFilterVtableField::BrigadeArity,
+    );
     emitter.instruction("test r9, r9");                                         // check whether the runtime value is zero
     emitter.instruction("jz __rt_aufs_simple_x");                               // 0 → fall through to existing simple-string path
     emitter.instruction("mov rcx, r8");                                         // method_ptr → SysV 4th arg of brigade_invoke
@@ -324,31 +297,14 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_user_filter_brigade_invoke");                 // tail-call into the brigade dispatcher
 
     emitter.label("__rt_aufs_simple_x");
-    emitter.instruction("mov r10, r8");                                         // existing simple-string path expects the method ptr in r10
-    // -- copy the input bytes into _stream_filter_buf so the method's concat_buf
-    //    writes don't overlap with its input (fread bytes live in concat_buf and
-    //    the method's prologue typically rewinds _concat_off). --
-    emitter.instruction("push r10");                                            // save filter method ptr across the copy loop
-    emitter.instruction("push rdi");                                            // save $this across the copy loop
-    abi::emit_symbol_address(emitter, "r10", "_stream_filter_buf");             // load runtime data address
-    emitter.instruction("xor r9, r9");                                          // byte copy index
-    emitter.label("__rt_aufs_copy_x86");
-    emitter.instruction("cmp r9, rdx");                                         // copied every byte?
-    emitter.instruction("jge __rt_aufs_copy_done_x86");                         // full input copied
-    emitter.instruction("movzx r11d, BYTE PTR [rsi + r9]");                     // load a source byte
-    emitter.instruction("mov BYTE PTR [r10 + r9], r11b");                       // store into the isolated scratch buffer
-    emitter.instruction("inc r9");                                              // advance the copy index
-    emitter.instruction("jmp __rt_aufs_copy_x86");                              // continue copying
-    emitter.label("__rt_aufs_copy_done_x86");
-    emitter.instruction("mov rsi, r10");                                        // method receives the scratch-buffer pointer as its $data ptr
-    emitter.instruction("pop rdi");                                             // restore $this
-    emitter.instruction("pop r10");                                             // restore filter method ptr
+    stream_scratch::emit_stage_callback_input(emitter, "r8");
 
     // -- call filter($this=rdi, string=rsi/rdx) → returns string in rax/rdx --
-    emitter.instruction("call r10");                                            // invoke the user filter method
+    emitter.instruction("call r8");                                             // invoke the user filter method
     abi::emit_branch_if_php_return_owned(emitter, "__rt_aufs_owned_x86");
     abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.label("__rt_aufs_owned_x86");
+    stream_scratch::emit_finish_callback_input(emitter);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the post-filter string in rax/rdx
 
@@ -356,7 +312,7 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // rsi=buf, rdx=len; expose them as the elephc string-result pair.
     emitter.instruction("mov rax, rsi");                                        // copy buf pointer into the string-result ptr register
     // rdx already holds the length in the string-result len register.
-    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::emit_call_label(emitter, "__rt_filter_acquire_input");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the original buf/len unchanged
 }
@@ -367,18 +323,15 @@ fn emit_resolve_user_filter_id_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resolve_user_filter_id ---");
     emitter.label_global("__rt_resolve_user_filter_id");
 
-    abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
     emitter.label("__rt_rufi_scan_x86");
-    emitter.instruction(&format!("cmp r9, {}", USER_FILTER_REGISTRATIONS_CAP)); // scanned every registry slot?
+    emitter.instruction(&format!("cmp r9, {}", stream_tables::FILTER_REGISTRATION_CAPACITY)); // scanned every registry slot?
     emitter.instruction("jge __rt_rufi_miss_x86");                              // no match found
-    emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // stored filter-name pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_FILTER_REGISTRY, emitter, "r10", "r9", "r8");
+    stream_tables::emit_load_registration_field(emitter, "rax", "r10", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test rax, rax");                                       // is this slot empty?
     emitter.instruction("jz __rt_rufi_next_x86");                               // skip empty slots
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // stored filter-name length
+    stream_tables::emit_load_registration_field(emitter, "r11", "r10", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp r11, rsi");                                        // do the lengths match?
     emitter.instruction("jne __rt_rufi_next_x86");                              // length mismatch — try the next slot
 

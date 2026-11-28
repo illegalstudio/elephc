@@ -15,9 +15,9 @@ use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
-const MAGIC_SET_GUARD_FRAME_BYTES: usize = TRY_HANDLER_SLOT_SIZE + 64;
+const MAGIC_SET_GUARD_FRAME_BYTES: usize = MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_SLOT_SIZE + 16;
 const MAGIC_SET_GUARD_NODE_OFFSET: usize = 0;
-const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = 48;
+const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = elephc_memoir::owner_layout::MagicSetGuard::BYTES + 16;
 
 /// Raises PHP's call-site `TypeError` for a property argument whose storage cannot satisfy a
 /// typed by-reference parameter. The runtime unwinder transfers control, so the callee call
@@ -942,7 +942,7 @@ pub(super) fn emit_branch_if_stacked_object_class_matches(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the stacked receiver's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // compare it with this candidate class
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // take the candidate's declared-slot store
@@ -956,7 +956,7 @@ pub(super) fn emit_branch_if_stacked_object_class_matches(
             // class-id word in `r10`.
             let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked receiver's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "r11");
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", candidate_reg));           // compare it with this candidate class
@@ -1367,17 +1367,7 @@ fn emit_magic_set_guard_pop(ctx: &mut FunctionContext<'_>, node_offset: usize) {
 /// Installs a local handler so an escaping `__set` cannot strand a stack guard node.
 fn emit_magic_set_exception_handler(ctx: &mut FunctionContext<'_>, caught_label: &str) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    for (symbol, offset) in [
-        ("_exc_handler_top", MAGIC_SET_GUARD_HANDLER_OFFSET),
-        ("_exc_call_frame_top", MAGIC_SET_GUARD_HANDLER_OFFSET + 8),
-        (
-            "_rt_diag_suppression",
-            MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, symbol, 0);
-        abi::emit_store_to_sp(ctx.emitter, scratch, offset);
-    }
+    elephc_memoir::activation_records::emit_save_sp_try_prefix(ctx.emitter, scratch, MAGIC_SET_GUARD_HANDLER_OFFSET);
     abi::emit_temporary_stack_address(ctx.emitter, scratch, MAGIC_SET_GUARD_HANDLER_OFFSET);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::emit_temporary_stack_address(
@@ -1707,7 +1697,7 @@ pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the candidate receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id before checking the property name
             ctx.emitter.instruction(&format!("b.ne {}", next_label));           // skip name comparison for unrelated classes
@@ -1716,7 +1706,7 @@ pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
             // Caller-saved `rcx`, never callee-saved `r12`. See the sibling probe above.
             let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the candidate receiver class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "r11");
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, class_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", candidate_reg));           // compare receiver class id before checking the property name
@@ -1739,7 +1729,7 @@ pub(super) fn emit_branch_if_stacked_object_is_stdclass(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the stacked object's class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x10", "x9");
             abi::emit_load_int_immediate(ctx.emitter, "x11", stdclass_id as i64);
             ctx.emitter.instruction("cmp x10, x11");                            // check whether the runtime receiver is stdClass
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // route stdClass writes through the dynamic-property helper
@@ -1748,7 +1738,7 @@ pub(super) fn emit_branch_if_stacked_object_is_stdclass(
             // Caller-saved `rcx`, never callee-saved `r12`. See the sibling probes above.
             let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked object's class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r10", "r11");
             abi::emit_load_int_immediate(ctx.emitter, candidate_reg, stdclass_id as i64);
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", candidate_reg));           // check whether the runtime receiver is stdClass
@@ -1819,6 +1809,8 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
             )
         };
     }
+    use elephc_memoir::owner_layout::EvalPropertyWriteWords as WriteWords;
+
     let plain = ctx.next_label("eval_prop_set_plain");
     let handled = ctx.next_label("eval_prop_set_handled");
     let raise = ctx.next_label("eval_prop_set_raise");
@@ -1827,7 +1819,7 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
     materialize_dynamic_property_mixed_value(ctx, value, value_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     // Frame from here: [sp] Throwable out slot, [sp+16] value cell, then the caller's block.
-    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_reserve_temporary_stack(ctx.emitter, WriteWords::VALUE);
     let target = ctx.emitter.target;
     let (arg0, arg1, arg2, arg3, arg4, arg5) = (
         abi::int_arg_reg_name(target, 0),
@@ -1840,9 +1832,9 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
     // php decides visibility from the WRITING function's lexical class; a free function has none.
     let scope = ctx.lexical_class().unwrap_or_default().to_owned();
     let (scope_label, scope_len) = ctx.data.add_string(scope.as_bytes());
-    abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, object_stack_offset + 32);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, name_stack_offset + 32);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, name_stack_offset + 40);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, object_stack_offset + WriteWords::STACK_BYTES);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, name_stack_offset + WriteWords::STACK_BYTES);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, name_stack_offset + WriteWords::STACK_BYTES + 8);
     // One block carries both: word 0 is the Throwable slot, word 2 the value cell pushed above.
     abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
     abi::emit_symbol_address(ctx.emitter, arg4, &scope_label);
@@ -1862,18 +1854,18 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
         }
     }
     ctx.emitter.label(&handled);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, WriteWords::VALUE);
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_release_temporary_stack(ctx.emitter, WriteWords::STACK_BYTES);
     if let Some(done) = native_done_label {
         abi::emit_release_temporary_stack(ctx.emitter, enclosing_stack_bytes);
         abi::emit_jump(ctx.emitter, done);
     } else { abi::emit_jump(ctx.emitter, &done); }
 
     ctx.emitter.label(&raise);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, WriteWords::VALUE);
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, WriteWords::THROWABLE);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match target.arch {
         Arch::AArch64 => abi::emit_store_reg_to_symbol(ctx.emitter, "x1", "_exc_value", 0),
@@ -1883,9 +1875,9 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
     // then retire the box before abandoning the stack block that held its only pointer.
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_exc_value", 0);
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object("Throwable".into()));
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, WriteWords::THROWABLE);
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    abi::emit_release_temporary_stack(ctx.emitter, 32 + enclosing_stack_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, WriteWords::STACK_BYTES + enclosing_stack_bytes);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&plain);
@@ -1894,25 +1886,25 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
         // hands it to their store untouched: releasing it here freed the box the store then
         // adopted. Any other cell holds its own reference.
         if !adopted {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, WriteWords::VALUE);
             abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
         }
-        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_release_temporary_stack(ctx.emitter, WriteWords::STACK_BYTES);
         ctx.emitter.label(&done);
         return Ok(());
     }
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_release_temporary_stack(ctx.emitter, WriteWords::VALUE);
     match target.arch {
         Arch::AArch64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", object_stack_offset + 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", name_stack_offset + 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", name_stack_offset + 24);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", object_stack_offset + WriteWords::VALUE);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", name_stack_offset + WriteWords::VALUE);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", name_stack_offset + WriteWords::VALUE + 8);
             abi::emit_pop_reg(ctx.emitter, "x3");
         }
         Arch::X86_64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", object_stack_offset + 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", name_stack_offset + 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", name_stack_offset + 24);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", object_stack_offset + WriteWords::VALUE);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", name_stack_offset + WriteWords::VALUE);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", name_stack_offset + WriteWords::VALUE + 8);
             abi::emit_pop_reg(ctx.emitter, "rcx");
         }
     }

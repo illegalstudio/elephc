@@ -64,7 +64,9 @@ pub(in crate::interpreter) fn eval_file_probe_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
-        return eval_user_wrapper_file_probe_from_stat(name, stat, values);
+        return eval_with_user_wrapper_stat_lease(stat, context, values, |stat, values| {
+            eval_user_wrapper_file_probe_from_stat(name, stat, values)
+        });
     }
     if stream_wrappers::is_phar_stream(&path) {
         let exists = elephc_phar::extract_url_bytes(path.as_bytes()).is_some();

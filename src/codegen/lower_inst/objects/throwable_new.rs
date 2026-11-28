@@ -8,6 +8,7 @@
 //! - Ordinary objects record creation lines after property defaults initialize the shared prefix.
 //! - Message storage and previous-object retention follow the receiver's native layout.
 
+use elephc_memoir::values::throwable_storage;
 use super::*;
 
 /// Lowers builtin Throwable allocation using the compact runtime payload layout.
@@ -108,8 +109,6 @@ fn throwable_inherits_only_builtin_storage_and_constructor(class_info: &ClassInf
             .is_none_or(|owner| is_builtin_throwable_payload_class(owner))
 }
 
-/// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
-const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
 
 /// Stamps ordinary Throwable metadata outside every PHP-visible property slot.
 pub(super) fn emit_regular_throwable_creation_line(
@@ -152,43 +151,26 @@ pub(super) fn emit_throwable_allocation(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
-                &format!("mov x0, #{}", THROWABLE_COMPACT_PAYLOAD_SIZE)
-            );                                                                  // request compact Throwable payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks runtime object payloads
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the Throwable payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            throwable_storage::emit_allocate(ctx.emitter);
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
-            ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
             if runtime_line {
                 emit_throwable_runtime_line_aarch64(ctx, "x0", "x9");
             } else {
                 emit_throwable_creation_line_aarch64(ctx, "x0", "x9", creation_line);
             }
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null until constructor init
+            throwable_storage::emit_empty_previous(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
-            // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
-                &format!("mov rax, {}", THROWABLE_COMPACT_PAYLOAD_SIZE)
-            );                                                                  // request compact Throwable payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(                                   // preserve the x86_64 heap marker when selecting the Throwable kind
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
-            ));                                                                 // materialize the x86_64 Throwable heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the Throwable payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            throwable_storage::emit_allocate(ctx.emitter);
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
             if runtime_line {
                 emit_throwable_runtime_line_x86_64(ctx, "rax", "r10");
             } else {
                 emit_throwable_creation_line_x86_64(ctx, "rax", creation_line);
             }
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null until constructor init
+            throwable_storage::emit_empty_previous(ctx.emitter, "rax");
         }
     }
 }
@@ -292,8 +274,7 @@ pub(super) fn emit_throwable_message_fields_aarch64(
         emit_empty_string_to_regs(ctx, "x1", "x2");
     }
     ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the saved Throwable object for message initialization
-    ctx.emitter.instruction("str x1, [x9, #8]");                                // store Throwable message pointer
-    ctx.emitter.instruction("str x2, [x9, #16]");                               // store Throwable message length
+    throwable_storage::emit_store_message_pair(ctx.emitter, "x9", "x1", "x2");
     Ok(())
 }
 
@@ -309,8 +290,7 @@ pub(super) fn emit_throwable_message_fields_x86_64(
         emit_empty_string_to_regs(ctx, "rax", "rdx");
     }
     ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // reload the saved Throwable object for message initialization
-    ctx.emitter.instruction("mov QWORD PTR [r11 + 8], rax");                    // store Throwable message pointer
-    ctx.emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                   // store Throwable message length
+    throwable_storage::emit_store_message_pair(ctx.emitter, "r11", "rax", "rdx");
     Ok(())
 }
 
@@ -340,7 +320,7 @@ pub(super) fn emit_throwable_code_field_aarch64(
         abi::emit_load_int_immediate(ctx.emitter, "x1", 0);
     }
     ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the saved Throwable object for code initialization
-    ctx.emitter.instruction("str x1, [x9, #24]");                               // store Throwable code
+    abi::emit_store_to_address(ctx.emitter, "x1", "x9", throwable_storage::CODE);
     Ok(())
 }
 
@@ -355,7 +335,7 @@ pub(super) fn emit_throwable_code_field_x86_64(
         abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
     }
     ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // reload the saved Throwable object for code initialization
-    ctx.emitter.instruction("mov QWORD PTR [r11 + 24], rax");                   // store Throwable code
+    abi::emit_store_to_address(ctx.emitter, "rax", "r11", throwable_storage::CODE);
     Ok(())
 }
 
@@ -390,11 +370,11 @@ pub(super) fn emit_throwable_previous_field_aarch64(
         ctx.emitter.instruction("mov x0, xzr");                                 // compact payload stores raw null, not the in-band sentinel
         ctx.emitter.label(&store_label);
         ctx.emitter.instruction("ldr x9, [sp]");                                // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("str x0, [x9, #40]");                           // store Throwable previous pointer
+        abi::emit_store_to_address(ctx.emitter, "x0", "x9", throwable_storage::PREVIOUS);
     } else {
         // -- initialize an omitted previous Throwable --
         ctx.emitter.instruction("ldr x9, [sp]");                                // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("str xzr, [x9, #40]");                          // previous defaults to null
+        throwable_storage::emit_empty_previous(ctx.emitter, "x9");
     }
     Ok(())
 }
@@ -420,11 +400,11 @@ pub(super) fn emit_throwable_previous_field_x86_64(
         ctx.emitter.instruction("xor rax, rax");                                // compact payload stores raw null, not the in-band sentinel
         ctx.emitter.label(&store_label);
         ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("mov QWORD PTR [r11 + 40], rax");               // store Throwable previous pointer
+        abi::emit_store_to_address(ctx.emitter, "rax", "r11", throwable_storage::PREVIOUS);
     } else {
         // -- initialize an omitted previous Throwable --
         ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("mov QWORD PTR [r11 + 40], 0");                 // previous defaults to null
+        throwable_storage::emit_empty_previous(ctx.emitter, "r11");
     }
     Ok(())
 }

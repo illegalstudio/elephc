@@ -19,6 +19,10 @@
 //! - Emits both ARM64 and x86_64 variants gated on `emitter.target.arch`.
 
 use crate::codegen_support::emit::Emitter;
+use elephc_memoir::interop::zval::array_storage::{
+    emit_array_backing,
+    ArrayStorage, emit_adopt_child_words, emit_array_header, emit_retire_child_envelope,
+};
 use crate::codegen_support::platform::Arch;
 
 /// zval_pack_array_packed: build a PHP packed HashTable from an elephc indexed array.
@@ -41,36 +45,16 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the elephc array pointer
     emitter.instruction("ldr x1, [x0]");                                        // load the element count
     emitter.instruction("str x1, [sp, #8]");                                    // save the length
-    emitter.instruction("ldr x1, [x0, #16]");                                   // load the element size
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x1");
     emitter.instruction("str x1, [sp, #16]");                                   // save the elem_size
-    emitter.instruction("ldr x1, [x0, #-8]");                                   // load the kind word (value_type is byte 1)
-    emitter.instruction("lsr x1, x1, #8");                                      // shift the value_type byte into the low position
-    emitter.instruction("and x1, x1, #0x7f");                                   // isolate the 7-bit value_type, excluding the COW flag in bit 15
+    elephc_memoir::values::array_header::emit_load_value_type_tag(
+        emitter, "x0", "x1",
+    );
     emitter.instruction("str x1, [sp, #24]");                                   // save the value_type
     emitter.instruction("add x1, x0, #24");                                     // elements start right after the 24-byte header
     emitter.instruction("str x1, [sp, #56]");                                   // save the elements base
 
-    // -- nTableSize = next power of two, minimum 8 --
-    emitter.instruction("mov x9, #8");                                          // start at the minimum packed table size
-    emitter.label("__rt_zval_pack_array_packed_pow2");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the length
-    emitter.instruction("cmp x9, x1");                                          // is the candidate size already >= length?
-    emitter.instruction("b.ge __rt_zval_pack_array_packed_pow2_done");          // stop doubling once the table covers the length
-    emitter.instruction("lsl x9, x9, #1");                                      // double the candidate size
-    emitter.instruction("b __rt_zval_pack_array_packed_pow2");                  // retry the power-of-two search
-    emitter.label("__rt_zval_pack_array_packed_pow2_done");
-    emitter.instruction("str x9, [sp, #40]");                                   // save nTableSize
-
-    // -- allocate the data block (8 sentinel bytes + nTableSize * 32-byte buckets) --
-    emitter.instruction("lsl x0, x9, #5");                                      // nTableSize * 32 bytes of bucket storage
-    emitter.instruction("add x0, x0, #8");                                      // add the two 4-byte sentinel slots
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = data block base
-    emitter.instruction("str x0, [sp, #32]");                                   // save the data block pointer
-    emitter.instruction("mov x9, #-1");                                         // HT_INVALID_IDX = 0xFFFFFFFF
-    emitter.instruction("str w9, [x0]");                                        // stamp the first packed sentinel
-    emitter.instruction("str w9, [x0, #4]");                                    // stamp the second packed sentinel
-    emitter.instruction("add x9, x0, #8");                                      // arData = data block base + 8
-    emitter.instruction("str x9, [sp, #64]");                                   // save arData
+    emit_array_backing(emitter, ArrayStorage::Packed);
     emitter.instruction("str xzr, [sp, #48]");                                  // initialize the loop index i = 0
 
     // -- element loop: convert each elephc element into a bucket zval --
@@ -169,16 +153,13 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #48]");                                  // reload i
     emitter.instruction("lsl x11, x10, #5");                                    // i * 32 bytes per bucket
     emitter.instruction("add x12, x9, x11");                                    // x12 = bucket address
-    emitter.instruction("ldr x13, [x0]");                                       // load the child zval value
-    emitter.instruction("str x13, [x12]");                                      // store the value into the bucket
-    emitter.instruction("ldr x13, [x0, #8]");                                   // load the child zval type_info + u2
-    emitter.instruction("str x13, [x12, #8]");                                  // store type_info + u2 into the bucket
+    emit_adopt_child_words(emitter, "x12", "x0", "x13");
     emitter.instruction("ldr x14, [sp, #48]");                                  // reload i for the integer key
     emitter.instruction("str x14, [x12, #16]");                                 // bucket.h = i (packed integer key)
     emitter.instruction("str xzr, [x12, #24]");                                 // bucket.key = NULL (packed has no string key)
 
     // -- release the temporary child zval block (ownership transfers to the bucket) --
-    emitter.instruction("bl __rt_heap_free");                                   // free the 16-byte child zval block only
+    emit_retire_child_envelope(emitter);
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload i
     emitter.instruction("add x9, x9, #1");                                      // advance to the next element
     emitter.instruction("str x9, [sp, #48]");                                   // store the incremented index
@@ -187,32 +168,7 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.label("__rt_zval_pack_array_packed_loop_done");
 
     // -- allocate and fill the 56-byte HashTable structure --
-    emitter.instruction("mov x0, #56");                                         // HashTable structures are 56 bytes
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = HashTable pointer
-    emitter.instruction("str x0, [sp, #72]");                                   // save the HashTable pointer
-    emitter.instruction("mov x9, #1");                                          // refcount starts at one owner
-    emitter.instruction("str w9, [x0]");                                        // store refcount at offset 0 (32-bit)
-    emitter.instruction("mov x9, #7");                                          // gc type_info = IS_ARRAY (7)
-    emitter.instruction("str w9, [x0, #4]");                                    // store gc type_info at offset 4 (32-bit)
-    emitter.instruction("mov x9, #0x60");                                       // HASH_FLAG_PACKED | HASH_FLAG_STATIC_KEYS
-    emitter.instruction("str w9, [x0, #8]");                                    // store flags at offset 8 (32-bit)
-    emitter.instruction("mov x9, #-2");                                         // HT_MIN_MASK = -2 marks a packed table
-    emitter.instruction("str w9, [x0, #12]");                                   // store nTableMask at offset 12 (32-bit)
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the data block base
-    emitter.instruction("add x9, x9, #8");                                      // arData = data block base + 8
-    emitter.instruction("str x9, [x0, #16]");                                   // store arData at offset 16
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the length
-    emitter.instruction("str w9, [x0, #24]");                                   // store nNumUsed at offset 24 (32-bit)
-    emitter.instruction("str w9, [x0, #28]");                                   // store nNumOfElements at offset 28 (32-bit)
-    emitter.instruction("mov x9, #-1");                                         // HT_INVALID_IDX for the internal pointer
-    emitter.instruction("str w9, [x0, #32]");                                   // store nInternalPointer at offset 32 (32-bit)
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the length for nNextFreeElement
-    emitter.instruction("cbnz x9, __rt_zval_pack_array_packed_next_ready");     // nonempty packed arrays append after their final integer key
-    emitter.instruction("movz x9, #0x8000, lsl #48");                           // an empty table has no integer key yet: ZEND_LONG_MIN
-    emitter.label("__rt_zval_pack_array_packed_next_ready");
-    emitter.instruction("str x9, [x0, #40]");                                   // store nNextFreeElement at offset 40 (64-bit)
-    emitter.instruction("str xzr, [x0, #48]");                                  // store pDestructor = NULL at offset 48
-    emitter.instruction("ldr x0, [sp, #72]");                                   // return the HashTable pointer
+    emit_array_header(emitter, ArrayStorage::Packed);
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the stack frame
     emitter.instruction("ret");                                                 // return the zend_array pointer in x0
@@ -233,36 +189,16 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the element count
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the length
-    emitter.instruction("mov rcx, QWORD PTR [rax + 16]");                       // load the element size
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "rax", "rcx");
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the elem_size
-    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the kind word (value_type is byte 1)
-    emitter.instruction("shr rcx, 8");                                          // shift the value_type byte into the low position
-    emitter.instruction("and rcx, 0x7f");                                       // isolate the 7-bit value_type, excluding the COW flag in bit 15
+    elephc_memoir::values::array_header::emit_load_value_type_tag(
+        emitter, "rax", "rcx",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the value_type
     emitter.instruction("lea rcx, [rax + 24]");                                 // elements start right after the 24-byte header
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the elements base
 
-    // -- nTableSize = next power of two, minimum 8 --
-    emitter.instruction("mov r9, 8");                                           // start at the minimum packed table size
-    emitter.label("__rt_zval_pack_array_packed_pow2");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the length
-    emitter.instruction("cmp r9, rcx");                                         // is the candidate size already >= length?
-    emitter.instruction("jge __rt_zval_pack_array_packed_pow2_done");           // stop doubling once the table covers the length
-    emitter.instruction("shl r9, 1");                                           // double the candidate size
-    emitter.instruction("jmp __rt_zval_pack_array_packed_pow2");                // retry the power-of-two search
-    emitter.label("__rt_zval_pack_array_packed_pow2_done");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save nTableSize
-
-    // -- allocate the data block (8 sentinel bytes + nTableSize * 32-byte buckets) --
-    emitter.instruction("mov rax, r9");                                         // copy nTableSize for the size computation
-    emitter.instruction("shl rax, 5");                                          // nTableSize * 32 bytes of bucket storage
-    emitter.instruction("add rax, 8");                                          // add the two 4-byte sentinel slots
-    emitter.instruction("call __rt_heap_alloc");                                // rax = data block base
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the data block pointer
-    emitter.instruction("mov DWORD PTR [rax], -1");                             // stamp the first packed sentinel (HT_INVALID_IDX)
-    emitter.instruction("mov DWORD PTR [rax + 4], -1");                         // stamp the second packed sentinel
-    emitter.instruction("lea rcx, [rax + 8]");                                  // arData = data block base + 8
-    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // save arData
+    emit_array_backing(emitter, ArrayStorage::Packed);
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // initialize the loop index i = 0
 
     // -- element loop: convert each elephc element into a bucket zval --
@@ -362,16 +298,13 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload i
     emitter.instruction("shl r10, 5");                                          // i * 32 bytes per bucket
     emitter.instruction("lea r12, [r9 + r10]");                                 // r12 = bucket address
-    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the child zval value
-    emitter.instruction("mov QWORD PTR [r12], rcx");                            // store the value into the bucket
-    emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                        // load the child zval type_info + u2
-    emitter.instruction("mov QWORD PTR [r12 + 8], rcx");                        // store type_info + u2 into the bucket
+    emit_adopt_child_words(emitter, "r12", "rax", "rcx");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 80]");                       // reload i for the integer key
     emitter.instruction("mov QWORD PTR [r12 + 16], rcx");                       // bucket.h = i (packed integer key)
     emitter.instruction("mov QWORD PTR [r12 + 24], 0");                         // bucket.key = NULL (packed has no string key)
 
     // -- release the temporary child zval block (ownership transfers to the bucket) --
-    emitter.instruction("call __rt_heap_free");                                 // free the 16-byte child zval block only
+    emit_retire_child_envelope(emitter);
     emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // reload i
     emitter.instruction("inc r9");                                              // advance to the next element
     emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // store the incremented index
@@ -380,29 +313,7 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_zval_pack_array_packed_loop_done");
 
     // -- allocate and fill the 56-byte HashTable structure --
-    emitter.instruction("mov rax, 56");                                         // HashTable structures are 56 bytes
-    emitter.instruction("call __rt_heap_alloc");                                // rax = HashTable pointer
-    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the HashTable pointer
-    emitter.instruction("mov DWORD PTR [rax], 1");                              // refcount = 1 (32-bit)
-    emitter.instruction("mov DWORD PTR [rax + 4], 7");                          // gc type_info = IS_ARRAY (7)
-    emitter.instruction("mov DWORD PTR [rax + 8], 96");                         // HASH_FLAG_PACKED | HASH_FLAG_STATIC_KEYS = 0x60
-    emitter.instruction("mov DWORD PTR [rax + 12], -2");                        // nTableMask = HT_MIN_MASK = -2 (packed)
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the data block base
-    emitter.instruction("lea rcx, [rcx + 8]");                                  // arData = data block base + 8
-    emitter.instruction("mov QWORD PTR [rax + 16], rcx");                       // store arData at offset 16
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the length
-    emitter.instruction("mov DWORD PTR [rax + 24], ecx");                       // store nNumUsed at offset 24 (32-bit)
-    emitter.instruction("mov DWORD PTR [rax + 28], ecx");                       // store nNumOfElements at offset 28 (32-bit)
-    emitter.instruction("mov DWORD PTR [rax + 32], -1");                        // nInternalPointer = HT_INVALID_IDX (32-bit)
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the length for nNextFreeElement
-    emitter.instruction("test rcx, rcx");                                       // distinguish an empty table from one ending at key length - 1
-    emitter.instruction("jnz __rt_zval_pack_array_packed_next_ready");          // nonempty packed arrays append at their element count
-    emitter.instruction("mov rcx, 1");                                          // materialize ZEND_LONG_MIN without an out-of-range immediate
-    emitter.instruction("shl rcx, 63");                                         // an empty table has no integer key yet
-    emitter.label("__rt_zval_pack_array_packed_next_ready");
-    emitter.instruction("mov QWORD PTR [rax + 40], rcx");                       // store nNextFreeElement at offset 40 (64-bit)
-    emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
-    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the HashTable pointer
+    emit_array_header(emitter, ArrayStorage::Packed);
     emitter.instruction("add rsp, 96");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax

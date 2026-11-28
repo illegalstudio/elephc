@@ -34,9 +34,10 @@ pub(in crate::interpreter) fn eval_persistent_variable_reference(
         _ => return Ok(None),
     };
     if scope.visible_cell(local) != Some(reference) {
-        for old in scope.set_respecting_references(local.to_string(), reference, ScopeCellOwnership::Borrowed) {
-            values.release(old)?;
-        }
+        let replaced = scope.set_respecting_references(
+            local.to_string(), reference, ScopeCellOwnership::Borrowed,
+        );
+        super::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     }
     Ok(Some(reference))
 }
@@ -67,12 +68,12 @@ fn promote_array_reference_variable(
     let reference = values.reference_new(value)?;
     context.copy_array_metadata(value, reference);
     context.bind_local_reference_types(reference, &types);
-    for old in source.set_reference(name.to_string(), name.to_string(), value, ownership) {
-        values.release(old)?;
-    }
-    for old in source.set_respecting_references(name.to_string(), reference, ScopeCellOwnership::Owned) {
-        values.release(old)?;
-    }
+    let replaced = source.set_reference(name.to_string(), name.to_string(), value, ownership);
+    super::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
+    let replaced = source.set_respecting_references(
+        name.to_string(), reference, ScopeCellOwnership::Owned,
+    );
+    super::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     Ok(reference)
 }
 

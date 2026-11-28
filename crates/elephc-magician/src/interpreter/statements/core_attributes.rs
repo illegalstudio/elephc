@@ -9,6 +9,7 @@
 //! - Warning handlers run while the discarded return value remains owned by its caller.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 #[cfg(test)]
 mod repeatability_tests {
@@ -123,23 +124,37 @@ fn warn_eval_discarded_instance_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let warned = (|| {
-        if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(()); }
-        let identity = values.object_identity(object)?;
-        let Some(class) = context.dynamic_object_class(identity) else { return Ok(()); };
-        let Some((_, method)) = context.class_method(class.name(), method) else { return Ok(()); };
-        if !eval_attributes_have_global_builtin_attribute(method.attributes(), "NoDiscard") { return Ok(()); }
-        let name = format!("{}::{}", class.name(), method.name());
-        eval_dispatch_php_error(
-            &format!("The return value of {name}() should either be used or explicitly ignored"),
-            E_WARNING, context, values,
-        ).map(|_| ())
-    })();
-    if let Err(status) = warned {
-        release_expr_result(result, context, values)?;
-        return Err(status);
-    }
-    Ok(result)
+    let result = RuntimeOwnerSlot::new(result);
+    with_runtime_owners(&result, || {
+        let warned = (|| {
+            if values.type_tag(object)? != EVAL_TAG_OBJECT {
+                return Ok(());
+            }
+            let identity = values.object_identity(object)?;
+            let Some(class) = context.dynamic_object_class(identity) else {
+                return Ok(());
+            };
+            let Some((_, method)) = context.class_method(class.name(), method) else {
+                return Ok(());
+            };
+            if !eval_attributes_have_global_builtin_attribute(method.attributes(), "NoDiscard") {
+                return Ok(());
+            }
+            let name = format!("{}::{}", class.name(), method.name());
+            eval_dispatch_php_error(
+                &format!("The return value of {name}() should either be used or explicitly ignored"),
+                E_WARNING,
+                context,
+                values,
+            )
+            .map(|_| ())
+        })();
+        if let Err(status) = warned {
+            release_expr_result(result.take(), context, values)?;
+            return Err(status);
+        }
+        Ok(result.take())
+    })
 }
 
 /// Emits the PHP warning for an ignored result from an interpreted marked declaration.

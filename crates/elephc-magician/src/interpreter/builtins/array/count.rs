@@ -11,6 +11,7 @@
 //!   caller already owns, and recursive counting retires every key and element it reads.
 
 use super::super::super::*;
+use super::super::collection_builder::{stage_collection_entry, with_collection_cells};
 
 eval_builtin! {
     contract: "count",
@@ -123,29 +124,17 @@ pub(in crate::interpreter) fn eval_count_recursive_len(
     let len = values.array_len(value)?;
     let mut total = len;
     for position in 0..len {
-        let key = values.array_iter_key(value, position)?;
-        let element = values.array_get(value, key);
-        let key_released = values.release(key);
-        let element = match (element, key_released) {
-            (Ok(element), Ok(())) => element,
-            (Ok(element), Err(status)) => {
-                let _ = values.release(element);
-                return Err(status);
-            }
-            (Err(status), _) => return Err(status),
-        };
-        let nested = (|| {
+        let nested = with_collection_cells(values, |values, owners| {
+            let (_, element) = stage_collection_entry(value, position, values, owners)?;
             if values.is_array_like(element)? {
                 eval_count_recursive_len(element, values, arrays_seen)
             } else {
                 Ok(0)
             }
-        })();
-        let element_released = values.release(element);
+        })?;
         total = total
-            .checked_add(nested?)
+            .checked_add(nested)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        element_released?;
     }
 
     arrays_seen.pop();

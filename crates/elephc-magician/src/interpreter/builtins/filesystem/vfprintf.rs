@@ -62,6 +62,7 @@ pub(in crate::interpreter) fn eval_vfprintf_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let format_args = eval_sprintf_argument_array_values(array, values)?;
-    super::fprintf::eval_fprintf_result(stream, format, &format_args, context, values)
+    with_sprintf_array_args(array, context, values, |args, context, values| {
+        super::fprintf::eval_fprintf_result(stream, format, args, context, values)
+    })
 }

@@ -57,6 +57,7 @@ pub use runtime_call::{
     ArrayKeySort, RuntimeArgumentLayout, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
 };
 pub use types::{IrHeapKind, IrType};
+pub(crate) use types::RUNTIME_OBJECT_VIEW_CLASS;
 pub use validator::{validate_function, validate_module, ValidationError};
 pub use function_variants::{
     collect_dispatch_groups, parse_variant_label, resolve_variant_callee,

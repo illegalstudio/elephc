@@ -647,6 +647,26 @@ echo $v, "|", $a[0], "\n";
     assert_clean(out, "direct|direct\n");
 }
 
+/// A destructor can read the replacement through the hash while the old child retires.
+#[test]
+fn test_hash_reference_publishes_before_reentrant_destructor() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class HashReferenceWitness {
+    public function __destruct() {
+        global $arena;
+        echo is_int($arena["key"] ?? null) ? "new|" : "old|";
+    }
+}
+$arena = ["key" => new HashReferenceWitness()];
+$alias =& $arena["key"];
+$arena["key"] = 42;
+echo $alias;
+"#,
+    );
+    assert_clean(out, "new|42");
+}
+
 /// Overwriting the referenced key releases the previous cell payload exactly once.
 #[test]
 fn test_reference_write_through_releases_the_previous_payload() {

@@ -22,6 +22,11 @@
 //!   NAN comparisons are not antisymmetric, so swapping operands would give a
 //!   different result from reversing the PHP comparison result.
 
+use elephc_memoir::{
+    hash_layout::{self, EntryField, HeaderField},
+    values::packed_slots,
+};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::MIXED_SORT_NON_SCALAR_MSG;
 
@@ -50,7 +55,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             // -- scan every boxed Mixed slot before the sorter can mutate the array --
             emitter.instruction("ldr x9, [x0]");                                // load the indexed-array element count
             emitter.instruction("mov x10, #0");                                 // start at the first Mixed slot
-            emitter.instruction("add x11, x0, #24");                            // point past the indexed-array header to its slots
+            packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x0");
             emitter.label("__rt_mixed_sort_scalar_scan");
             emitter.instruction("cmp x10, x9");                                 // have all live Mixed slots been validated?
             emitter.instruction("b.hs __rt_mixed_sort_scalar_done");            // return once every runtime tag is supported
@@ -65,7 +70,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             // -- objects sort only through a reviewed internal comparison adapter --
             emitter.instruction("ldr x12, [x11, x10, lsl #3]");                 // reload this slot's boxed Mixed cell
             emitter.instruction("ldr x12, [x12, #8]");                          // load the object pointer from the cell payload
-            emitter.instruction("ldr x12, [x12]");                              // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x12");
             abi::emit_symbol_address(emitter, "x13", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("ldr x13, [x13, x12, lsl #3]");                 // read this class's comparison adapter
             emitter.instruction("cbz x13, __rt_mixed_sort_non_scalar");         // unhandled object classes still fail closed
@@ -93,7 +98,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.instruction("mov rax, rdi");                                // preserve the array pointer as the helper result
             emitter.instruction("mov rcx, QWORD PTR [rax]");                    // load the indexed-array element count
             emitter.instruction("xor edx, edx");                                // start at the first Mixed slot
-            emitter.instruction("lea r8, [rax + 24]");                          // point past the indexed-array header to its slots
+            packed_slots::emit_packed_payload_x86_64(emitter, "r8", "rax");
             emitter.label("__rt_mixed_sort_scalar_scan_x86");
             emitter.instruction("cmp rdx, rcx");                                // have all live Mixed slots been validated?
             emitter.instruction("jae __rt_mixed_sort_scalar_done_x86");         // return once every runtime tag is supported
@@ -108,7 +113,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             // -- objects sort only through a reviewed internal comparison adapter --
             emitter.instruction("mov r9, QWORD PTR [r8 + rdx * 8]");            // reload this slot's boxed Mixed cell
             emitter.instruction("mov r9, QWORD PTR [r9 + 8]");                  // load the object pointer from the cell payload
-            emitter.instruction("mov r9, QWORD PTR [r9]");                      // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "r9");
             abi::emit_symbol_address(emitter, "r10", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("cmp QWORD PTR [r10 + r9 * 8], 0");             // does this class declare a comparison adapter?
             emitter.instruction("je __rt_mixed_sort_non_scalar_x86");           // unhandled object classes still fail closed
@@ -216,33 +221,32 @@ pub fn emit_hash_sort_require_scalars(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cbz x0, __rt_hash_sort_scalar_done");          // a null table has no entries to validate
-            emitter.instruction("ldr x9, [x0]");                                // load the live entry count
+            hash_layout::emit_load_header_field(emitter, "x9", "x0", HeaderField::Count);
             emitter.instruction("cbz x9, __rt_hash_sort_scalar_done");          // an empty hash is trivially sortable
-            emitter.instruction("ldr x10, [x0, #8]");                           // load the entry-slot capacity
-            emitter.instruction("ldr x11, [x0, #40]");                          // borrow the separate entry storage
+            hash_layout::emit_load_header_field(emitter, "x10", "x0", HeaderField::Capacity);
+            hash_layout::emit_entries(emitter, "x11", "x0");
             emitter.instruction("mov x12, #0");                                 // start at the first occupied slot
             emitter.label("__rt_hash_sort_scalar_scan");
             emitter.instruction("cmp x12, x10");                                // have all entry slots been inspected?
             emitter.instruction("b.hs __rt_hash_sort_scalar_done");             // return once every live value is supported
-            emitter.instruction("lsl x13, x12, #6");                            // scale the slot index to the 64-byte entry size
-            emitter.instruction("add x13, x11, x13");                           // address the current entry
-            emitter.instruction("ldr x14, [x13]");                              // load the occupied marker
+            hash_layout::emit_entry_address_from_storage(emitter, "x13", "x11", "x12");
+            hash_layout::emit_load_entry_field(emitter, "x14", "x13", EntryField::Occupied);
             emitter.instruction("cmp x14, #1");                                 // only live entries carry a value to compare
             emitter.instruction("b.ne __rt_hash_sort_scalar_next");             // skip empty and tombstone slots
             emitter.instruction("mov x16, #0");                                 // inline payloads have no boxed Mixed pointer
-            emitter.instruction("ldr x15, [x13, #40]");                         // load the entry runtime value tag
+            hash_layout::emit_load_entry_field(emitter, "x15", "x13", EntryField::ValueTag);
             emitter.instruction("cmp x15, #11");                                // does this entry belong to a PHP reference set?
             emitter.instruction("b.eq __rt_hash_sort_scalar_reference");        // the managed cell owns the comparable value
             emitter.instruction("cmp x15, #7");                                 // does this entry hold a boxed Mixed cell?
             emitter.instruction("b.eq __rt_hash_sort_scalar_boxed");            // the box carries the comparable tag
             emitter.instruction("b __rt_hash_sort_scalar_classify");            // inline scalar and object payloads are ready
             emitter.label("__rt_hash_sort_scalar_reference");
-            emitter.instruction("ldr x16, [x13, #24]");                         // load the managed reference cell
+            hash_layout::emit_load_entry_field(emitter, "x16", "x13", EntryField::ValueLow);
             emitter.instruction("ldr x16, [x16]");                              // read the boxed Mixed value the cell owns
             emitter.instruction("ldr x15, [x16]");                              // read the comparable runtime tag
             emitter.instruction("b __rt_hash_sort_scalar_classify");            // classify the dereferenced value
             emitter.label("__rt_hash_sort_scalar_boxed");
-            emitter.instruction("ldr x16, [x13, #24]");                         // load the boxed Mixed cell pointer
+            hash_layout::emit_load_entry_field(emitter, "x16", "x13", EntryField::ValueLow);
             emitter.instruction("ldr x15, [x16]");                              // read the comparison tag from the cell
             emitter.label("__rt_hash_sort_scalar_classify");
             emitter.instruction("cmp x15, #3");                                 // are int, string, float, or bool semantics sufficient?
@@ -255,9 +259,9 @@ pub fn emit_hash_sort_require_scalars(emitter: &mut Emitter) {
             emitter.instruction("ldr x14, [x16, #8]");                          // load the object pointer from the box payload
             emitter.instruction("b __rt_hash_sort_scalar_object_class");        // resolve the object's comparison adapter
             emitter.label("__rt_hash_sort_scalar_inline_object");
-            emitter.instruction("ldr x14, [x13, #24]");                         // load the inline object pointer
+            hash_layout::emit_load_entry_field(emitter, "x14", "x13", EntryField::ValueLow);
             emitter.label("__rt_hash_sort_scalar_object_class");
-            emitter.instruction("ldr x14, [x14]");                              // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x14", "x14");
             abi::emit_symbol_address(emitter, "x17", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("ldr x14, [x17, x14, lsl #3]");                 // read this class's comparison adapter
             emitter.instruction("cbz x14, __rt_hash_sort_scalar_non_scalar");   // unhandled object classes still fail closed
@@ -272,33 +276,33 @@ pub fn emit_hash_sort_require_scalars(emitter: &mut Emitter) {
         Arch::X86_64 => {
             emitter.instruction("test rdi, rdi");                               // a null table has no entries to validate
             emitter.instruction("jz __rt_hash_sort_scalar_done_x86");           // return without touching a null table
-            emitter.instruction("cmp QWORD PTR [rdi], 0");                      // does the hash hold any live entries?
+            hash_layout::emit_load_header_field(emitter, "r11", "rdi", HeaderField::Count);
+            emitter.instruction("cmp r11, 0");                                  // does the hash hold any live entries?
             emitter.instruction("je __rt_hash_sort_scalar_done_x86");           // an empty hash is trivially sortable
-            emitter.instruction("mov rcx, QWORD PTR [rdi + 8]");                // load the entry-slot capacity
-            emitter.instruction("mov r8, QWORD PTR [rdi + 40]");                // borrow the separate entry storage
+            hash_layout::emit_load_header_field(emitter, "rcx", "rdi", HeaderField::Capacity);
+            hash_layout::emit_entries(emitter, "r8", "rdi");
             emitter.instruction("xor r9d, r9d");                                // start at the first occupied slot
             emitter.label("__rt_hash_sort_scalar_scan_x86");
             emitter.instruction("cmp r9, rcx");                                 // have all entry slots been inspected?
             emitter.instruction("jae __rt_hash_sort_scalar_done_x86");          // return once every live value is supported
-            emitter.instruction("mov r10, r9");                                 // copy the slot index before scaling
-            emitter.instruction("shl r10, 6");                                  // scale the slot index to the 64-byte entry size
-            emitter.instruction("add r10, r8");                                 // address the current entry
-            emitter.instruction("cmp QWORD PTR [r10], 1");                      // only live entries carry a value to compare
+            hash_layout::emit_entry_address_from_storage(emitter, "r10", "r8", "r9");
+            hash_layout::emit_load_entry_field(emitter, "rax", "r10", EntryField::Occupied);
+            emitter.instruction("cmp rax, 1");                                  // only live entries carry a value to compare
             emitter.instruction("jne __rt_hash_sort_scalar_next_x86");          // skip empty and tombstone slots
             emitter.instruction("xor edx, edx");                                // inline payloads have no boxed Mixed pointer
-            emitter.instruction("mov r11, QWORD PTR [r10 + 40]");               // load the entry runtime value tag
+            hash_layout::emit_load_entry_field(emitter, "r11", "r10", EntryField::ValueTag);
             emitter.instruction("cmp r11, 11");                                 // does this entry belong to a PHP reference set?
             emitter.instruction("je __rt_hash_sort_scalar_reference_x86");      // the managed cell owns the comparable value
             emitter.instruction("cmp r11, 7");                                  // does this entry hold a boxed Mixed cell?
             emitter.instruction("je __rt_hash_sort_scalar_boxed_x86");          // the box carries the comparable tag
             emitter.instruction("jmp __rt_hash_sort_scalar_classify_x86");      // inline scalar and object payloads are ready
             emitter.label("__rt_hash_sort_scalar_reference_x86");
-            emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");               // load the managed reference cell
+            hash_layout::emit_load_entry_field(emitter, "rdx", "r10", EntryField::ValueLow);
             emitter.instruction("mov rdx, QWORD PTR [rdx]");                    // read the boxed Mixed value the cell owns
             emitter.instruction("mov r11, QWORD PTR [rdx]");                    // read the comparable runtime tag
             emitter.instruction("jmp __rt_hash_sort_scalar_classify_x86");      // classify the dereferenced value
             emitter.label("__rt_hash_sort_scalar_boxed_x86");
-            emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");               // load the boxed Mixed cell pointer
+            hash_layout::emit_load_entry_field(emitter, "rdx", "r10", EntryField::ValueLow);
             emitter.instruction("mov r11, QWORD PTR [rdx]");                    // read the comparison tag from the cell
             emitter.label("__rt_hash_sort_scalar_classify_x86");
             emitter.instruction("cmp r11, 3");                                  // are int, string, float, or bool semantics sufficient?
@@ -312,9 +316,9 @@ pub fn emit_hash_sort_require_scalars(emitter: &mut Emitter) {
             emitter.instruction("mov rax, QWORD PTR [rdx + 8]");                // load the object pointer from the box payload
             emitter.instruction("jmp __rt_hash_sort_scalar_object_class_x86");  // resolve the object's comparison adapter
             emitter.label("__rt_hash_sort_scalar_inline_object_x86");
-            emitter.instruction("mov rax, QWORD PTR [r10 + 24]");               // load the inline object pointer
+            hash_layout::emit_load_entry_field(emitter, "rax", "r10", EntryField::ValueLow);
             emitter.label("__rt_hash_sort_scalar_object_class_x86");
-            emitter.instruction("mov rax, QWORD PTR [rax]");                    // load the object's runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "rax");
             abi::emit_symbol_address(emitter, "rsi", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
             emitter.instruction("cmp QWORD PTR [rsi + rax * 8], 0");            // does this class declare a comparison adapter?
             emitter.instruction("je __rt_hash_sort_scalar_non_scalar_x86");     // unhandled object classes still fail closed

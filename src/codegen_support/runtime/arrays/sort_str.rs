@@ -38,9 +38,9 @@ pub fn emit_sort_str(emitter: &mut Emitter, reverse: bool) {
     emitter.instruction("sub sp, sp, #64");                                     // frame for saved registers and sort state
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
-    emitter.instruction("ldr x1, [x0]");                                        // x1 = array length from the header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x1", "x0"); // x1 = array length from the header
     emitter.instruction("str x1, [sp, #0]");                                    // save the array length
-    emitter.instruction("add x1, x0, #24");                                     // x1 = base of the data region (skip header)
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x0");
     emitter.instruction("str x1, [sp, #8]");                                    // save the data base
     emitter.instruction("mov x1, #1");                                          // outer-loop index i = 1
     emitter.instruction("str x1, [sp, #16]");                                   // save i
@@ -123,9 +123,9 @@ fn emit_sort_str_linux_x86_64(emitter: &mut Emitter, reverse: bool) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // reserve the insertion-sort state slots
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // r8 = array length from the header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r8", "rdi"); // r8 = array length from the header
     emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save the array length
-    emitter.instruction("lea r8, [rdi + 24]");                                  // r8 = base of the data region (skip header)
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // save the data base
     emitter.instruction("mov r8, 1");                                           // outer-loop index i = 1
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save i

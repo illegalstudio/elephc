@@ -11,6 +11,7 @@
 //!   and eval/runtime class-like existence checks.
 
 use super::super::*;
+use super::collection_builder::with_collection_cells;
 use std::collections::HashSet;
 
 const EVAL_CLASS_METADATA_FLAG_STATIC: u64 = 1;
@@ -46,10 +47,7 @@ pub(in crate::interpreter) fn eval_object_class_metadata_name(
     if let Some(class_name) = context.dynamic_object_class_name(identity) {
         return Ok(class_name);
     }
-    let class_name = values.object_class_name(object)?;
-    let class_name_bytes = values.string_bytes(class_name);
-    values.release(class_name)?;
-    let class_name = String::from_utf8(class_name_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let class_name = runtime_object_class_name(object, values)?;
     Ok(class_name.trim_start_matches('\\').to_string())
 }
 
@@ -171,15 +169,12 @@ pub(in crate::interpreter) fn eval_runtime_string_array_to_vec(
     let len = values.array_len(array)?;
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
-        let key = values.int(position as i64)?;
-        let value = values.array_get(array, key);
-        let key_released = values.release(key);
-        let value = value?;
-        let name = eval_class_metadata_name(value, values);
-        let value_released = values.release(value);
-        key_released?;
-        value_released?;
-        result.push(name?);
+        let name = with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.int(position as i64)?);
+            let value = owners.stage(values.array_get(array, key.borrowed())?);
+            eval_class_metadata_name(value.borrowed(), values)
+        })?;
+        result.push(name);
     }
     Ok(result)
 }

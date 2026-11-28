@@ -32,7 +32,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
             emitter.instruction("cmp x0, #6");                                  // only an object can own native property storage
             emitter.instruction(&format!("b.ne {fail}"));                       // decline unsupported receiver shapes
             emitter.instruction("str x1, [sp, #16]");                           // preserve the physical object for the selected body
-            emitter.instruction("ldr x9, [x1]");                                // dispatch by the receiver's actual class identifier
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x1");
             emit_aarch64_property_dispatch(module, emitter, data, &slots, "reference", fail);
         }
         Arch::X86_64 => {
@@ -50,7 +50,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
             emitter.instruction("cmp rax, 6");                                  // only an object can own native property storage
             emitter.instruction(&format!("jne {fail}"));                        // decline unsupported receiver shapes
             emitter.instruction("mov QWORD PTR [rbp - 24], rdi");               // preserve the physical object for the selected body
-            emitter.instruction("mov r11, QWORD PTR [rdi]");                    // dispatch by the receiver's actual class identifier
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
             emit_x86_64_property_dispatch(module, emitter, data, &slots, "reference", fail);
         }
     }

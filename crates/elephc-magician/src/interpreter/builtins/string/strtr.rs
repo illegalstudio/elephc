@@ -16,6 +16,7 @@
 //!   zero-length key; eval skips the key with the same observable result without warning,
 //!   matching the compiled backend.
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use std::collections::HashMap;
 
 eval_builtin! {
@@ -85,14 +86,14 @@ fn eval_strtr_pairs(
     let len = values.array_len(from)?;
     let mut pairs = HashMap::with_capacity(len);
     for position in 0..len {
-        let key = values.array_iter_key(from, position)?;
-        let value = values.array_get(from, key)?;
-        let key = values.string_bytes(key)?;
-        if key.is_empty() || key.len() > subject_len {
-            continue;
-        }
-        let value = values.string_bytes(value)?;
-        pairs.insert(key, value);
+        with_collection_cells(values, |values, owners| {
+            let (key, value) = stage_collection_entry(from, position, values, owners)?;
+            let key = values.string_bytes(key)?;
+            if !key.is_empty() && key.len() <= subject_len {
+                pairs.insert(key, values.string_bytes(value)?);
+            }
+            Ok(())
+        })?;
     }
     Ok(pairs)
 }

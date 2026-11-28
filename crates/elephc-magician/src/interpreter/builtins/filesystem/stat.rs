@@ -15,6 +15,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use crate::stream_wrappers;
 use super::*;
 
@@ -66,7 +67,9 @@ pub(in crate::interpreter) fn eval_file_stat_scalar_result(
     if let Some(stat) =
         eval_user_wrapper_url_stat_result(&path, EVAL_URL_STAT_FLAGS_NOCACHE, context, values)?
     {
-        return eval_user_wrapper_file_stat_scalar_from_stat(name, stat, values);
+        return eval_with_user_wrapper_stat_lease(stat, context, values, |stat, values| {
+            eval_user_wrapper_file_stat_scalar_from_stat(name, stat, values)
+        });
     }
     // Every name this function serves returns `false` on failure, `filemtime` included. It used
     // to be singled out here to answer `int(0)` on both the unsupported-scheme and the
@@ -153,36 +156,12 @@ pub(in crate::interpreter) fn eval_stat_metadata_array(
         ("blksize", eval_u64_to_i64(metadata.blksize())?),
         ("blocks", eval_u64_to_i64(metadata.blocks())?),
     ];
-    let mut result = values.assoc_new(fields.len() * 2)?;
-    for (index, (name, value)) in fields.iter().enumerate() {
-        result = eval_stat_array_set_int_key(result, index, *value, values)?;
-        result = eval_stat_array_set_string_key(result, name, *value, values)?;
+    let mut result = EvalArrayBuilder::assoc(values, fields.len() * 2)?;
+    for (index, (name, value)) in fields.into_iter().enumerate() {
+        result.index(index, |values| values.int(value))?;
+        result.string(name, |values| values.int(value))?;
     }
-    Ok(result)
-}
-
-/// Inserts one integer stat field under a numeric PHP array key.
-pub(in crate::interpreter) fn eval_stat_array_set_int_key(
-    array: RuntimeCellHandle,
-    key: usize,
-    value: i64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.int(i64::try_from(key).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let value = values.int(value)?;
-    values.array_set(array, key, value)
-}
-
-/// Inserts one integer stat field under a string PHP array key.
-pub(in crate::interpreter) fn eval_stat_array_set_string_key(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: i64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    let value = values.int(value)?;
-    values.array_set(array, key, value)
+    Ok(result.finish())
 }
 
 /// Converts unsigned stat metadata into the signed integer payload used by PHP cells.

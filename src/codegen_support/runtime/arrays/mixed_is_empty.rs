@@ -11,6 +11,7 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use elephc_memoir::values::container_header;
 
 /// Emits `__rt_mixed_is_empty` which implements PHP `empty()` semantics for boxed mixed values.
 ///
@@ -106,7 +107,7 @@ pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_is_empty_array");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the array/hash pointer from value_lo
     emit_branch_if_null_container(emitter, "x10", "x11", "__rt_mixed_is_empty_yes");
-    emitter.instruction("ldr x10, [x10]");                                      // load the container element count from the header
+    container_header::emit_load_count(emitter, "x10", "x10");
     emitter.instruction("cmp x10, #0");                                         // compare the element count against zero
     emitter.instruction("cset x0, eq");                                         // return 1 when the container has no elements
     emitter.instruction("ret");                                                 // finish array/hash empty() evaluation
@@ -192,7 +193,7 @@ fn emit_mixed_is_empty_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_is_empty_array_linux_x86_64");
     emitter.instruction("test rdi, rdi");                                       // null array or hash payload pointers behave like empty/null under the mixed contract
     emitter.instruction("je __rt_mixed_is_empty_yes_linux_x86_64");             // treat missing array or hash payload pointers as empty
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the unboxed array or hash element count from the container header
+    container_header::emit_load_count(emitter, "rax", "rdi");
     emitter.instruction("cmp rax, 0");                                          // compare the container element count against zero
     emitter.instruction("sete al");                                             // materialize the x86_64 container empty() result in the low byte when the element count is zero
     emitter.instruction("movzx eax, al");                                       // widen the x86_64 boolean byte back into the canonical integer result register

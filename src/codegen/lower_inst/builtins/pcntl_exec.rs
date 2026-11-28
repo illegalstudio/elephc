@@ -9,6 +9,8 @@
 //!   are coerced with PHP string rules before the bridge copies them.
 //! - The third argument's presence selects `execve`; omission preserves the host environment.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, CodegenIrError, Result};
@@ -217,7 +219,7 @@ fn emit_indexed_string_array(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", CONTAINER_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", INDEX_OFFSET);
-            ctx.emitter.instruction("ldr x11, [x9]");                           // load the packed array's logical length
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x11", "x9"); // load the packed array's logical length
             ctx.emitter.instruction("cmp x10, x11");                            // compare the current index with the element count
             ctx.emitter.instruction(&format!("b.ge {done}"));                   // finish after the final packed entry
             let shift = if matches!(element.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
@@ -227,7 +229,7 @@ fn emit_indexed_string_array(
             };
             ctx.emitter.instruction(&format!("lsl x11, x10, #{shift}"));        // scale by the selected packed element width
             ctx.emitter.instruction("add x11, x9, x11");                        // advance to the selected string slot
-            ctx.emitter.instruction("add x11, x11, #24");                       // skip the packed-array header
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x11");
             if element.codegen_repr() == PhpType::Str {
                 ctx.emitter.instruction("ldp x3, x4, [x11]");                   // load the borrowed string pointer and length
             } else {
@@ -257,7 +259,7 @@ fn emit_indexed_string_array(
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", CONTAINER_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", INDEX_OFFSET);
-            ctx.emitter.instruction("mov r11, QWORD PTR [r9]");                 // load the packed array's logical length
+            elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r9"); // load the packed array's logical length
             ctx.emitter.instruction("cmp r10, r11");                            // compare the current index with the element count
             ctx.emitter.instruction(&format!("jge {done}"));                    // finish after the final packed entry
             ctx.emitter.instruction("mov r11, r10");                            // copy the index before scaling it
@@ -268,7 +270,7 @@ fn emit_indexed_string_array(
             };
             ctx.emitter.instruction(&format!("shl r11, {shift}"));              // scale by the selected packed element width
             ctx.emitter.instruction("add r11, r9");                             // advance to the selected string slot
-            ctx.emitter.instruction("add r11, 24");                             // skip the packed-array header
+            packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "r11");
             ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                // load the borrowed string pointer or scalar payload
             if element.codegen_repr() == PhpType::Str {
                 ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 8]");         // load the borrowed string length

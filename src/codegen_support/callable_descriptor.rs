@@ -24,6 +24,9 @@ use crate::codegen_support::data_section::{DataSection, DataWord};
 use crate::codegen_support::emit::Emitter;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
+pub(crate) use elephc_memoir::callables::storage::{
+    emit_copy_descriptor_header_to_runtime,
+};
 
 pub(crate) const CALLABLE_DESC_KIND_CLOSURE: u64 = CallableDescriptorShape::Closure as u64;
 pub(crate) const CALLABLE_DESC_KIND_FIRST_CLASS: u64 =
@@ -47,21 +50,18 @@ pub(crate) const CALLABLE_DESC_ORIGIN_STRING: u64 = 1 << 8;
 /// Kind-word flag: this implicit callable stands for a PHP array (`[$obj, 'm']`, `['Cls', 'm']`).
 pub(crate) const CALLABLE_DESC_ORIGIN_ARRAY: u64 = 1 << 9;
 
-pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
-pub(crate) const CALLABLE_DESC_NAME_OFFSET: usize = 16;
-pub(crate) const CALLABLE_DESC_NAME_LENGTH_OFFSET: usize = 24;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_ENVIRONMENT_OFFSET: usize = 40;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_INVOCATION_OFFSET: usize = 48;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_INVOKER_OFFSET: usize = 56;
-pub(crate) const CALLABLE_DESC_STATIC_SIZE: usize = 64;
-pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
+pub(crate) use elephc_memoir::callables::layout::{
+    ENTRY_OFFSET as CALLABLE_DESC_ENTRY_OFFSET,
+    INVOKER_OFFSET as CALLABLE_DESC_INVOKER_OFFSET,
+    NAME_LENGTH_OFFSET as CALLABLE_DESC_NAME_LENGTH_OFFSET,
+    NAME_OFFSET as CALLABLE_DESC_NAME_OFFSET,
+};
+use elephc_memoir::callables::layout::{
+    DescriptorBinding, DescriptorEnvironment, DescriptorHeader, DescriptorSignature,
+    BINDING_WORDS, NO_VARIADIC_PARAMETER, PARAM_NAME_WORDS, PARAM_TYPE_WORDS,
+};
 
-const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
+pub(crate) use elephc_memoir::callables::layout::RUNTIME_CAPTURE_OFFSET as CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
 
 /// Inline scalar pairs own no heap child, unlike the boxed Mixed binding tag 7.
 const CALLABLE_BINDING_TAG_TAGGED_SCALAR: u64 = 16;
@@ -265,16 +265,17 @@ fn static_descriptor_from_spec(
         .map(|label| DataWord::Symbol(label.to_string()))
         .unwrap_or(DataWord::U64(0));
 
-    data.add_words(vec![
-        DataWord::U64(spec.kind),
-        entry_word,
-        name_word,
-        DataWord::U64(name_len),
-        signature_word,
-        environment_word,
-        invocation_word,
-        invoker_word,
-    ])
+    let header = DescriptorHeader {
+        kind: DataWord::U64(spec.kind),
+        entry: entry_word,
+        name: name_word,
+        name_len: DataWord::U64(name_len),
+        signature: signature_word,
+        environment: environment_word,
+        invocation: invocation_word,
+        invoker: invoker_word,
+    };
+    data.add_words(header.into_words().into())
 }
 
 /// Emits assembly for loading the ABI entry slot from a descriptor.
@@ -308,33 +309,6 @@ pub(crate) fn emit_release_current_descriptor(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_callable_descriptor_release");
 }
 
-/// Copies the fixed static descriptor header into a runtime descriptor allocation.
-pub(crate) fn emit_copy_static_descriptor_to_runtime(
-    emitter: &mut Emitter,
-    dest_reg: &str,
-    descriptor_label: &str,
-) {
-    let source_reg = abi::symbol_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, source_reg, descriptor_label);
-    emit_copy_descriptor_header_to_runtime(emitter, dest_reg, source_reg);
-}
-
-/// Copies the fixed header of the descriptor in `source_reg` into a runtime descriptor allocation.
-///
-/// `source_reg` must differ from the secondary scratch register, which carries each word.
-pub(crate) fn emit_copy_descriptor_header_to_runtime(
-    emitter: &mut Emitter,
-    dest_reg: &str,
-    source_reg: &str,
-) {
-    let word_reg = abi::secondary_scratch_reg(emitter);
-    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
-        abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
-        abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
-    }
-    emit_initialize_runtime_descriptor(emitter, dest_reg);
-}
-
 /// Branches to `label` when `descriptor_reg` holds no descriptor: a zero pointer or the in-band
 /// null sentinel a missed read (`$callbacks[$missing]`) leaves in a `callable` slot. Checks that
 /// read the descriptor's words must take this branch first. Clobbers one scratch register.
@@ -352,17 +326,7 @@ pub(crate) fn emit_branch_if_missing_descriptor(emitter: &mut Emitter, descripto
 /// The origin flags sit above the 8-bit kind, which runtime readers mask with
 /// `CALLABLE_DESC_KIND_MASK`; `gettype()`, `get_class()` and `::class` read them.
 pub(crate) fn emit_mark_runtime_descriptor_origin(emitter: &mut Emitter, descriptor_reg: &str, origin: u64) {
-    use crate::codegen_support::platform::Arch;
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));        // load the descriptor kind word
-            emitter.instruction(&format!("orr x9, x9, #{origin}"));             // record which PHP value the callable stands for
-            emitter.instruction(&format!("str x9, [{descriptor_reg}]"));        // store the tagged kind word
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("or QWORD PTR [{descriptor_reg}], {origin}")); // record which PHP value the callable stands for
-        }
-    }
+    elephc_memoir::callables::storage::emit_or_kind_flags(emitter, descriptor_reg, origin);
 }
 
 /// Branches to `string_label` or `array_label` when the descriptor in `descriptor_reg` stands for
@@ -371,20 +335,12 @@ pub(crate) fn emit_mark_runtime_descriptor_origin(emitter: &mut Emitter, descrip
 pub(crate) fn emit_branch_on_descriptor_origin(
     emitter: &mut Emitter, descriptor_reg: &str, string_label: &str, array_label: &str,
 ) {
-    use crate::codegen_support::platform::Arch;
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));        // load the descriptor kind word
-            emitter.instruction(&format!("tbnz x9, #8, {string_label}"));       // the callable stands for a PHP string
-            emitter.instruction(&format!("tbnz x9, #9, {array_label}"));        // the callable stands for a PHP array
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("test QWORD PTR [{descriptor_reg}], {CALLABLE_DESC_ORIGIN_STRING}")); // does the callable stand for a PHP string?
-            emitter.instruction(&format!("jnz {string_label}"));                // report the string it came from
-            emitter.instruction(&format!("test QWORD PTR [{descriptor_reg}], {CALLABLE_DESC_ORIGIN_ARRAY}")); // does the callable stand for a PHP array?
-            emitter.instruction(&format!("jnz {array_label}"));                 // report the array it came from
-        }
-    }
+    elephc_memoir::callables::storage::emit_branch_on_kind_flags(
+        emitter,
+        descriptor_reg,
+        (CALLABLE_DESC_ORIGIN_STRING, string_label),
+        (CALLABLE_DESC_ORIGIN_ARRAY, array_label),
+    );
 }
 
 /// Returns a second static descriptor equal to the one at `label` but recording, in its kind word,
@@ -399,126 +355,57 @@ pub(crate) fn static_descriptor_with_origin(data: &mut DataSection, label: &str,
 /// that records the PHP value it stands for. Only for a descriptor that
 /// [`static_descriptor_with_origin`] cannot duplicate at compile time.
 pub(crate) fn emit_runtime_copy_with_origin(emitter: &mut Emitter, origin: u64) {
-    use crate::codegen_support::platform::Arch;
     let result = abi::int_result_reg(emitter);
-    abi::emit_push_reg(emitter, result);
-    abi::emit_load_int_immediate(emitter, result, CALLABLE_DESC_STATIC_SIZE as i64);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let (source, word) = match emitter.target.arch {
-        Arch::AArch64 => ("x12", "x13"),
-        Arch::X86_64 => ("rcx", "rdx"),
-    };
-    abi::emit_pop_reg(emitter, source);
-    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
-        abi::emit_load_from_address(emitter, word, source, offset);
-        abi::emit_store_to_address(emitter, word, result, offset);
-    }
-    emit_initialize_runtime_descriptor(emitter, result);
+    elephc_memoir::callables::storage::emit_new_from_result_with_handle(
+        emitter,
+        result,
+        elephc_memoir::callables::storage::ObjectHandle::Internal,
+    );
     emit_mark_runtime_descriptor_origin(emitter, result, origin);
 }
 
-/// Clears capture storage before publishing a fresh allocation as a managed callable node.
-pub(crate) fn emit_initialize_runtime_descriptor(emitter: &mut Emitter, dest: &str) {
-    use crate::codegen_support::{platform::Arch, sentinels::{CALLABLE_HEAP_KIND, x86_64_heap_kind_word}};
-    // -- recycled captures must be null before any later allocation or ownership cleanup --
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr w9, [{dest}, #-16]"));            // bound initialization by the allocator's actual payload capacity
-            emitter.instruction("mov x10, #64");                                // preserve the copied fixed descriptor header
-            emitter.label("1");
-            emitter.instruction("cmp x10, x9");                                 // stop before crossing the allocated descriptor payload
-            emitter.instruction("b.hs 2f");                                     // descriptors without captures need no slot initialization
-            emitter.instruction(&format!("str xzr, [{dest}, x10]"));            // leave every not-yet-written capture null for nested cleanup
-            emitter.instruction("add x10, x10, #8");                            // initialize the next capture word, including metadata halves
-            emitter.instruction("b 1b");                                        // finish initialization before publishing the graph kind
-            emitter.label("2");
-            emitter.instruction(&format!("mov x9, #{CALLABLE_HEAP_KIND}"));     // register callable ownership independently from raw helper buffers
-            emitter.instruction(&format!("str x9, [{dest}, #-8]"));             // publish the canonical managed callable kind
+/// Selects which ABI result registers are stored for the caller's typed capture.
+fn capture_result_registers(emitter: &Emitter, capture_ty: &PhpType) -> Option<(&'static str, Option<&'static str>)> {
+    match capture_ty.codegen_repr() {
+        PhpType::TaggedScalar => Some((abi::int_result_reg(emitter), Some(
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
+        ))),
+        PhpType::Float => Some((abi::float_result_reg(emitter), None)),
+        PhpType::Str => {
+            let (pointer, length) = abi::string_result_regs(emitter);
+            Some((pointer, Some(length)))
         }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov r11d, DWORD PTR [{dest} - 16]")); // bound initialization by the allocator's actual payload capacity
-            emitter.instruction("mov r10d, 64");                                // preserve the copied fixed descriptor header
-            emitter.label("1");
-            emitter.instruction("cmp r10, r11");                                // stop before crossing the allocated descriptor payload
-            emitter.instruction("jae 2f");                                      // descriptors without captures need no slot initialization
-            emitter.instruction(&format!("mov QWORD PTR [{dest} + r10], 0"));   // leave every not-yet-written capture null for nested cleanup
-            emitter.instruction("add r10, 8");                                  // initialize the next capture word, including metadata halves
-            emitter.instruction("jmp 1b");                                      // finish initialization before publishing the graph kind
-            emitter.label("2");
-            emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(CALLABLE_HEAP_KIND))); // preserve canonical heap magic while registering callable ownership
-            emitter.instruction(&format!("mov QWORD PTR [{dest} - 8], r10"));   // publish the canonical managed callable kind
-        }
+        PhpType::Void | PhpType::Never => None,
+        _ => Some((abi::int_result_reg(emitter), None)),
     }
 }
 
-/// Stores the current result registers into a runtime descriptor capture slot.
+/// Stores the selected result registers into one initialized native capture slot.
 pub(crate) fn emit_store_current_result_to_runtime_capture(
     emitter: &mut Emitter,
     descriptor_reg: &str,
     capture_index: usize,
     capture_ty: &PhpType,
 ) {
-    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
-    match capture_ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-            abi::emit_store_to_address(emitter,
-                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
-        }
-        PhpType::Float => {
-            abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_store_to_address(emitter, ptr_reg, descriptor_reg, offset);
-            abi::emit_store_to_address(emitter, len_reg, descriptor_reg, offset + 8);
-        }
-        PhpType::Void | PhpType::Never => {}
-        _ => {
-            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-        }
+    if let Some((low, high)) = capture_result_registers(emitter, capture_ty) {
+        elephc_memoir::callables::storage::emit_store_capture(emitter, descriptor_reg, capture_index, low, high);
     }
 }
 
 /// Overwrites the kind word of a runtime (heap) descriptor copy held in `descriptor_reg`.
 pub(crate) fn emit_store_kind_to_runtime_descriptor(emitter: &mut Emitter, descriptor_reg: &str, kind: u64) {
-    match emitter.target.arch {
-        crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("mov x9, #{kind}"));                   // materialize the descriptor kind
-            emitter.instruction(&format!("str x9, [{descriptor_reg}]"));        // record the kind in the runtime descriptor header
-        }
-        crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [{descriptor_reg}], {kind}")); // record the kind in the runtime descriptor header
-        }
-    }
+    elephc_memoir::callables::storage::emit_store_kind(emitter, descriptor_reg, kind);
 }
 
-/// Loads a runtime descriptor capture slot into the ABI result registers.
+/// Loads a runtime descriptor capture into the result registers chosen by the caller's type.
 pub(crate) fn emit_load_runtime_capture_to_result(
     emitter: &mut Emitter,
     descriptor_reg: &str,
     capture_index: usize,
     capture_ty: &PhpType,
 ) {
-    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
-    match capture_ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-            abi::emit_load_from_address(emitter,
-                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
-        }
-        PhpType::Float => {
-            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_load_from_address(emitter, ptr_reg, descriptor_reg, offset);
-            abi::emit_load_from_address(emitter, len_reg, descriptor_reg, offset + 8);
-        }
-        PhpType::Void | PhpType::Never => {}
-        _ => {
-            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-        }
+    if let Some((low, high)) = capture_result_registers(emitter, capture_ty) {
+        elephc_memoir::callables::storage::emit_load_capture(emitter, descriptor_reg, capture_index, low, high);
     }
 }
 
@@ -554,7 +441,7 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let required_count = crate::types::call_args::required_param_count(sig);
     let variadic_index = source_variadic_index
         .map(|_| regular_param_count as u64)
-        .unwrap_or(CALLABLE_DESC_VARIADIC_NONE);
+        .unwrap_or(NO_VARIADIC_PARAMETER);
     let flags = u64::from(sig.declared_return);
     let param_names = optional_symbol(param_name_table(data, &public_params));
     let param_types = optional_symbol(param_type_table(data, &public_params));
@@ -562,20 +449,21 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let ref_flags = optional_symbol(flag_table(data, &public_ref_flags));
     let declared_flags = optional_symbol(flag_table(data, &public_declared_flags));
 
-    data.add_words(vec![
-        DataWord::U64(visible_param_count as u64),
-        DataWord::U64(required_count as u64),
-        DataWord::U64(regular_param_count as u64),
-        DataWord::U64(variadic_index),
-        DataWord::U64(type_tag(&sig.return_type)),
-        DataWord::U64(sig.return_type.codegen_repr().register_count() as u64),
-        DataWord::U64(flags),
+    let signature = DescriptorSignature {
+        param_count: DataWord::U64(visible_param_count as u64),
+        required_count: DataWord::U64(required_count as u64),
+        regular_count: DataWord::U64(regular_param_count as u64),
+        variadic_index: DataWord::U64(variadic_index),
+        return_tag: DataWord::U64(type_tag(&sig.return_type)),
+        return_words: DataWord::U64(sig.return_type.codegen_repr().register_count() as u64),
+        return_flags: DataWord::U64(flags),
         param_names,
         param_types,
         defaults,
         ref_flags,
         declared_flags,
-    ])
+    };
+    data.add_words(signature.into_words().into())
 }
 
 /// Builds the descriptor environment record for captures and hidden wrapper params.
@@ -586,12 +474,13 @@ fn environment_record(
 ) -> String {
     let capture_table = optional_symbol(binding_table(data, captures));
     let hidden_table = optional_symbol(binding_table(data, hidden_params));
-    data.add_words(vec![
-        DataWord::U64(captures.len() as u64),
-        DataWord::U64(hidden_params.len() as u64),
-        capture_table,
-        hidden_table,
-    ])
+    let environment = DescriptorEnvironment {
+        capture_count: DataWord::U64(captures.len() as u64),
+        hidden_count: DataWord::U64(hidden_params.len() as u64),
+        captures: capture_table,
+        hidden: hidden_table,
+    };
+    data.add_words(environment.into_words().into())
 }
 
 /// Builds the descriptor invocation record for target-shape metadata.
@@ -618,7 +507,7 @@ fn param_name_table(data: &mut DataSection, params: &[(String, PhpType)]) -> Opt
     if params.is_empty() {
         return None;
     }
-    let mut words = Vec::with_capacity(params.len() * 2);
+    let mut words = Vec::with_capacity(params.len() * PARAM_NAME_WORDS);
     for (name, _) in params {
         let (name_word, name_len) = optional_string_word(data, Some(name));
         words.push(name_word);
@@ -632,7 +521,7 @@ fn param_type_table(data: &mut DataSection, params: &[(String, PhpType)]) -> Opt
     if params.is_empty() {
         return None;
     }
-    let mut words = Vec::with_capacity(params.len() * 3);
+    let mut words = Vec::with_capacity(params.len() * PARAM_TYPE_WORDS);
     for (_, ty) in params {
         let repr = ty.codegen_repr();
         words.push(DataWord::U64(type_tag(&repr)));
@@ -678,16 +567,19 @@ fn binding_table(
     if bindings.is_empty() {
         return None;
     }
-    let mut words = Vec::with_capacity(bindings.len() * 4);
+    let mut words = Vec::with_capacity(bindings.len() * BINDING_WORDS);
     for (name, ty, by_ref) in bindings {
         let (name_word, name_len) = optional_string_word(data, Some(name));
-        words.push(name_word);
-        words.push(DataWord::U64(name_len));
         let tag = if ty.codegen_repr() == PhpType::TaggedScalar {
             CALLABLE_BINDING_TAG_TAGGED_SCALAR
         } else { type_tag(&ty.codegen_repr()) };
-        words.push(DataWord::U64(tag));
-        words.push(DataWord::U64(u64::from(*by_ref)));
+        let binding = DescriptorBinding {
+            name: name_word,
+            name_len: DataWord::U64(name_len),
+            tag: DataWord::U64(tag),
+            by_ref: DataWord::U64(u64::from(*by_ref)),
+        };
+        words.extend(binding.into_words());
     }
     Some(data.add_words(words))
 }

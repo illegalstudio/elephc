@@ -1,0 +1,109 @@
+//! Purpose:
+//! Emits the `__rt_array_ensure_unique`, `__rt_array_ensure_unique_done` runtime helper assembly for array ensure unique.
+//! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
+//!
+//! Called from:
+//! - `elephc::codegen_support::runtime::emitters::emit_runtime()` via `elephc::codegen_support::runtime::arrays`.
+//!
+//! Key details:
+//! - COW helpers must clone shared storage before mutation while leaving unique arrays and hashes untouched.
+
+use crate::Emitter;
+use crate::Arch;
+
+/// Splits a shared array before mutation using copy-on-write (COW) semantics.
+///
+/// Null arrays (x0=0) and the in-band null-container sentinel that missed reads
+/// materialize (issue #556) are returned unchanged: neither carries a heap header,
+/// so they must never reach the refcount load below.
+/// For real arrays: if refcount > 1, clones the array and decrements the
+/// original's refcount; if refcount <= 1, returns the array unchanged.
+///
+/// Dispatches to `emit_array_ensure_unique_linux_x86_64` on x86_64; emits
+/// inline ARM64 code on ARM64 targets.
+///
+/// Input:  x0 = candidate array pointer (ARM64) / rdi = candidate array pointer (x86_64)
+/// Output: x0 = unique array pointer (ARM64) / rax = unique array pointer (x86_64)
+pub fn emit_array_ensure_unique(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
+        emit_array_ensure_unique_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: array_ensure_unique ---");
+    emitter.label_global("__rt_array_ensure_unique");
+
+    // -- null and sentinel-null arrays are already trivially unique --
+    emitter.instruction("cbz x0, __rt_array_ensure_unique_done");               // null inputs do not need copy-on-write splitting
+    crate::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::layout::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x9");                                          // does the array carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_array_ensure_unique_done");                  // sentinel-null arrays from missed reads have no header to split
+
+    // -- only shared arrays need to be cloned --
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current array refcount from the uniform header
+    emitter.instruction("cmp w9, #1");                                          // is there more than one owner of this array?
+    emitter.instruction("b.ls __rt_array_ensure_unique_done");                  // refcount <= 1 means the array can be mutated in place
+
+    // -- clone the shared array and release this mutator's old owner slot --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate a small stack frame for the split path
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // set up new frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the shared source array pointer
+    emitter.instruction("bl __rt_array_clone_shallow");                         // clone the shared array for this mutating owner
+    emitter.instruction("str x0, [sp, #8]");                                    // preserve the new clone while retiring the old mutator owner
+    emitter.instruction("ldr x0, [sp]");                                        // release the old owner through the shared candidate hook
+    emitter.instruction("bl __rt_decref_array");                                // nonfinal COW releases can make an old cycle unreachable
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return the new unique container
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // deallocate the split-path stack frame
+
+    emitter.label("__rt_array_ensure_unique_done");
+    emitter.instruction("ret");                                                 // return with x0 = a unique array pointer
+}
+
+/// Emits the x86_64 Linux implementation of `__rt_array_ensure_unique`.
+///
+/// Mirrors the ARM64 logic: null and sentinel-null inputs return immediately;
+/// shared arrays (refcount > 1) are cloned via `__rt_array_clone_shallow` and the
+/// original's refcount is decremented; unique arrays (refcount <= 1) are returned
+/// unchanged.
+///
+/// Input:  rdi = candidate indexed-array pointer
+/// Output: rax = unique indexed-array pointer
+fn emit_array_ensure_unique_linux_x86_64(emitter: &mut impl Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_ensure_unique ---");
+    emitter.label_global("__rt_array_ensure_unique");
+
+    emitter.instruction("mov rax, rdi");                                        // default to returning the original indexed-array pointer when no copy-on-write split is needed
+    emitter.instruction("test rdi, rdi");                                       // null indexed-array pointers are already trivially unique
+    emitter.instruction("je __rt_array_ensure_unique_done");                    // return immediately for null inputs without touching heap metadata
+    crate::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::layout::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r10");                                        // does the indexed array carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_array_ensure_unique_done");                    // sentinel-null arrays from missed reads have no header to split
+    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current indexed-array refcount from the uniform heap header
+    emitter.instruction("cmp r10d, 1");                                         // does the indexed array have more than one logical owner?
+    emitter.instruction("jbe __rt_array_ensure_unique_done");                   // refcount <= 1 means the indexed array can be mutated in place
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving copy-on-write spill space
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved shared indexed-array pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve one aligned spill slot for the shared indexed-array pointer across the clone call
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the shared indexed-array pointer across the clone helper call
+    emitter.instruction("call __rt_array_clone_shallow");                       // clone the shared indexed array so this mutator gets an isolated owner copy
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the new clone while retiring the old mutator owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the old shared container
+    emitter.instruction("call __rt_decref_array");                              // record a suspect if its final external owner moved to the clone
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the new unique container
+    emitter.instruction("add rsp, 16");                                         // release the aligned copy-on-write spill slot before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the copy-on-write split
+    emitter.label("__rt_array_ensure_unique_done");
+    emitter.instruction("ret");                                                 // return to the caller with rax holding the unique indexed-array pointer
+}

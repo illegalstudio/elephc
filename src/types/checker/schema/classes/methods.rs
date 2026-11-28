@@ -110,11 +110,7 @@ fn apply_static_method(
     if inherited_method_satisfies_requirement(checker, class, method, &method_key, inherited)? {
         return Ok(());
     }
-    let mut sig = build_method_sig(checker, method, &class.name)?;
-    if class.name == "WeakReference" && method_key == "create" && method.span == crate::span::Span::dummy() {
-        // Box the generic object boundary so native Closure descriptors keep their runtime tag.
-        sig.params[0].1 = crate::types::PhpType::Mixed;
-    }
+    let sig = build_method_sig(checker, method, &class.name)?;
     if has_same_class_kind_conflict(class, method) {
         return Err(method_kind_error(class, method));
     }

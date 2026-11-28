@@ -12,6 +12,8 @@
 //!   terminate: a comparator that answers "greater" both ways (PHP's `<=>` against `NAN`, or a
 //!   user callback that ignores its arguments) used to swap the same pair forever (#1353).
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -42,7 +44,7 @@ pub fn emit_usort(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save array pointer to stack
 
     // -- read array length --
-    emitter.instruction("ldr x20, [x1]");                                       // x20 = array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x20", "x1"); // x20 = array length
     emitter.instruction("cmp x20, #2");                                         // check if array has fewer than 2 elements
     emitter.instruction("b.lt __rt_usort_done");                                // if length < 2, already sorted
     emitter.instruction("sub x9, x20, #1");                                     // at most length - 1 passes sort any consistent input
@@ -61,7 +63,7 @@ pub fn emit_usort(emitter: &mut Emitter) {
 
     // -- load adjacent elements --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload array pointer
-    emitter.instruction("add x9, x9, #24");                                     // skip header to data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
     emitter.instruction("ldr x0, [x9, x22, lsl #3]");                           // x0 = data[j] (first element)
     emitter.instruction("add x10, x22, #1");                                    // x10 = j + 1
     emitter.instruction("ldr x1, [x9, x10, lsl #3]");                           // x1 = data[j+1] (second element)
@@ -136,7 +138,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // preserve the comparator callback address in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov r13, rsi");                                        // preserve the indexed-array pointer in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save optional callback environment pointer for captured comparator wrappers
-    emitter.instruction("mov r14, QWORD PTR [r13]");                            // load the indexed-array logical length once before the bubble-sort passes begin
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r14", "r13"); // load the indexed-array logical length once before the bubble-sort passes begin
     emitter.instruction("cmp r14, 2");                                          // does the indexed array contain fewer than two elements?
     emitter.instruction("jl __rt_usort_done_linux_x86_64");                     // arrays of length zero or one are already sorted
     emitter.instruction("lea r10, [r14 - 1]");                                  // at most length - 1 passes sort any consistent input
@@ -151,7 +153,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, 1");                                          // derive the final comparable inner-loop index as length - 1 for the adjacent-pair scan
     emitter.instruction("cmp rbx, r10");                                        // has the inner-loop cursor reached the final adjacent pair for this bubble-sort pass?
     emitter.instruction("jge __rt_usort_check_linux_x86_64");                   // finish the current outer pass once every adjacent pair has been compared
-    emitter.instruction("lea r10, [r13 + 24]");                                 // point at the indexed-array payload region just after the fixed 24-byte header
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r13");
     emitter.instruction("mov rdi, QWORD PTR [r10 + rbx * 8]");                  // load the left comparator argument from the current indexed-array slot
     emitter.instruction("lea r11, [rbx + 1]");                                  // derive the right adjacent slot index before loading the second comparator argument
     emitter.instruction("mov rsi, QWORD PTR [r10 + r11 * 8]");                  // load the right comparator argument from the adjacent indexed-array slot
@@ -162,7 +164,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r12");                                            // invoke the user comparator callback on the current adjacent indexed-array pair
     emitter.instruction("cmp rax, 0");                                          // did the comparator report that the current adjacent pair is already ordered?
     emitter.instruction("jle __rt_usort_noswap_linux_x86_64");                  // skip the swap path when the comparator says the left element should stay before the right element
-    emitter.instruction("lea r10, [r13 + 24]");                                 // reload the indexed-array payload base after the comparator call clobbered caller-saved registers
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r13");
     emitter.instruction("mov rdx, QWORD PTR [r10 + rbx * 8]");                  // reload the left indexed-array element so it can be swapped with its right neighbor
     emitter.instruction("lea r11, [rbx + 1]");                                  // recompute the right adjacent slot index for the swap write-back path
     emitter.instruction("mov rcx, QWORD PTR [r10 + r11 * 8]");                  // reload the right indexed-array element so the adjacent pair can be swapped in place

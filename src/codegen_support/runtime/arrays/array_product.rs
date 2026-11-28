@@ -35,8 +35,8 @@ pub fn emit_array_product(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_product");
 
     // -- set up loop variables --
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = array length from header
-    emitter.instruction("add x10, x0, #24");                                    // x10 = base of data region (skip 24-byte header)
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = array length from header
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("mov x11, #0");                                         // x11 = i = 0 (loop counter)
     emitter.instruction("mov x12, #1");                                         // x12 = accumulator = 1 (multiplicative identity)
 
@@ -64,8 +64,8 @@ fn emit_array_product_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_product ---");
     emitter.label_global("__rt_array_product");
 
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before starting the scalar product loop
-    emitter.instruction("lea r11, [rdi + 24]");                                 // compute the first scalar payload slot address in the source indexed array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the source indexed-array logical length before starting the scalar product loop
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "rdi");
     emitter.instruction("xor ecx, ecx");                                        // initialize the scalar product loop cursor at the front of the source indexed array
     emitter.instruction("mov rax, 1");                                          // seed the scalar product accumulator with the multiplicative identity
 

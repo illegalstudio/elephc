@@ -1,79 +1,55 @@
 //! Purpose:
-//! Emits the `__rt_chr` runtime helper assembly for chr.
-//! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
+//! Emits the runtime conversion of a byte-valued integer to a PHP string.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
+//! - Direct PHP lowering and the eval builtin dispatcher.
 //!
 //! Key details:
-//! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - Memoir reserves and publishes the result storage.
 
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::strings::staged_concat::emit_reserve_byte_for_integer;
 
-/// Emits the `__rt_chr` runtime helper assembly for chr.
-///
-/// Converts an integer code point to a single-byte string by writing the byte
-/// into the shared concat buffer and returning a pointer/length pair.
-///
-/// # Inputs
-/// - `x0`: The character code (only the low byte is used)
-///
-/// # Outputs
-/// - `x1`: Pointer to the byte in the concat buffer
-/// - `x2`: Length = 1
-///
-/// # Side effects
-/// - Advances `_concat_off` by 1 byte; result is stored in the concat buffer
-///   which is heap-backed and refcount-compatible.
+/// Converts the low byte of the incoming integer and returns a one-byte string.
 pub fn emit_chr(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_chr_linux_x86_64(emitter);
-        return;
-    }
-
     emitter.blank();
     emitter.comment("--- runtime: chr ---");
     emitter.label_global("__rt_chr");
 
-    // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-
-    // -- store single character --
-    emitter.instruction("add x1, x7, x8");                                      // compute write position, set as return ptr
-    emitter.instruction("strb w0, [x1]");                                       // store the character byte at that position
-    emitter.instruction("add x8, x8, #1");                                      // advance offset by 1 byte
-    emitter.instruction("str x8, [x6]");                                        // store updated offset to _concat_off
-    emitter.instruction("mov x2, #1");                                          // return length = 1 (single character)
-    emitter.instruction("ret");                                                 // return to caller
+    emit_reserve_byte_for_integer(emitter, "__rt_chr_reserved");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("strb w0, [x1]");                               // store the low byte as the string
+            emitter.instruction("mov x2, #1");                                  // return the initialized length
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov BYTE PTR [rax], dil");                     // store the low byte as the string
+            emitter.instruction("mov edx, 1");                                  // return the initialized length
+        }
+    }
+    abi::emit_jump(emitter, "__rt_concat_publish");
 }
 
-/// Emits the x86_64 Linux variant of `__rt_chr`.
-///
-/// Same behavior as the ARM64 variant but uses x86_64 System V ABI registers:
-/// - `dil` (low byte of `di`/`rdi`): input character code
-/// - `rax`: returned string pointer (concat buffer address)
-/// - `rdx`: returned string length = 1
-///
-/// # Side effects
-/// - Reads and updates `_concat_off` and `_concat_buf` globals.
-fn emit_chr_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: chr ---");
-    emitter.label_global("__rt_chr");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
 
-    // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the chr() result byte
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-
-    // -- store single character --
-    emitter.instruction("lea rax, [r10 + r9]");                                 // compute the concat-buffer write address and return it as the one-byte string pointer
-    emitter.instruction("mov BYTE PTR [rax], dil");                             // store the low byte of the requested character code into concat storage
-    emitter.instruction("add r9, 1");                                           // advance the concat-buffer write offset by the single byte that chr() produced
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // persist the updated concat-buffer write offset after materializing the chr() result
-    emitter.instruction("mov rdx, 1");                                          // return a one-byte string length for the concat-backed chr() result
-    emitter.instruction("ret");                                                 // return the concat-backed one-byte string in the standard x86_64 string result registers
+    /// Every target bounds the byte store with the shared reservation and publishes the result.
+    #[test]
+    fn chr_reserves_before_writing_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_chr(&mut emitter);
+            let output = emitter.output();
+            let reserve = output.find("__rt_concat_reserve").unwrap();
+            let write = output.find(if name == "linux-x86_64" {
+                "mov BYTE PTR [rax], dil"
+            } else {
+                "strb w0, [x1]"
+            }).unwrap();
+            let publish = output.find("__rt_concat_publish").unwrap();
+            assert!(reserve < write && write < publish, "{name}");
+        }
+    }
 }

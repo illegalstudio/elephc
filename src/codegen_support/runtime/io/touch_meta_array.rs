@@ -74,7 +74,7 @@ pub fn emit_touch_meta_array(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // value_hi = 0 for an integer scalar
     abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // x0 = boxed Mixed(int) mtime
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the array pointer
-    emitter.instruction("str x0, [x9, #24]");                                   // array[0] = boxed mtime
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "x9", "x0", 0);
 
     // -- element 1: box atime as Mixed(int) and store at array[1] --
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
@@ -84,7 +84,7 @@ pub fn emit_touch_meta_array(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the array pointer
     emitter.instruction("str x0, [x9, #32]");                                   // array[1] = boxed atime
     emitter.instruction("mov x10, #2");                                         // logical length after both inserts
-    emitter.instruction("str x10, [x9]");                                       // publish the indexed-array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x9", "x10"); // publish the indexed-array length
 
     // -- box the array as Mixed(tag 4); this increfs the array to refcount 2 --
     emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
@@ -146,7 +146,7 @@ fn emit_touch_meta_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // runtime tag 0 = int
     abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // rax = boxed Mixed(int) mtime
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the array pointer
-    emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // array[0] = boxed mtime
+    elephc_memoir::values::packed_slots::emit_store_packed_word(emitter, "r11", "rax", 0);
 
     // -- element 1: box atime as Mixed(int) and store at array[1] --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // value_lo = atime seconds
@@ -155,7 +155,7 @@ fn emit_touch_meta_array_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // rax = boxed Mixed(int) atime
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the array pointer
     emitter.instruction("mov QWORD PTR [r11 + 32], rax");                       // array[1] = boxed atime
-    emitter.instruction("mov QWORD PTR [r11], 2");                              // publish the indexed-array length
+    elephc_memoir::values::packed_slots::emit_publish_length_immediate(emitter, "r11", 2); // publish the indexed-array length
 
     // -- box the array as Mixed(tag 4); this increfs the array to refcount 2 --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // value_lo = array pointer

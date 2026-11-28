@@ -1,25 +1,16 @@
 //! Purpose:
-//! Emits geometric string append after EIR transfers a destination local's owner.
+//! Exposes compiler imports and tests for Memoir storage assembly.
 //!
 //! Called from:
-//! - `runtime::emitters::emit_runtime` for every supported target.
+//! - Compiler runtime orchestration and focused memory integration tests.
 //!
 //! Key details:
-//! - Inputs and result use concat's pointer/length ABI; RHS is borrowed.
-//! - Unique owned buffers may grow in place; other paths copy before retiring the old owner.
-//! - Allocation failure preserves the old local owner until replacement succeeds.
+//! - Preserves the compiler namespace while Memoir owns the assembly implementation.
 
+pub use elephc_memoir::strings::str_append::*;
+
+#[cfg(test)]
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-mod aarch64;
-mod x86_64;
 #[cfg(test)]
 mod tests;
-
-/// Emits checked, consuming append with fresh metadata for every changed string.
-pub fn emit_str_append(emitter: &mut Emitter, mbstring: bool) {
-    match emitter.target.arch {
-        Arch::AArch64 => aarch64::emit(emitter, mbstring),
-        Arch::X86_64 => x86_64::emit(emitter, mbstring),
-    }
-}

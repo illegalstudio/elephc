@@ -38,7 +38,7 @@ pub fn emit_array_flip_string(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
 
     // -- create hash table with capacity = array length * 2 (load factor) --
-    emitter.instruction("ldr x0, [x0]");                                        // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x0", "x0"); // load source array length
     emitter.instruction("lsl x0, x0, #1");                                      // double the capacity to keep hash load low
     emitter.instruction("mov x9, #16");                                         // materialize the minimum hash capacity
     emitter.instruction("cmp x0, x9");                                          // compare requested capacity with the runtime minimum
@@ -50,13 +50,13 @@ pub fn emit_array_flip_string(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_flip_string_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // load source array length
     emitter.instruction("ldr x4, [sp, #16]");                                   // load current source index
     emitter.instruction("cmp x4, x3");                                          // compare current source index against source length
     emitter.instruction("b.ge __rt_array_flip_string_done");                    // finish once every source element has been flipped
 
     // -- load array[i] as the candidate string key and normalize PHP numeric-string keys --
-    emitter.instruction("add x5, x0, #24");                                     // point at the source string payload region
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x0");
     emitter.instruction("lsl x6, x4, #4");                                      // convert string element index into a 16-byte slot offset
     emitter.instruction("add x5, x5, x6");                                      // advance to the selected source string slot
     emitter.instruction("ldr x1, [x5]");                                        // load source string pointer as candidate key low word
@@ -97,7 +97,7 @@ fn emit_array_flip_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for source, result, and loop index
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the string array-flip loop
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across nested helper calls
-    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the source indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdi", "rdi"); // load the source indexed-array logical length
     emitter.instruction("shl rdi, 1");                                          // double the source length for destination hash headroom
     emitter.instruction("cmp rdi, 16");                                         // compare requested capacity with the runtime minimum
     emitter.instruction("jge __rt_array_flip_string_capacity_x86");             // keep requested capacity when it already meets the minimum
@@ -113,7 +113,7 @@ fn emit_array_flip_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload source indexed-array pointer
     emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare current source index against source length
     emitter.instruction("jge __rt_array_flip_string_done_x86");                 // finish once every source element has been flipped
-    emitter.instruction("lea r11, [r10 + 24]");                                 // compute the source string payload base address
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r10");
     emitter.instruction("mov rax, rcx");                                        // copy source index before scaling to a 16-byte string slot
     emitter.instruction("shl rax, 4");                                          // convert source index into a string slot byte offset
     emitter.instruction("add r11, rax");                                        // advance to the selected source string slot

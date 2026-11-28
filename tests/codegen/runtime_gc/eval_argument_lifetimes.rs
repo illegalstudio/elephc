@@ -448,3 +448,35 @@ unset($result);"#;
         "Reflected eval return retained an argument or result owner",
     );
 }
+
+/// Memoir-managed debug properties, iconv options, and wrapper stat cells leave no per-call owners.
+#[test]
+fn test_core_eval_memoir_migrated_temporary_owners_release() {
+    let setup = r#"class MemoirDebugOwner {
+    public function __debugInfo(): array { return ["field" => str_repeat("d", 3)]; }
+}
+class MemoirStatWrapper {
+    public $context;
+    public function url_stat(string $path, int $flags): array {
+        return ["mode" => 0100644, "size" => strlen(str_repeat("s", 4))];
+    }
+}
+stream_wrapper_register("memoirstat", "MemoirStatWrapper");"#;
+    let operation = r#"$debug = new MemoirDebugOwner();
+$printed = print_r($debug, true);
+ob_start(); var_dump($debug); $dumped = ob_get_clean();
+$encoded = iconv_mime_encode("Subject", "Prüfung", [
+    "scheme" => "Q", "input-charset" => "UTF-8", "output-charset" => "UTF-8"
+]);
+clearstatcache();
+$exists = file_exists("memoirstat://item");
+$size = filesize("memoirstat://item");
+$type = filetype("memoirstat://item");
+$stat = stat("memoirstat://item");
+unset($debug, $printed, $dumped, $encoded, $exists, $size, $type, $stat);"#;
+    assert_eq!(
+        live_blocks_after_eval_operations(setup, operation, 5),
+        live_blocks_after_eval_operations(setup, operation, 1),
+        "Migrated eval debug, iconv, or wrapper-stat temporaries retained an owner",
+    );
+}

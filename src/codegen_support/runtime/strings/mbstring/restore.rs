@@ -56,9 +56,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_build_new_list");
     emitter.instruction("mov x1, #8");                                          // store owned Mixed cell pointers in indexed elements
     abi::emit_call_label(emitter, "__rt_array_new");
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // preserve allocation and indexed heap metadata
-    emitter.instruction("orr x9, x9, #0x700");                                  // mark boxed Mixed elements for cleanup and traversal
-    emitter.instruction("str x9, [x0, #-8]");                                   // publish indexed ownership before any element allocation
+    elephc_memoir::values::packed_mixed_header::emit_enable(emitter);
     emitter.label("__rt_mbstring_build_new_ready");
     emitter.instruction("str x0, [sp, #32]");                                   // own the fresh unique table until returning it
     emitter.label("__rt_mbstring_build_loop");
@@ -115,10 +113,9 @@ fn aarch64(emitter: &mut Emitter) {
     bind_string(emitter, true);
     emitter.instruction("ldr x9, [sp, #32]");                                   // recover the unique indexed destination
     emitter.instruction("ldr x10, [sp, #24]");                                  // recover the next initialized element index
-    emitter.instruction("add x11, x9, #24");                                    // skip the indexed header
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // transfer the fresh boxed owner into its element slot
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "x9", "x10", "x0", "x11");
     emitter.instruction("add x10, x10, #1");                                    // include the newly initialized owner in cleanup
-    emitter.instruction("str x10, [x9]");                                       // expose exactly the initialized elements
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x9", "x10");
     emitter.instruction("b __rt_mbstring_build_advance");                       // share progress with associative construction
     emitter.label("__rt_mbstring_build_done");
     emitter.instruction("ldr x0, [sp, #32]");                                   // transfer the single completed table owner to Rust
@@ -150,7 +147,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_build_new_list");
     emitter.instruction("mov esi, 8");                                          // store owned Mixed cell pointers in indexed elements
     abi::emit_call_label(emitter, "__rt_array_new");
-    emitter.instruction("or QWORD PTR [rax - 8], 1792");                        // select boxed Mixed element cleanup metadata
+    elephc_memoir::values::packed_mixed_header::emit_enable(emitter);
     emitter.label("__rt_mbstring_build_new_ready");
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // own the fresh unique table until returning it
     emitter.label("__rt_mbstring_build_loop");
@@ -206,9 +203,9 @@ fn x86_64(emitter: &mut Emitter) {
     bind_string(emitter, true);
     emitter.instruction("mov r10, QWORD PTR [rsp + 32]");                       // recover the unique indexed destination
     emitter.instruction("mov r11, QWORD PTR [rsp + 24]");                       // recover the next element index
-    emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rax");             // transfer the fresh boxed owner into its slot
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r10", "r11", "rax", "r9");
     emitter.instruction("add r11, 1");                                          // include the initialized element in cleanup
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // expose exactly initialized owners
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "r10", "r11");
     emitter.instruction("jmp __rt_mbstring_build_advance");                     // share progress with associative construction
     emitter.label("__rt_mbstring_build_done");
     emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // transfer the single completed table owner to Rust

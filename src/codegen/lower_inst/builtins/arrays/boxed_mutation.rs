@@ -158,18 +158,25 @@ pub(super) fn install_boxed_array_payload(
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("ldr x0, [x9, #8]");                        // take the unique cell's previous payload owner
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 0);
-            ctx.emitter.instruction("str x10, [x9, #8]");                       // transfer the new container into the published cell
-            abi::emit_load_int_immediate(ctx.emitter, "x10", i64::from(tag));
-            ctx.emitter.instruction("str x10, [x9]");                           // install the layout tag before retiring old storage
-            ctx.emitter.instruction("str xzr, [x9, #16]");                      // array payloads have no high word
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "x10", "x9");
+            elephc_memoir::layout::emit_store_mixed_tag_immediate(
+                ctx.emitter,
+                i64::from(tag),
+                "x9",
+            );
+            elephc_memoir::layout::emit_clear_mixed_high(ctx.emitter, "x9");
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "r10")?;
             ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 8]");            // take the unique cell's previous payload owner
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 0);
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");            // transfer the new container into the published cell
-            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {tag}"));    // publish the new packed or associative layout
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");             // array payloads have no high word
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "r11", "r10");
+            elephc_memoir::layout::emit_store_mixed_tag_immediate(
+                ctx.emitter,
+                i64::from(tag),
+                "r10",
+            );
+            elephc_memoir::layout::emit_clear_mixed_high(ctx.emitter, "r10");
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_decref_any");

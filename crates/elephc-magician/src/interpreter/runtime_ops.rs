@@ -13,6 +13,7 @@
 use std::ffi::c_void;
 
 use elephc_builtin_contract::RuntimeBuiltinId;
+use elephc_memoir::owner_layout::MagicSetGuard;
 
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
@@ -458,30 +459,22 @@ pub trait RuntimeValueOps {
             EVAL_TAG_ASSOC => self.assoc_new(len)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         };
-        let mut operands = Vec::new();
-        let mut copied = (|| {
-            for position in 0..len {
-                let key = self.array_iter_key(array, position)?;
-                operands.push(key);
-                let value = self.array_get_for_structural_copy(array, key)?;
-                operands.push(value);
-                self.array_set(result, key, value)?;
-            }
-            Ok(())
-        })();
-        for operand in operands {
-            if !operand.is_borrowed() {
-                let released = self.release(operand);
-                if copied.is_ok() { copied = released; }
-            }
-        }
-        match copied {
-            Ok(()) => Ok(result),
-            Err(status) => {
-                let _ = self.release(result);
-                Err(status)
-            }
-        }
+        use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
+
+        let output = RuntimeOwnerSlot::new(result);
+        let temporaries = StagedRuntimeOwners::default();
+        with_runtime_owners(&(&output, &temporaries), || {
+            let copied = (|| {
+                for position in 0..len {
+                    let key = temporaries.stage(self.array_iter_key(array, position)?);
+                    let value = temporaries.stage(self.array_get_for_structural_copy(array, key)?);
+                    let updated = self.array_set(output.borrowed(), key, value)?;
+                    output.update_receiver(updated);
+                }
+                Ok(())
+            })();
+            temporaries.finish(copied, &output, |cell| self.release(cell))
+        })
     }
 
     /// Reads a named property from a runtime object held in a boxed Mixed cell.
@@ -519,7 +512,7 @@ pub trait RuntimeValueOps {
         &mut self,
         object_identity: u64,
         property: &str,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&MagicSetGuard>,
     ) -> Result<bool, EvalStatus> {
         FALLBACK_MAGIC_SET_GUARDS.with(|guards| {
             let mut guards = guards.borrow_mut();
@@ -536,7 +529,7 @@ pub trait RuntimeValueOps {
     /// Removes a guard node previously accepted by `native_magic_set_guard_push`.
     fn native_magic_set_guard_pop(
         &mut self,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&MagicSetGuard>,
     ) -> Result<(), EvalStatus> {
         FALLBACK_MAGIC_SET_GUARDS.with(|guards| {
             let removed = guards.borrow_mut().pop();
@@ -1288,9 +1281,10 @@ pub(super) const EVAL_TAG_MIXED: u64 = 7;
 pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
-pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
-/// Internal invoker source shape for a two-word nullable integer, never a PHP value tag.
-pub(super) const EVAL_INVOKER_TAGGED_SCALAR_SOURCE: u64 = 12;
+pub(super) use elephc_memoir::owner_layout::{
+    INVOKER_ARG_REF_CELL_TAG as EVAL_TAG_INVOKER_REF_CELL,
+    INVOKER_ARG_TAGGED_SCALAR_SOURCE as EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
+};
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;

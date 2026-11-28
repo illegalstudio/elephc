@@ -7,6 +7,169 @@ sidebar:
 
 elephc manages memory without calling `malloc`/`free` for PHP values directly. Storage lives on the **stack** (automatic, per-function), in fixed BSS regions, or in a compiler-managed **heap buffer** with a free-list allocator, reference counting, and a targeted cycle collector for array/hash/object graphs. The final binary still links the target platform's system C library for OS and libc services.
 
+The compiler-side `elephc-memoir` crate centralizes the Rust code that emits
+heap allocation, reference counting, cycle collection, graph traversal, COW,
+cloning, deep release, owned strings, growable string buffers, consuming append,
+callable capture release, hash ownership guards, buffers, Mixed boxing, persistent
+references, unboxing, protected cleanup, temporary-owner transfers,
+reference acquisition,
+identity pinning, object-handle recycling, guarded stack allocation/free, byte-string
+concatenation, C-string copies, raw capture buffers, zval storage retirement,
+Mixed-array slot conversion, reference-wrapper promotion and child-slot selection,
+scalar/empty-array cleanup eligibility checks, static binding storage, guarded
+owner slots, depth-stamped temporary owner lists, abandoned activation cleanup
+and hydrated-property owner transfers, non-owning observer caches, hash-entry
+reference promotion and borrowed payload views, temporary/fixed-frame owner record
+publication, exact chain unlink, consuming container boxing, Mixed symbol publication,
+external record publication, contained foreign-owner release and conditional
+helper-owner retirement. Memoir also owns associative-array header and entry
+geometry, including field access, entry addressing and borrowed value-slot
+addresses. The logical-count word shared by indexed arrays and hashes, plus
+the indexed-array element stride, are exposed through Memoir layout helpers so
+consumers do not repeat physical offsets. Hash algorithms and PHP key/value
+policy remain compiler-owned.
+It also owns fixed heap/GC/buffer state, handle tables and string-scratch
+declarations. Output-buffer slots and control words, stream-context owner slots,
+fixed stream side tables and the active serializer stream are addressed only
+through Memoir facades. The compiler continues to choose output behavior,
+stream operations and serialization semantics. The compiler enables Memoir's
+`codegen` feature to emit the
+assembly `__rt_*` helpers. Magician enables `runtime` for the eval buffer registry,
+cell retirement observers, allocation-bound weak metadata, stable owner slots,
+detached-batch cleanup, owned object edges and output handlers. The Rust code is
+linked through the Magician archive when a program needs the bridge. Eval
+buffer slots and their libc allocations are independent of the emitted buffer
+table and heap. EIR ownership analysis and optimization remain in the compiler,
+together with PHP type/reference validation, resource identity policy,
+class-specific layout inputs, PHP formatting and output routing, zval pack/unpack,
+platform mapping flags, semantic runtime data, helper ordering and linking. The
+compiler emitter adapter supplies target ABI operations and layout facts to Memoir. Capture cleanup receives a compiler callback for its mode reset. Zval
+storage cleanup releases copied strings/arrays and leaves borrowed native
+object/resource payloads untouched. The compiler supplies the scalar-tag eligibility
+policy and an optional type-source association callback after Mixed promotion;
+static retirement receives its weak-source unbind callback, and guard layout and
+scoped-list symbols come from the compiler. Frame-local cleanup boundaries use
+Memoir to park the current Throwable, publish the native handler record and
+restore the enclosing handler and diagnostic depth. The compiler still selects
+the caught label, frame placement and cleanup policy. Other exception-handler
+installation, failed-constructor destructor policy, parser completion and
+diagnostic selection remain compiler-owned.
+The compiler also selects the surviving activation during unwinding. Memoir walks
+the supplied cleanup chain and detaches each abandoned record before its callback
+can release user objects or reenter the runtime.
+Hydration owner helpers receive the compiler's uninitialized marker, box deferral
+entry and tagged-payload release entry. Reused boxes preserve live registry
+back-references while replaced owners are retired; parsing, property validation
+and context completion remain compiler-owned.
+Weak observer caches receive the compiler's wrapper class-id symbol and invalidate
+both directions before referent or wrapper storage can be reused. They never
+retain the referent. Hash-entry reference promotion separates shared Mixed boxes
+before transferring the entry's existing owner into a managed cell. Borrowed reads,
+including inline reads using caller-selected registers, allocate nothing and
+change no refcounts. PHP class/method policy and hash iterator cursor/successor
+semantics remain compiler-owned.
+Temporary call owners and fixed return leases share Memoir's six-word record
+contract. Publication receives the compiler-selected chain, cleanup and visitor;
+exact unlink preserves newer records and live argument registers without runtime
+calls. The compiler chooses frame placement and owner discipline, and its target
+ABI supplies stack addressing and scratch storage operations. Fresh-container
+boxing acquires the Mixed payload owner before retiring the builder's original
+owner. The JSON parser retains flag handling, failure propagation and throwing policy.
+Mixed symbol publication receives the compiler's storage symbol, initialization
+offset, release policy, optional transferred-owner frame slot and label prefix.
+It follows an existing persistent wrapper before replacing its child owner.
+Transferred temporary ownership and initialization metadata are cleared before
+the displaced value can run a destructor. The compiler retains static-property
+type validation, layout selection and EIR ownership decisions.
+Extended activations, validation pins and pending argument pins use three
+distinct layouts shared by the Rust storage and Memoir's emitted instructions.
+Memoir initializes an external activation before linking it to the supplied
+chain, and visits its actual pointer fields while the owning frame is stable.
+The compiler retains versioned C ABI wrappers and selects which slots to visit.
+The magic-setter guard and staged invoker slots also share their native sizes
+and field offsets. A staged invoker slot reserves two words even for a scalar
+because a native variadic writer can publish a complete pair. A borrowed scalar
+slot is accessed at its actual width. Magician selects the argument's PHP
+representation and the writeback target.
+Foreign release receives optional staging-owner transfer and exception
+boxing/unboxing hooks. It contains destructor throws below Rust, updates the
+caller's owned nullable exception accumulator and returns the new-throw status.
+An eval output buffer retains both its callable and the context needed to run
+it after the opening frame returns. Buffer close detaches both leases before
+cleanup. Web request discard snapshots and retires remaining eval registrations
+before reusing request storage.
+Conditional helper-owner retirement receives typed mode/payload offsets and an
+ownership flag bit, preserving the pending exception. The compiler still creates
+and propagates PHP assignment-refusal errors.
+Byte-string copies share the concat reservation protocol or allocate independent
+owned storage. The two reusable C-string destinations start with separate 4 KiB
+inline buffers and can grow into owned heap blocks. Their pointers are borrowed
+until the next overwrite or reset. Memoir emits the declarations and reset, while
+the compiler selects request cleanup timing and arena policy. An already owned
+string or pointer can be adopted directly by a new Mixed cell. Callback cleanup
+loads an owner from its frame slot and clears the slot before releasing the value,
+so reentrant destruction cannot retire the same slot twice.
+Boxed-array storage helpers separate shared cells, create an empty indexed
+payload when the caller requests one, and install a promoted hash before
+releasing the displaced array. Eval argument lists own staged callable descriptors
+and expose their actual slots to GC.
+The common eval argument cleanup keeps the result visible to GC until its
+arguments have been released. It preserves the call error or the first cleanup
+error and detaches a result that cleanup prevents from being returned.
+Persistent eval values use the same runtime ownership contract. Stream-context
+options and cURL private values publish independent owners through
+`RuntimeOwnerSlot`; replacement detaches the predecessor before any release can
+reenter Magician. Context teardown first removes constants, enum values, static
+storage, handler stacks, stream wrappers, stream contexts and cURL callback roots,
+then releases the complete detached batch. Array cursor metadata uses the exact
+observed cell lifetime, so an allocator-reused address cannot inherit the retired
+cell's cursor. Compiler-side Mixed mutation uses Memoir's tag, payload and cleared
+high-word publication helpers while the compiler retains PHP layout decisions.
+A native reference commit publishes the validated owner before it retires the
+displaced value and any snapshot lease, reporting cleanup exceptions through the
+caller's context. String writes can use
+a private snapshot and an unwind guard to keep their input valid while a warning
+handler runs. The compiler supplies the layouts and controls when these
+operations run.
+AOT assignment and eval writeback share Mixed payload transfer and displaced-owner
+release. The compiler supplies the destination and chooses when to publish. Native
+destructor dispatch and the cycle collector share the same heap header flags.
+Replacing a frame, symbol or declared property owner publishes the new value
+before retiring the previous one. A destructor can therefore observe the new
+value or assign another replacement, and a destructor exception leaves the
+completed assignment visible to its catch.
+
+Persistent root cleanup keeps a direct object owner published while its
+destructor runs, with a temporary lease to keep the receiver alive across
+reentrant writes. The drain checks which owner is still published after the
+callback and repeats for replacements. The compiler supplies the root inventory
+and the initialization markers for globals, static locals and static properties.
+
+Memoir drains resource inventory nodes after the compiler-selected handle cleanup.
+For glob directories it releases libc results with `globfree` and returns the
+envelope to the native heap, including when a directory fails to open. Fixed SPL
+backing arrays and declared object payload geometry also use Memoir storage helpers.
+Memoir also publishes native heap limits, packed Mixed element headers, scalar
+frame cells, refcount transitions, and the main and active stack floors. It
+owns the layout of the weak observer table and range checks used before a
+compiler adapter reads managed storage. The compiler supplies PHP decisions
+and the operating system's stack bounds.
+
+Host-side lifetimes that do not expose PHP values use Memoir runtime leases as
+well. Magician's opaque ABI owner count and PCNTL active/detached context registry
+share overflow-safe retain/release and deferred-reclamation mechanics, while
+Magician retains signal registration and teardown policy.
+
+Memoir source changes also participate in runtime-object cache identity.
+
+The host API composes assembly output, target ABI and memory-context capabilities.
+Heap storage kinds and runtime value tags have distinct types. Owner-record and
+frame offsets are separate aligned contracts, paired in validated guard layouts;
+scoped owner-list symbols are named fields. These checks run in the compiler and
+preserve emitted instructions. Host CI audits the Cargo production-consumer graph
+and source boundary, runs the crate's layout contracts and compile-fail examples,
+and retains the compiler's bridge-catalog guard against target-program linkage.
+
 This page explains where every value lives in memory at runtime.
 
 For `--emit phpext`, each PHP request owns a snapshot of these native writable
@@ -365,7 +528,7 @@ reference counting: nested records and padding are bytes, while pointer fields r
 addresses. Typed pointer sources use the null guard and require caller-managed liveness.
 Resolved packed stores remain call-clobbering for register allocation, unlike scalar stores.
 
-Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps its own thread-local registry (`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_registry.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
+Buffers created inside `eval()` do not use `_buffer_registry`. Magician uses Memoir's thread-local registry (`crates/elephc-memoir/src/eval_buffers.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
 
 ### Fiber stacks and scheduler state
 
@@ -474,7 +637,15 @@ never need to be scanned.
 
 ### Outgrowing the buffer
 
-The shared arena is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+Sized producers reserve a destination through `__rt_concat_reserve`. It
+returns scratch while the result fits and a heap block when it does not.
+`__rt_concat_publish` advances the cursor only for scratch-backed results.
+`chr()` reserves one byte before storing it. The IPv4 and platform formatters
+stage their output and copy the measured length through the same reservation
+path. Integer and float formatting have dedicated spill rings, so they can
+render during allocation failures. Incremental producers such as `implode()`
+and `stream_get_contents()` can move their existing bytes into a larger heap
+block through `__rt_concat_grow`.
 
 A `.` result (and the `__rt_concat_grow` producers) that outgrows the buffer is stamped `CONCAT_TEMP_HEAP_KIND` instead of heap kind 1: like a scratch slice it has no owner that frees it, and the first consumer that persists it, a store or an `Acquire`, adopts the block in place by retagging it as an owned string rather than copying it, which is what keeps `$s .= ...` from duplicating a large accumulator on every append. That takeover is only safe while nothing else will release the same block. A user function that may return its argument hands the block back as its call result, an owning temporary the caller releases, so before such a call the caller claims a fresh transient argument (a `.`, interpolation or scalar-to-string result, never a builtin view such as `substr($s, 0)` or `$s[0]`, which points into a live string) with `EnsureOwned` (`__rt_str_claim`): the block is retagged as owned without a copy, every later persist duplicates it, and the argument is released after the call unless the callee returned it (`ReleaseUnlessAliases`). Without the claim, `$x = id($big . "b")` stored a block that the release of the call result then freed.
 

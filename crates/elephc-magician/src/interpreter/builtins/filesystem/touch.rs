@@ -15,6 +15,8 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 use crate::stream_wrappers;
 use super::*;
 
@@ -81,31 +83,43 @@ pub(in crate::interpreter) fn eval_touch_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     let (mtime, atime) = eval_touch_times(mtime, atime, values)?;
-    let metadata_value = eval_touch_metadata_value(mtime, atime, values)?;
-    if let Some(result) = eval_user_wrapper_stream_metadata_result(
-        &path,
-        EVAL_STREAM_META_TOUCH,
-        metadata_value,
-        context,
-        values,
-    )? {
-        return Ok(result);
-    }
-    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
-        return values.bool_value(false);
-    };
-    let file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(_) => return values.bool_value(false),
-    };
-    let times = std::fs::FileTimes::new()
-        .set_modified(mtime)
-        .set_accessed(atime);
-    values.bool_value(file.set_times(times).is_ok())
+    let metadata = RuntimeOwnerSlot::new(eval_touch_metadata_value(mtime, atime, values)?);
+    let output = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&metadata, &output), || {
+        let operation = (|| {
+            let result = if let Some(result) = eval_user_wrapper_stream_metadata_result(
+                &path,
+                EVAL_STREAM_META_TOUCH,
+                metadata.borrowed(),
+                context,
+                values,
+            )? {
+                result
+            } else if let Some(path) = stream_wrappers::local_filesystem_path(&path) {
+                let file = match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .open(path)
+                {
+                    Ok(file) => file,
+                    Err(_) => {
+                        output.replace(Some(values.bool_value(false)?));
+                        return Ok(());
+                    }
+                };
+                let times = std::fs::FileTimes::new()
+                    .set_modified(mtime)
+                    .set_accessed(atime);
+                values.bool_value(file.set_times(times).is_ok())?
+            } else {
+                values.bool_value(false)?
+            };
+            output.replace(Some(result));
+            Ok(())
+        })();
+        let operation = operation.and(values.release(metadata.take()));
+        output.finish(operation, |cell| values.release(cell))
+    })
 }
 
 /// Builds the `[mtime, atime]` array passed to wrapper `stream_metadata()`.
@@ -114,13 +128,14 @@ fn eval_touch_metadata_value(
     atime: std::time::SystemTime,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(2)?;
-    let key = values.int(0)?;
-    let value = values.int(eval_system_time_to_unix(mtime).ok_or(EvalStatus::RuntimeFatal)?)?;
-    result = values.array_set(result, key, value)?;
-    let key = values.int(1)?;
-    let value = values.int(eval_system_time_to_unix(atime).ok_or(EvalStatus::RuntimeFatal)?)?;
-    values.array_set(result, key, value)
+    let mut result = EvalArrayBuilder::indexed(values, 2)?;
+    result.index(0, |values| {
+        values.int(eval_system_time_to_unix(mtime).ok_or(EvalStatus::RuntimeFatal)?)
+    })?;
+    result.index(1, |values| {
+        values.int(eval_system_time_to_unix(atime).ok_or(EvalStatus::RuntimeFatal)?)
+    })?;
+    Ok(result.finish())
 }
 
 /// Resolves PHP touch timestamp defaults into concrete system times.

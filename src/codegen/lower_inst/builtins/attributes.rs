@@ -9,6 +9,7 @@
 //! - Class and attribute lookup follows PHP's case-insensitive symbol rules.
 //! - Captured literal attribute arguments are boxed as owned Mixed cells.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -231,38 +232,29 @@ fn emit_reflection_attribute_object(
     ctx: &mut FunctionContext<'_>,
     layout: &ReflectionAttributeLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("mov x0, #{}", payload_size));            // request ReflectionAttribute object payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks ReflectionAttribute as an object
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the object heap header before the payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter
                 .instruction(&format!("mov x10, #{}", layout.class_id));        // materialize the ReflectionAttribute class id
-            ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x10", "x0");
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size));            // request ReflectionAttribute object payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            let heap_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
-            ctx.emitter.instruction(&format!("mov r10, 0x{heap_kind:x}"));      // materialize the x86_64 object heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter
                 .instruction(&format!("mov r10, {}", layout.class_id));         // materialize the ReflectionAttribute class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
-    for index in 0..layout.property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(
+        ctx.emitter, object_reg, layout.property_count,
+    );
 }
 
 /// Stores the reflected attribute name into the object currently parked on the stack.

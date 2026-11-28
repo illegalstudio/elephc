@@ -1193,6 +1193,26 @@ fclose($translit);
     assert_eq!(out, format!("{cafe}|plain|plain|{cafe}|{cafe}"));
 }
 
+/// Length-growing read filters return every staged byte, even for a single input byte.
+#[test]
+fn test_stream_read_expanding_filter_publishes_full_result() {
+    let out = compile_and_run(r#"<?php
+$f = tmpfile();
+fwrite($f, "f");
+rewind($f);
+stream_filter_append($f, "convert.base64-encode", STREAM_FILTER_READ);
+echo fread($f, 8), "|";
+fclose($f);
+$f = tmpfile();
+fwrite($f, "=");
+rewind($f);
+stream_filter_append($f, "convert.quoted-printable-encode", STREAM_FILTER_READ);
+echo fread($f, 8);
+fclose($f);
+"#);
+    assert_eq!(out, "Zg==|=3D");
+}
+
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
 #[test]
 fn test_stream_filter_base64_encode_pads_correctly() {
@@ -5942,6 +5962,71 @@ echo fread($f, 64);
     assert_eq!(out, "hello world");
 }
 
+/// Keeps a large read filter's input live while another filter reenters fread().
+#[test]
+fn test_user_stream_filter_large_nested_read_preserves_input() {
+    let out = compile_and_run(
+        r#"<?php
+class NestedReadFilter {
+    public function filter(string $data): string {
+        return strtoupper($data);
+    }
+}
+class LargeReadFilter {
+    public function filter(string $data): string {
+        global $nestedFilterStream;
+        $inner = fread($nestedFilterStream, 8);
+        return substr($data, 0, 3) . ':' . $inner . ':' . strlen($data) . ':' . substr($data, -3);
+    }
+}
+stream_filter_register("nested.read", "NestedReadFilter");
+stream_filter_register("large.read", "LargeReadFilter");
+$nestedFilterStream = fopen("php://memory", "r+");
+fwrite($nestedFilterStream, "inner");
+rewind($nestedFilterStream);
+stream_filter_append($nestedFilterStream, "nested.read", STREAM_FILTER_READ);
+$large = fopen("php://memory", "r+");
+fwrite($large, "beg" . str_repeat("a", 70000) . "end");
+rewind($large);
+stream_filter_append($large, "large.read", STREAM_FILTER_READ);
+echo fread($large, 80000);
+fclose($large);
+fclose($nestedFilterStream);
+"#,
+    );
+    assert_eq!(out, "beg:INNER:70006:end");
+}
+
+/// A caught filter exception releases each stabilized read buffer under the same heap limit.
+#[test]
+fn test_user_stream_filter_large_nested_read_releases_input_on_throw() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+class ThrowingReadFilter {
+    public function filter(string $data): string {
+        throw new RuntimeException("filter " . strlen($data));
+    }
+}
+stream_filter_register("throws.read", "ThrowingReadFilter");
+$file = fopen("php://memory", "r+");
+fwrite($file, str_repeat("X", 70000));
+stream_filter_append($file, "throws.read", STREAM_FILTER_READ);
+for ($index = 0; $index < 16; $index++) {
+    rewind($file);
+    try {
+        fread($file, 80000);
+    } catch (RuntimeException $error) {
+        echo $error->getMessage(), "\n";
+        unset($error);
+    }
+}
+fclose($file);
+"#,
+        512 * 1024,
+    );
+    assert_eq!(out.trim_end().lines().collect::<Vec<_>>(), vec!["filter 70000"; 16]);
+}
+
 /// Verifies compiled PHP output for user stream filter params exposed on `$this`.
 #[test]
 fn test_user_stream_filter_params_are_exposed_on_this() {
@@ -8918,4 +9003,33 @@ echo file_get_contents("fgccontent://x"), "|";
 "#,
     );
     assert_eq!(out, "wrapper-content|");
+}
+
+/// A synchronous stream-notification exception must retire the native argument array.
+#[test]
+fn test_stream_notification_callback_unwind_releases_arguments() {
+    let source = r#"<?php
+$ctx = stream_context_create([], ['notification' => function($code, $sev, $msg, $mc, $bt, $bm) {
+    throw new Exception("notification");
+}]);
+for ($i = 0; $i < (int)$argv[1]; $i++) {
+    try {
+        @fopen('http://127.0.0.1:1/', 'r');
+    } catch (Exception $error) {
+        echo $error->getMessage(), "|";
+        unset($error);
+    }
+}
+unset($ctx, $i);
+stream_context_create([], ['other' => 1]);
+echo "done";
+"#;
+    let counts = ["0", "1", "6"];
+    let outputs = compile_and_run_with_heap_debug_per_argv(source, &[&["0"], &["1"], &["6"]]);
+    let summaries: Vec<_> = outputs.iter().zip(counts).map(|(result, calls)| {
+        assert!(result.success, "{}", result.stderr);
+        assert_eq!(result.stdout, format!("{}done", "notification|".repeat(calls.parse().unwrap())));
+        result.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:")).unwrap()
+    }).collect();
+    assert!(summaries.iter().all(|summary| *summary == summaries[0]), "{summaries:?}");
 }

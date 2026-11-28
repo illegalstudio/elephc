@@ -180,7 +180,7 @@ impl EvalFileStream {
 
 /// Userspace wrapper stream stored behind one eval resource id.
 pub(super) struct EvalUserWrapperStream {
-    pub(super) object: RuntimeCellHandle,
+    pub(super) object: RuntimeOwnerSlot,
     pub(super) class_name: String,
     pub(super) uri: String,
     pub(super) mode: String,
@@ -191,8 +191,17 @@ impl EvalUserWrapperStream {
     /// Copies the dispatch-relevant wrapper fields out of the resource table.
     pub(super) fn info(&self) -> EvalUserWrapperStreamInfo {
         EvalUserWrapperStreamInfo {
-            object: self.object,
+            object: self.object.borrowed(),
             class_name: self.class_name.clone(),
+            eof: self.eof,
+        }
+    }
+
+    /// Transfers the wrapper object when its resource record is removed.
+    pub(super) fn into_info(self) -> EvalUserWrapperStreamInfo {
+        EvalUserWrapperStreamInfo {
+            object: self.object.take(),
+            class_name: self.class_name,
             eof: self.eof,
         }
     }
@@ -207,7 +216,7 @@ pub(crate) struct EvalUserWrapperStreamInfo {
 
 /// Userspace-wrapper directory stored behind one eval resource id.
 pub(super) struct EvalUserWrapperDirectory {
-    pub(super) object: RuntimeCellHandle,
+    pub(super) object: RuntimeOwnerSlot,
     pub(super) class_name: String,
 }
 
@@ -215,8 +224,16 @@ impl EvalUserWrapperDirectory {
     /// Copies the dispatch fields needed while invoking wrapper directory methods.
     pub(super) fn info(&self) -> EvalUserWrapperDirectoryInfo {
         EvalUserWrapperDirectoryInfo {
-            object: self.object,
+            object: self.object.borrowed(),
             class_name: self.class_name.clone(),
+        }
+    }
+
+    /// Transfers the wrapper object when its directory resource record is removed.
+    pub(super) fn into_info(self) -> EvalUserWrapperDirectoryInfo {
+        EvalUserWrapperDirectoryInfo {
+            object: self.object.take(),
+            class_name: self.class_name,
         }
     }
 }
@@ -304,16 +321,30 @@ pub(super) struct EvalCurlEasyHandle {
     pub(super) return_transfer: bool,
     /// Mirrors `CurlHandle::$__elephc_write_user`.
     pub(super) write_user: bool,
-    /// Mirrors `CurlHandle::$__elephc_private` (`CURLOPT_PRIVATE`'s stored value).
-    /// `None` until first set, read back as PHP `false` — matching the AOT property's
-    /// `false` default.
-    pub(super) private_value: Option<RuntimeCellHandle>,
+    /// Owns `CurlHandle::$__elephc_private` until replacement or handle teardown.
+    /// An empty owner slot reads back as PHP `false`, matching the AOT property default.
+    pub(super) private_value: RuntimeOwnerSlot,
     /// Mirrors `CurlHandle::$__elephc_callbacks`, indexed by `crate::curl_ffi`'s `SLOT_*`.
     /// THE ROOT for every installed callback: the bridge's own slot holds only two opaque
     /// integers (the slot index and this handle's eval table key), never the callable, so
     /// this table is what keeps the PHP value alive between `curl_setopt()` and the
     /// transfer that fires it.
-    pub(super) callbacks: [EvalCurlCallbackSlot; crate::curl_ffi::SLOT_COUNT],
+    pub(super) callbacks: [EvalCurlCallbackKind; crate::curl_ffi::SLOT_COUNT],
+    /// Memoir-owned roots corresponding to `Callable` callback states.
+    pub(super) callback_owners: [RuntimeOwnerSlot; crate::curl_ffi::SLOT_COUNT],
+}
+
+/// Persistent callback state without embedding a raw runtime-cell owner.
+#[cfg(feature = "curl")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum EvalCurlCallbackKind {
+    /// Nothing is installed in the bridge slot.
+    #[default]
+    Empty,
+    /// The bridge trampoline stays installed without a PHP callable.
+    Silent,
+    /// The corresponding `callback_owners` slot retains the PHP callable.
+    Callable,
 }
 
 /// One `CURLOPT_*FUNCTION` slot's eval-side state.
@@ -372,7 +403,7 @@ pub(super) struct EvalCurlShareHandle {
 
 /// Stream context metadata tracked by eval.
 pub(super) struct EvalStreamContext {
-    pub(super) options: Option<RuntimeCellHandle>,
+    pub(super) options: RuntimeOwnerSlot,
 }
 
 /// Parsed PHP fopen mode used to configure `OpenOptions`.

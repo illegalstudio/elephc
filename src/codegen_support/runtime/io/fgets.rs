@@ -12,8 +12,11 @@
 //!   A line longer than the 64 KiB concat scratch therefore produces owned heap storage
 //!   instead of running past `_concat_buf` into the adjacent BSS globals.
 
+use elephc_memoir::buffers::io_scratch;
+
+use elephc_memoir::strings::concat_window::{self, ReadAhead, WindowSlots};
+
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 /// Initial reserved line capacity, in bytes. Long enough that ordinary text lines never grow,
 /// small enough that a `while (fgets($f))` loop still stays inside the shared concat scratch.
@@ -77,23 +80,12 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- read loop: one byte at a time until \n or EOF --
     emitter.label("__rt_fgets_loop");
 
-    // -- make room for one more byte before reading it --
-    emitter.instruction("ldr x9, [sp, #8]");                                    // current line length
-    emitter.instruction("add x9, x9, #1");                                      // capacity needed once the next byte lands
-    emitter.instruction("ldr x10, [sp, #24]");                                  // current line capacity
-    emitter.instruction("cmp x9, x10");                                         // does the next byte still fit the reservation?
-    emitter.instruction("b.ls __rt_fgets_have_room");                           // no growth needed for this iteration
-    emitter.instruction("lsl x10, x10, #1");                                    // double the line capacity
-    emitter.instruction("str x10, [sp, #24]");                                  // save the grown line capacity
-    emitter.instruction("ldr x1, [sp, #16]");                                   // old line buffer pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole claimed window
-    emitter.instruction("bl __rt_concat_publish");                              // hand the old scratch window back before moving to heap storage
-    emitter.instruction("ldr x0, [sp, #16]");                                   // old line buffer pointer
-    emitter.instruction("ldr x1, [sp, #8]");                                    // bytes accumulated so far must survive the move
-    emitter.instruction("ldr x2, [sp, #24]");                                   // grown line capacity
-    emitter.instruction("bl __rt_concat_grow");                                 // move the accumulated line into a larger owned buffer
-    emitter.instruction("str x0, [sp, #16]");                                   // save the grown line buffer pointer
-    emitter.label("__rt_fgets_have_room");
+    concat_window::emit_ensure_before_read(
+        emitter,
+        WindowSlots { buffer: 16, used: 8, capacity: 24 },
+        ReadAhead::Byte,
+        "__rt_fgets_have_room",
+    );
     emitter.instruction("ldr x1, [sp, #16]");                                   // line buffer base pointer
     emitter.instruction("ldr x10, [sp, #8]");                                   // current line length
     emitter.instruction("add x1, x1, x10");                                     // buf pointer for read syscall
@@ -147,21 +139,18 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("cbz x2, __rt_fgets_wrapper_done");                     // defensive: empty read also ends the line
     emitter.instruction("ldrb w13, [x1]");                                      // load the read byte
     emitter.instruction("ldr x10, [sp, #8]");                                   // current line length
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_user_wrapper_drain_buf");
-    emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "x12");
+    io_scratch::emit_store_wrapper_byte(emitter, "x12", "x10", "w13");
     emitter.instruction("add x10, x10, #1");                                    // advance the line length
     emitter.instruction("str x10, [sp, #8]");                                   // store the updated line length
     emitter.instruction("strb w13, [sp, #32]");                                 // remember the byte across the chunk-release calls
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov x0, x1");                                          // chunk ptr for release
-    emitter.instruction("bl __rt_decref_any");                                  // release the chunk before continuing or finishing the line
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);
     emitter.instruction("ldrb w13, [sp, #32]");                                 // reload the byte the wrapper produced
     emitter.instruction("cmp w13, #0x0A");                                      // is the byte a newline?
     emitter.instruction("b.eq __rt_fgets_wrapper_done");                        // newline: finish the line
     emitter.instruction("b __rt_fgets_wrapper_loop");                           // read the next byte
     emitter.label("__rt_fgets_wrapper_done");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_user_wrapper_drain_buf"); // line pointer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "x1"); // line pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // line length
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
@@ -179,9 +168,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- EOF reached: set eof flag for this fd --
     emitter.label("__rt_fgets_eof");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "w10", "x0", "x9");
 
     // -- return result string --
     emitter.label("__rt_fgets_done");
@@ -232,23 +220,12 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fgets_loop_x86");
 
-    // -- make room for one more byte before reading it --
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // current line length
-    emitter.instruction("add r8, 1");                                           // capacity needed once the next byte lands
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // current line capacity
-    emitter.instruction("cmp r8, r9");                                          // does the next byte still fit the reservation?
-    emitter.instruction("jbe __rt_fgets_have_room_x86");                        // no growth needed for this iteration
-    emitter.instruction("add r9, r9");                                          // double the line capacity
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the grown line capacity
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // old line buffer pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole claimed window
-    emitter.instruction("call __rt_concat_publish");                            // hand the old scratch window back before moving to heap storage
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // old line buffer pointer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // bytes accumulated so far must survive the move
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // grown line capacity
-    emitter.instruction("call __rt_concat_grow");                               // move the accumulated line into a larger owned buffer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the grown line buffer pointer
-    emitter.label("__rt_fgets_have_room_x86");
+    concat_window::emit_ensure_before_read(
+        emitter,
+        WindowSlots { buffer: 24, used: 16, capacity: 40 },
+        ReadAhead::Byte,
+        "__rt_fgets_have_room_x86",
+    );
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // line buffer base pointer
     emitter.instruction("add rsi, QWORD PTR [rbp - 16]");                       // compute the address where libc read() should append the next byte
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the tracked file descriptor as the first libc read() argument
@@ -301,21 +278,18 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the chunk ptr across the per-chunk release
     emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // load the read byte
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // current line length
-    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_drain_buf");        // line buffer base
-    emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "r11");        // line buffer base
+    io_scratch::emit_store_wrapper_byte(emitter, "r11", "r10", "cl");
     emitter.instruction("add r10, 1");                                          // advance the line length
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the updated line length
     emitter.instruction("mov BYTE PTR [rbp - 48], cl");                         // remember the byte across the chunk-release calls
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // chunk ptr for release
-    emitter.instruction("call __rt_decref_any");                                // release the chunk before continuing or finishing the line
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(32));
     emitter.instruction("movzx ecx, BYTE PTR [rbp - 48]");                      // reload the byte the wrapper produced
     emitter.instruction("cmp cl, 0x0A");                                        // is the byte a newline?
     emitter.instruction("je __rt_fgets_wrapper_done_x86");                      // newline: finish the line
     emitter.instruction("jmp __rt_fgets_wrapper_loop_x86");                     // read the next byte
     emitter.label("__rt_fgets_wrapper_done_x86");
-    abi::emit_symbol_address(emitter, "rax", "_user_wrapper_drain_buf");        // line pointer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "rax");        // line pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // line length
     emitter.instruction("add rsp, 48");                                         // release the fgets() spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -329,7 +303,6 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fgets_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
-    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "1", "r10", "r11");
     emitter.instruction("jmp __rt_fgets_done_x86");                             // return the possibly empty borrowed slice accumulated before EOF or read failure
 }

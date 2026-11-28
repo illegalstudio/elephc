@@ -50,10 +50,13 @@ pub(super) fn lower_boxed_array_unshift(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0]"),               // return the new logical entry count
-        Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax]"),    // return the new logical entry count
-    }
+    let hash = match ctx.emitter.target.arch { Arch::AArch64 => "x0", Arch::X86_64 => "rax" };
+    elephc_memoir::hash_layout::emit_load_header_field(
+        ctx.emitter,
+        hash,
+        hash,
+        elephc_memoir::hash_layout::HeaderField::Count,
+    );
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
 }
@@ -136,10 +139,13 @@ fn finish_assoc_unshift(
         abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);                // return the merged table's logical entry count
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0]"),               // read the new count from the published table
-        Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax]"),    // read the new count from the published table
-    }
+    let hash = match ctx.emitter.target.arch { Arch::AArch64 => "x0", Arch::X86_64 => "rax" };
+    elephc_memoir::hash_layout::emit_load_header_field(
+        ctx.emitter,
+        hash,
+        hash,
+        elephc_memoir::hash_layout::HeaderField::Count,
+    );
     abi::emit_release_temporary_stack(ctx.emitter, if has_prefix { 48 } else { 32 });
     store_if_result(ctx, inst)
 }

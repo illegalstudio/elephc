@@ -14,6 +14,7 @@
 //! - Typed static properties use the same high-word uninitialized sentinel as
 //!   the emitted code before reads.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
@@ -447,8 +448,12 @@ fn emit_direct_store_static_property_result(
         if let Some(done) = done { ctx.emitter.label(&done); }
         return Ok(());
     }
-    abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, release_previous);
-    clear_uninitialized_marker_after_static_store(ctx, &slot.symbol, &slot.php_type);
+    abi::emit_store_result_to_symbol_then(
+        ctx.emitter, &slot.symbol, &slot.php_type, release_previous,
+        |emitter| clear_uninitialized_marker_after_static_store(
+            emitter, &slot.symbol, &slot.php_type,
+        ),
+    );
     Ok(())
 }
 
@@ -662,12 +667,12 @@ fn branch_static_property_slot(
 
 /// Clears the typed-property high word after a successful static property store.
 fn clear_uninitialized_marker_after_static_store(
-    ctx: &mut FunctionContext<'_>,
+    emitter: &mut crate::codegen::emit::Emitter,
     symbol: &str,
     ty: &PhpType,
 ) {
     if !matches!(ty.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
-        abi::emit_store_zero_to_symbol(ctx.emitter, symbol, 8);
+        abi::emit_store_zero_to_symbol(emitter, symbol, 8);
     }
 }
 
@@ -1187,21 +1192,15 @@ fn emit_uninitialized_static_property_fatal(
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
-            ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the Error object payload
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = object instance
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_error_class_id");   // load Error's runtime class id symbol
             ctx.emitter.instruction("ldr x9, [x9]");                            // load Error's runtime class id for this program
-            ctx.emitter.instruction("str x9, [x0]");                            // store class id at the object header
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", &message_label);          // materialize static Error message pointer
-            ctx.emitter.instruction("str x9, [x0, #8]");                        // store static Error message pointer
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             ctx.emitter.instruction(&format!("mov x9, #{}", message_len));      // load Error message length
-            ctx.emitter.instruction("str x9, [x0, #16]");                       // store exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -1210,23 +1209,15 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
             ctx.emitter.instruction("mov rbp, rsp");                            // establish aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
-            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
-            ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction(                                            // materialize the canonical x86_64 Throwable heap-kind word
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
+            elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             ctx.emitter.instruction(                                            // store Error message length
                 &format!("mov QWORD PTR [rax + 16], {}", message_len)
             );
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "rax");
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);   // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing

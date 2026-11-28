@@ -10,7 +10,7 @@
 //! - Eval storage markers and native storage markers are checked on their respective paths.
 
 use super::super::super::*;
-use super::super::collection_builder::EvalArrayBuilder;
+use super::super::collection_builder::{EvalArrayBuilder, with_collection_cells};
 use super::super::{eval_runtime_property_access_metadata, eval_runtime_string_array_to_vec};
 use std::collections::HashSet;
 
@@ -145,10 +145,11 @@ fn collect_native_entries(
         chain.push(name);
     }
     for name in chain.into_iter().rev() {
-        let names = values.reflection_property_names(&name)?;
-        let decoded = eval_runtime_string_array_to_vec(names, values);
-        values.release(names)?;
-        for property in decoded? {
+        let decoded = with_collection_cells(values, |values, owners| {
+            let names = owners.stage(values.reflection_property_names(&name)?);
+            eval_runtime_string_array_to_vec(names.borrowed(), values)
+        })?;
+        for property in decoded {
             let Some((owner, visibility, is_static)) =
                 eval_runtime_property_access_metadata(&name, &property, values)?
             else { continue; };
@@ -169,12 +170,11 @@ fn native_parent_name(
     name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<String>, EvalStatus> {
-    let class = values.string(name)?;
-    let parent = values.parent_class_name(class);
-    values.release(class)?;
-    let parent = parent?;
-    let bytes = values.string_bytes(parent);
-    values.release(parent)?;
-    let name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
-    Ok((!name.is_empty()).then_some(name))
+    with_collection_cells(values, |values, owners| {
+        let class = owners.stage(values.string(name)?);
+        let parent = owners.stage(values.parent_class_name(class.borrowed())?);
+        let bytes = values.string_bytes(parent.borrowed())?;
+        let name = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        Ok((!name.is_empty()).then_some(name))
+    })
 }

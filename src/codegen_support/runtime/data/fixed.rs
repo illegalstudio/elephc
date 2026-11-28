@@ -8,8 +8,10 @@
 //! Key details:
 //! - Fixed symbols are cached across compilations, with target and PHP-profile inputs covered by the cache key.
 
+use elephc_memoir::buffers::io_scratch;
+
 use super::{
-    ALLOC_OVERFLOW_MSG, CONCAT_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
+    RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
@@ -38,7 +40,6 @@ use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
-use crate::codegen_support::data_section::comm_directive_aligned;
 use crate::codegen_support::platform::{Platform, Target};
 use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
@@ -79,32 +80,13 @@ pub(crate) fn emit_runtime_data_fixed(
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
-    // The scratch arena is bounded by the same capacity the runtime publishes: a
-    // `--heap-size` above 1 GiB must not reserve a second giant buffer, or the link
-    // exceeds AArch64's 4 GiB ADRP window.
-    out.push_str(&comm_directive(
-        "_concat_buf",
-        super::super::concat_scratch_capacity(heap_size),
-        target,
-    ));
-    out.push_str(&comm_directive("_concat_off", 8, target));
+    elephc_memoir::data::append_string_scratch_storage(&mut out, heap_size, &target);
+
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     // User boundary code reads this value from its linked runtime, including cached objects.
-    out.push_str(&format!(".globl _concat_capacity\n_concat_capacity:\n    .quad {}\n",
-        super::super::concat_scratch_capacity(heap_size)));
-    out.push_str(&comm_directive(
-        "_itoa_spill_ring",
-        32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
-        target,
-    ));
-    out.push_str(&comm_directive("_itoa_spill_index", 8, target));
-    out.push_str(&comm_directive(
-        "_float_spill_ring",
-        crate::codegen_support::runtime::strings::FLOAT_WINDOW_BYTES
-            * crate::codegen_support::runtime::strings::FLOAT_SPILL_SLOTS,
-        target,
-    ));
-    out.push_str(&comm_directive("_float_spill_index", 8, target));
+    elephc_memoir::data::append_string_scratch_capacity(&mut out, heap_size);
+
+    elephc_memoir::strings::format_windows::append_spill_rings(&mut out, &target);
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
@@ -294,40 +276,28 @@ pub(crate) fn emit_runtime_data_fixed(
     // __rt_pr_finish into an owned heap string. Only non-zero during an active
     // print_r rendering, so ordinary output is unaffected.
     out.push_str(&comm_directive("_print_r_mode", 8, target));
-    out.push_str(&comm_directive("_print_r_off", 8, target));
-    out.push_str(&comm_directive("_print_r_ptr", 8, target));
-    out.push_str(&comm_directive("_print_r_cap", 8, target));
+    elephc_memoir::data::append_capture_buffer_storage(&mut out, &target);
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
     // arrays (heap buffer base pointer, used bytes, capacity) indexed by level-1.
     // Buffers are heap-allocated by __rt_ob_start, grown by __rt_ob_append, and
     // written to the terminal sink by __rt_ob_flush_all at process exit.
-    out.push_str(&comm_directive("_ob_level", 8, target));
-    out.push_str(&comm_directive("_ob_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_lens", 512, target));
-    out.push_str(&comm_directive("_ob_caps", 512, target));
+    elephc_memoir::data::append_output_buffer_storage(&mut out, &target);
     // Per-level output-buffer metadata (parallel to _ob_ptrs, indexed by level-1):
     // the user-handler invocation stub + env word (stub 0 = default handler; env
     // is a retained callable-descriptor pointer for AOT handlers or a magician
     // registry id for eval handlers), the persisted handler display name
     // (ptr/len), the auto-flush chunk size, the ob_start() flags word, and the
     // started flag (set at the first handler invocation; feeds PHP started bits).
-    out.push_str(&comm_directive("_ob_handler_stubs", 512, target));
-    out.push_str(&comm_directive("_ob_handler_envs", 512, target));
-    out.push_str(&comm_directive("_ob_name_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_name_lens", 512, target));
-    out.push_str(&comm_directive("_ob_chunk_sizes", 512, target));
-    out.push_str(&comm_directive("_ob_flags", 512, target));
-    out.push_str(&comm_directive("_ob_started", 512, target));
+    elephc_memoir::buffers::output::append_handler_storage(&mut out, &target);
     // _ob_in_handler: non-zero while a user output handler runs. Output produced
     // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
     // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.
-    out.push_str(&comm_directive("_ob_in_handler", 8, target));
     // _ob_flushing: re-entry guard for the process-exit drain. A user handler
     // running during __rt_ob_flush_all may call exit() again; the guard makes
     // the nested drain a no-op instead of an infinite loop.
-    out.push_str(&comm_directive("_ob_flushing", 8, target));
+    elephc_memoir::buffers::output::append_control_storage(&mut out, &target);
     // _elephc_eval_ob_handler_fn: installed Rust callback (magician) that runs
     // an eval-registered ob_start() handler: fn(id, buf, len, phase) -> Mixed
     // result cell pointer (0 = pass-through). Called via __rt_ob_eval_trampoline.
@@ -341,7 +311,6 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     // ob_implicit_flush() stored flag. Semantically inert in elephc: terminal
     // writes are unbuffered syscalls, so implicit flushing is always on.
-    out.push_str(&comm_directive("_ob_implicit_flush", 8, target));
     // ob_get_status()/ob_list_handlers() string constants: PHP's default handler
     // name and the status-array key strings read by __rt_ob_get_status.
     out.push_str(&format!(
@@ -402,12 +371,9 @@ pub(crate) fn emit_runtime_data_fixed(
     // The active serialize() output stream: a pointer to the `__rt_strbuf_*` descriptor in the
     // frame of the innermost `__rt_serialize_call_value`, which saves and restores it around itself and
     // every hook call that can re-enter serialize().
-    out.push_str(&comm_directive("_ser_stream", 8, target));
-    out.push_str(&comm_directive("_ser_obj_count", 8, target));
-    out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
-    out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
-    out.push_str(&comm_directive("_unser_count", 8, target));
-    out.push_str(&comm_directive("_unser_values", 524288, target));
+    elephc_memoir::strings::scoped_stream::append_active_storage(&mut out, &target);
+    elephc_memoir::values::serialize_registry::append_data(&mut out, &target);
+    elephc_memoir::values::reference_registry::append_unserialize_storage(&mut out, &target);
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
     // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
     // fixed-offset ISO parser reads it (see `system::strtotime::iso_date`).
@@ -455,11 +421,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // publishes the exact hash-entry value slot it lends as `mixed &$value`, allowing
     // escape boundaries to reject only that unmanaged reference instead of ordinary
     // frame aliases. The owning walk boundary restores the saved head after unwinding.
-    out.push_str(&comm_directive("_rt_unmanaged_ref_borrow_top", 8, target));
-    // Active boxed-value validation roots are excluded from PHP-visible sharing counts.
-    out.push_str(&comm_directive("_rt_reference_validation_pins_top", 8, target));
+    elephc_memoir::data::append_reference_roots(&mut out, &target);
+
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
-    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
+    elephc_memoir::buffers::diagnostic_buffer::append_storage(&mut out, &target);
+    for symbol in ["_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
     }
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
@@ -491,11 +457,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_exc_value", 8, target));
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_magic_set_guard_head", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_magic_set_guard", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_gc_release_suppressed", 8, target));
+    for symbol in elephc_memoir::coroutine_storage::main_context_symbols() {
+        out.push_str(&comm_directive(symbol, 8, target));
+    }
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
@@ -506,8 +470,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // These two are read by every compiled prologue, so keep them in `.data` near the
     // text: a large `--heap-size` pushes `.comm` far enough that ADRP cannot reach the
     // end of the common block from `__text` (a 2G heap already crosses the 4G window).
-    out.push_str(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n");
-    out.push_str(".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n");
+    elephc_memoir::stacks::append_stack_floor_data(&mut out);
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
@@ -659,70 +622,16 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     // Heap headers and object-handle side-table indices use 16-byte granules.
     // Keep payload alignment stable when preceding runtime symbols change.
-    out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
-    // One bit per 8-byte heap granule records live payload bases. String persistence uses this
-    // authoritative side table to reject forged headers in interior byte views in constant time.
-    out.push_str(&comm_directive(
-        "_heap_live_bases",
-        heap_size.div_ceil(64).max(1),
-        target,
-    ));
-    out.push_str(&comm_directive("_heap_off", 8, target));
-    out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive(
-        "_heap_small_bins",
-        super::super::arrays::HEAP_BIN_TABLE_BYTES as usize,
-        target,
-    ));
-    // One byte per heap granule: set while a guarded free parks the block in a bin.
-    out.push_str(&comm_directive(
-        "_heap_bin_marks",
-        super::super::arrays::heap_bin_mark_bytes(heap_size),
-        target,
-    ));
-    // `_gc_frees` at the end of the allocator's last consolidation pass (see `__rt_heap_alloc`).
-    out.push_str(&comm_directive("_heap_consolidated_frees", 8, target));
-    out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
-    out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    elephc_memoir::data::append_heap_storage(&mut out, heap_size, &target);
+
     // Generation-safe buffer descriptor registry. Public Buffer values are
     // scalar `(generation << 32) | index` handles, never heap pointers: slot
     // reuse increments generation so stale aliases cannot access a new payload.
     // Index zero is reserved as the invalid/null handle; the descriptor free
     // list is static metadata and therefore does not consume user heap space.
-    out.push_str(&comm_directive(
-        "_buffer_registry",
-        (crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY + 1)
-            * crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE,
-        target,
-    ));
-    out.push_str(&comm_directive("_buffer_registry_free", 8, target));
-    out.push_str(".globl _buffer_registry_next\n_buffer_registry_next:\n    .quad 1\n");
-    // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
-    // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
-    // blocks can never share a granule because the smallest block is 16 header
-    // bytes plus the allocator's 8-byte minimum payload = 24 > 16, so the mapping
-    // needs no hashing, no probing and no capacity policy. It stores handles keyed
-    // BY POSITION and never an object pointer, so it owns nothing, keeps nothing
-    // alive and is never a GC root. `_obj_handle_free` is the LIFO stack of
-    // released handles php-src reuses from; its depth can never exceed the number
-    // of distinct handles, which is bounded by the peak live-object count, which is
-    // bounded by `heap_size / 24`. See `runtime::objects::handles`.
-    out.push_str(&comm_directive(
-        "_obj_handle_index",
-        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 4,
-        target,
-    ));
-    out.push_str(&comm_directive(
-        "_obj_weak_reference_index",
-        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 8,
-        target,
-    ));
-    out.push_str(&comm_directive(
-        "_obj_handle_free",
-        crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4,
-        target,
-    ));
-    out.push_str(&comm_directive("_obj_handle_free_top", 8, target));
+    elephc_memoir::data::append_buffer_registry(&mut out, &target);
+
+    elephc_memoir::data::append_object_handle_storage(&mut out, heap_size, &target);
     // PHP RESOURCE ids. A SEPARATE numbering space from the object handles above —
     // php-src keeps `zend_resource.handle` and `zend_object.handle` in two unrelated
     // lists, so `resource(5)` and `object(C)#5` can and do coexist. The table maps a
@@ -732,51 +641,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // resource payloads are not heap-block addresses: descriptors are tiny integers
     // and bridge handles come from the C allocator, so neither has a granule to index.
     // Occupancy lives in the value word (id 0 = empty slot; minted ids start at 5).
-    out.push_str(&comm_directive(
-        "_resource_id_keys",
-        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
-        target,
-    ));
-    out.push_str(&comm_directive(
-        "_resource_id_vals",
-        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
-        target,
-    ));
-    // Per-resource incarnation inventory used by get_resources(). Unlike the
-    // payload-to-id hash, this list keeps closed resources after descriptor reuse.
-    out.push_str(&comm_directive("_resource_inventory_head", 8, target));
-    out.push_str(&comm_directive("_resource_inventory_tail", 8, target));
-    out.push_str(".globl _gc_enabled\n_gc_enabled:\n    .quad 1\n");
-    for symbol in [
-        "_gc_candidates_enabled", "_gc_candidates_gathering", "_gc_candidates_visited",
-        "_gc_candidates_roots", "_gc_candidates_roots_count", "_gc_candidates_roots_capacity",
-        "_gc_candidates_nodes", "_gc_candidates_nodes_count", "_gc_candidates_nodes_capacity",
-        "_gc_candidates_anchors", "_gc_candidates_anchors_count", "_gc_candidates_anchors_capacity",
-        "_gc_candidate_root_scan_fn",
-        "_gc_proofs", "_gc_proofs_count", "_gc_proofs_capacity", "_gc_proofs_initialized",
-        "_gc_proof_parent", "_gc_proof_slot", "_gc_proofs_debt", "_gc_proofs_visited",
-        "_gc_proof_epoch", "_gc_proof_memos", "_gc_proof_memos_capacity", "_gc_proofs_cost",
-    ] {
-        out.push_str(&comm_directive(symbol, 8, target));
-    }
-    out.push_str(&comm_directive("_gc_collecting", 8, target));
-    out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
-    out.push_str(&comm_directive("_gc_pin_head", 8, target));
-    out.push_str(&comm_directive("_gc_pending_throw", 8, target));
-    out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
-    out.push_str(&comm_directive("_hash_write_guard_top", 8, target));
-    out.push_str(&comm_directive("_gc_runs", 8, target));
-    out.push_str(&comm_directive("_gc_safe_point_credit", 8, target));
-    out.push_str(&comm_directive("_gc_safe_point_live_limit", 8, target));
-    out.push_str(&comm_directive("_gc_collected", 8, target));
-    out.push_str(&comm_directive("_gc_application_started", 8, target));
-    out.push_str(&comm_directive("_gc_collector_started", 8, target));
-    out.push_str(&comm_directive("_gc_free_started", 8, target));
-    out.push_str(&comm_directive("_gc_destructor_started", 8, target));
-    out.push_str(&comm_directive("_gc_collector_time", 8, target));
-    out.push_str(&comm_directive("_gc_destructor_time", 8, target));
-    out.push_str(&comm_directive("_gc_free_time", 8, target));
-    out.push_str(&comm_directive("_gc_destructor_depth", 8, target));
+    elephc_memoir::values::resource_weak::append_storage(&mut out, &target);
+    elephc_memoir::data::append_gc_state(&mut out, &target);
     out.push_str(&format!(
         ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",
         php_version.error_reporting_mask()
@@ -825,10 +691,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // both at zero; a recorded decode error increments them once.
     out.push_str(&comm_directive("_json_error_scan_count", 8, target));
     out.push_str(&comm_directive("_json_error_scan_bytes", 8, target));
-    // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
-    // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
-    // "this block never acquired a handle".
-    out.push_str(".globl _obj_handle_next\n_obj_handle_next:\n    .quad 1\n");
+    elephc_memoir::data::append_object_handle_cursor(&mut out);
     // `_resource_id_next` is the never-used PHP RESOURCE id cursor. It starts at 5,
     // not at 1, and that number is measured rather than chosen: under PHP 8.5.6 CLI
     // the three standard streams occupy ids 1..3 (`get_resource_id(STDIN|STDOUT|STDERR)`
@@ -837,42 +700,13 @@ pub(crate) fn emit_runtime_data_fixed(
     // and for `php -r`. elephc already renders STDIN/STDOUT/STDERR as 1/2/3, so
     // starting user resources at 5 reproduces reference numbering end to end.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
-    out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
-    out.push_str(&format!(
-        ".globl _heap_limit\n_heap_limit:\n    .quad {}\n",
-        memory_limit
-    ));
-    // The startup ceiling is immutable: `ini_set('memory_limit', …)` only moves `_heap_limit`,
-    // and the web request boundary copies this value back so one request cannot cap the next.
-    out.push_str(&format!(
-        ".globl _heap_limit_startup\n_heap_limit_startup:\n    .quad {}\n",
-        memory_limit
-    ));
-    out.push_str(".globl _heap_fail_request\n_heap_fail_request:\n    .quad 0\n");
-    out.push_str(&format!(
-        ".globl _heap_fatal_prefix\n_heap_fatal_prefix:\n    .ascii {:?}\n",
-        super::HEAP_FATAL_PREFIX
-    ));
-    out.push_str(&format!(
-        ".globl _heap_fatal_middle\n_heap_fatal_middle:\n    .ascii {:?}\n",
-        super::HEAP_FATAL_MIDDLE
-    ));
-    out.push_str(&format!(
-        ".globl _heap_fatal_suffix\n_heap_fatal_suffix:\n    .ascii {:?}\n",
-        super::HEAP_FATAL_SUFFIX
-    ));
-    out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
-    out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
-    out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
-    out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
+    elephc_memoir::data::append_heap_limits(&mut out, heap_size, memory_limit);
+
     out.push_str(&format!(
         ".globl _stack_err_msg\n_stack_err_msg:\n    .ascii {:?}\n",
         STACK_OVERFLOW_MSG
     ));
-    out.push_str(&format!(
-        ".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii {:?}\n",
-        ARRAY_ALLOC_SIZE_MSG
-    ));
+    elephc_memoir::data::append_array_allocation_message(&mut out);
     out.push_str(&format!(
         ".globl _hash_append_err_msg\n_hash_append_err_msg:\n    .ascii {:?}\n",
         super::HASH_APPEND_ERROR_MSG
@@ -885,13 +719,8 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _range_size_err_msg\n_range_size_err_msg:\n    .ascii {:?}\n",
         RANGE_SIZE_MSG
     ));
-    out.push_str(&format!(
-        ".globl _buffer_alloc_size_msg\n_buffer_alloc_size_msg:\n    .ascii {:?}\n",
-        BUFFER_ALLOC_SIZE_MSG
-    ));
-    out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
-    out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
-    out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
+    elephc_memoir::data::append_buffer_messages(&mut out);
+
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
@@ -908,14 +737,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
     out.push_str(".globl _ptr_null_err_msg\n_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str(".globl _ptr_read_string_len_err_msg\n_ptr_read_string_len_err_msg:\n    .ascii \"Fatal error: ptr_read_string() length must be non-negative\\n\"\n");
-    out.push_str(&format!(
-        ".globl _alloc_overflow_msg\n_alloc_overflow_msg:\n    .ascii {:?}\n",
-        ALLOC_OVERFLOW_MSG
-    ));
-    out.push_str(&format!(
-        ".globl _concat_overflow_msg\n_concat_overflow_msg:\n    .ascii {:?}\n",
-        CONCAT_OVERFLOW_MSG
-    ));
+    elephc_memoir::data::append_allocation_messages(&mut out);
+
     out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
@@ -1203,50 +1026,28 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
     out.push_str(".globl _fiber_msg_switch_signal\n_fiber_msg_switch_signal:\n    .ascii \"Cannot switch fibers in current execution context\"\n");
     out.push_str(&emit_builtin_callable_data(target));
-    out.push_str(&comm_directive("_gc_allocs", 8, target));
-    out.push_str(&comm_directive("_gc_frees", 8, target));
-    out.push_str(&comm_directive("_gc_live", 8, target));
-    out.push_str(&comm_directive("_gc_peak", 8, target));
-    out.push_str(&comm_directive("_cstr_buf", 4096, target));
-    out.push_str(&comm_directive("_cstr_buf2", 4096, target));
-    // C-string conversions need a NUL-terminated copy for libc. The 4 KiB inline
-    // buffers stay as the common case; these pointers let the helpers grow into an
-    // owned block when a path, pattern, or command is longer than that, instead of
-    // copying past the buffer into adjacent runtime state.
-    out.push_str(".p2align 3\n.globl _cstr_base\n_cstr_base:\n    .quad _cstr_buf\n");
-    out.push_str(".p2align 3\n.globl _cstr_cap\n_cstr_cap:\n    .quad 4096\n");
-    out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
-    out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
-    out.push_str(&comm_directive("_eof_flags", 256, target));
-    out.push_str(&comm_directive("_runtime_wrapper_class_buf", 1024, target));
-    // Synthetic user-wrapper stream metadata: 256 handles, one kind byte, a
-    // 256-byte URI buffer, and the exact fopen mode each. Kind 1 is a native
-    // zip:// open, kind 2 is the ZipArchive::getStream memory wrapper. A program
-    // that cannot register a user wrapper never references these tables.
+    elephc_memoir::data::append_memory_counters(&mut out, &target);
+
+    elephc_memoir::interop::cstr_scratch::append_data(&mut out, &target);
+    elephc_memoir::buffers::io_scratch::RUNTIME_WRAPPER_CLASS.append(&mut out, &target);
+    // Synthetic user-wrapper stream metadata uses Memoir's per-handle geometry.
+    // A program that cannot register a user wrapper never references these tables.
     if features.user_stream_wrapper {
-        out.push_str(&comm_directive("_zip_stream_kind", 256, target));
-        out.push_str(&comm_directive("_zip_stream_uri_len", 2048, target));
-        out.push_str(&comm_directive("_zip_stream_uri", 65536, target));
-        out.push_str(&comm_directive("_zip_stream_mode_len", 2048, target));
-        out.push_str(&comm_directive("_zip_stream_mode", 4096, target));
+        elephc_memoir::buffers::stream_tables::append_zip_metadata(&mut out, &target);
     }
-    out.push_str(&comm_directive("_popen_files", 2048, target));
-    out.push_str(&comm_directive("_dir_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::POPEN_FILES.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.append(&mut out, &target);
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The
     // readdir/closedir/rewinddir helpers probe this table first; a non-zero
     // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(&comm_directive("_glob_handles", 2048, target));
-    out.push_str(&comm_directive("_stream_read_filters", 256, target));
-    out.push_str(&comm_directive("_stream_write_filters", 256, target));
-    out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
-    // 64KB scratch used by length-growing stream filters (convert.base64-encode,
-    // convert.quoted-printable-encode). The filter encodes into the scratch and
-    // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
-    // so the 4/3 base64 expansion still fits the scratch.
-    out.push_str(&comm_directive("_stream_grow_scratch", 65536, target));
-    out.push_str(&comm_directive("_zstream_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::GLOB_HANDLES.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::READ_FILTERS.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::WRITE_FILTERS.append(&mut out, &target);
+    elephc_memoir::buffers::stream_scratch::append_data(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::ZLIB_HANDLES.append(&mut out, &target);
     out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_zlib_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_init2_fn", 8, target));
@@ -1256,14 +1057,14 @@ pub(crate) fn emit_runtime_data_fixed(
     // bzip2.compress write-filter state: per-fd bz_stream pointer table
     // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
     // shared runtime calls through so non-bzip2 programs never link -lbz2.
-    out.push_str(&comm_directive("_bzstream_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.append(&mut out, &target);
     out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_bz2_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));
     // convert.iconv.* WRITE-filter state: per-fd iconv_t descriptor table
     // (_iconv_handles) plus the indirect fn-pointer slots the shared runtime
     // calls through so it never names libc iconv (which needs -liconv on macOS).
-    out.push_str(&comm_directive("_iconv_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.append(&mut out, &target);
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
     // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
@@ -1272,7 +1073,7 @@ pub(crate) fn emit_runtime_data_fixed(
     if target.platform == Platform::MacOS {
         out.push_str(&comm_directive("_iconv_write_options", 256, target));
     }
-    out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
+    io_scratch::FTP_RESPONSE.append(&mut out, &target);
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
     // _ftp_use_tls: set to 1 by fopen("ftps://...") before __rt_ftp_open is
     // invoked. The handshake helper interprets it as "perform AUTH TLS on the
@@ -1280,7 +1081,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // attach the PASV data connection". Reset to 0 at the end of __rt_ftp_open
     // so subsequent plain ftp:// opens are not contaminated.
     out.push_str(&comm_directive("_ftp_use_tls", 8, target));
-    out.push_str(&comm_directive("_http_resp_buf", 1048576, target));
+    io_scratch::HTTP_RESPONSE.append(&mut out, &target);
     // https:// goes through indirect function pointers so only programs that
     // actually open https URLs reference elephc-tls (and pull in -lelephc_tls
     // at link time); other programs keep the runtime libc-only.
@@ -1491,18 +1292,17 @@ pub(crate) fn emit_runtime_data_fixed(
     // entry means "unset" and reports PHP's default of 8192. stream_set_chunk_size
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
-    out.push_str(&comm_directive("_stream_chunk_size", 2048, target));
+    elephc_memoir::buffers::stream_tables::CHUNK_SIZES.append(&mut out, &target);
     // _stream_connect_host: per-fd transport host string (ptr, len) captured by
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
     // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
-    out.push_str(&comm_directive("_stream_connect_host", 4096, target));
+    elephc_memoir::buffers::stream_tables::CONNECT_HOSTS.append(&mut out, &target);
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
     // it at the CONNECT, COMPLETED, and FAILURE transfer milestones. Zero when
     // no notification callback is registered (the fire shim is then a no-op).
-    out.push_str(&comm_directive("_stream_notification_callback", 8, target));
     // _tls_peer_name_default: hardcoded peer-name buffer used as the SNI
     // hint when stream_socket_enable_crypto is called without a context
     // peer_name. v1 limitation — production TLS needs real peer-name
@@ -1639,7 +1439,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_http_active_host_len", 8, target));
     // 2 KiB scratch for the Location header's path component on
     // relative redirects (covers the vast majority of API redirects).
-    out.push_str(&comm_directive("_http_redirect_path_buf", 2048, target));
+    io_scratch::HTTP_REDIRECT.append(&mut out, &target);
     out.push_str(&comm_directive("_http_redirect_path_len", 8, target));
     out.push_str(
         ".globl _http_request_fulluri_key_str\n_http_request_fulluri_key_str:\n    .ascii \"request_fulluri\"\n",
@@ -1674,7 +1474,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // PHP int (19 ascii digits) + "REST " (5) + "\r\n" (2) = 26 bytes, so
     // 64 leaves generous headroom for future extensions (auth, custom
     // commands).
-    out.push_str(&comm_directive("_ftp_cmd_scratch", 64, target));
+    io_scratch::FTP_COMMAND.append(&mut out, &target);
 
     // Bucket-brigade property keys used by __rt_user_filter_brigade_invoke
     // to build and walk brigade-shaped argument data when the user's
@@ -1702,27 +1502,27 @@ pub(crate) fn emit_runtime_data_fixed(
     // `__rt_http_build_request` and consumed by `__rt_http_open` via
     // the http_stream lowering when context options can override the
     // default method.
-    out.push_str(&comm_directive("_http_req_scratch", 8192, target));
+    io_scratch::HTTP_REQUEST.append(&mut out, &target);
     out.push_str(&comm_directive("_fgc_url_addr", 512, target));
     out.push_str(&comm_directive("_fgc_url_retr", 2048, target));
     out.push_str(".globl _fgc_url_slash\n_fgc_url_slash:\n    .ascii \"/\"\n");
-    out.push_str(&comm_directive("_https_resp_buf", 1048576, target));
+    io_scratch::HTTPS_RESPONSE.append(&mut out, &target);
     out.push_str(&comm_directive("_fsockopen_addr", 512, target));
     // _user_wrappers: USER_WRAPPER_REGISTRATIONS_CAP = 64 scheme→class
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
-    out.push_str(&comm_directive("_user_wrappers", 2048, target));
+    elephc_memoir::buffers::stream_tables::USER_WRAPPERS.append(&mut out, &target);
     out.push_str(&comm_directive("_simplexml_unwind_stream", 8, target));
     // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
     // slots, each storing the wrapper object pointer keyed by synthetic fd
     // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
     // is null. 256 slots × 8 bytes = 2048 bytes.
-    out.push_str(&comm_directive("_user_wrapper_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::USER_WRAPPER_HANDLES.append(&mut out, &target);
     // _user_wrapper_drain_buf: 1 MiB accumulation buffer for the codegen-level
     // feof-gated read loop emitted by stream_get_contents on a wrapper fd.
     // Each fread chunk is copied here, building one contiguous result. Drains
     // larger than 1 MiB are truncated (v1).
-    out.push_str(&comm_directive("_user_wrapper_drain_buf", 1048576, target));
+    io_scratch::WRAPPER_DRAIN.append(&mut out, &target);
     // phar:// write stream state. _phar_write_out is the 1 MiB in-memory
     // payload buffer (template prefix + entry content); _phar_write_len is the
     // bytes used; _phar_write_tpl_len locates the entry payload. The path and
@@ -1730,39 +1530,39 @@ pub(crate) fn emit_runtime_data_fixed(
     // read-modify-write bridge. The url ptr/len pair keeps a runtime-built
     // phar:// URL alive until fclose() can route it through the URL bridge.
     // Fallback only: one stream at a time; synthetic fd 0x50000000.
-    out.push_str(&comm_directive("_phar_write_out", 1048576, target));
+    io_scratch::PHAR_OUTPUT.append(&mut out, &target);
     out.push_str(&comm_directive("_phar_write_len", 8, target));
     out.push_str(&comm_directive("_phar_write_tpl_len", 8, target));
     out.push_str(&comm_directive("_phar_write_path_ptr", 8, target));
     out.push_str(&comm_directive("_phar_write_path_len", 8, target));
     out.push_str(&comm_directive("_phar_write_entry_ptr", 8, target));
     out.push_str(&comm_directive("_phar_write_entry_len", 8, target));
-    out.push_str(&comm_directive("_phar_write_url_ptr", 8, target));
-    out.push_str(&comm_directive("_phar_write_url_len", 8, target));
+    io_scratch::PHAR_URL_POINTER.append(&mut out, &target);
+    io_scratch::PHAR_URL_LENGTH.append(&mut out, &target);
     // _stream_open_opened_path_scratch: 16-byte scratch backing the 5th
     // `?string &$opened_path` parameter of stream_open. The runtime passes
     // its address so wrappers that follow the PHP-faithful signature can
     // safely write to it; elephc v1 zeroes the slot before each call and
     // does not read the value back.
-    out.push_str(&comm_directive("_stream_open_opened_path_scratch", 16, target));
+    io_scratch::OPENED_PATH.append(&mut out, &target);
     // _user_filter_registry: 128 (filter_name, class_name) registrations,
     // each entry 32 bytes (filter_name_ptr/len + class_name_ptr/len). Slot
     // is free when filter_name_ptr is null. User filter IDs are slot_index
     // + USER_FILTER_ID_BASE (128) so they don't collide with the existing
     // u8 built-in filter IDs (1..=4). 128 × 32 = 4096 bytes.
-    out.push_str(&comm_directive("_user_filter_registry", 4096, target));
+    elephc_memoir::buffers::stream_tables::USER_FILTER_REGISTRY.append(&mut out, &target);
     // _user_filter_instances: one wrapper-class instance per attached
     // filter, keyed by (fd, direction). Slot = _user_filter_instances[fd*2
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
     // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
-    out.push_str(&comm_directive("_user_filter_instances", 4096, target));
+    elephc_memoir::buffers::stream_tables::USER_FILTER_INSTANCES.append(&mut out, &target);
     // _stream_context_options: pointer to the current stream-context
     // options hash (nested array of `wrapper => option => value`).
     // stream_context_create() stores its options arg here; consumers
     // (http://, ftp://, fopen 4th arg) read it back through
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
-    out.push_str(&comm_directive("_stream_context_options", 8, target));
+    elephc_memoir::buffers::stream_context_owners::append_ambient_storage(&mut out, &target);
     // var_dump body literals (rodata): per-element prefix/suffix bytes used by
     // the array/hash walkers. NONE of them carry a leading indent: every
     // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`
@@ -1817,8 +1617,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // object body by `__rt_var_dump_value`'s tag-6 branch. 256 entries × 8 B.
     // The capacity MUST match `VD_SEEN_CAPACITY` in `runtime::io::var_dump_object`:
     // a lookup that reaches the cap reports recursion, which is what bounds the walk.
-    out.push_str(&comm_directive("_vd_seen", 2048, target));
-    out.push_str(&comm_directive("_vd_seen_n", 8, target));
+    elephc_memoir::values::diagnostic_stack::append_data(&mut out, &target);
     // _debuginfo_guard: `_exc_handler_top | 1` while a run-time `__debugInfo()` call is in
     // flight (0 otherwise); a throw that finds no newer handler is reported as PHP's fatal.
     out.push_str(&comm_directive("_debuginfo_guard", 8, target));
@@ -1879,37 +1678,23 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_recvfrom_addr_len", 8, target));
     out.push_str(&comm_directive("_accept_peer_ptr", 8, target));
     out.push_str(&comm_directive("_accept_peer_len", 8, target));
-    out.push_str(&comm_directive("_protoent_buf", 32768, target));
+    io_scratch::PROTOCOLS.append(&mut out, &target);
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
-    out.push_str(&comm_directive("_servent_buf", 1048576, target));
+    io_scratch::SERVICES.append(&mut out, &target);
     out.push_str(".globl _etc_services_path\n_etc_services_path:\n    .asciz \"/etc/services\"\n");
-    out.push_str(&comm_directive("_principal_lookup_buf", 4096, target));
+    io_scratch::PRINCIPAL.append(&mut out, &target);
     out.push_str(".globl _etc_passwd_path\n_etc_passwd_path:\n    .asciz \"/etc/passwd\"\n");
     out.push_str(".globl _etc_group_path\n_etc_group_path:\n    .asciz \"/etc/group\"\n");
     out.push_str(".globl _principal_lookup_read_mode\n_principal_lookup_read_mode:\n    .asciz \"r\"\n");
     out.push_str(&emit_spl_autoload_extensions_data());
-    out.push_str(".globl _heap_dbg_stats_prefix\n_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
-    out.push_str(".globl _heap_dbg_frees_label\n_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
-    out.push_str(".globl _heap_dbg_live_blocks_label\n_heap_dbg_live_blocks_label:\n    .ascii \" live_blocks=\"\n");
-    out.push_str(".globl _heap_dbg_live_bytes_label\n_heap_dbg_live_bytes_label:\n    .ascii \" live_bytes=\"\n");
-    out.push_str(".globl _heap_dbg_peak_label\n_heap_dbg_peak_label:\n    .ascii \" peak_live_bytes=\"\n");
-    out.push_str(".globl _heap_dbg_leak_prefix\n_heap_dbg_leak_prefix:\n    .ascii \"HEAP DEBUG: leak summary: \"\n");
-    out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
-    out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
-    out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    elephc_memoir::data::append_heap_debug_stat_labels(&mut out);
+
     out.push_str(".globl _rt_diag_leading_newline\n_rt_diag_leading_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _rt_diag_in\n_rt_diag_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _rt_diag_on_line\n_rt_diag_on_line:\n    .ascii \" on line \"\n");
     out.push_str(".globl _rt_diag_newline\n_rt_diag_newline:\n    .ascii \"\\n\"\n");
-    out.push_str(".globl _heap_dbg_block_offset\n_heap_dbg_block_offset:\n    .ascii \"HEAP DEBUG: live offset=\"\n");
-    out.push_str(".globl _heap_dbg_block_bytes\n_heap_dbg_block_bytes:\n    .ascii \" bytes=\"\n");
-    out.push_str(".globl _heap_dbg_block_kind\n_heap_dbg_block_kind:\n    .ascii \" kind=\"\n");
-    out.push_str(".globl _heap_dbg_block_refs\n_heap_dbg_block_refs:\n    .ascii \" refs=\"\n");
-    out.push_str(".globl _heap_dbg_block_class\n_heap_dbg_block_class:\n    .ascii \" class_id=\"\n");
-    out.push_str(".globl _heap_dbg_block_class_name\n_heap_dbg_block_class_name:\n    .ascii \" class=\"\n");
-    out.push_str(".globl _heap_dbg_block_tag\n_heap_dbg_block_tag:\n    .ascii \" tag=\"\n");
-    out.push_str(".globl _heap_dbg_block_length\n_heap_dbg_block_length:\n    .ascii \" length=\"\n");
-    out.push_str(".globl _heap_dbg_block_fingerprint\n_heap_dbg_block_fingerprint:\n    .ascii \" fingerprint=\"\n");
+    elephc_memoir::data::append_heap_debug_block_labels(&mut out);
+
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     for (label, value) in [
         ("_bt_arg_unknown", "Unknown"),
@@ -2220,6 +2005,20 @@ mod tests {
             let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85, crate::codegen_support::RuntimeFeatures::all());
             assert_eq!(asm.contains("_iconv_write_options"), expected, "{target:?}");
         }
+    }
+
+    /// Large arenas reserve exactly the bounded scratch capacity published to the runtime.
+    #[test]
+    fn test_large_heap_uses_bounded_concat_reservation() {
+        let target = Target::new(Platform::Linux, Arch::AArch64);
+        let asm = emit_runtime_data_fixed(
+            1 << 31,
+            target,
+            PhpVersion::Php85,
+            crate::codegen_support::RuntimeFeatures::none(),
+        );
+        assert!(asm.contains(&comm_directive("_concat_buf", 1 << 30, target)));
+        assert!(asm.contains("_concat_capacity:\n    .quad 1073741824\n"));
     }
 
     /// Pins the stack-guard symbols in `.data`, aligned, rather than in `.comm`.

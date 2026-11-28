@@ -90,8 +90,8 @@ fn emit_by_reference_warning(
     // -- preserve the global string-concat reader state across user warning handlers --
     let scratch = abi::symbol_scratch_reg(emitter);
     abi::emit_reserve_temporary_stack(emitter, 16);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
-    abi::emit_store_to_sp(emitter, scratch, 0);
+    elephc_memoir::strings::concat_cursor::SavedConcatCursor::Stack(0)
+        .emit_save(emitter, scratch);
 
     let warning_prefix = data.add_string(b"Warning: ");
     emit_static_fragment(emitter, &warning_prefix, false);
@@ -117,8 +117,8 @@ fn emit_by_reference_warning(
     let newline = data.add_string(b"\n");
     emit_static_fragment(emitter, &newline, true);
 
-    abi::emit_load_temporary_stack_slot(emitter, scratch, 0);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::SavedConcatCursor::Stack(0)
+        .emit_restore(emitter, scratch);
     abi::emit_release_temporary_stack(emitter, 16);
 }
 

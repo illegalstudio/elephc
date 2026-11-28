@@ -9,6 +9,8 @@
 //!   and preserve PHP runtime conversion, class-alias, and closure-capture rules.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch};
 
 /// Applies one already-evaluated binary operation with eval runtime semantics.
 pub(in crate::interpreter) fn eval_binary_result(
@@ -56,31 +58,25 @@ fn eval_concat_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let left_string = eval_string_context_value(left, context, values)?;
-    let right_string = match eval_string_context_value(right, context, values) {
-        Ok(value) => value,
-        Err(status) => {
+    use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
+
+    let owners = StagedRuntimeOwners::default();
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&owners, &result), || {
+        let operation = (|| {
+            let left_string = eval_string_context_value(left, context, values)?;
             if left_string != left {
-                let _ = release_expr_result(left_string, context, values);
+                owners.stage(left_string);
             }
-            return Err(status);
-        }
-    };
-    let result = values.concat(left_string, right_string);
-    let left_released = if left_string != left {
-        release_expr_result(left_string, context, values)
-    } else { Ok(()) };
-    let right_released = if right_string != right {
-        release_expr_result(right_string, context, values)
-    } else { Ok(()) };
-    match (result, left_released.and(right_released)) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+            let right_string = eval_string_context_value(right, context, values)?;
+            if right_string != right {
+                owners.stage(right_string);
+            }
+            result.replace(Some(values.concat(left_string, right_string)?));
+            Ok(())
+        })();
+        owners.finish(operation, &result, |cell| release_expr_result(cell, context, values))
+    })
 }
 
 /// Evaluates a runtime property or method name expression and returns its PHP string bytes as UTF-8.
@@ -90,18 +86,23 @@ pub(in crate::interpreter) fn eval_dynamic_member_name(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let source = eval_owned_expr(expr, context, scope, values)?;
-    let result = (|| {
-        let value = eval_string_context_value(source, context, values)?;
-        let bytes = values.string_bytes(value);
-        let released = if value != source {
-            release_expr_result(value, context, values)
-        } else { Ok(()) };
-        let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
-        String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
-    })();
-    let released = eval_release_value(context, values, source);
-    result.and_then(|result| released.map(|()| result))
+    let source = RuntimeOwnerSlot::new(eval_owned_expr(expr, context, scope, values)?);
+    let converted = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&source, &converted), || {
+        let result = (|| {
+            let value = eval_string_context_value(source.borrowed(), context, values)?;
+            if value != source.borrowed() {
+                converted.replace(Some(value));
+            }
+            let bytes = values.string_bytes(value)?;
+            String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+        })();
+        let converted_released = converted
+            .take_optional()
+            .map_or(Ok(()), |value| release_expr_result(value, context, values));
+        let source_released = eval_release_value(context, values, source.take());
+        result.and_then(|result| converted_released.and(source_released).map(|()| result))
+    })
 }
 
 /// Reads an array element or dispatches `ArrayAccess::offsetGet()` for objects.
@@ -229,20 +230,20 @@ pub(super) fn eval_new_object_result(
     // `crate::interpreter::builtins::curl::multipart` consumes exactly such an object when
     // it walks a `CURLOPT_POSTFIELDS` array. The interception existed only because that
     // walk did not, which made a constructible `CURLFile` a value nothing could use.
-    let object = values.new_object(class_name)?;
-    let result = eval_native_constructor_with_evaluated_args(
-        class_name, object, args.clone(), context, values,
-    );
-    let mut released = Ok(());
-    for arg in args {
-        let cleanup = release_expr_result(arg.value, context, values);
-        if released.is_ok() { released = cleanup; }
-    }
-    if let Err(err) = result.and(released) {
-        let _ = values.release(object);
-        return Err(err);
-    }
-    Ok(object)
+    let object = RuntimeOwnerSlot::new(values.new_object(class_name)?);
+    let argument_owners = RuntimeOwnerBatch::new(args.iter().map(|arg| arg.value));
+    with_runtime_owners(&(&object, &argument_owners), || {
+        let constructed = eval_native_constructor_with_evaluated_args(
+            class_name, object.borrowed(), args.clone(), context, values,
+        );
+        argument_owners.finish(
+            constructed,
+            &object,
+            ReleaseOrder::Forward,
+            CleanupErrorPolicy::First,
+            |arg| release_expr_result(arg, context, values),
+        )
+    })
 }
 
 /// Resolves special class names used by `new` while preserving AOT fallback names.
@@ -275,6 +276,20 @@ pub(in crate::interpreter) fn eval_dynamic_class_name(
         EVAL_TAG_OBJECT => eval_instanceof_object_target_name(class_name, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Converts one evaluated class-name operand and retires its temporary owner on every exit.
+pub(in crate::interpreter) fn eval_owned_dynamic_class_name(
+    class_name: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let owner = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(class_name);
+    crate::runtime_hooks::owner_frames::with_runtime_owners(&owner, || {
+        let result = eval_dynamic_class_name(owner.borrowed(), context, values);
+        let cleanup = release_expr_result(owner.take(), context, values);
+        result.and_then(|class_name| cleanup.map(|()| class_name))
+    })
 }
 
 /// Returns the runtime class name for `$object::class` and rejects non-object dynamic receivers.
@@ -395,10 +410,7 @@ fn eval_instanceof_object_target_name(
     if let Some(class) = context.dynamic_object_class(identity) {
         return Ok(class.name().to_string());
     }
-    let class_name = values.object_class_name(target)?;
-    let bytes = values.string_bytes(class_name);
-    values.release(class_name)?;
-    let class_name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let class_name = runtime_object_class_name(target, values)?;
     Ok(class_name.trim_start_matches('\\').to_string())
 }
 

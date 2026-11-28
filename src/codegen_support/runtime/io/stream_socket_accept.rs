@@ -20,6 +20,7 @@
 //!   today, future families) lowers to an empty string. A failed accept
 //!   clears both globals.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{
     abi,
     emit::Emitter,
@@ -173,9 +174,7 @@ pub fn emit_stream_socket_accept(emitter: &mut Emitter) {
     // -- empty $peer_name: connected/unnamed peer or unsupported family --
     emitter.label("__rt_ssa_empty_peer");
     emitter.instruction("mov x0, #1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = single-byte buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov x1, x0");                                          // empty address pointer
     emitter.instruction("mov x2, #0");                                          // empty address length
 
@@ -320,9 +319,7 @@ fn emit_stream_socket_accept_linux_x86_64(emitter: &mut Emitter) {
     // -- empty $peer_name: connected/unnamed peer or unsupported family --
     emitter.label("__rt_ssa_empty_peer_x86");
     emitter.instruction("mov rax, 1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("call __rt_heap_alloc");                                // rax = single-byte buffer
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // owned-string heap-kind word with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("xor edx, edx");                                        // empty address length
 
     emitter.label("__rt_ssa_stash_peer_x86");

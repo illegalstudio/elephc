@@ -8,6 +8,7 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
@@ -366,7 +367,7 @@ fn apply_instance_property(
     state.prop_types.push((prop.name.clone(), ty));
     state
         .property_offsets
-        .insert(prop.name.clone(), 8 + slot_index * 16);
+        .insert(prop.name.clone(), object_declared_slot_offset(slot_index));
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
@@ -574,7 +575,7 @@ fn apply_private_parent_property_shadowing(
     state.prop_types.push((prop.name.clone(), ty));
     state
         .property_offsets
-        .insert(prop.name.clone(), 8 + slot_index * 16);
+        .insert(prop.name.clone(), object_declared_slot_offset(slot_index));
     state.defaults.push(untyped_property_schema_default(prop));
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);

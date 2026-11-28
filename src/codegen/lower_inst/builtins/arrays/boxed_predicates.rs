@@ -12,7 +12,7 @@ use super::*;
 use crate::codegen::lower_inst::{callables, callable_argument_normalizer};
 use crate::codegen_support::{callable_descriptor, sentinels};
 
-const BORROWED_BYTES: usize = 64;
+const BORROWED_BYTES: usize = 2 * elephc_memoir::values::stack_cell::BORROWED_MIXED_ARG_CELL_BYTES;
 
 /// Returns the first matching value, retaining its PHP type and independent result owner.
 pub(crate) fn lower_array_find(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

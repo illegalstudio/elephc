@@ -46,9 +46,9 @@ const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
 const EVAL_ESCAPING_PCNTL_CALLABLE_MESSAGE: &str =
     "Fatal error: PCNTL handler/closure cannot escape its eval context\n";
 const EVAL_STACK_BYTES: usize = 96;
-const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
-const EVAL_RESULT_ERROR_OFFSET: usize = 16;
-const EVAL_CONTEXT_HANDLE_OFFSET: usize = 24;
+const EVAL_RESULT_VALUE_CELL_OFFSET: usize = elephc_memoir::owner_layout::EvalResultWords::VALUE_CELL;
+const EVAL_RESULT_ERROR_OFFSET: usize = elephc_memoir::owner_layout::EvalResultWords::ERROR;
+const EVAL_CONTEXT_HANDLE_OFFSET: usize = elephc_memoir::owner_layout::EvalResultWords::BYTES;
 const EVAL_SCOPE_HANDLE_OFFSET: usize = 32;
 const EVAL_TEMP_CELL_OFFSET: usize = 40;
 const EVAL_CODE_PTR_OFFSET: usize = 48;

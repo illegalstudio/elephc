@@ -23,7 +23,11 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
             // The symbol loader uses x9 as its address scratch on AArch64. Load the count before
             // putting the receiver's class id in x9, otherwise every valid id is overwritten by
             // the symbol address and the attached-storage probe always answers false.
-            ctx.emitter.instruction("ldr x9, [x0]");                            // read the immutable concrete class identity
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                "x9",
+                "x0",
+            );
             ctx.emitter.instruction("cmp x9, x10");                             // negative and out-of-range identities fail the unsigned bound
             ctx.emitter.instruction(&format!("b.hs {absent}"));                 // reject before indexing the trusted table
             abi::emit_symbol_address(ctx.emitter, "x10", "_class_offsetget_forwrite_ptrs");
@@ -34,7 +38,11 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // an absent receiver has no attached storage
             ctx.emitter.instruction(&format!("jz {absent}"));                   // avoid dereferencing an absent receiver
-            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // read the immutable concrete class identity
+            elephc_memoir::values::object_storage::emit_load_class_id(
+                ctx.emitter,
+                "r9",
+                "rax",
+            );
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_class_iface_method_count", 0);
             ctx.emitter.instruction("cmp r9, r10");                             // negative and out-of-range identities fail the unsigned bound
             ctx.emitter.instruction(&format!("jae {absent}"));                  // reject before indexing the trusted table

@@ -22,6 +22,7 @@
 //! - Payload handling mirrors `__rt_array_to_hash_unique`: strings are persisted into independent
 //!   copies and heap-backed values retained, so the result owns what it holds.
 
+use elephc_memoir::values::hash_payload::{self, StringSlotStore};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -53,8 +54,8 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish the frame pointer
 
     emitter.instruction("str x0, [sp, #0]");                                    // save the source hash
-    emitter.instruction("ldr x9, [x0]");                                        // entry count, used as the capacity hint
-    emitter.instruction("ldr x10, [x0, #16]");                                  // the hash header's value_type
+    hash_layout::emit_load_header_field(emitter, "x9", "x0", HeaderField::Count);
+    hash_layout::emit_load_header_field(emitter, "x10", "x0", HeaderField::ValueType);
     emitter.instruction("str x10, [sp, #72]");                                  // save it: the seen-key shape depends on it
     emitter.instruction("cmp x9, #8");                                          // below the minimum useful capacity?
     emitter.instruction("b.ge __rt_h2h_uniq_cap_ok");                           // use the count as the hint
@@ -123,14 +124,10 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_h2h_uniq_insert");                           // scalars need no retain
     emitter.instruction("cmp x9, #7");                                          // above the heap-backed tag range?
     emitter.instruction("b.gt __rt_h2h_uniq_insert");                           // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #48]");                                   // the heap-backed payload
-    emitter.instruction("bl __rt_incref");                                      // retain it for the result
+    hash_payload::emit_retain_staged_pointer(emitter, 48);
     emitter.instruction("b __rt_h2h_uniq_insert");                              // payload retained: insert it
     emitter.label("__rt_h2h_uniq_persist");
-    emitter.instruction("ldr x1, [sp, #48]");                                   // string pointer
-    emitter.instruction("ldr x2, [sp, #56]");                                   // string length
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = an independent copy
-    emitter.instruction("stp x1, x2, [sp, #48]");                               // the result stores the copy
+    hash_payload::emit_persist_staged_string(emitter, 48, StringSlotStore::PairedOnAarch64);
 
     emitter.label("__rt_h2h_uniq_insert");
     emitter.instruction("ldr x0, [sp, #8]");                                    // the result hash
@@ -165,8 +162,8 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 96");                                         // reserve the walk state, keeping rsp aligned
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source hash
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // entry count, used as the capacity hint
-    emitter.instruction("mov r10, QWORD PTR [rdi + 16]");                       // the hash header's value_type
+    hash_layout::emit_load_header_field(emitter, "rax", "rdi", HeaderField::Count);
+    hash_layout::emit_load_header_field(emitter, "r10", "rdi", HeaderField::ValueType);
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // save it: the seen-key shape depends on it
     emitter.instruction("cmp rax, 8");                                          // below the minimum useful capacity?
     emitter.instruction("jge __rt_h2h_uniq_cap_ok_x");                          // use the count as the hint
@@ -235,15 +232,10 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_h2h_uniq_insert_x");                           // scalars need no retain
     emitter.instruction("cmp r10, 7");                                          // above the heap-backed tag range?
     emitter.instruction("jg __rt_h2h_uniq_insert_x");                           // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // pass the heap-backed payload in the incref helper's input register
-    emitter.instruction("call __rt_incref");                                    // retain it for the result
+    hash_payload::emit_retain_staged_pointer(emitter, 56);
     emitter.instruction("jmp __rt_h2h_uniq_insert_x");                          // payload retained: insert it
     emitter.label("__rt_h2h_uniq_persist_x");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // string pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // string length
-    emitter.instruction("call __rt_str_persist");                               // rax/rdx = an independent copy
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // the result stores the copy
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // and the copy's length
+    hash_payload::emit_persist_staged_string(emitter, 56, StringSlotStore::Separate);
 
     emitter.label("__rt_h2h_uniq_insert_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the result hash
@@ -264,3 +256,4 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller's frame pointer
     emitter.instruction("ret");                                                 // return the owned unique hash to the caller
 }
+use elephc_memoir::hash_layout::{self, HeaderField};

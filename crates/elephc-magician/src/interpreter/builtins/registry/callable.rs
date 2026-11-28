@@ -21,6 +21,9 @@ pub(in crate::interpreter) use ownership::*;
 mod static_dispatch;
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 
 pub(in crate::interpreter) use array_dispatch::*;
 pub(in crate::interpreter) use call_user_func::*;
@@ -398,19 +401,18 @@ fn eval_array_callable_with_receiver_owner(
     if values.array_len(callback)? != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut temporaries = Vec::with_capacity(4);
-    let result = (|| {
-        let zero = values.int(0)?;
-        temporaries.push(zero);
-        let one = values.int(1)?;
-        temporaries.push(one);
-        let receiver = values.array_get(callback, zero)?;
-        temporaries.push(receiver);
-        let method = values.array_get(callback, one)?;
-        temporaries.push(method);
-        let method =
-            String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
-        match values.type_tag(receiver)? {
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder};
+    let temporaries = StagedRuntimeOwners::default();
+    let receiver_owner = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&temporaries, &receiver_owner), || {
+        let result = (|| {
+            let zero = temporaries.stage(values.int(0)?);
+            let one = temporaries.stage(values.int(1)?);
+            let receiver = temporaries.stage(values.array_get(callback, zero)?);
+            let method = temporaries.stage(values.array_get(callback, one)?);
+            let method = String::from_utf8(values.string_bytes(method)?)
+                .map_err(|_| EvalStatus::RuntimeFatal)?;
+            match values.type_tag(receiver)? {
             EVAL_TAG_OBJECT => {
                 let native_dispatch = context
                     .eval_object_callable_native_dispatch(callback, receiver, &method)
@@ -465,36 +467,34 @@ fn eval_array_callable_with_receiver_owner(
                     bridge_scope,
                 })
             }
-            _ => Err(EvalStatus::UnsupportedConstruct),
-        }
-    })();
-    // Only an object-method result transfers the array read's receiver owner.
-    // Special class strings resolve to a borrowed $this, not the temporary string cell.
-    let receiver = match &result {
-        Ok(EvaluatedCallable::ObjectMethod { object, .. })
-            if !object.is_borrowed() && temporaries.contains(object) =>
-        {
-            Some(*object)
-        }
-        _ => None,
-    };
-    let mut cleanup = Ok(());
-    for temporary in temporaries {
-        if Some(temporary) != receiver {
-            let released = values.release(temporary);
-            if cleanup.is_ok() { cleanup = released; }
-        }
-    }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(_), Err(status)) => {
-            if let Some(receiver) = receiver.filter(|cell| !cell.is_borrowed()) {
-                let _ = values.release(receiver);
+                _ => Err(EvalStatus::UnsupportedConstruct),
             }
-            Err(status)
+        })();
+        // Only an object-method result transfers the array read's receiver owner.
+        // Special class strings resolve to a borrowed $this, not the temporary string cell.
+        if let Ok(EvaluatedCallable::ObjectMethod { object, .. }) = &result {
+            if !object.is_borrowed() {
+                receiver_owner.replace(temporaries.take_first(*object));
+            }
         }
-        (Ok(callable), Ok(())) => Ok((callable, receiver)),
-    }
+        let cleanup = temporaries.take_all().release(
+            ReleaseOrder::Forward,
+            CleanupErrorPolicy::First,
+            |temporary| values.release(temporary),
+        );
+        match (result, cleanup) {
+            (Err(status), _) | (Ok(_), Err(status)) => {
+                if let Some(receiver) = receiver_owner.take_optional() {
+                    let _ = values.release(receiver);
+                }
+                Err(status)
+            }
+            (Ok(callable), Ok(())) => {
+                let receiver = receiver_owner.take_optional();
+                Ok((callable, receiver))
+            }
+        }
+    })
 }
 
 /// Resolves deprecated `self`/`static`/`parent` callable arrays inside method scope.

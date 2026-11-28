@@ -37,7 +37,8 @@ pub(super) fn run(function: &mut Function) -> bool {
         let uses = instruction_uses(function);
         let terms = terminator_used_values(function);
         let mut region = Region::default();
-        if !gather(function, sink, &uses, &terms, &mut region) || region.slots.is_empty() { continue; }
+        let gathered = gather(function, sink, &uses, &terms, &mut region);
+        if !gathered || region.slots.is_empty() { continue; }
         for (sink, rewrite) in region.sinks { apply_rewrite(function, sink, rewrite); }
         for id in region.instructions { neutralize_to_nop(&mut function.instructions[id.as_raw() as usize]); }
         for slot in region.slots {
@@ -97,6 +98,12 @@ fn gather(function: &Function, first: InstId, uses: &HashMap<ValueId, Vec<InstId
                     Op::MixedNumericBinop if matches!(inst.immediate, Some(Immediate::MixedNumericOp(MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul))) => pending.push(user),
                     Op::Cast if integer_cast(inst) => pending.push(user),
                     Op::StoreLocal if region.writers.contains(&user) => pending.push(user),
+                    Op::StoreLocal => {
+                        let Some(scope) = super::super::transient_owner_scopes::for_store(function, user) else {
+                            return false;
+                        };
+                        region.instructions.extend(scope.operations());
+                    }
                     _ => return false,
                 }
             }

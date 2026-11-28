@@ -11,6 +11,7 @@
 //!   shares the same scan.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{with_collection_cells, with_collection_result};
 
 eval_builtin! {
     contract: "array_search",
@@ -87,21 +88,33 @@ pub(in crate::interpreter) fn eval_array_search_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let comparison = if strict { EvalBinOp::StrictEq } else { EvalBinOp::LooseEq };
     let len = values.array_len(array)?;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let equal = values.compare(comparison, needle, value)?;
-        if values.truthy(equal)? {
-            return match name {
-                "in_array" => values.bool_value(true),
-                "array_search" => Ok(key),
-                _ => Err(EvalStatus::UnsupportedConstruct),
-            };
+    with_collection_result(values, |values, result| {
+        for position in 0..len {
+            let found = with_collection_cells(values, |values, owners| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let value = owners.stage(values.array_get(array, key)?);
+                let equal = owners.stage(values.compare(comparison, needle, value)?);
+                if !values.truthy(equal)? {
+                    return Ok(false);
+                }
+                let answer = match name {
+                    "in_array" => values.bool_value(true)?,
+                    "array_search" => values.retain(key)?,
+                    _ => return Err(EvalStatus::UnsupportedConstruct),
+                };
+                result.replace(Some(answer));
+                Ok(true)
+            })?;
+            if found {
+                return Ok(());
+            }
         }
-    }
-    match name {
-        "in_array" => values.bool_value(false),
-        "array_search" => values.bool_value(false),
-        _ => Err(EvalStatus::UnsupportedConstruct),
-    }
+        match name {
+            "in_array" | "array_search" => {
+                result.replace(Some(values.bool_value(false)?));
+                Ok(())
+            }
+            _ => Err(EvalStatus::UnsupportedConstruct),
+        }
+    })
 }

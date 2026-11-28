@@ -56,7 +56,7 @@ fn emit_mixed_object_offset_unset_aarch64(emitter: &mut Emitter) {
     guards::guard(emitter, 64, 96);
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the receiver after guard registration
     emitter.instruction("ldr x1, [sp, #8]");                                    // restore the original offset before dispatch
-    emitter.instruction("ldr x11, [x0]");                                       // load the receiver's class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x11", "x0");
     for (symbol, target) in [
         ("_spl_fixed_array_class_id", "__rt_mixed_object_offset_unset_spl_fixed"),
         ("_spl_dll_class_id", "__rt_mixed_object_offset_unset_spl_list"),
@@ -64,7 +64,7 @@ fn emit_mixed_object_offset_unset_aarch64(emitter: &mut Emitter) {
         ("_spl_queue_class_id", "__rt_mixed_object_offset_unset_spl_list"),
     ] {
         abi::emit_symbol_address(emitter, "x12", symbol);
-        emitter.instruction("ldr x12, [x12]");                                  // load the runtime container's class id
+        elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x12", "x12");
         emitter.instruction("cmp x11, x12");                                    // is the receiver this runtime container?
         emitter.instruction(&format!("b.eq {target}"));                         // delegate the original offset to its consuming helper
     }
@@ -129,7 +129,7 @@ fn emit_mixed_object_offset_unset_x86_64(emitter: &mut Emitter) {
     guards::guard(emitter, 64, 96);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the receiver after guard registration
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // restore the original offset before dispatch
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the receiver's class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     for (symbol, target) in [
         ("_spl_fixed_array_class_id", "__rt_mixed_object_offset_unset_spl_fixed"),
         ("_spl_dll_class_id", "__rt_mixed_object_offset_unset_spl_list"),

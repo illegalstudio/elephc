@@ -16,6 +16,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells, with_collection_result};
 use super::super::super::*;
 use super::*;
 
@@ -71,9 +72,10 @@ pub(in crate::interpreter) fn eval_builtin_stream_select_call(
         if let Some(microseconds) = optional_evaluated_ref_arg(&bound, 4) {
             selected_args.push(microseconds.value);
         }
-        let result = eval_stream_select_result(&selected_args, context, values)?;
-        eval_write_stream_select_empty_arrays(&targets, context, values)?;
-        Ok(result)
+        with_collection_result(values, |values, result| {
+            result.replace(Some(eval_stream_select_result(&selected_args, context, values)?));
+            eval_write_stream_select_empty_arrays(&targets, context, values)
+        })
     })
 }
 
@@ -139,9 +141,10 @@ fn eval_stream_select_cast_array(
     }
     let len = values.array_len(array)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        eval_stream_select_cast_value(value, context, values)?;
+        with_collection_cells(values, |values, owners| {
+            let (_, value) = stage_collection_entry(array, position, values, owners)?;
+            eval_stream_select_cast_value(value, context, values)
+        })?;
     }
     Ok(())
 }

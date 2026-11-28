@@ -17,11 +17,8 @@ use crate::codegen::callable_descriptor;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::Module;
-
-const ERROR_HANDLER_NODE_BYTES: i64 = 48;
-const EVAL_DYNAMIC_CONTEXT_CAPTURE: usize = 0;
-const EVAL_DYNAMIC_CALLBACK_CAPTURE: usize = 1;
-const EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES: usize = 32;
+use elephc_memoir::callables::storage::{self, CaptureSlot};
+use elephc_memoir::handler_owners::ERROR_FIELDS;
 
 /// Emits eval-facing error-reporting, handler registration, restore, and dispatch wrappers.
 pub(super) fn emit_eval_error_handler_helpers(
@@ -50,11 +47,6 @@ pub(super) fn emit_eval_error_handler_helpers(
     }
     emit_dispatch_error_handler(module, emitter);
     emit_get_error_handler(module, emitter);
-}
-
-/// Returns the byte offset for one capture in an eval dynamic callable descriptor.
-const fn dynamic_capture_offset(index: usize) -> usize {
-    callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + index * 16
 }
 
 /// Emits the ARM64 C wrapper for reading or replacing the reporting mask.
@@ -98,14 +90,9 @@ fn emit_set_error_handler_aarch64(
     emitter.instruction("str x1, [sp, #8]");                                    // save the nullable boxed callback value
     emitter.instruction("str x2, [sp, #16]");                                   // save the selected PHP error-level mask
     emitter.instruction("str x3, [sp, #24]");                                   // save writable previous-callback output storage
-    emitter.instruction(&format!("mov x0, #{ERROR_HANDLER_NODE_BYTES}"));       // allocate one native error-handler stack node
-    emitter.instruction("bl __rt_heap_alloc");                                  // create storage for the previous process-wide state
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, &ERROR_FIELDS);
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the node across symbol loads and calls
-    for (offset, symbol) in error_handler_fields() {
-        abi::emit_load_symbol_to_reg(emitter, "x9", symbol, 0);
-        emitter.instruction(&format!("str x9, [x0, #{offset}]"));               // transfer one prior handler field into the stack node
-    }
-    abi::emit_store_reg_to_symbol(emitter, "x0", "_php_error_handler_stack", 0);
+    elephc_memoir::handler_owners::emit_save_node(emitter, "x0", "x9", &ERROR_FIELDS, true);
     abi::emit_load_symbol_to_reg(emitter, "x0", "_php_error_handler_value", 0);
     emitter.instruction(&format!("cbz x0, {no_previous}"));                     // an empty prior registration returns a null raw pointer
     emitter.instruction("bl __rt_incref");                                      // give the PHP return value an independent owner
@@ -122,30 +109,12 @@ fn emit_set_error_handler_aarch64(
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the callback for descriptor capture ownership
     emitter.instruction("bl __rt_incref");                                      // retain the callback owned by the runtime descriptor capture
     emitter.instruction("str x0, [sp, #40]");                                   // keep the capture owner while allocating the descriptor
-    emitter.instruction(&format!(                                               // allocate the fixed descriptor plus two capture slots
-        "mov x0, #{}",
-        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
-            + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES
-    ));
-    emitter.instruction("bl __rt_heap_alloc");                                  // create the runtime descriptor block
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+    storage::emit_callback_adapter(
         emitter,
-        "x0",
         descriptor_label,
-    );
-    emitter.instruction("ldr x9, [sp, #0]");                                    // load the eval context capture
-    abi::emit_store_to_address(
-        emitter,
         "x9",
-        "x0",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
-    );
-    emitter.instruction("ldr x9, [sp, #40]");                                   // load the retained boxed callback capture
-    abi::emit_store_to_address(
-        emitter,
-        "x9",
-        "x0",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
+        CaptureSlot::Stack(0),
+        CaptureSlot::Stack(40),
     );
     abi::emit_store_reg_to_symbol(emitter, "x0", "_php_error_handler_callable", 0);
     emitter.instruction("ldr x0, [sp, #0]");                                    // retain the eval context for the persistent handler descriptor
@@ -189,14 +158,9 @@ fn emit_set_error_handler_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the nullable boxed callback value
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the selected PHP error-level mask
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save writable previous-callback output storage
-    emitter.instruction(&format!("mov rax, {ERROR_HANDLER_NODE_BYTES}"));       // allocate one native error-handler stack node
-    emitter.instruction("call __rt_heap_alloc");                                // create storage for the previous process-wide state
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, &ERROR_FIELDS);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the node across symbol loads and calls
-    for (offset, symbol) in error_handler_fields() {
-        abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
-        emitter.instruction(&format!("mov QWORD PTR [rax + {offset}], r10"));   // transfer one prior handler field into the stack node
-    }
-    abi::emit_store_reg_to_symbol(emitter, "rax", "_php_error_handler_stack", 0);
+    elephc_memoir::handler_owners::emit_save_node(emitter, "rax", "r10", &ERROR_FIELDS, true);
     abi::emit_load_symbol_to_reg(emitter, "rax", "_php_error_handler_value", 0);
     emitter.instruction("test rax, rax");                                       // check for an existing callback value
     emitter.instruction(&format!("jz {no_previous}"));                          // an empty prior registration returns a null raw pointer
@@ -215,30 +179,12 @@ fn emit_set_error_handler_x86_64(
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the callback for descriptor capture ownership
     emitter.instruction("call __rt_incref");                                    // retain the callback owned by the runtime descriptor capture
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // keep the capture owner while allocating the descriptor
-    emitter.instruction(&format!(                                               // allocate the fixed descriptor plus two capture slots
-        "mov rax, {}",
-        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
-            + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES
-    ));
-    emitter.instruction("call __rt_heap_alloc");                                // create the runtime descriptor block
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+    storage::emit_callback_adapter(
         emitter,
-        "rax",
         descriptor_label,
-    );
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the eval context capture
-    abi::emit_store_to_address(
-        emitter,
         "r10",
-        "rax",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
-    );
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // load the retained boxed callback capture
-    abi::emit_store_to_address(
-        emitter,
-        "r10",
-        "rax",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
+        CaptureSlot::Frame(8),
+        CaptureSlot::Frame(48),
     );
     abi::emit_store_reg_to_symbol(emitter, "rax", "_php_error_handler_callable", 0);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // retain the eval context for the persistent handler descriptor
@@ -377,18 +323,6 @@ fn clear_error_handler_owner_globals(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_php_error_handler_callable", 0);
     abi::emit_store_zero_to_symbol(emitter, "_php_error_handler_context", 0);
     abi::emit_store_zero_to_symbol(emitter, "_php_error_handler_context_release", 0);
-}
-
-/// Returns the linked-node field layout shared by registration and restoration.
-fn error_handler_fields() -> [(usize, &'static str); 6] {
-    [
-        (0, "_php_error_handler_stack"),
-        (8, "_php_error_handler_value"),
-        (16, "_php_error_handler_callable"),
-        (24, "_php_error_handler_mask"),
-        (32, "_php_error_handler_context"),
-        (40, "_php_error_handler_context_release"),
-    ]
 }
 
 /// Emits a platform-C global label for one generated eval wrapper.

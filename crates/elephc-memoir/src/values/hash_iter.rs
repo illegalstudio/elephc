@@ -1,0 +1,229 @@
+//! Purpose:
+//! Emits the `__rt_hash_iter_next`, `__rt_hash_iter_end` runtime helper assembly for hash iter.
+//! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
+//!
+//! Called from:
+//! - The compiler's managed runtime emitter inventory.
+//!
+//! Key details:
+//! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+
+use crate::hash_layout;
+use crate::{Arch, Emitter};
+
+/// Emits `__rt_hash_iter_next` for the host target (ARM64 or x86_64).
+///
+/// Iterates over hash table entries in insertion order using a cursor protocol:
+/// - Cursor `0` starts a fresh walk from the header head slot
+/// - Cursor `> 0` encodes `slot_index + 1` for resumed iteration
+/// - Cursor `-2` is returned after yielding the tail entry; the next probe returns done
+/// - Cursor `-1` signals no more entries
+///
+/// # Inputs (ARM64 convention)
+/// - `x0`: hash table pointer
+/// - `x1`: cursor (0 for first call, previously returned cursor for resume)
+///
+/// # Outputs (ARM64 convention)
+/// - `x0`: next cursor (or `-1` if done)
+/// - `x1`: key pointer
+/// - `x2`: key length
+/// - `x3`: value low word
+/// - `x4`: value high word
+/// - `x5`: value tag
+/// - `x6`: value address (for by-reference foreach binding)
+///
+/// Delegates to `emit_hash_iter_linux_x86_64` on x86_64.
+///
+pub fn emit_raw_hash_iter(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
+        emit_hash_iter_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: hash_iter_next ---");
+    emitter.label_global("__rt_hash_iter_next");
+
+    // -- cursor protocol --
+    // 0   = start from header.head
+    // >0  = slot index + 1 of the next entry to return
+    // -2  = post-last cursor returned with the final yielded entry
+    // -1  = no more entries
+    emitter.instruction("cbz x0, __rt_hash_iter_end");                          // null tables from missed reads have nothing to iterate
+    crate::abi::emit_load_int_immediate(
+        emitter,
+        "x7",
+        crate::layout::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x7");                                          // does the table carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_hash_iter_end");                             // sentinel-null tables from missed reads have nothing to iterate
+    emitter.instruction("cmp x1, #-1");                                         // has the caller already consumed the end sentinel?
+    emitter.instruction("b.eq __rt_hash_iter_end");                             // repeated end probes stay at done
+    emitter.instruction("cmp x1, #-2");                                         // was the previous yielded entry the tail?
+    emitter.instruction("b.eq __rt_hash_iter_end");                             // convert the post-last cursor into the final done signal
+    emitter.instruction("cbnz x1, __rt_hash_iter_resume");                      // non-zero cursors already encode the next slot to return
+
+    // -- start a fresh insertion-order walk from the head slot --
+    emitter.instruction("ldr x6, [x0, #24]");                                   // x6 = head slot index from the hash header
+    emitter.instruction("cmp x6, #-1");                                         // does the hash contain any entries?
+    emitter.instruction("b.eq __rt_hash_iter_end");                             // empty hashes are immediately done
+    emitter.instruction("b __rt_hash_iter_entry");                              // load and return the head entry
+
+    // -- resume iteration from the encoded next slot --
+    emitter.label("__rt_hash_iter_resume");
+    emitter.instruction("sub x6, x1, #1");                                      // decode slot index = cursor - 1
+
+    // -- compute entry address: entries + index * 64 --
+    emitter.label("__rt_hash_iter_entry");
+    emitter.instruction("mov x7, #64");                                         // x7 = hash entry size in bytes
+    hash_layout::emit_entry_address(emitter, "x8", "x0", "x6");
+
+    // -- a saved cursor may name an entry deleted by the loop body --
+    emitter.instruction("ldr x10, [x8]");                                       // inspect the occupied marker before returning this slot
+    emitter.instruction("cmp x10, #2");                                         // is the saved successor now a tombstone?
+    emitter.instruction("b.ne __rt_hash_iter_live_entry");                      // live entries can be returned normally
+    emitter.instruction("ldr x6, [x8, #56]");                                   // tombstones retain their former next link for active cursors
+    emitter.instruction("cmp x6, #-1");                                         // did deletion remove the final pending entry?
+    emitter.instruction("b.eq __rt_hash_iter_end");                             // no live successor remains
+    emitter.instruction("b __rt_hash_iter_entry");                              // follow the preserved chain until a live entry is found
+    emitter.label("__rt_hash_iter_live_entry");
+
+    // -- return the selected entry and encode the next cursor --
+    emitter.instruction("ldr x9, [x8, #56]");                                   // x9 = next slot index from the insertion-order chain
+    emitter.instruction("cmp x9, #-1");                                         // is this the tail entry?
+    emitter.instruction("b.eq __rt_hash_iter_tail");                            // tail entries return the post-last cursor
+    emitter.instruction("add x0, x9, #1");                                      // x0 = next cursor (slot index + 1)
+    emitter.instruction("b __rt_hash_iter_return");                             // emit the current entry payload
+    emitter.label("__rt_hash_iter_tail");
+    emitter.instruction("mov x0, #-2");                                         // x0 = post-last cursor for the next probe
+    emitter.label("__rt_hash_iter_return");
+    emitter.instruction("ldr x1, [x8, #8]");                                    // x1 = key_ptr
+    emitter.instruction("ldr x2, [x8, #16]");                                   // x2 = key_len
+    emitter.instruction("ldr x3, [x8, #24]");                                   // x3 = value_lo
+    emitter.instruction("ldr x4, [x8, #32]");                                   // x4 = value_hi
+    emitter.instruction("ldr x5, [x8, #40]");                                   // x5 = value_tag
+    emitter.instruction("add x6, x8, #24");                                     // return the current entry value address for by-reference foreach binding
+    emitter.instruction("ret");                                                 // return the current entry payload
+
+    // -- no more entries --
+    emitter.label("__rt_hash_iter_end");
+    emitter.instruction("mov x0, #-1");                                         // return -1 to signal end of iteration
+    emitter.instruction("mov x5, #8");                                          // value_tag = null when iteration is done
+    emitter.instruction("ret");                                                 // return to caller
+
+}
+
+/// Emits `__rt_hash_iter_next` for the x86_64 Linux ABI.
+///
+/// Identical iteration semantics to the ARM64 variant but uses System V AMD64 ABI:
+/// - `rdi`: hash table pointer
+/// - `rsi`: cursor
+/// - `rax`: next cursor (or `-1` if done), key pointer, key length, value words, value tag
+/// - `r10`: value address (for by-reference foreach binding)
+///
+/// Cursor protocol and slot encoding match the ARM64 implementation.
+fn emit_hash_iter_linux_x86_64(emitter: &mut impl Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_iter_next ---");
+    emitter.label_global("__rt_hash_iter_next");
+
+    emitter.instruction("test rdi, rdi");                                       // null tables from missed reads have nothing to iterate
+    emitter.instruction("jz __rt_hash_iter_end");                               // return the done sentinel before reading a null table header
+    crate::abi::emit_load_int_immediate(
+        emitter,
+        "r11",
+        crate::layout::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r11");                                        // does the table carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_hash_iter_end");                               // sentinel-null tables from missed reads have nothing to iterate
+    emitter.instruction("cmp rsi, -1");                                         // has the caller already consumed the terminal done sentinel?
+    emitter.instruction("je __rt_hash_iter_end");                               // repeated end probes keep returning the done sentinel
+    emitter.instruction("cmp rsi, -2");                                         // did the previous yielded entry already encode the post-last cursor?
+    emitter.instruction("je __rt_hash_iter_end");                               // convert the post-last cursor into the final done signal
+    emitter.instruction("test rsi, rsi");                                       // does the caller want to resume from a previously returned next cursor?
+    emitter.instruction("jne __rt_hash_iter_resume");                           // non-zero cursors already encode the next slot to return
+
+    emitter.instruction("mov r10, QWORD PTR [rdi + 24]");                       // load the insertion-order head slot from the hash header for a fresh walk
+    emitter.instruction("cmp r10, -1");                                         // is the hash table empty?
+    emitter.instruction("je __rt_hash_iter_end");                               // empty hashes are immediately done
+    emitter.instruction("jmp __rt_hash_iter_entry");                            // return the head entry on the first iteration step
+
+    emitter.label("__rt_hash_iter_resume");
+    emitter.instruction("mov r10, rsi");                                        // copy the encoded cursor before decoding it into a raw slot index
+    emitter.instruction("sub r10, 1");                                          // decode slot index = cursor - 1 for resumed insertion-order walks
+
+    emitter.label("__rt_hash_iter_entry");
+    hash_layout::emit_entry_address(emitter, "r11", "rdi", "r10");             // address the selected entry in the separate allocation
+    emitter.instruction("cmp QWORD PTR [r11], 2");                              // did the loop body delete the saved successor?
+    emitter.instruction("jne __rt_hash_iter_live_entry");                       // live entries can be returned normally
+    emitter.instruction("mov r10, QWORD PTR [r11 + 56]");                       // tombstones retain their former next link for active cursors
+    emitter.instruction("cmp r10, -1");                                         // did deletion remove the final pending entry?
+    emitter.instruction("je __rt_hash_iter_end");                               // no live successor remains
+    emitter.instruction("jmp __rt_hash_iter_entry");                            // follow the preserved chain until a live entry is found
+    emitter.label("__rt_hash_iter_live_entry");
+    emitter.instruction("mov rax, QWORD PTR [r11 + 56]");                       // load the insertion-order next-slot index from the current entry
+    emitter.instruction("cmp rax, -1");                                         // is this entry the insertion-order tail?
+    emitter.instruction("je __rt_hash_iter_tail");                              // tail entries return the post-last cursor so the next probe yields done
+    emitter.instruction("add rax, 1");                                          // encode the next slot as cursor = slot index + 1 for the caller
+    emitter.instruction("jmp __rt_hash_iter_return");                           // return the current entry payload alongside the encoded next cursor
+
+    emitter.label("__rt_hash_iter_tail");
+    emitter.instruction("mov rax, -2");                                         // encode the post-last cursor after yielding the current tail entry
+
+    emitter.label("__rt_hash_iter_return");
+    emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                        // return the entry key pointer in the first borrowed-string result register
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 16]");                       // return the entry key length in the paired borrowed-string result register
+    emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // return the low payload word for the current hash entry value
+    emitter.instruction("mov r8, QWORD PTR [r11 + 32]");                        // return the high payload word for the current hash entry value
+    emitter.instruction("mov r9, QWORD PTR [r11 + 40]");                        // return the runtime value tag that describes the current hash entry payload
+    emitter.instruction("lea r10, [r11 + 24]");                                 // return the current entry value address for by-reference foreach binding
+    emitter.instruction("ret");                                                 // return the current insertion-order entry payload to the caller
+
+    emitter.label("__rt_hash_iter_end");
+    emitter.instruction("mov rax, -1");                                         // return the done sentinel cursor once iteration has completed
+    emitter.instruction("xor edi, edi");                                        // clear the borrowed key pointer when iteration is done
+    emitter.instruction("xor edx, edx");                                        // clear the borrowed key length when iteration is done
+    emitter.instruction("xor ecx, ecx");                                        // clear the low payload word when iteration is done
+    emitter.instruction("xor r8d, r8d");                                        // clear the high payload word when iteration is done
+    emitter.instruction("mov r9, 8");                                           // return runtime value tag 8 = null when iteration is done
+    emitter.instruction("ret");                                                 // return the terminal iterator state to the caller
+}
+
+/// Emits the AArch64 inline hash ordinal walk.
+///
+/// Follows the insertion-order `next` chain from the header head slot `x1` times and
+/// leaves the selected entry's address in `x10`. The cursor has already been bounds
+/// checked against the live count, so a chain that runs out early means the table is
+/// inconsistent; that branches to `invalid` instead of reading past the entries.
+pub fn emit_hash_ordinal_aarch64(emitter: &mut impl Emitter, prefix: &str, invalid: &str) {
+    emitter.emit_load_from_address("x9", "x0", hash_layout::ORDER_HEAD_OFFSET);                                   // x9 = insertion-order head slot index
+    emitter.label(&format!("{}_walk", prefix));
+    emitter.instruction("cmn x9, #1");                                          // has the insertion-order chain run out?
+    emitter.instruction(&format!("b.eq {}", invalid));                          // an exhausted chain has no entry at this ordinal
+    emitter.instruction("mov x10, #64");                                        // x10 = hash entry stride in bytes
+    hash_layout::emit_entry_address(emitter, "x10", "x0", "x9");
+    emitter.instruction(&format!("cbz x1, {}_walk_done", prefix));              // ordinal 0 selects the current entry
+    emitter.instruction("sub x1, x1, #1");                                      // consume one step of the requested ordinal
+    emitter.emit_load_from_address("x9", "x10", hash_layout::ENTRY_NEXT_OFFSET);                                  // x9 = next slot index from the insertion-order chain
+    emitter.instruction(&format!("b {}_walk", prefix));                         // keep walking towards the requested ordinal
+    emitter.label(&format!("{}_walk_done", prefix));
+}
+
+/// Emits the x86_64 inline hash ordinal walk.
+///
+/// Follows the insertion-order `next` chain from the header head slot `rsi` times and
+/// leaves the selected entry's address in `r10`. Branches to `invalid` if the chain runs
+/// out before the bounds-checked ordinal is reached.
+pub fn emit_hash_ordinal_x86_64(emitter: &mut impl Emitter, prefix: &str, invalid: &str) {
+    emitter.emit_load_from_address("rax", "rdi", hash_layout::ORDER_HEAD_OFFSET);                       // rax = insertion-order head slot index
+    emitter.label(&format!("{}_walk", prefix));
+    emitter.instruction("cmp rax, -1");                                         // has the insertion-order chain run out?
+    emitter.instruction(&format!("je {}", invalid));                            // an exhausted chain has no entry at this ordinal
+    hash_layout::emit_entry_address(emitter, "r10", "rdi", "rax");
+    emitter.instruction("test rsi, rsi");                                       // is the requested ordinal exhausted?
+    emitter.instruction(&format!("je {}_walk_done", prefix));                   // ordinal 0 selects the current entry
+    emitter.instruction("sub rsi, 1");                                          // consume one step of the requested ordinal
+    emitter.emit_load_from_address("rax", "r10", hash_layout::ENTRY_NEXT_OFFSET);                       // rax = next slot index from the insertion-order chain
+    emitter.instruction(&format!("jmp {}_walk", prefix));                       // keep walking towards the requested ordinal
+    emitter.label(&format!("{}_walk_done", prefix));
+}

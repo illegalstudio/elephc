@@ -67,11 +67,16 @@ echo ord("\xFF") . ":" . ord("\777") . ":" . bin2hex("\xC3\xA9") . ":" . bin2hex
     assert_eq!(out, "255:255:c3a9:eda080:ee8080");
 }
 
-/// Verifies `chr()` returns the single-character string "A" for ASCII code 65.
+/// Exercises runtime byte wrapping and the escape of a freshly formatted result.
 #[test]
 fn test_chr() {
-    let out = compile_and_run("<?php echo chr(65);");
-    assert_eq!(out, "A");
+    let out = compile_and_run(r#"<?php
+function runtime_chr(int $value): string {
+    return chr($value);
+}
+echo chr(65), runtime_chr($argc + 64), "|", bin2hex(runtime_chr($argc - 2));
+"#);
+    assert_eq!(out, "AA|ff");
 }
 
 /// Verifies `addslashes()` escapes double quotes and apostrophes with backslashes.
@@ -641,6 +646,20 @@ echo (gzinflate($packed) === $data ? "roundtrip-ok" : "roundtrip-fail");
 "#,
     );
     assert_eq!(out, "smaller|roundtrip-ok");
+}
+
+/// Forces repeated storage replacement while retaining the prefix already decoded by zlib.
+#[test]
+fn test_gzinflate_growth_preserves_the_decoded_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+$data = str_repeat("inflate keeps earlier bytes|", 8192);
+$packed = gzdeflate($data);
+$decoded = gzinflate($packed);
+echo strlen($decoded), "|", (int) ($decoded === $data);
+"#,
+    );
+    assert_eq!(out, "229376|1");
 }
 
 /// Verifies compiled PHP output for gzinflate invalid is false.

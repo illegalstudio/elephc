@@ -9,6 +9,8 @@
 //! - A bounded exception handler retires the original owner after success or a nested throw.
 //! - Cleanup preserves completed output and chains destructor exceptions before propagating.
 
+use elephc_memoir::{FrameOffset, strings::scoped_stream::StreamScope};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::{data::SERIALIZE_RETURN_ARRAY_MSG, exceptions};
 
@@ -20,6 +22,10 @@ const OBJECT: usize = 32;
 const NAMES: usize = 40;
 const NAME_STRING: usize = 48;
 const PREFIX_START: usize = 56;
+
+const OUTPUT_STREAM: StreamScope = StreamScope {
+    saved: FrameOffset::new(CONCAT_END),
+};
 
 /// Emits a consuming serializer boundary and its borrowed array-body dispatcher.
 pub(super) fn emit_magic_result(emitter: &mut Emitter) {
@@ -53,18 +59,14 @@ pub(super) fn emit_owned_result_boundary(
     exceptions::emit_guarded_cleanup_call(emitter, body, result, PENDING);
     // The releases below can run destructors, which may call serialize() and use the concat
     // scratch: park the active stream and move `_concat_off` past a scratch-backed stream.
-    let desc = abi::int_arg_reg_name(emitter.target, 0);
-    abi::emit_load_symbol_to_reg(emitter, desc, "_ser_stream", 0);
-    abi::store_at_offset(emitter, desc, CONCAT_END);
-    abi::emit_call_label(emitter, "__rt_strbuf_sync");
+    OUTPUT_STREAM.emit_save_and_sync(emitter);
     if sleep {
         abi::load_at_offset(emitter, result, NAME_STRING);
         exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, PENDING);
     }
     abi::load_at_offset(emitter, result, OWNER);
     exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, PENDING);
-    abi::load_at_offset(emitter, result, CONCAT_END);
-    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
+    OUTPUT_STREAM.emit_restore(emitter);
     abi::load_at_offset(emitter, result, PENDING);
     let return_label = format!("{entry}_return");
     abi::emit_branch_if_int_result_zero(emitter, &return_label);
@@ -135,30 +137,9 @@ fn branch_if_tag(emitter: &mut Emitter, tag: usize, label: &str) {
 /// Raises a catchable TypeError; the enclosing boundary still owns and retires the invalid result.
 fn emit_invalid_result(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, result, 56);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let kind = match emitter.target.arch {
-        Arch::AArch64 => 6,
-        Arch::X86_64 => crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
-    };
-    abi::emit_load_int_immediate(emitter, scratch, kind);
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("stur x10, [x0, #-8]"),            // stamp the allocated payload as a Throwable object
-        Arch::X86_64 => emitter.instruction("mov QWORD PTR [rax - 8], r10"),    // stamp the allocated payload as a Throwable object
-    }
-    abi::emit_call_label(emitter, "__rt_object_handle_acquire");
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_spl_type_error_class_id", 0);
-    abi::emit_store_to_address(emitter, scratch, result, 0);
-    abi::emit_symbol_address(emitter, scratch, "_serialize_return_array_msg");
-    abi::emit_store_to_address(emitter, scratch, result, 8);
-    abi::emit_load_int_immediate(emitter, scratch, SERIALIZE_RETURN_ARRAY_MSG.len() as i64);
-    abi::emit_store_to_address(emitter, scratch, result, 16);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    for offset in [24, 40, 48] {
-        abi::emit_store_to_address(emitter, scratch, result, offset);
-    }
-    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, result);
+    elephc_memoir::values::throwable_storage::emit_error_with_auxiliary_zero(
+        emitter, "_spl_type_error_class_id", "_serialize_return_array_msg", SERIALIZE_RETURN_ARRAY_MSG.len() as i64,
+    );
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     abi::emit_jump(emitter, "__rt_throw_current");
 }

@@ -15,6 +15,7 @@ eval_builtin! {
     values: Iconv,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 use super::iconv::{eval_iconv_charset, eval_iconv_failure};
 
@@ -37,21 +38,21 @@ pub(in crate::interpreter) fn eval_iconv_mime_decode_headers_result(
             return eval_iconv_failure("iconv_mime_decode_headers", &error, values);
         }
     };
-    let mut headers = values.assoc_new(entries.len())?;
+    let mut headers = EvalArrayBuilder::assoc(values, entries.len())?;
     for (name, field_values) in entries {
-        let key = values.string_bytes_value(&name)?;
-        let value = if field_values.len() == 1 {
-            values.string_bytes_value(&field_values[0])?
-        } else {
-            let mut list = values.array_new(field_values.len())?;
-            for (index, entry) in field_values.iter().enumerate() {
-                let index = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-                let entry = values.string_bytes_value(entry)?;
-                list = values.array_set(list, index, entry)?;
-            }
-            list
-        };
-        headers = values.array_set(headers, key, value)?;
+        headers.entry_from_key(
+            |values| values.string_bytes_value(&name),
+            |values, _| {
+                if let [entry] = field_values.as_slice() {
+                    return values.string_bytes_value(entry);
+                }
+                let mut list = EvalArrayBuilder::indexed(values, field_values.len())?;
+                for (index, entry) in field_values.iter().enumerate() {
+                    list.index(index, |values| values.string_bytes_value(entry))?;
+                }
+                Ok(list.finish())
+            },
+        )?;
     }
-    Ok(headers)
+    Ok(headers.finish())
 }

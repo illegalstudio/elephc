@@ -260,7 +260,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_callable_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let class_name = eval_expr(class_name, context, scope, values)?;
-    let class_name = eval_dynamic_class_name(class_name, context, values)?;
+    let class_name = eval_owned_dynamic_class_name(class_name, context, values)?;
     let receiver = resolve_eval_static_method_receiver(&class_name, context)?;
     let method = eval_dynamic_member_name(method, context, scope, values)?;
     let target = eval_static_method_callable_target(

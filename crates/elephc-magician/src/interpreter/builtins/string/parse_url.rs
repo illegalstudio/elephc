@@ -19,6 +19,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates a direct `parse_url()` call while preserving PHP source argument order.
 pub(in crate::interpreter) fn eval_builtin_parse_url(
@@ -86,34 +87,27 @@ fn eval_parse_url_array_result(
     parsed: &EvalParsedUrl,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(8)?;
-    result = eval_parse_url_insert_string(result, "scheme", parsed.scheme.as_deref(), values)?;
-    result = eval_parse_url_insert_string(result, "host", parsed.host.as_deref(), values)?;
-    if let Some(port) = parsed.port {
-        let key = values.string("port")?;
-        let value = values.int(i64::from(port))?;
-        result = values.array_set(result, key, value)?;
+    let mut result = EvalArrayBuilder::assoc(values, 8)?;
+    for (key, value) in [("scheme", &parsed.scheme), ("host", &parsed.host)] {
+        if let Some(value) = value {
+            result.string(key, |values| values.string_bytes_value(value))?;
+        }
     }
-    result = eval_parse_url_insert_string(result, "user", parsed.user.as_deref(), values)?;
-    result = eval_parse_url_insert_string(result, "pass", parsed.pass.as_deref(), values)?;
-    result = eval_parse_url_insert_string(result, "path", parsed.path.as_deref(), values)?;
-    result = eval_parse_url_insert_string(result, "query", parsed.query.as_deref(), values)?;
-    eval_parse_url_insert_string(result, "fragment", parsed.fragment.as_deref(), values)
-}
-
-/// Inserts one present string component while omitting missing keys.
-fn eval_parse_url_insert_string(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: Option<&[u8]>,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(value) = value else {
-        return Ok(array);
-    };
-    let key = values.string(key)?;
-    let value = values.string_bytes_value(value)?;
-    values.array_set(array, key, value)
+    if let Some(port) = parsed.port {
+        result.string("port", |values| values.int(i64::from(port)))?;
+    }
+    for (key, value) in [
+        ("user", &parsed.user),
+        ("pass", &parsed.pass),
+        ("path", &parsed.path),
+        ("query", &parsed.query),
+        ("fragment", &parsed.fragment),
+    ] {
+        if let Some(value) = value {
+            result.string(key, |values| values.string_bytes_value(value))?;
+        }
+    }
+    Ok(result.finish())
 }
 
 /// Materializes one component as string, integer port, or null when absent.

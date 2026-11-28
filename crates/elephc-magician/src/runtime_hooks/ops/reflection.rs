@@ -23,54 +23,24 @@ macro_rules! impl_reflection_ops {
         &mut self,
         callback: RuntimeCellHandle,
     ) -> Result<Option<NativeCallableSignatureMetadata>, EvalStatus> {
-        const DESCRIPTOR_SIGNATURE_WORD: usize = 4;
-        const DESCRIPTOR_INVOKER_WORD: usize = 7;
-        const DESCRIPTOR_NAME_WORD: usize = 2;
-        const DESCRIPTOR_NAME_LENGTH_WORD: usize = 3;
-        const SIGNATURE_PARAM_COUNT_WORD: usize = 0;
-        const SIGNATURE_REGULAR_COUNT_WORD: usize = 2;
-        const SIGNATURE_VARIADIC_INDEX_WORD: usize = 3;
-        const SIGNATURE_NAMES_WORD: usize = 7;
-        const SIGNATURE_TYPES_WORD: usize = 8;
-        const SIGNATURE_REF_FLAGS_WORD: usize = 10;
-        const VARIADIC_NONE: u64 = u64::MAX;
         const MAX_DESCRIPTOR_PARAMETERS: usize = 4096;
 
-        let descriptor = self.raw_value_word(callback)? as *const u64;
-        if descriptor.is_null() || (descriptor as usize) % std::mem::align_of::<u64>() != 0 {
+        let descriptor = self.raw_value_word(callback)?;
+        let mut signature = CallableSignatureViewV1::default();
+        match unsafe { __elephc_eval_callable_signature_v1(descriptor, &mut signature) } {
+            0 => return Ok(None),
+            1 => {}
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+        let param_count = signature.parameter_count;
+        let regular_param_count = signature.regular_count;
+        if param_count > MAX_DESCRIPTOR_PARAMETERS || regular_param_count > param_count {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let (signature, invoker, display_name_ptr, display_name_len) = unsafe {
-            (
-                *descriptor.add(DESCRIPTOR_SIGNATURE_WORD) as *const u64,
-                *descriptor.add(DESCRIPTOR_INVOKER_WORD),
-                *descriptor.add(DESCRIPTOR_NAME_WORD) as *const u8,
-                *descriptor.add(DESCRIPTOR_NAME_LENGTH_WORD) as usize,
-            )
-        };
-        if signature.is_null() || invoker == 0 {
-            return Ok(None);
-        }
-        let (param_count, regular_param_count, variadic, names, types, ref_flags) = unsafe {
-            (
-                *signature.add(SIGNATURE_PARAM_COUNT_WORD) as usize,
-                *signature.add(SIGNATURE_REGULAR_COUNT_WORD) as usize,
-                *signature.add(SIGNATURE_VARIADIC_INDEX_WORD),
-                *signature.add(SIGNATURE_NAMES_WORD) as *const u64,
-                *signature.add(SIGNATURE_TYPES_WORD) as *const u64,
-                *signature.add(SIGNATURE_REF_FLAGS_WORD) as *const u64,
-            )
-        };
-        if param_count > MAX_DESCRIPTOR_PARAMETERS
-            || regular_param_count > param_count
-            || (param_count != 0 && (names.is_null() || types.is_null() || ref_flags.is_null()))
-        {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let variadic_index = if variadic == VARIADIC_NONE {
+        let variadic_index = if signature.variadic == NO_VARIADIC_PARAMETER {
             None
         } else {
-            let index = usize::try_from(variadic).map_err(|_| EvalStatus::RuntimeFatal)?;
+            let index = usize::try_from(signature.variadic).map_err(|_| EvalStatus::RuntimeFatal)?;
             if index >= param_count || index != regular_param_count {
                 return Err(EvalStatus::RuntimeFatal);
             }
@@ -78,37 +48,31 @@ macro_rules! impl_reflection_ops {
         };
         let mut parameters = Vec::with_capacity(param_count);
         for index in 0..param_count {
-            let (name_ptr, name_len, type_tag, by_ref) = unsafe {
-                (
-                    *names.add(index * 2) as *const u8,
-                    *names.add(index * 2 + 1) as usize,
-                    *types.add(index * 3),
-                    *ref_flags.add(index) != 0,
-                )
+            let mut parameter = CallableParameterViewV1::default();
+            let status = unsafe {
+                __elephc_eval_callable_parameter_v1(signature.parameters, index, &mut parameter)
             };
-            if name_ptr.is_null() && name_len != 0 {
+            if status != 1 || (parameter.name.is_null() && parameter.name_length != 0) {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let name = if name_len == 0 {
+            let name = if parameter.name_length == 0 {
                 String::new()
             } else {
-                let bytes = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
-                std::str::from_utf8(bytes)
-                    .map_err(|_| EvalStatus::RuntimeFatal)?
-                    .to_string()
+                let bytes = unsafe { std::slice::from_raw_parts(parameter.name, parameter.name_length) };
+                std::str::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?.to_string()
             };
-            parameters.push(NativeCallableParameterMetadata { name, type_tag, by_ref });
+            parameters.push(NativeCallableParameterMetadata {
+                name, type_tag: parameter.type_tag, by_ref: parameter.by_ref != 0,
+            });
         }
-        if display_name_ptr.is_null() && display_name_len != 0 {
+        if signature.name.is_null() && signature.name_length != 0 {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let display_name = if display_name_len == 0 {
+        let display_name = if signature.name_length == 0 {
             String::from("Closure")
         } else {
-            let bytes = unsafe { std::slice::from_raw_parts(display_name_ptr, display_name_len) };
-            std::str::from_utf8(bytes)
-                .map_err(|_| EvalStatus::RuntimeFatal)?
-                .to_string()
+            let bytes = unsafe { std::slice::from_raw_parts(signature.name, signature.name_length) };
+            std::str::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?.to_string()
         };
         Ok(Some(NativeCallableSignatureMetadata {
             display_name,

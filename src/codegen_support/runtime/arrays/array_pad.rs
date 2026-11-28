@@ -37,7 +37,7 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save size argument
     emitter.instruction("str x2, [sp, #16]");                                   // save pad value
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // x9 = source array length
     emitter.instruction("str x9, [sp, #24]");                                   // save source length
 
     // -- determine absolute size and pad direction --
@@ -74,7 +74,7 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
 
     // -- pad left: fill pad values first, then copy source --
     emitter.instruction("sub x5, x3, x9");                                      // x5 = pad_count = abs(size) - length
-    emitter.instruction("add x10, x0, #24");                                    // x10 = dest data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("ldr x11, [sp, #16]");                                  // x11 = pad value
     emitter.instruction("mov x6, #0");                                          // x6 = i = 0
 
@@ -88,7 +88,7 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     // -- copy source elements after pad values --
     emitter.label("__rt_array_pad_copy_left");
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source array pointer
-    emitter.instruction("add x2, x1, #24");                                     // x2 = source data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("mov x7, #0");                                          // x7 = j = 0
 
     emitter.label("__rt_array_pad_copy_left_loop");
@@ -103,9 +103,9 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     // -- pad right: copy source first, then fill pad values --
     emitter.label("__rt_array_pad_calc_right");
     emitter.instruction("sub x5, x3, x9");                                      // x5 = pad_count = size - length
-    emitter.instruction("add x10, x0, #24");                                    // x10 = dest data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source array pointer
-    emitter.instruction("add x2, x1, #24");                                     // x2 = source data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("mov x6, #0");                                          // x6 = i = 0
 
     emitter.label("__rt_array_pad_copy_right");
@@ -132,7 +132,7 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     emitter.label("__rt_array_pad_finish");
     emitter.instruction("ldr x0, [sp, #32]");                                   // x0 = new array pointer
     emitter.instruction("ldr x3, [sp, #48]");                                   // x3 = clamped abs(size), never negative
-    emitter.instruction("str x3, [x0]");                                        // set array length = abs(size)
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x3"); // set array length = abs(size)
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = padded array
@@ -144,8 +144,8 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_new");                                   // allocate new array
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source array pointer
     emitter.instruction("ldr x9, [sp, #24]");                                   // x9 = source length
-    emitter.instruction("add x2, x1, #24");                                     // x2 = source data base
-    emitter.instruction("add x3, x0, #24");                                     // x3 = dest data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("mov x4, #0");                                          // x4 = i = 0
 
     emitter.label("__rt_array_pad_copy_loop");
@@ -157,7 +157,7 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_pad_copy_loop");                          // continue loop
 
     emitter.label("__rt_array_pad_copy_done");
-    emitter.instruction("str x9, [x0]");                                        // set array length = source length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x9"); // set array length = source length
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = copied array
@@ -178,7 +178,7 @@ fn emit_array_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across target-length normalization and result-array construction
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the signed pad-size argument across result-array construction
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the scalar pad value across result-array construction and copy loops
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before deriving the target padded length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the source indexed-array logical length before deriving the target padded length
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the source indexed-array logical length across constructor calls and copy loops
     emitter.instruction("mov r11, rsi");                                        // seed the absolute target-length scratch register from the signed pad-size argument
     emitter.instruction("cmp r11, 0");                                          // detect whether the caller requested left padding by passing a negative target size
@@ -200,9 +200,9 @@ fn emit_array_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate the padded indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the padded indexed-array pointer across the scalar copy and fill loops
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source indexed-array pointer after the constructor clobbered caller-saved registers
-    emitter.instruction("lea r8, [r8 + 24]");                                   // compute the first scalar payload slot address in the source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "r8");
     emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the padded indexed-array pointer before seeding the copy and fill loops
-    emitter.instruction("lea r9, [r9 + 24]");                                   // compute the first scalar payload slot address in the padded indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "r9");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the source indexed-array logical length before deriving the pad count
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the final target padded length before deriving the pad count
     emitter.instruction("mov rcx, r11");                                        // seed the pad-count scratch register from the final target padded length

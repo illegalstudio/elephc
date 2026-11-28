@@ -12,7 +12,7 @@
 use super::super::super::*;
 use super::super::registry::eval_call_user_func_with_values_from_scope;
 use super::func_args::eval_literal_func_args_callback;
-use crate::runtime_hooks::owner_frames::with_runtime_owners;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 eval_builtin! {
     contract: "call_user_func",
@@ -40,16 +40,19 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
             _ => unreachable!("literal func-args callback was canonicalized"),
         };
     }
-    let callback = eval_owned_expr(&args[0], context, scope, values)?;
-    if let Some(name) = eval_owned_argument_callback_name(callback, context, Some(scope), values)? {
+    let callback = RuntimeOwnerSlot::new(eval_owned_expr(&args[0], context, scope, values)?);
+    let callback_name = with_runtime_owners(&callback, || {
+        eval_owned_argument_callback_name(callback.borrowed(), context, Some(scope), values)
+    })?;
+    if let Some(name) = callback_name {
         if eval_builtin_uses_owned_arguments(&name) {
             let arguments = args[1..].iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
             let result = with_runtime_owners(&callback, ||
                 eval_builtin_call_by_value(&name, &arguments, context, scope, values));
-            return finish_eval_argument_values(result, [callback], context, values);
+            return finish_eval_argument_values(result, [callback.take()], context, values);
         }
     }
-    let mut operands = vec![callback];
+    let mut operands = vec![callback.take()];
     for argument in &args[1..] {
         match with_runtime_owners(&operands, || eval_owned_expr(argument, context, scope, values)) {
             Ok(value) => operands.push(value),

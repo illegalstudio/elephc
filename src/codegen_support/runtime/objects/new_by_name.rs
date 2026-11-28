@@ -22,6 +22,7 @@
 //!   null (`gettype()` reports "NULL").
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::values::class_metadata::{self, ClassLookupField};
 
 #[cfg(test)]
 mod tests {
@@ -85,14 +86,14 @@ pub fn emit_new_by_name(emitter: &mut Emitter, native_validation: bool) {
     emitter.instruction("cmp x11, x9");                                         // scanned every registered class?
     emitter.instruction("b.ge __rt_nbn_miss");                                  // exhausted the table without a match
     emitter.instruction("ldr x10, [sp, #48]");                                  // reload the entry cursor
-    emitter.instruction("ldr x13, [x10, #8]");                                  // stored name length
+    class_metadata::emit_load_class_lookup_field(emitter, "x13", "x10", ClassLookupField::NameLength);
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the input name length
     emitter.instruction("cmp x13, x2");                                         // length mismatch → skip
     emitter.instruction("b.ne __rt_nbn_skip");                                  // skip this class when the name lengths differ
     emitter.instruction("str x11, [sp, #56]");                                  // save the entry index across the string helper
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload the input name pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the input name length
-    emitter.instruction("ldr x3, [x10]");                                       // stored class-name pointer
+    class_metadata::emit_load_class_lookup_field(emitter, "x3", "x10", ClassLookupField::Name);
     emitter.instruction("mov x4, x13");                                         // stored class-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names case-insensitively
     emitter.instruction("ldr x11, [sp, #56]");                                  // restore the entry index after the string helper
@@ -102,7 +103,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter, native_validation: bool) {
 
     emitter.label("__rt_nbn_skip");
     emitter.instruction("ldr x10, [sp, #48]");                                  // reload the entry cursor
-    emitter.instruction("add x10, x10, #32");                                   // advance to the next 32-byte entry
+    class_metadata::emit_advance_class_lookup_row(emitter, "x10");
     emitter.instruction("str x10, [sp, #48]");                                  // persist the cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the entry index
     abi::emit_symbol_address(emitter, "x9", "_classes_by_name_count");
@@ -111,8 +112,8 @@ pub fn emit_new_by_name(emitter: &mut Emitter, native_validation: bool) {
 
     emitter.label("__rt_nbn_match");
     emitter.instruction("ldr x10, [sp, #48]");                                  // reload the matched entry cursor
-    emitter.instruction("ldr x12, [x10, #16]");                                 // class_id
-    emitter.instruction("ldr x13, [x10, #24]");                                 // obj_size
+    class_metadata::emit_load_class_lookup_field(emitter, "x12", "x10", ClassLookupField::ClassId);
+    class_metadata::emit_load_class_lookup_field(emitter, "x13", "x10", ClassLookupField::ObjectSize);
     emitter.instruction("str x12, [sp, #32]");                                  // save class_id across the heap call
     emitter.instruction("str x13, [sp, #40]");                                  // save obj_size across the heap call
     abi::emit_symbol_address(emitter, "x10", "_class_initcheck_ptrs");
@@ -126,10 +127,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter, native_validation: bool) {
     // -- allocate the object payload --
     emitter.label("__rt_nbn_generic_alloc");
     emitter.instruction("mov x0, x13");                                         // allocation size
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = object pointer
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload class_id
     emitter.instruction("str x12, [x0]");                                       // class_id at offset 0
 
@@ -194,14 +192,14 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter, native_validation: bool)
     emitter.instruction("cmp r11, r9");                                         // scanned every registered class?
     emitter.instruction("jge __rt_nbn_miss_x86");                               // exhausted the table without a match
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the entry cursor
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // stored name length
+    class_metadata::emit_load_class_lookup_field(emitter, "rcx", "r10", ClassLookupField::NameLength);
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the input name length
     emitter.instruction("cmp rcx, rdx");                                        // length mismatch?
     emitter.instruction("jne __rt_nbn_skip_x86");                               // skip on length mismatch
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the entry index across the string helper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the input name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the input name length
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // stored class-name pointer
+    class_metadata::emit_load_class_lookup_field(emitter, "rdx", "r10", ClassLookupField::Name);
     emitter.instruction("call __rt_strcasecmp");                                // compare class names case-insensitively
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // restore the entry index after the string helper
     emitter.instruction("test rax, rax");                                       // did the class names match case-insensitively?
@@ -210,7 +208,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter, native_validation: bool)
 
     emitter.label("__rt_nbn_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the entry cursor
-    emitter.instruction("add r10, 32");                                         // advance to the next 32-byte entry
+    class_metadata::emit_advance_class_lookup_row(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // persist the cursor
     emitter.instruction("add r11, 1");                                          // advance the entry index
     abi::emit_load_symbol_to_reg(emitter, "r9", "_classes_by_name_count", 0); // reload the count (lost across the table walk)
@@ -218,8 +216,8 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter, native_validation: bool)
 
     emitter.label("__rt_nbn_match_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the matched entry cursor
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 16]");                       // class_id
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // obj_size
+    class_metadata::emit_load_class_lookup_field(emitter, "rcx", "r10", ClassLookupField::ClassId);
+    class_metadata::emit_load_class_lookup_field(emitter, "rdx", "r10", ClassLookupField::ObjectSize);
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // stash class_id
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash obj_size
     abi::emit_symbol_address(emitter, "r10", "_class_initcheck_ptrs");
@@ -234,13 +232,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter, native_validation: bool)
     // -- allocate the object payload --
     emitter.label("__rt_nbn_generic_alloc_x86");
     emitter.instruction("mov rax, rdx");                                        // allocation size
-    emitter.instruction("call __rt_heap_alloc");                                // rax = object pointer
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    ));                                                                         // object heap-kind word with the x86_64 marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // class_id at offset 0
 

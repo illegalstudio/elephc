@@ -28,14 +28,14 @@ use crate::interpreter::RuntimeValueOps;
 use crate::runtime_hooks::{self, ElephcRuntimeOps};
 #[cfg(not(test))]
 use crate::value::{RuntimeCell, RuntimeCellHandle};
-use std::collections::HashMap;
+use elephc_memoir::object_owners::WeakIdentityOwners;
 use std::sync::{Mutex, OnceLock};
 
-static DYNAMIC_DESTRUCTOR_CONTEXTS: OnceLock<Mutex<HashMap<u64, usize>>> = OnceLock::new();
+static DYNAMIC_DESTRUCTOR_CONTEXTS: OnceLock<Mutex<WeakIdentityOwners>> = OnceLock::new();
 
 /// Returns the process-local dynamic object to eval context registry.
-fn dynamic_destructor_contexts() -> &'static Mutex<HashMap<u64, usize>> {
-    DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()))
+fn dynamic_destructor_contexts() -> &'static Mutex<WeakIdentityOwners> {
+    DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(WeakIdentityOwners::default()))
 }
 
 /// Reports whether a raw object identity belongs to a live eval-declared class.
@@ -72,7 +72,7 @@ pub(crate) fn register_dynamic_object_context(identity: u64, context: *mut Eleph
         return;
     }
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.insert(identity, context as usize);
+        contexts.register(identity, context as usize);
     }
 }
 
@@ -82,7 +82,7 @@ pub(crate) fn unregister_dynamic_object(identity: u64) {
         return;
     }
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.remove(&identity);
+        contexts.take(identity);
     }
 }
 
@@ -93,7 +93,7 @@ pub(crate) fn unregister_dynamic_objects_for_context(context: *mut ElephcEvalCon
     }
     let context = context as usize;
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.retain(|_, owner| *owner != context);
+        contexts.untrack_context(context);
     }
 }
 
@@ -101,7 +101,7 @@ pub(crate) fn unregister_dynamic_objects_for_context(context: *mut ElephcEvalCon
 #[cfg(not(test))]
 pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcEvalContext> {
     let contexts = dynamic_destructor_contexts().lock().ok()?;
-    let context = *contexts.get(&identity)?;
+    let context = contexts.owner(identity)?;
     Some(context as *mut ElephcEvalContext)
 }
 
@@ -311,8 +311,11 @@ unsafe fn dynamic_object_property_set_inner(
     if value_block.is_null() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let throwable_out = value_block;
-    let value = unsafe { *value_block.add(2) };
+    use elephc_memoir::owner_layout::EvalPropertyWriteWords as WriteWords;
+
+    let bytes = value_block.cast::<u8>();
+    let throwable_out = unsafe { bytes.add(WriteWords::THROWABLE).cast::<*mut RuntimeCell>() };
+    let value = unsafe { *bytes.add(WriteWords::VALUE).cast::<*mut RuntimeCell>() };
     unsafe { *throwable_out = std::ptr::null_mut(); }
     if object.is_null() || value.is_null() {
         return Ok(0);

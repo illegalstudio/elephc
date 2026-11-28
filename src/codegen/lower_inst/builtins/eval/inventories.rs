@@ -9,6 +9,9 @@
 //! - Borrowed bridge names are copied and constant cells retained by each snapshot.
 
 use super::*;
+use elephc_memoir::owner_layout::EvalInventoryWords;
+
+const INVENTORY_ENTRY_OFFSET: usize = 48;
 
 /// Appends dynamic constants or function names to the owned container in the result register.
 pub(in crate::codegen::lower_inst::builtins) fn append_eval_inventory(ctx: &mut FunctionContext<'_>, constants: bool) -> Result<()> {
@@ -28,20 +31,24 @@ pub(in crate::codegen::lower_inst::builtins) fn append_eval_inventory(ctx: &mut 
     let arg3 = abi::int_arg_reg_name(ctx.emitter.target, 3);
     abi::emit_load_int_immediate(ctx.emitter, arg1, i64::from(constants));
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, 40);
-    abi::emit_temporary_stack_address(ctx.emitter, arg3, 48);
+    abi::emit_temporary_stack_address(ctx.emitter, arg3, INVENTORY_ENTRY_OFFSET);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_inventory_entry");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
     if constants {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 64);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, INVENTORY_ENTRY_OFFSET + EvalInventoryWords::VALUE_CELL);
         abi::emit_call_label(ctx.emitter, "__rt_incref");
     }
-    for (arg, offset) in [(0, 32), (1, 48), (2, 56)] {
+    for (arg, offset) in [
+        (0, 32),
+        (1, INVENTORY_ENTRY_OFFSET + EvalInventoryWords::NAME_PTR),
+        (2, INVENTORY_ENTRY_OFFSET + EvalInventoryWords::NAME_LEN),
+    ] {
         let reg = abi::int_arg_reg_name(ctx.emitter.target, arg);
         abi::emit_load_temporary_stack_slot(ctx.emitter, reg, offset);
     }
     if constants {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, arg3, 64);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, arg3, INVENTORY_ENTRY_OFFSET + EvalInventoryWords::VALUE_CELL);
         for (arg, value) in [(4, 0), (5, 7)] {
             let reg = abi::int_arg_reg_name(ctx.emitter.target, arg);
             abi::emit_load_int_immediate(ctx.emitter, reg, value);

@@ -10,6 +10,7 @@
 //! - Object contents remain mutable through readable readonly or restricted-set properties.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Selects PHP write-fetch initialization rules independently of key diagnostic suppression.
 #[derive(Clone, Copy, PartialEq)]
@@ -191,17 +192,22 @@ pub(super) fn probe_native_child(
         _ => return Ok(None),
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
-    let native = super::super::runtime_ops::simplexml_properties::is_native(values, current, "")
-        .and_then(|native| {
+    let current = RuntimeOwnerSlot::new(current);
+    let native = with_runtime_owners(&current, || {
+        super::super::runtime_ops::simplexml_properties::is_native(values, current.borrowed(), "")
+            .and_then(|native| {
             if native { return Ok(true); }
-            if !matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) { return Ok(false); }
+            if !matches!(values.type_tag(current.borrowed())?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                return Ok(false);
+            }
             Ok(array_uses_writable_storage(object, property, context, values)?
                 && values.final_object_identity_for_release(object)?.is_some())
-        });
+        })
+    });
     match native {
-        Ok(true) => Ok(Some(current)),
+        Ok(true) => Ok(Some(current.take())),
         result => {
-            let released = eval_release_value(context, values, current);
+            let released = eval_release_value(context, values, current.take());
             if let Err(status) = result { return Err(status); }
             released?;
             if let NativeStorage::Hook(owner) = storage {

@@ -17,9 +17,7 @@
 //! - Positions that must survive growth (a value's start, an object's prefix, the hoisted
 //!   `<count>:{` tail) are stream OFFSETS from `__rt_ser_tell`, never absolute pointers.
 
-use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
 
 /// Emits `__rt_ser_reserve`, `__rt_ser_tell`, and `__rt_ser_seek`.
 ///
@@ -28,47 +26,5 @@ use crate::codegen_support::platform::Arch;
 /// - `__rt_ser_tell`: returns the bytes written so far in `x0`/`rax`. Leaf.
 /// - `__rt_ser_seek`: `x0`/`rax` = offset; truncates the stream back to it. Leaf.
 pub(super) fn emit_serialize_stream(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: serialize output stream ---");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.label_global("__rt_ser_reserve");
-            abi::emit_symbol_address(emitter, "x9", "_ser_stream");
-            emitter.instruction("ldr x0, [x9]");                                // active stream descriptor
-            emitter.instruction("b __rt_strbuf_ensure");                        // grow it when x1 more bytes would not fit
-
-            emitter.label_global("__rt_ser_tell");
-            abi::emit_symbol_address(emitter, "x9", "_ser_stream");
-            emitter.instruction("ldr x9, [x9]");                                // active stream descriptor
-            emitter.instruction("ldr x10, [x9, #8]");                           // stream cursor
-            emitter.instruction("ldr x9, [x9]");                                // stream start
-            emitter.instruction("sub x0, x10, x9");                             // bytes written so far
-            emitter.instruction("ret");                                         // return the stream offset
-
-            emitter.label_global("__rt_ser_seek");
-            abi::emit_symbol_address(emitter, "x9", "_ser_stream");
-            emitter.instruction("ldr x9, [x9]");                                // active stream descriptor
-            emitter.instruction("ldr x10, [x9]");                               // stream start
-            emitter.instruction("add x10, x10, x0");                            // cursor at the requested offset
-            emitter.instruction("str x10, [x9, #8]");                           // truncate the stream back to it
-            emitter.instruction("ret");                                         // return to the serializer
-        }
-        Arch::X86_64 => {
-            emitter.label_global("__rt_ser_reserve");
-            abi::emit_load_symbol_to_reg(emitter, "rdi", "_ser_stream", 0);
-            emitter.instruction("jmp __rt_strbuf_ensure");                      // grow it when rsi more bytes would not fit
-
-            emitter.label_global("__rt_ser_tell");
-            abi::emit_load_symbol_to_reg(emitter, "r8", "_ser_stream", 0);
-            emitter.instruction("mov rax, QWORD PTR [r8 + 8]");                 // stream cursor
-            emitter.instruction("sub rax, QWORD PTR [r8]");                     // bytes written so far
-            emitter.instruction("ret");                                         // return the stream offset
-
-            emitter.label_global("__rt_ser_seek");
-            abi::emit_load_symbol_to_reg(emitter, "r8", "_ser_stream", 0);
-            emitter.instruction("add rax, QWORD PTR [r8]");                     // cursor at the requested offset
-            emitter.instruction("mov QWORD PTR [r8 + 8], rax");                 // truncate the stream back to it
-            emitter.instruction("ret");                                         // return to the serializer
-        }
-    }
+    elephc_memoir::strings::scoped_stream::emit_serializer_helpers(emitter);
 }

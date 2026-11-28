@@ -71,7 +71,7 @@ use super::loops::{compute_loops, NaturalLoop};
 use super::rewrite::{neutralize_to_nop, replace_all_uses, resolve_chains};
 
 mod element_views;
-mod numeric;
+pub(super) mod numeric;
 
 /// Rewrites buffer accesses in every function-like body and reports whether anything changed.
 pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {

@@ -35,6 +35,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
+use elephc_memoir::values::container_header;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
@@ -58,14 +59,14 @@ pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     match inst.result_php_type.codegen_repr() {
         PhpType::Str | PhpType::Bool => {
             let ty = save_print_r_operand(ctx, value)?;
-            begin_print_r_capture(ctx);
+            elephc_memoir::strings::capture_buffer::emit_begin(ctx.emitter);
             reload_print_r_operand(ctx, &ty);
             emit_print_r_loaded_value(ctx, &ty)?;
             abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
             abi::emit_pop_call_operand_owner(ctx.emitter);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             if inst.result_php_type.codegen_repr() == PhpType::Bool {
-                echo_owned_print_r_capture(ctx);
+                elephc_memoir::strings::capture_buffer::emit_write_owned(ctx.emitter, "__rt_stdout_write");
                 let result = abi::int_result_reg(ctx.emitter);
                 abi::emit_load_int_immediate(ctx.emitter, result, 1);
             }
@@ -107,38 +108,6 @@ fn reload_print_r_operand(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     }
 }
 
-/// Publishes the raw capture owner before rendering can invoke PHP debug hooks.
-fn begin_print_r_capture(ctx: &mut FunctionContext<'_>) {
-    let address = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, address, "_print_r_ptr");
-    abi::emit_push_call_operand_owner(ctx.emitter, address, false);
-    abi::emit_symbol_address(ctx.emitter, address, "__rt_cleanup_print_r_capture");
-    abi::emit_store_to_sp(ctx.emitter, address, 8);
-    abi::emit_call_label(ctx.emitter, "__rt_pr_abort");
-    let result = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result, 1);
-    abi::emit_store_reg_to_symbol(ctx.emitter, result, "_print_r_mode", 0);
-}
-
-/// Writes the completed string once, retaining an unwind owner across output-buffer callbacks.
-fn echo_owned_print_r_capture(ctx: &mut FunctionContext<'_>) {
-    let (pointer, length) = abi::string_result_regs(ctx.emitter);
-    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
-    abi::emit_store_to_sp(ctx.emitter, pointer, 0);
-    abi::emit_store_to_sp(ctx.emitter, length, 8);
-    let address = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_temporary_stack_address(ctx.emitter, address, 0);
-    abi::emit_push_call_operand_owner(ctx.emitter, address, false);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 48);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 56);
-    abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
-    abi::emit_pop_call_operand_owner(ctx.emitter);
-    let result = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-}
-
 /// Captures both runtime flag modes before returning a string or echoing and boxing true.
 fn lower_print_r_runtime_flag(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, value: ValueId,
@@ -156,7 +125,7 @@ fn lower_print_r_runtime_flag(
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     abi::emit_store_to_sp(ctx.emitter, result, 0);
     let ty = save_print_r_operand(ctx, value)?;
-    begin_print_r_capture(ctx);
+    elephc_memoir::strings::capture_buffer::emit_begin(ctx.emitter);
     reload_print_r_operand(ctx, &ty);
     emit_print_r_loaded_value(ctx, &ty)?;
     abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
@@ -196,7 +165,7 @@ fn lower_print_r_runtime_flag(
     }
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&echo_label);
-    echo_owned_print_r_capture(ctx);
+    elephc_memoir::strings::capture_buffer::emit_write_owned(ctx.emitter, "__rt_stdout_write");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, #1");                              // PHP echo mode always returns true
@@ -724,14 +693,7 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
     emit_write_literal(ctx, b"array(");
     abi::emit_pop_reg(ctx.emitter, result_reg);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [x0]");                            // load the array or hash element count from the heap header
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the array or hash element count from the heap header
-        }
-    }
+    container_header::emit_load_count(ctx.emitter, result_reg, result_reg);
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     emit_write_current_string(ctx);
     emit_write_literal(ctx, b") {\n");

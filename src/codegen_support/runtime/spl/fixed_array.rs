@@ -9,14 +9,16 @@
 //! - Slots store owned boxed `Mixed` cells or null pointers for unset/null entries.
 //! - Resize and overwrite paths release replaced Mixed cells before losing ownership.
 
+use elephc_memoir::values::packed_mixed_copy::PackedMixedCopy;
+use elephc_memoir::values::{packed_slots, throwable_storage};
 use crate::codegen_support::abi;
+use elephc_memoir::hash_layout::{self, HeaderField};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::values::spl_storage;
 
 use super::offset_convert::SPL_OFFSET_MODE_FIXED;
-use super::SPL_FIXED_STORAGE_OFFSET;
 
-const SPL_FIXED_OBJECT_SIZE: i64 = 16;
 const INT_TAG: i64 = 0;
 const NULL_TAG: i64 = 8;
 const SPL_FIXED_CONSTRUCT_SIZE_MSG_LEN: usize =
@@ -70,34 +72,7 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, #0");                                          // reject negative sizes
     emitter.instruction("b.lt __rt_spl_fixed_new_size_throw");                  // negative sizes raise ValueError
     emitter.instruction("str x1, [sp, #8]");                                    // save requested fixed size
-    emitter.instruction(&format!("mov x0, #{}", SPL_FIXED_OBJECT_SIZE));        // request fixed-array object payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate SplFixedArray object payload
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp allocation as an object instance
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload concrete class id
-    emitter.instruction("str x9, [x0]");                                        // store class id at object header
-    emitter.instruction("str x0, [sp, #16]");                                   // save object pointer while allocating storage
-    emitter.instruction("ldr x0, [sp, #8]");                                    // reload requested fixed size as array capacity
-    emitter.instruction("mov x1, #8");                                          // each slot holds one Mixed pointer
-    emitter.instruction("bl __rt_array_new");                                   // allocate fixed-array storage
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load storage packed kind word
-    emitter.instruction("orr x9, x9, #0x700");                                  // mark storage as containing Mixed cells
-    emitter.instruction("str x9, [x0, #-8]");                                   // persist Mixed value_type tag
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload fixed size
-    emitter.instruction("str x10, [x0]");                                       // logical length is the fixed size
-    emitter.instruction("add x11, x0, #24");                                    // point at first storage slot
-    emitter.instruction("mov x12, #0");                                         // initialize slot-zeroing cursor
-    emitter.label("__rt_spl_fixed_new_zero_loop");
-    emitter.instruction("cmp x12, x10");                                        // have all slots been initialized?
-    emitter.instruction("b.ge __rt_spl_fixed_new_done");                        // finish once every slot is zeroed
-    emitter.instruction("str xzr, [x11, x12, lsl #3]");                         // initialize slot as unset/null
-    emitter.instruction("add x12, x12, #1");                                    // advance zeroing cursor
-    emitter.instruction("b __rt_spl_fixed_new_zero_loop");                      // continue zeroing storage slots
-    emitter.label("__rt_spl_fixed_new_done");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload object pointer
-    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // object.storage = fixed-array storage
-    emitter.instruction("mov x0, x9");                                          // return initialized SplFixedArray object
+    spl_storage::emit_fixed_storage(emitter);
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release constructor frame
     emitter.instruction("ret");                                                 // return object pointer
@@ -116,8 +91,8 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
 /// x0 = receiver SplFixedArray object. Returns the fixed size in x0.
 fn emit_count_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_count");
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
-    emitter.instruction("ldr x0, [x9]");                                        // return logical fixed size
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x0");
+    packed_slots::emit_load_length(emitter, "x0", "x9");                                        // return logical fixed size
     emitter.instruction("ret");                                                 // return count/getSize result
 }
 
@@ -133,56 +108,7 @@ fn emit_set_size_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("cmp x1, #0");                                          // reject negative sizes
     emitter.instruction("b.lt __rt_spl_fixed_set_size_throw");                  // negative sizes raise ValueError
-    emitter.instruction("str x1, [sp, #8]");                                    // save requested new size
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load current storage
-    emitter.instruction("str x9, [sp, #16]");                                   // save current storage pointer
-    emitter.instruction("ldr x10, [x9]");                                       // load old size
-    emitter.instruction("str x10, [sp, #24]");                                  // save old size
-    emitter.label("__rt_spl_fixed_set_size_grow_check");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload storage pointer
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload requested size
-    emitter.instruction("ldr x11, [x9, #8]");                                   // load storage capacity
-    emitter.instruction("cmp x10, x11");                                        // does storage need more capacity?
-    emitter.instruction("b.le __rt_spl_fixed_set_size_release_tail");           // skip growth when capacity is enough
-    emitter.instruction("mov x0, x9");                                          // pass current storage to array_grow
-    emitter.instruction("bl __rt_array_grow");                                  // grow fixed-array storage
-    emitter.instruction("str x0, [sp, #16]");                                   // save grown storage pointer
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // publish grown storage on receiver
-    emitter.instruction("b __rt_spl_fixed_set_size_grow_check");                // grow again if requested size still exceeds capacity
-    emitter.label("__rt_spl_fixed_set_size_release_tail");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload storage pointer
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload requested new size
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload old size
-    emitter.instruction("add x12, x9, #24");                                    // point at first storage slot
-    emitter.instruction("mov x13, x10");                                        // tail-release cursor starts at new size
-    emitter.label("__rt_spl_fixed_set_size_tail_loop");
-    emitter.instruction("cmp x13, x11");                                        // have all truncated slots been released?
-    emitter.instruction("b.ge __rt_spl_fixed_set_size_zero_new");               // stop tail release at old size
-    emitter.instruction("ldr x0, [x12, x13, lsl #3]");                          // load truncated Mixed cell
-    emitter.instruction("str x9, [sp, #16]");                                   // preserve storage across release
-    emitter.instruction("str x10, [sp, #8]");                                   // preserve requested size across release
-    emitter.instruction("str x11, [sp, #24]");                                  // preserve old size across release
-    emitter.instruction("str x13, [sp, #32]");                                  // preserve tail-release cursor
-    emitter.instruction("bl __rt_decref_mixed");                                // release truncated Mixed cell if present
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload storage after release
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload requested size after release
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload old size after release
-    emitter.instruction("ldr x13, [sp, #32]");                                  // reload tail-release cursor after release
-    emitter.instruction("add x12, x9, #24");                                    // restore storage slot base
-    emitter.instruction("str xzr, [x12, x13, lsl #3]");                         // clear released slot
-    emitter.instruction("add x13, x13, #1");                                    // advance tail-release cursor
-    emitter.instruction("b __rt_spl_fixed_set_size_tail_loop");                 // continue releasing truncated slots
-    emitter.label("__rt_spl_fixed_set_size_zero_new");
-    emitter.instruction("ldr x13, [sp, #24]");                                  // zero-fill starts at old size
-    emitter.label("__rt_spl_fixed_set_size_zero_loop");
-    emitter.instruction("cmp x13, x10");                                        // have all newly exposed slots been zeroed?
-    emitter.instruction("b.ge __rt_spl_fixed_set_size_done");                   // finish after zero-filling to requested size
-    emitter.instruction("str xzr, [x12, x13, lsl #3]");                         // initialize grown slot as unset/null
-    emitter.instruction("add x13, x13, #1");                                    // advance zero-fill cursor
-    emitter.instruction("b __rt_spl_fixed_set_size_zero_loop");                 // continue zero-filling new slots
-    emitter.label("__rt_spl_fixed_set_size_done");
-    emitter.instruction("str x10, [x9]");                                       // store new logical fixed size
+    elephc_memoir::values::fixed_array_storage::emit_resize(emitter);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release resize frame
     emitter.instruction("ret");                                                 // return void
@@ -208,10 +134,10 @@ fn emit_offset_exists_aarch64(emitter: &mut Emitter) {
         "__rt_spl_fixed_offset_exists_type_throw",
         "__rt_spl_fixed_offset_exists_false",
     );
-    emitter.instruction("add x11, x9, #24");                                    // point at first storage slot
+    packed_slots::emit_packed_payload(emitter, "x11", "x9");                                    // point at first storage slot
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load candidate Mixed cell pointer
     emitter.instruction("cbz x12, __rt_spl_fixed_offset_exists_false");         // unset slots do not exist for isset()
-    emitter.instruction("ldr x13, [x12]");                                      // load boxed Mixed tag
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, "x13", "x12");         // load boxed Mixed tag
     emitter.instruction(&format!("cmp x13, #{}", NULL_TAG));                    // explicit null behaves like unset for isset()
     emitter.instruction("cset x0, ne");                                         // return true when slot is non-null
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -240,7 +166,7 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
         "__rt_spl_fixed_offset_get_type_throw",
         "__rt_spl_fixed_offset_get_range_throw",
     );
-    emitter.instruction("add x11, x9, #24");                                    // point at first storage slot
+    packed_slots::emit_packed_payload(emitter, "x11", "x9");                                    // point at first storage slot
     emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // load selected Mixed cell
     emitter.instruction("cbz x0, __rt_spl_fixed_offset_get_null_loaded");       // unset slots read as null
     emitter.instruction("bl __rt_incref");                                      // retain selected Mixed cell for caller
@@ -270,7 +196,7 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
 
 /// Emits `__rt_spl_fixed_offset_set` on aarch64: ArrayAccess `offsetSet`.
 /// x0 = receiver, x1 = boxed offset, x2 = owned Mixed value to store.
-/// Releases the previous slot value via `__rt_decref_mixed` before overwriting.
+/// Releases the displaced slot owner after publishing the replacement.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
@@ -291,20 +217,11 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #0");                                         // reject negative offsets
     emitter.instruction("b.lt __rt_spl_fixed_offset_set_range_throw");          // negative offsets are out of range
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
-    emitter.instruction("ldr x11, [x9]");                                       // load fixed size
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x0");
+    packed_slots::emit_load_length(emitter, "x11", "x9");                                       // load fixed size
     emitter.instruction("cmp x10, x11");                                        // compare offset against fixed size
     emitter.instruction("b.hs __rt_spl_fixed_offset_set_range_throw");          // reject offsets outside fixed range
-    emitter.instruction("add x12, x9, #24");                                    // point at first storage slot
-    emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load previous Mixed cell
-    emitter.instruction("str x9, [sp, #40]");                                   // preserve storage across release
-    emitter.instruction("str x10, [sp, #48]");                                  // preserve offset across release
-    emitter.instruction("bl __rt_decref_mixed");                                // release previous slot value if present
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload storage after release
-    emitter.instruction("ldr x10, [sp, #48]");                                  // reload offset after release
-    emitter.instruction("add x12, x9, #24");                                    // restore storage slot base
-    emitter.instruction("ldr x13, [sp, #16]");                                  // reload owned Mixed replacement
-    emitter.instruction("str x13, [x12, x10, lsl #3]");                         // store replacement Mixed cell
+    elephc_memoir::values::spl_storage::emit_replace_slot(emitter);
     emitter.instruction("b __rt_spl_fixed_offset_set_done");                    // finish offsetSet
     emitter.label("__rt_spl_fixed_offset_set_type_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
@@ -331,8 +248,7 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_spl_fixed_offset_unset` on aarch64: ArrayAccess `offsetUnset`.
-/// x0 = receiver, x1 = boxed offset. Releases the existing Mixed cell at the slot
-/// via `__rt_decref_mixed` and marks the slot as unset/null.
+/// x0 = receiver, x1 = boxed offset. Clears the slot and releases its detached Mixed owner.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_unset");
@@ -341,14 +257,7 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
         "__rt_spl_fixed_offset_unset_type_throw",
         "__rt_spl_fixed_offset_unset_range_throw",
     );
-    emitter.instruction("add x11, x9, #24");                                    // point at first storage slot
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // load existing Mixed cell
-    emitter.instruction("str x11, [sp, #32]");                                  // preserve storage slot base across release
-    emitter.instruction("str x10, [sp, #40]");                                  // preserve offset across release
-    emitter.instruction("bl __rt_decref_mixed");                                // release existing Mixed cell if present
-    emitter.instruction("ldr x11, [sp, #32]");                                  // reload storage slot base
-    emitter.instruction("ldr x10, [sp, #40]");                                  // reload offset
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // mark slot unset/null
+    elephc_memoir::values::fixed_array_storage::emit_unset_slot(emitter);
     emitter.label("__rt_spl_fixed_offset_unset_done");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release offset frame
@@ -390,8 +299,8 @@ fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_lab
     emitter.instruction("cmp x10, #0");                                         // reject negative offsets
     emitter.instruction(&format!("b.lt {}", range_label));                      // negative offsets are invalid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
-    emitter.instruction("ldr x11, [x9]");                                       // load fixed size
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x0");
+    packed_slots::emit_load_length(emitter, "x11", "x9");                                       // load fixed size
     emitter.instruction("cmp x10, x11");                                        // compare offset against fixed size
     emitter.instruction(&format!("b.hs {}", range_label));                      // reject offsets outside fixed range
 }
@@ -416,42 +325,11 @@ fn emit_to_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve toArray frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish toArray frame
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x0");
     emitter.instruction("str x9, [sp, #0]");                                    // save source storage
-    emitter.instruction("ldr x10, [x9]");                                       // load fixed size
-    emitter.instruction("str x10, [sp, #8]");                                   // save fixed size
-    emitter.instruction("mov x0, x10");                                         // result array capacity equals fixed size
-    emitter.instruction("mov x1, #8");                                          // result slots hold Mixed pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate result PHP array
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load result packed kind word
-    emitter.instruction("orr x9, x9, #0x700");                                  // mark result as containing Mixed cells
-    emitter.instruction("str x9, [x0, #-8]");                                   // persist result Mixed value_type tag
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload fixed size
-    emitter.instruction("str x10, [x0]");                                       // result logical length equals fixed size
-    emitter.instruction("str x0, [sp, #16]");                                   // save result array
-    emitter.instruction("str xzr, [sp, #24]");                                  // initialize copy cursor
-    emitter.label("__rt_spl_fixed_to_array_loop");
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload fixed size
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload copy cursor
-    emitter.instruction("cmp x11, x10");                                        // have all slots been copied?
-    emitter.instruction("b.ge __rt_spl_fixed_to_array_done");                   // finish after copying fixed size slots
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload source storage
-    emitter.instruction("add x9, x9, #24");                                     // point at source slot base
-    emitter.instruction("ldr x0, [x9, x11, lsl #3]");                           // load source Mixed cell pointer
-    emitter.instruction("cbz x0, __rt_spl_fixed_to_array_null");                // unset slots become boxed null
-    emitter.instruction("bl __rt_incref");                                      // retain source Mixed cell for result array
-    emitter.instruction("b __rt_spl_fixed_to_array_store");                     // store retained slot
-    emitter.label("__rt_spl_fixed_to_array_null");
-    emit_boxed_null_call_aarch64(emitter);
-    emitter.label("__rt_spl_fixed_to_array_store");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload result array
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload copy cursor
-    emitter.instruction("add x9, x9, #24");                                     // point at result slot base
-    emitter.instruction("str x0, [x9, x11, lsl #3]");                           // store owned Mixed cell into result array
-    emitter.instruction("add x11, x11, #1");                                    // advance copy cursor
-    emitter.instruction("str x11, [sp, #24]");                                  // save updated copy cursor
-    emitter.instruction("b __rt_spl_fixed_to_array_loop");                      // continue copying slots
-    emitter.label("__rt_spl_fixed_to_array_done");
+    let copy = PackedMixedCopy { source: 0, length: 8, array: 16, cursor: 24 };
+    copy.emit_allocate(emitter);
+    copy.emit_nullable_slots(emitter);
     emitter.instruction("ldr x0, [sp, #16]");                                   // return result array pointer
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release toArray frame
@@ -471,15 +349,15 @@ fn emit_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save SplFixedArray class id
     emitter.instruction("str x1, [sp, #8]");                                    // save source PHP array
     emitter.instruction("str x2, [sp, #16]");                                   // save preserveKeys flag
-    emitter.instruction("ldr x9, [x1, #-8]");                                   // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x1");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap kind byte
     emitter.instruction("cmp x9, #3");                                          // is the source an associative array hash?
     emitter.instruction("b.eq __rt_spl_fixed_from_array_hash_size");            // hash sources need key-aware sizing
-    emitter.instruction("ldr x10, [x1]");                                       // indexed source size equals logical array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x1"); // indexed source size equals logical array length
     emitter.instruction("str x10, [sp, #24]");                                  // save constructor size
     emitter.instruction("b __rt_spl_fixed_from_array_alloc");                   // allocate with the indexed source length
     emitter.label("__rt_spl_fixed_from_array_hash_size");
-    emitter.instruction("ldr x10, [x1]");                                       // load hash entry count for packed import
+    hash_layout::emit_load_header_field(emitter, "x10", "x1", HeaderField::Count); // load hash entry count for packed import
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload preserveKeys flag
     emitter.instruction("cbnz x11, __rt_spl_fixed_from_array_hash_preserve_size"); // preserveKeys=true sizes by the maximum numeric key
     emitter.instruction("str x10, [sp, #24]");                                  // packed hash import size equals entry count
@@ -549,22 +427,22 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save source PHP array
     emitter.instruction("str x2, [sp, #16]");                                   // save preserveKeys flag
-    emitter.instruction("ldr x9, [x1, #-8]");                                   // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x1");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap kind byte
     emitter.instruction("cmp x9, #3");                                          // is the source an associative array hash?
     emitter.instruction("b.eq __rt_spl_fixed_copy_from_hash");                  // hash sources need insertion-order import
     emitter.instruction("mov x0, x1");                                          // pass source array to mixed conversion
-    emitter.instruction("ldr x1, [x0, #-8]");                                   // load packed array kind and value-type metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x1", "x0");
     emitter.instruction("lsr x1, x1, #8");                                      // move value_type tag down to the low byte
     emitter.instruction("and x1, x1, #0x7f");                                   // isolate the indexed-array value_type tag without COW metadata
     emitter.instruction("bl __rt_array_to_mixed");                              // normalize source slots to boxed Mixed cells
     emitter.instruction("str x0, [sp, #8]");                                    // save possibly-converted source array
-    emitter.instruction("ldr x1, [x0]");                                        // load source logical length
+    packed_slots::emit_load_length(emitter, "x1", "x0");                                        // load source logical length
     emitter.instruction("str x1, [sp, #24]");                                   // save source length
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for resize
     emitter.instruction("bl __rt_spl_fixed_set_size");                          // resize receiver to exactly the source length
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after resize
-    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x9");
     emitter.instruction("str x9, [sp, #32]");                                   // save destination storage
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize copy cursor
     emitter.label("__rt_spl_fixed_copy_from_array_loop");
@@ -573,18 +451,18 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x11");                                        // have all source slots been copied?
     emitter.instruction("b.ge __rt_spl_fixed_copy_from_array_done");            // finish once every slot is imported
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload destination storage
-    emitter.instruction("add x12, x9, #24");                                    // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "x12", "x9");                                    // point at destination slot base
     emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load existing destination Mixed cell
     emitter.instruction("str x10, [sp, #40]");                                  // preserve cursor across release
     emitter.instruction("bl __rt_decref_mixed");                                // release any overwritten destination cell
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload copy cursor after release
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload source array
-    emitter.instruction("add x9, x9, #24");                                     // point at source Mixed slot base
+    packed_slots::emit_packed_payload(emitter, "x9", "x9");                                     // point at source Mixed slot base
     emitter.instruction("ldr x0, [x9, x10, lsl #3]");                           // load source Mixed cell
     emitter.instruction("bl __rt_incref");                                      // retain source cell for fixed-array storage
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload copy cursor after retain
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload destination storage after retain
-    emitter.instruction("add x12, x9, #24");                                    // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "x12", "x9");                                    // point at destination slot base
     emitter.instruction("str x0, [x12, x10, lsl #3]");                          // store retained Mixed cell into fixed-array slot
     emitter.instruction("add x10, x10, #1");                                    // advance copy cursor
     emitter.instruction("str x10, [sp, #40]");                                  // save updated copy cursor
@@ -593,12 +471,12 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload preserveKeys flag
     emitter.instruction("cbnz x9, __rt_spl_fixed_copy_from_hash_preserve");     // preserve numeric keys when requested
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload source hash
-    emitter.instruction("ldr x1, [x9]");                                        // packed hash import size equals live entry count
+    hash_layout::emit_load_header_field(emitter, "x1", "x9", HeaderField::Count);
     emitter.instruction("str x1, [sp, #24]");                                   // save destination size
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for resize
     emitter.instruction("bl __rt_spl_fixed_set_size");                          // resize receiver for packed hash import
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after resize
-    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x9");
     emitter.instruction("str x9, [sp, #32]");                                   // save destination storage
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize packed destination index
     emitter.instruction("str xzr, [sp, #48]");                                  // initialize hash iterator cursor
@@ -639,7 +517,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for resize
     emitter.instruction("bl __rt_spl_fixed_set_size");                          // resize receiver for preserved numeric keys
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after resize
-    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    spl_storage::emit_load_fixed_storage(emitter, "x9", "x9");
     emitter.instruction("str x9, [sp, #32]");                                   // save destination storage
     emitter.instruction("str xzr, [sp, #48]");                                  // reset hash iterator cursor for value copy
     emitter.label("__rt_spl_fixed_copy_hash_preserve_loop");
@@ -660,7 +538,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload preserved destination index
     emitter.label("__rt_spl_fixed_copy_hash_store");
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload destination storage
-    emitter.instruction("add x12, x9, #24");                                    // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "x12", "x9");                                    // point at destination slot base
     emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load existing destination Mixed cell
     emitter.instruction("str x10, [sp, #80]");                                  // preserve destination index across release
     emitter.instruction("bl __rt_decref_mixed");                                // release any overwritten destination cell
@@ -678,7 +556,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_store_box");
     emitter.instruction("ldr x10, [sp, #80]");                                  // reload destination index after boxing
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload destination storage after boxing
-    emitter.instruction("add x12, x9, #24");                                    // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "x12", "x9");                                    // point at destination slot base
     emitter.instruction("str x0, [x12, x10, lsl #3]");                          // store owned Mixed value into fixed-array slot
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload preserveKeys flag
     emitter.instruction("cbnz x9, __rt_spl_fixed_copy_hash_preserve_loop");     // preserved imports keep source numeric keys
@@ -700,16 +578,6 @@ fn emit_tail_boxed_null_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, xzr");                                         // null payload low word is empty
     emitter.instruction("mov x2, xzr");                                         // null payload high word is empty
     emitter.instruction("b __rt_mixed_from_value");                             // tail-call boxed Mixed construction
-}
-
-/// Emits a call sequence to construct a boxed null Mixed cell on aarch64.
-/// Sets NULL_TAG (8) as runtime tag, zero payload words, and calls `__rt_mixed_from_value`.
-/// Used when a null must be allocated (e.g., unset slot in toArray).
-fn emit_boxed_null_call_aarch64(emitter: &mut Emitter) {
-    emitter.instruction(&format!("mov x0, #{}", NULL_TAG));                     // runtime tag 8 = null
-    emitter.instruction("mov x1, xzr");                                         // null payload low word is empty
-    emitter.instruction("mov x2, xzr");                                         // null payload high word is empty
-    emitter.instruction("bl __rt_mixed_from_value");                            // allocate boxed null Mixed cell
 }
 
 /// Emits all x86_64 `SplFixedArray` runtime helpers via a blank line, section comment,
@@ -752,34 +620,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     );
     emitter.label("__rt_spl_fixed_new_size_ok");
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save requested fixed size
-    emitter.instruction(&format!("mov rax, {}", SPL_FIXED_OBJECT_SIZE));        // request fixed-array object payload size
-    emitter.instruction("call __rt_heap_alloc");                                // allocate SplFixedArray object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize object heap kind with x86 marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as an object instance
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload concrete class id
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save object pointer while allocating storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass requested size as storage capacity
-    emitter.instruction("mov rsi, 8");                                          // each slot holds one Mixed pointer
-    emitter.instruction("call __rt_array_new");                                 // allocate fixed-array storage
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load storage packed kind word
-    emitter.instruction("or r9, 0x700");                                        // mark storage as containing Mixed cells
-    emitter.instruction("mov QWORD PTR [rax - 8], r9");                         // persist Mixed value_type tag
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload fixed size
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // logical length is fixed size
-    emitter.instruction("lea r11, [rax + 24]");                                 // point at first storage slot
-    emitter.instruction("xor r12, r12");                                        // initialize slot-zeroing cursor
-    emitter.label("__rt_spl_fixed_new_zero_loop");
-    emitter.instruction("cmp r12, r10");                                        // have all slots been initialized?
-    emitter.instruction("jge __rt_spl_fixed_new_done");                         // finish once every slot is zeroed
-    emitter.instruction("mov QWORD PTR [r11 + r12 * 8], 0");                    // initialize slot as unset/null
-    emitter.instruction("add r12, 1");                                          // advance zeroing cursor
-    emitter.instruction("jmp __rt_spl_fixed_new_zero_loop");                    // continue zeroing storage slots
-    emitter.label("__rt_spl_fixed_new_done");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload object pointer
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // object.storage = fixed-array storage
-    emitter.instruction("mov rax, r11");                                        // return initialized SplFixedArray object
+    spl_storage::emit_fixed_storage(emitter);
     emitter.instruction("add rsp, 32");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return object pointer
@@ -789,8 +630,8 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
 /// rdi = receiver SplFixedArray object. Returns the fixed size in rax.
 fn emit_count_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_count");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // return logical fixed size
+    spl_storage::emit_load_fixed_storage(emitter, "r10", "rdi");
+    packed_slots::emit_load_length(emitter, "rax", "r10");                            // return logical fixed size
     emitter.instruction("ret");                                                 // return count/getSize result
 }
 
@@ -815,53 +656,7 @@ fn emit_set_size_x86_64(emitter: &mut Emitter) {
         SPL_FIXED_SET_SIZE_MSG_LEN,
     );
     emitter.label("__rt_spl_fixed_set_size_nonnegative");
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save requested new size
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load current storage
-    emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save current storage
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load old size
-    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save old size
-    emitter.label("__rt_spl_fixed_set_size_grow_check");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload requested size
-    emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                         // load capacity
-    emitter.instruction("cmp r10, r11");                                        // does storage need more capacity?
-    emitter.instruction("jle __rt_spl_fixed_set_size_release_tail");            // skip growth when capacity is enough
-    emitter.instruction("mov rdi, r9");                                         // pass current storage to array_grow
-    emitter.instruction("call __rt_array_grow");                                // grow fixed-array storage
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save grown storage
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // publish grown storage on receiver
-    emitter.instruction("jmp __rt_spl_fixed_set_size_grow_check");              // grow again if requested size still exceeds capacity
-    emitter.label("__rt_spl_fixed_set_size_release_tail");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload requested size
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload old size
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage slot
-    emitter.instruction("mov r13, r10");                                        // tail-release cursor starts at new size
-    emitter.label("__rt_spl_fixed_set_size_tail_loop");
-    emitter.instruction("cmp r13, r11");                                        // have all truncated slots been released?
-    emitter.instruction("jge __rt_spl_fixed_set_size_zero_new");                // stop tail release at old size
-    emitter.instruction("mov rax, QWORD PTR [r12 + r13 * 8]");                  // load truncated Mixed cell
-    emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // preserve tail-release cursor
-    emitter.instruction("call __rt_decref_mixed");                              // release truncated Mixed cell if present
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload storage after release
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload requested size after release
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload old size after release
-    emitter.instruction("lea r12, [r9 + 24]");                                  // restore storage slot base
-    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload tail-release cursor
-    emitter.instruction("mov QWORD PTR [r12 + r13 * 8], 0");                    // clear released slot
-    emitter.instruction("add r13, 1");                                          // advance tail-release cursor
-    emitter.instruction("jmp __rt_spl_fixed_set_size_tail_loop");               // continue releasing truncated slots
-    emitter.label("__rt_spl_fixed_set_size_zero_new");
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // zero-fill starts at old size
-    emitter.label("__rt_spl_fixed_set_size_zero_loop");
-    emitter.instruction("cmp r13, r10");                                        // have all newly exposed slots been zeroed?
-    emitter.instruction("jge __rt_spl_fixed_set_size_done");                    // finish after zero-filling to requested size
-    emitter.instruction("mov QWORD PTR [r12 + r13 * 8], 0");                    // initialize grown slot as unset/null
-    emitter.instruction("add r13, 1");                                          // advance zero-fill cursor
-    emitter.instruction("jmp __rt_spl_fixed_set_size_zero_loop");               // continue zero-filling new slots
-    emitter.label("__rt_spl_fixed_set_size_done");
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // store new logical fixed size
+    elephc_memoir::values::fixed_array_storage::emit_resize(emitter);
     emitter.instruction("add rsp, 48");                                         // release resize frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
@@ -878,11 +673,12 @@ fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
         "__rt_spl_fixed_offset_exists_type_throw",
         "__rt_spl_fixed_offset_exists_false",
     );
-    emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage slot
+    packed_slots::emit_packed_payload(emitter, "r11", "r9");                                  // point at first storage slot
     emitter.instruction("mov r12, QWORD PTR [r11 + r10 * 8]");                  // load candidate Mixed cell pointer
     emitter.instruction("test r12, r12");                                       // is the slot unset?
     emitter.instruction("jz __rt_spl_fixed_offset_exists_false");               // unset slots do not exist for isset()
-    emitter.instruction("cmp QWORD PTR [r12], 8");                              // explicit null behaves like unset for isset()
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, "r13", "r12");           // load boxed Mixed tag
+    emitter.instruction("cmp r13, 8");                                          // explicit null behaves like unset for isset()
     emitter.instruction("setne al");                                            // return true when slot is non-null
     emitter.instruction("movzx rax, al");                                       // widen boolean result
     emitter.instruction("add rsp, 48");                                         // release offset frame
@@ -911,7 +707,7 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
         "__rt_spl_fixed_offset_get_type_throw",
         "__rt_spl_fixed_offset_get_range_throw",
     );
-    emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage slot
+    packed_slots::emit_packed_payload(emitter, "r11", "r9");                                  // point at first storage slot
     emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");                  // load selected Mixed cell
     emitter.instruction("test rax, rax");                                       // is the slot unset?
     emitter.instruction("jz __rt_spl_fixed_offset_get_null_loaded");            // unset slots read as null
@@ -942,7 +738,7 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
 
 /// Emits `__rt_spl_fixed_offset_set` on x86_64: ArrayAccess `offsetSet`.
 /// rdi = receiver, rsi = boxed offset, rdx = owned Mixed value to store.
-/// Releases the previous slot value via `__rt_decref_mixed` before overwriting.
+/// Releases the displaced slot owner after publishing the replacement.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
@@ -963,20 +759,11 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction("jl __rt_spl_fixed_offset_set_range_throw");            // negative offsets are out of range
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
-    emitter.instruction("mov r11, QWORD PTR [r9]");                             // load fixed size
+    spl_storage::emit_load_fixed_storage(emitter, "r9", "rdi");
+    packed_slots::emit_load_length(emitter, "r11", "r9");                             // load fixed size
     emitter.instruction("cmp r10, r11");                                        // compare offset against fixed size
     emitter.instruction("jae __rt_spl_fixed_offset_set_range_throw");           // reject offsets outside fixed range
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage slot
-    emitter.instruction("mov rax, QWORD PTR [r12 + r10 * 8]");                  // load previous Mixed cell
-    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // preserve storage across release
-    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve offset across release
-    emitter.instruction("call __rt_decref_mixed");                              // release previous slot value if present
-    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload storage after release
-    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload offset after release
-    emitter.instruction("lea r12, [r9 + 24]");                                  // restore storage slot base
-    emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload owned Mixed replacement
-    emitter.instruction("mov QWORD PTR [r12 + r10 * 8], r13");                  // store replacement Mixed cell
+    elephc_memoir::values::spl_storage::emit_replace_slot(emitter);
     emitter.instruction("jmp __rt_spl_fixed_offset_set_done");                  // finish offsetSet
     emitter.label("__rt_spl_fixed_offset_set_type_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
@@ -1003,8 +790,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_spl_fixed_offset_unset` on x86_64: ArrayAccess `offsetUnset`.
-/// rdi = receiver, rsi = boxed offset. Releases the existing Mixed cell at the slot
-/// via `__rt_decref_mixed` and marks the slot as unset/null.
+/// rdi = receiver, rsi = boxed offset. Clears the slot and releases its detached Mixed owner.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_unset");
@@ -1013,14 +799,7 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
         "__rt_spl_fixed_offset_unset_type_throw",
         "__rt_spl_fixed_offset_unset_range_throw",
     );
-    emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage slot
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");                  // load existing Mixed cell
-    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // preserve storage slot base across release
-    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve offset across release
-    emitter.instruction("call __rt_decref_mixed");                              // release existing Mixed cell if present
-    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload storage slot base
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload offset
-    emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // mark slot unset/null
+    elephc_memoir::values::fixed_array_storage::emit_unset_slot(emitter);
     emitter.label("__rt_spl_fixed_offset_unset_done");
     emitter.instruction("add rsp, 48");                                         // release offset frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -1064,8 +843,8 @@ fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_labe
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction(&format!("jl {}", range_label));                        // negative offsets are invalid
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
-    emitter.instruction("mov r11, QWORD PTR [r9]");                             // load fixed size
+    spl_storage::emit_load_fixed_storage(emitter, "r9", "rdi");
+    packed_slots::emit_load_length(emitter, "r11", "r9");                             // load fixed size
     emitter.instruction("cmp r10, r11");                                        // compare offset against fixed size
     emitter.instruction(&format!("jae {}", range_label));                       // reject offsets outside fixed range
 }
@@ -1090,43 +869,11 @@ fn emit_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for toArray
     emitter.instruction("mov rbp, rsp");                                        // establish toArray frame
     emitter.instruction("sub rsp, 48");                                         // reserve source, size, result, and cursor spills
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    spl_storage::emit_load_fixed_storage(emitter, "r9", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 8], r9");                         // save source storage
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load fixed size
-    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save fixed size
-    emitter.instruction("mov rdi, r10");                                        // result array capacity equals fixed size
-    emitter.instruction("mov rsi, 8");                                          // result slots hold Mixed pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate result PHP array
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load result packed kind word
-    emitter.instruction("or r9, 0x700");                                        // mark result as containing Mixed cells
-    emitter.instruction("mov QWORD PTR [rax - 8], r9");                         // persist result Mixed value_type tag
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload fixed size
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // result logical length equals fixed size
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save result array
-    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize copy cursor
-    emitter.label("__rt_spl_fixed_to_array_loop");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload fixed size
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload copy cursor
-    emitter.instruction("cmp r11, r10");                                        // have all slots been copied?
-    emitter.instruction("jge __rt_spl_fixed_to_array_done");                    // finish after copying fixed size slots
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload source storage
-    emitter.instruction("lea r9, [r9 + 24]");                                   // point at source slot base
-    emitter.instruction("mov rax, QWORD PTR [r9 + r11 * 8]");                   // load source Mixed cell pointer
-    emitter.instruction("test rax, rax");                                       // is the source slot unset?
-    emitter.instruction("jz __rt_spl_fixed_to_array_null");                     // unset slots become boxed null
-    emitter.instruction("call __rt_incref");                                    // retain source Mixed cell for result array
-    emitter.instruction("jmp __rt_spl_fixed_to_array_store");                   // store retained slot
-    emitter.label("__rt_spl_fixed_to_array_null");
-    emit_boxed_null_call_x86_64(emitter);
-    emitter.label("__rt_spl_fixed_to_array_store");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload result array
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload copy cursor
-    emitter.instruction("lea r9, [r9 + 24]");                                   // point at result slot base
-    emitter.instruction("mov QWORD PTR [r9 + r11 * 8], rax");                   // store owned Mixed cell into result array
-    emitter.instruction("add r11, 1");                                          // advance copy cursor
-    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save updated copy cursor
-    emitter.instruction("jmp __rt_spl_fixed_to_array_loop");                    // continue copying slots
-    emitter.label("__rt_spl_fixed_to_array_done");
+    let copy = PackedMixedCopy { source: 8, length: 16, array: 24, cursor: 32 };
+    copy.emit_allocate(emitter);
+    copy.emit_nullable_slots(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return result array pointer
     emitter.instruction("add rsp, 48");                                         // release toArray frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -1146,15 +893,15 @@ fn emit_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save SplFixedArray class id
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save source PHP array
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save preserveKeys flag
-    emitter.instruction("mov r10, QWORD PTR [rsi - 8]");                        // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rsi");
     emitter.instruction("and r10, 0xff");                                       // isolate the low heap kind byte
     emitter.instruction("cmp r10, 3");                                          // is the source an associative array hash?
     emitter.instruction("je __rt_spl_fixed_from_array_hash_size_x86");          // hash sources need key-aware sizing
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // indexed source size equals logical array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rsi"); // indexed source size equals logical array length
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save constructor size
     emitter.instruction("jmp __rt_spl_fixed_from_array_alloc_x86");             // allocate with the indexed source length
     emitter.label("__rt_spl_fixed_from_array_hash_size_x86");
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load hash entry count for packed import
+    hash_layout::emit_load_header_field(emitter, "r10", "rsi", HeaderField::Count); // load hash entry count for packed import
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is preserveKeys false?
     emitter.instruction("jne __rt_spl_fixed_from_array_hash_preserve_size_x86"); // preserveKeys=true sizes by maximum numeric key
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // packed hash import size equals entry count
@@ -1224,23 +971,22 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save source PHP array
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save preserveKeys flag
-    emitter.instruction("mov r10, QWORD PTR [rsi - 8]");                        // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rsi");
     emitter.instruction("and r10, 0xff");                                       // isolate the low heap kind byte
     emitter.instruction("cmp r10, 3");                                          // is the source an associative array hash?
     emitter.instruction("je __rt_spl_fixed_copy_from_hash_x86");                // hash sources need insertion-order import
     emitter.instruction("mov rax, rsi");                                        // pass source array to mixed conversion
-    emitter.instruction("mov rsi, QWORD PTR [rax - 8]");                        // load packed array kind and value-type metadata
-    emitter.instruction("shr rsi, 8");                                          // move value_type tag down to the low byte
-    emitter.instruction("and rsi, 0x7f");                                       // isolate the indexed-array value_type tag without COW metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rsi", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rsi", "rsi");
     emitter.instruction("mov rdi, rax");                                        // pass the source indexed array pointer to the converter
     emitter.instruction("call __rt_array_to_mixed");                            // normalize source slots to boxed Mixed cells
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save possibly-converted source array
-    emitter.instruction("mov rsi, QWORD PTR [rax]");                            // load source logical length
+    packed_slots::emit_load_length(emitter, "rsi", "rax");                            // load source logical length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save source length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for resize
     emitter.instruction("call __rt_spl_fixed_set_size");                        // resize receiver to exactly the source length
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after resize
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    spl_storage::emit_load_fixed_storage(emitter, "r9", "r9");
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save destination storage
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize copy cursor
     emitter.label("__rt_spl_fixed_copy_from_array_loop");
@@ -1248,16 +994,16 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have all source slots been copied?
     emitter.instruction("jge __rt_spl_fixed_copy_from_array_done");             // finish once every slot is imported
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload destination storage
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "r12", "r9");                                  // point at destination slot base
     emitter.instruction("mov rax, QWORD PTR [r12 + r10 * 8]");                  // load existing destination Mixed cell
     emitter.instruction("call __rt_decref_mixed");                              // release any overwritten destination cell
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload copy cursor after release
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload source array
-    emitter.instruction("mov rax, QWORD PTR [r9 + 24 + r10 * 8]");              // load source Mixed cell
+    packed_slots::emit_load_indexed_word(emitter, "r9", "r10", "rax", "r12"); // load source Mixed cell
     emitter.instruction("call __rt_incref");                                    // retain source cell for fixed-array storage
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload copy cursor after retain
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload destination storage after retain
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "r12", "r9");                                  // point at destination slot base
     emitter.instruction("mov QWORD PTR [r12 + r10 * 8], rax");                  // store retained Mixed cell into fixed-array slot
     emitter.instruction("add r10, 1");                                          // advance copy cursor
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save updated copy cursor
@@ -1266,12 +1012,12 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // should numeric keys be preserved?
     emitter.instruction("jne __rt_spl_fixed_copy_from_hash_preserve_x86");      // preserve numeric keys when requested
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload source hash
-    emitter.instruction("mov rsi, QWORD PTR [r9]");                             // packed hash import size equals live entry count
+    hash_layout::emit_load_header_field(emitter, "rsi", "r9", HeaderField::Count);
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save destination size
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for resize
     emitter.instruction("call __rt_spl_fixed_set_size");                        // resize receiver for packed hash import
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after resize
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    spl_storage::emit_load_fixed_storage(emitter, "r9", "r9");
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save destination storage
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize packed destination index
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize hash iterator cursor
@@ -1311,7 +1057,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for resize
     emitter.instruction("call __rt_spl_fixed_set_size");                        // resize receiver for preserved numeric keys
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after resize
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    spl_storage::emit_load_fixed_storage(emitter, "r9", "r9");
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save destination storage
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // reset hash iterator cursor for value copy
     emitter.label("__rt_spl_fixed_copy_hash_preserve_loop_x86");
@@ -1332,7 +1078,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload preserved destination index
     emitter.label("__rt_spl_fixed_copy_hash_store_x86");
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload destination storage
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "r12", "r9");                                  // point at destination slot base
     emitter.instruction("mov rax, QWORD PTR [r12 + r10 * 8]");                  // load existing destination Mixed cell
     emitter.instruction("mov QWORD PTR [rbp - 88], r10");                       // preserve destination index across release
     emitter.instruction("call __rt_decref_mixed");                              // release any overwritten destination cell
@@ -1349,7 +1095,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_store_box_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload destination index after boxing
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload destination storage after boxing
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at destination slot base
+    packed_slots::emit_packed_payload(emitter, "r12", "r9");                                  // point at destination slot base
     emitter.instruction("mov QWORD PTR [r12 + r10 * 8], rax");                  // store owned Mixed value into fixed-array slot
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // was this a preserveKeys import?
     emitter.instruction("jne __rt_spl_fixed_copy_hash_preserve_loop_x86");      // preserved imports keep source numeric keys
@@ -1373,16 +1119,6 @@ fn emit_tail_boxed_null_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value");                           // tail-call boxed Mixed construction
 }
 
-/// Emits a call sequence to construct a boxed null Mixed cell on x86_64.
-/// Sets NULL_TAG (8) as runtime tag, zero payload registers, and calls `__rt_mixed_from_value`.
-/// Used when a null must be allocated (e.g., unset slot in toArray).
-fn emit_boxed_null_call_x86_64(emitter: &mut Emitter) {
-    emitter.instruction(&format!("mov rax, {}", NULL_TAG));                     // runtime tag 8 = null
-    emitter.instruction("xor rdi, rdi");                                        // null payload low word is empty
-    emitter.instruction("xor rsi, rsi");                                        // null payload high word is empty
-    emitter.instruction("call __rt_mixed_from_value");                          // allocate boxed null Mixed cell
-}
-
 /// Emits the aarch64 exception-throw sequence for SplFixedArray runtime errors.
 /// Allocates a 32-byte Throwable payload, stamps it as heap kind 6 (object), stores the
 /// class id from `class_id_symbol`, the static message pointer, the message length,
@@ -1394,20 +1130,16 @@ fn emit_throw_exception_aarch64(
     message_symbol: &str,
     message_len: usize,
 ) {
-    emitter.instruction("mov x0, #56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the exception object payload
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp allocation as a runtime object
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    throwable_storage::emit_allocate(emitter);
     abi::emit_symbol_address(emitter, "x9", class_id_symbol);
     emitter.instruction("ldr x9, [x9]");                                        // load the exception class id for this program
-    emitter.instruction("str x9, [x0]");                                        // store class id at object header
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x9", message_symbol);
-    emitter.instruction("str x9, [x0, #8]");                                    // store static exception message pointer
+    abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static exception message length
-    emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
-    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
+    abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
+    throwable_storage::emit_default_code(emitter, "x0");
+    throwable_storage::emit_empty_previous(emitter, "x0");
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
@@ -1427,18 +1159,14 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
-    emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the exception object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    throwable_storage::emit_allocate(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0);           // load the exception class id for this program
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
+    elephc_memoir::values::object_storage::emit_store_class_id(emitter, "r10", "rax");
     abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize static exception message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static exception message pointer
-    emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static exception message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], {}", throwable_storage::MESSAGE_LENGTH, message_len)); // store static exception message length
+    throwable_storage::emit_default_code(emitter, "rax");
+    throwable_storage::emit_empty_previous(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing

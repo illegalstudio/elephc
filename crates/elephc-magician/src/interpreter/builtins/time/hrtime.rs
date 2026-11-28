@@ -8,7 +8,8 @@
 //! - Monotonic time is returned as nanoseconds or `[seconds, nanoseconds]`.
 
 use super::super::super::*;
-use super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+
 
 eval_builtin! {
     contract: "hrtime",
@@ -26,10 +27,8 @@ pub(in crate::interpreter) fn eval_builtin_hrtime(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
         [] => eval_hrtime_result(None, values),
-        [as_number] => {
-            let as_number = eval_expr(as_number, context, scope, values)?;
-            eval_hrtime_result(Some(as_number), values)
-        }
+        [as_number] => with_eval_operands(&[as_number], context, scope, values,
+            |operands, _, _, values| eval_hrtime_result(Some(operands[0]), values)),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -51,9 +50,10 @@ pub(in crate::interpreter) fn eval_hrtime_result(
             .ok_or(EvalStatus::RuntimeFatal)?;
         return values.int(total);
     }
-    let mut result = values.array_new(2)?;
-    result = eval_array_set_int_int(result, 0, seconds, values)?;
-    eval_array_set_int_int(result, 1, nanoseconds, values)
+    let mut result = EvalArrayBuilder::indexed(values, 2)?;
+    result.index(0, |values| values.int(seconds))?;
+    result.index(1, |values| values.int(nanoseconds))?;
+    Ok(result.finish())
 }
 
 /// Reads the monotonic clock in whole seconds and nanoseconds.

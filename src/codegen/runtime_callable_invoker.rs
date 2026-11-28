@@ -48,6 +48,8 @@ pub(in crate::codegen) use scalar_param_args::InvokerScalarGuards;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
 
+use elephc_memoir::{hash_layout::{self, EntryField}, values::throwable_storage};
+use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use public_args::InvokerParamShape;
 
 use argument_owners::InvokerArgumentOwners;
@@ -67,7 +69,7 @@ use crate::codegen::{
     emit_box_runtime_payload_as_mixed,
 };
 use crate::codegen_support::try_handlers::{
-    EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::types::{FunctionSig, PhpType};
 
@@ -417,18 +419,9 @@ fn emit_invoker_exception_boundary_push(
     emitter.comment("push eval callable exception boundary");
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-            abi::store_at_offset(emitter, "x10", handler_base);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-            abi::store_at_offset(emitter, "x10", handler_base - 8);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-            abi::store_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
+            elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "x10", handler_base);
             emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+            elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
             emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
@@ -437,21 +430,9 @@ fn emit_invoker_exception_boundary_push(
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(                                                // save the previous native exception-handler head
-                &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-            );
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-            emitter.instruction(                                                // preserve the caller activation frame across callable unwinding
-                &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-            );
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!(                                       // save diagnostic suppression depth for restoration
-                "mov QWORD PTR [rbp - {}], r10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));
+            elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
             emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base)); // compute the boundary handler record address
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+            elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
             emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
@@ -468,25 +449,10 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
     emitter.comment("pop eval callable exception boundary");
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::load_at_offset(emitter, "x10", handler_base);
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-            abi::load_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+            elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "x10", handler_base);
         }
         Arch::X86_64 => {
-            emitter.instruction(                                                // reload the previous native exception-handler head
-                &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-            );
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(                                       // reload the saved diagnostic suppression depth
-                "mov r10, QWORD PTR [rbp - {}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+            elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", handler_base);
         }
     }
 }
@@ -600,8 +566,8 @@ fn emit_loaded_mixed_array_callback_call(
 
     // -- unpack the boxed Mixed container and branch on its runtime shape --
     emit_loaded_array_source_to_reg(array_source, mixed_reg, emitter);
-    abi::emit_load_from_address(emitter, tag_reg, mixed_reg, 0);
-    abi::emit_load_from_address(emitter, payload_reg, mixed_reg, 8);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag_reg, mixed_reg);
+    elephc_memoir::layout::emit_load_mixed_low(emitter, payload_reg, mixed_reg);
     abi::emit_push_reg(emitter, payload_reg); // preserve unboxed argument payload while branching by shape
     emit_branch_if_mixed_arg_tag(
         tag_reg,
@@ -694,7 +660,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- load the argument array and validate the required argument count --
     emit_loaded_array_source_to_reg(array_source, array_reg, emitter);
-    abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, len_reg, array_reg);
     emit_indexed_required_arg_count_check(sig, shape.visible_regular, len_reg, emitter, ctx, data);
     if ctx.mbstring_variable_ref_warnings {
         mbstring::warn_indexed_nonreference_roots(emitter, ctx, data, array_reg, len_reg, elem_size);
@@ -1333,7 +1299,7 @@ fn push_loaded_indexed_array_ref_arg(
     let result_reg = abi::int_result_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag_reg, result_reg);
     // -- call_user_func-family invocations pass every argument by value --
     let profile = abi::symbol_scratch_reg(emitter);
     let profile_mask = abi::tertiary_scratch_reg(emitter);
@@ -1366,7 +1332,7 @@ fn push_loaded_indexed_array_ref_arg(
             emitter.instruction(&format!("b.eq {php_reference_label}"));        // forward its original cell
             emitter.instruction(&format!("cmp {tag_reg}, #7"));                 // test for a persistent reference wrapper
             emitter.instruction(&format!("b.ne {temp_label}"));                 // ordinary values require temporary cells
-            abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag_reg, result_reg);
             emitter.instruction(&format!("cmp {tag_reg}, #1"));                 // flag one identifies the persistent reference
             emitter.instruction(&format!("b.eq {php_reference_label}"));        // preserve its writable target
         }
@@ -1375,7 +1341,7 @@ fn push_loaded_indexed_array_ref_arg(
             emitter.instruction(&format!("je {php_reference_label}"));          // forward its original cell
             emitter.instruction(&format!("cmp {tag_reg}, 7"));                  // test for a persistent reference wrapper
             emitter.instruction(&format!("jne {temp_label}"));                  // ordinary values require temporary cells
-            abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag_reg, result_reg);
             emitter.instruction(&format!("cmp {tag_reg}, 1"));                  // flag one identifies the persistent reference
             emitter.instruction(&format!("je {php_reference_label}"));          // preserve its writable target
         }
@@ -1384,8 +1350,12 @@ fn push_loaded_indexed_array_ref_arg(
 
     emitter.label(&special_label);
     let storage_reg = abi::symbol_scratch_reg(emitter);
-    abi::emit_load_from_address(emitter, storage_reg, result_reg, 8);
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    elephc_memoir::reference_cells::invoker_marker::emit_project(
+        emitter,
+        result_reg,
+        tag_reg,
+        storage_reg,
+    );
     push_invoker_ref_storage_address(storage_reg, tag_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
@@ -1404,7 +1374,7 @@ fn push_loaded_indexed_array_ref_arg(
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
     emitter.label(&dereference);
-    abi::emit_load_from_address(emitter, result_reg, result_reg, 8);
+    elephc_memoir::layout::emit_load_mixed_low(emitter, result_reg, result_reg);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
 
@@ -1508,11 +1478,8 @@ fn push_invoker_ref_storage_address(
     }
     emit_invoker_ref_heap_layout_guard(storage_reg, source_tag_reg, false, emitter, ctx);
     emit_boxed_mixed_object_ref_layout_guard(storage_reg, target_ty, emitter, ctx);
-    abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("add {}, {}, #8", result_reg, result_reg)), // address the mutable payload inside the Mixed cell
-        Arch::X86_64 => emitter.instruction(&format!("add {}, 8", result_reg)), // address the mutable payload inside the Mixed cell
-    }
+    elephc_memoir::reference_cells::emit_load_low(emitter, result_reg, storage_reg);
+    elephc_memoir::layout::emit_mixed_low_address(emitter, result_reg, result_reg);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
 
@@ -1550,8 +1517,8 @@ fn emit_boxed_mixed_object_ref_layout_guard(
     let compatible = ctx.next_label("invoker_ref_object_compatible");
     let incompatible = ctx.next_label("invoker_ref_object_incompatible");
     let result = abi::int_result_reg(emitter);
-    abi::emit_load_from_address(emitter, result, storage_reg, 0);
-    abi::emit_load_from_address(emitter, result, result, 0);
+    elephc_memoir::reference_cells::emit_load_low(emitter, result, storage_reg);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, result, result);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cmp x0, #6");                                  // a boxed object uses Mixed tag six
@@ -1605,7 +1572,7 @@ fn emit_invoker_ref_heap_layout_guard(
     let incompatible = ctx.next_label("invoker_ref_heap_layout_incompatible");
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg_pair(emitter, storage_reg, source_tag_reg);
-    abi::emit_load_from_address(emitter, result, storage_reg, 0);
+    elephc_memoir::reference_cells::emit_load_low(emitter, result, storage_reg);
     abi::emit_call_label(emitter, "__rt_heap_kind");
     abi::emit_pop_reg_pair(emitter, storage_reg, source_tag_reg);
     match emitter.target.arch {
@@ -1657,7 +1624,7 @@ fn push_loaded_indexed_array_value_arg(
     let result_reg = abi::int_result_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    elephc_memoir::layout::emit_load_mixed_tag(emitter, tag_reg, result_reg);
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
     let ordinary_ty = push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data);
     abi::emit_jump(emitter, &done_label);
@@ -1690,8 +1657,12 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
     // -- unpack the marker and materialize its referenced value --
-    abi::emit_load_from_address(emitter, ref_cell_reg, result_reg, 8);
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    elephc_memoir::reference_cells::invoker_marker::emit_project(
+        emitter,
+        result_reg,
+        tag_reg,
+        ref_cell_reg,
+    );
     emit_materialize_invoker_ref_cell_value_as_mixed(ref_cell_reg, tag_reg, emitter, ctx);
 }
 
@@ -1714,7 +1685,7 @@ fn emit_materialize_invoker_ref_cell_value_as_mixed(
     let done_label = ctx.next_label("invoker_ref_materialized");
     let ordinary_label = ctx.next_label("invoker_ref_not_tagged_scalar");
 
-    abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
+    elephc_memoir::reference_cells::emit_load_low(emitter, lo_reg, ref_cell_reg);
     abi::emit_load_int_immediate(emitter, hi_reg, 0);
     crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_source(
         emitter, source_tag_reg, ref_cell_reg, &box_label, &ordinary_label,
@@ -1737,7 +1708,7 @@ fn emit_materialize_invoker_ref_cell_value_as_mixed(
     }
     abi::emit_jump(emitter, &box_label);
     emitter.label(&string_hi_label);
-    abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
+    elephc_memoir::reference_cells::emit_load_high(emitter, hi_reg, ref_cell_reg);
     emitter.label(&box_label);
     emit_box_runtime_payload_as_mixed(emitter, source_tag_reg, lo_reg, hi_reg);
     abi::emit_jump(emitter, &done_label);
@@ -1799,7 +1770,7 @@ fn emit_branch_if_boxed_invoker_ref_cell(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {}, #7", raw_tag_reg));           // is the hash value a boxed Mixed pointer (tag 7)?
             emitter.instruction(&format!("b.ne {}", not_boxed_label));          // only boxed values can hide a ref-cell marker
-            abi::emit_load_from_address(emitter, marker_tag_reg, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, marker_tag_reg, raw_lo_reg);
             emitter.instruction(&format!(                                       // does the boxed cell carry the invoker ref-cell marker tag?
                 "cmp {}, #{}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
@@ -1809,7 +1780,7 @@ fn emit_branch_if_boxed_invoker_ref_cell(
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, 7", raw_tag_reg));            // is the hash value a boxed Mixed pointer (tag 7)?
             emitter.instruction(&format!("jne {}", not_boxed_label));           // only boxed values can hide a ref-cell marker
-            abi::emit_load_from_address(emitter, marker_tag_reg, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, marker_tag_reg, raw_lo_reg);
             emitter.instruction(&format!(                                       // does the boxed cell carry the invoker ref-cell marker tag?
                 "cmp {}, {}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
@@ -1834,14 +1805,14 @@ fn emit_branch_if_boxed_php_reference_cell(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hide references
             emitter.instruction(&format!("b.ne {done}"));                       // leave other values on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, #11"));                    // check the inner boxed reference marker
             emitter.instruction(&format!("b.eq {label}"));                      // forward the live managed cell
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hide references
             emitter.instruction(&format!("jne {done}"));                        // leave other values on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, 11"));                     // check the inner boxed reference marker
             emitter.instruction(&format!("je {label}"));                        // forward the live managed cell
         }
@@ -1860,20 +1831,20 @@ fn emit_branch_if_boxed_persistent_reference(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hold a persistent wrapper
             emitter.instruction(&format!("b.ne {done}"));                       // preserve ordinary hash value handling
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, #7"));                     // check the inner wrapper tag
             emitter.instruction(&format!("b.ne {done}"));                       // leave unrelated boxes on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, #1"));                     // flag one denotes a persistent reference
             emitter.instruction(&format!("b.eq {label}"));                      // forward its original writable storage
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hold a persistent wrapper
             emitter.instruction(&format!("jne {done}"));                        // preserve ordinary hash value handling
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
+            elephc_memoir::layout::emit_load_mixed_tag(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, 7"));                      // check the inner wrapper tag
             emitter.instruction(&format!("jne {done}"));                        // leave unrelated boxes on the ordinary path
-            abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
+            elephc_memoir::layout::emit_load_mixed_high(emitter, tag, raw_lo_reg);
             emitter.instruction(&format!("cmp {tag}, 1"));                      // flag one denotes a persistent reference
             emitter.instruction(&format!("je {label}"));                        // forward its original writable storage
         }
@@ -1889,8 +1860,12 @@ fn load_boxed_invoker_ref_cell_to_raw_regs(
 ) {
     let marker_reg = abi::temp_int_reg(emitter.target);
     emitter.instruction(&format!("mov {}, {}", marker_reg, raw_lo_reg));        // stash the marker pointer before overwriting the raw registers
-    abi::emit_load_from_address(emitter, raw_lo_reg, marker_reg, 8);
-    abi::emit_load_from_address(emitter, raw_hi_reg, marker_reg, 16);
+    elephc_memoir::reference_cells::invoker_marker::emit_project(
+        emitter,
+        marker_reg,
+        raw_hi_reg,
+        raw_lo_reg,
+    );
 }
 
 /// Coerces and pushes a loaded indexed-array element as a call argument.
@@ -1943,64 +1918,64 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
         | PhpType::Packed(_)
         | PhpType::Narrow(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
-            abi::emit_store_zero_to_address(emitter, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_clear_high(emitter, cell_reg);
         }
         PhpType::Float => {
             abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("fmov x10, d0");                        // move the float payload into an integer register for the store
-                    abi::emit_store_to_address(emitter, "x10", cell_reg, 0);
+                    elephc_memoir::reference_cells::emit_store_low(emitter, "x10", cell_reg);
                 }
                 Arch::X86_64 => {
                     emitter.instruction("movq r10, xmm0");                      // move the float payload into an integer register for the store
-                    abi::emit_store_to_address(emitter, "r10", cell_reg, 0);
+                    elephc_memoir::reference_cells::emit_store_low(emitter, "r10", cell_reg);
                 }
             }
             abi::emit_load_int_immediate(emitter, temp_reg, 2);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Str | PhpType::TaggedScalar => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
-            abi::emit_store_to_address(emitter, ptr_reg, cell_reg, 0);
-            abi::emit_store_to_address(emitter, len_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(emitter, ptr_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_store_high(emitter, len_reg, cell_reg);
         }
         PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 7);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Array(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 4);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::AssocArray { .. } => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 5);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Object(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 6);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Resource(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
             abi::emit_load_int_immediate(emitter, temp_reg, 9);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_high(emitter, temp_reg, cell_reg);
         }
         PhpType::Void | PhpType::Never => {
             abi::emit_pop_reg(emitter, temp_reg);
-            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
-            abi::emit_store_zero_to_address(emitter, cell_reg, 8);
+            elephc_memoir::reference_cells::emit_store_low(emitter, temp_reg, cell_reg);
+            elephc_memoir::reference_cells::emit_clear_high(emitter, cell_reg);
         }
     }
 }
@@ -2579,12 +2554,13 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x4, #40]");                           // inspect the original entry before __rt_hash_get dereferencing
+            hash_layout::emit_load_entry_field(emitter, "x9", "x4", EntryField::ValueTag);
             emitter.instruction("cmp x9, #11");                                 // a PHP reference owns a shared writable cell
             emitter.instruction(&format!("b.eq {entry_reference_label}"));      // forward that cell to the by-reference callee
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // inspect the original entry before __rt_hash_get dereferencing
+            hash_layout::emit_load_entry_field(emitter, "r9", "r8", EntryField::ValueTag);
+            emitter.instruction("cmp r9, 11");                                  // a PHP reference owns a shared writable cell
             emitter.instruction(&format!("je {entry_reference_label}"));        // forward that cell to the by-reference callee
         }
     }
@@ -2606,8 +2582,8 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&entry_reference_label);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("ldr x1, [x4, #24]"),              // load the managed reference from its hash entry
-        Arch::X86_64 => emitter.instruction("mov rdi, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
+        Arch::AArch64 => hash_layout::emit_load_entry_field(emitter, "x1", "x4", EntryField::ValueLow),
+        Arch::X86_64 => hash_layout::emit_load_entry_field(emitter, "rdi", "r8", EntryField::ValueLow),
     }
     abi::emit_load_int_immediate(emitter, raw_hi_reg, 7);                       // hash reference cells own one boxed Mixed payload
     push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);
@@ -3271,7 +3247,8 @@ fn call_target_with_pushed_args(
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
-    save_concat_offset_before_nested_call(emitter);
+    let scratch = abi::temp_int_reg(emitter.target);
+    invoker_concat_slot(emitter.target.arch).emit_save(emitter, scratch);
     emit_restore_invoker_php_frame_head(emitter);
     abi::emit_call_reg(emitter, call_reg);
     emit_restore_invoker_php_frame_head(emitter);
@@ -3297,13 +3274,11 @@ fn emit_restore_invoker_php_frame_head(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
-/// Saves the current concat offset before the nested callable target runs.
-fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    let scratch = abi::temp_int_reg(emitter.target);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
-    match emitter.target.arch {
-        Arch::AArch64 => abi::emit_push_reg(emitter, scratch),
-        Arch::X86_64 => abi::store_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
+/// Selects the target-specific spill for the concat cursor across a callable invocation.
+fn invoker_concat_slot(arch: Arch) -> SavedConcatCursor {
+    match arch {
+        Arch::AArch64 => SavedConcatCursor::Pushed,
+        Arch::X86_64 => SavedConcatCursor::Frame(FrameOffset::new(INVOKER_CONCAT_OFFSET)),
     }
 }
 
@@ -3322,11 +3297,7 @@ fn restore_concat_offset_after_nested_call(
         }
     }
     let scratch = abi::temp_int_reg(emitter.target);
-    match emitter.target.arch {
-        Arch::AArch64 => abi::emit_pop_reg(emitter, scratch),
-        Arch::X86_64 => abi::load_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
-    }
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
+    invoker_concat_slot(emitter.target.arch).emit_restore(emitter, scratch);
 }
 
 /// Returns whether this callee's variadic collector may receive a NAMED tail entry.
@@ -3812,51 +3783,39 @@ fn emit_invoker_throwable(
     let (message_label, message_len) = data.add_string(message.as_bytes());
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the catchable builtin throwable
-            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
-            emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
+            throwable_storage::emit_allocate(emitter);
             abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
-            emitter.instruction("str x9, [x0]");                                // identify the requested builtin throwable class
-            abi::emit_symbol_address(emitter, "x9", &message_label);
-            emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
-            abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
-            emitter.instruction("str x9, [x0, #16]");                           // store the diagnostic byte length
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "x0",
+            elephc_memoir::values::object_storage::emit_store_class_id(
+                emitter,
+                "x9",
+                "x0",
             );
-            emitter.instruction("str xzr, [x0, #40]");                          // previous exception defaults to null
+            abi::emit_symbol_address(emitter, "x9", &message_label);
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
+            abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(emitter, "x0");
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // release argument guards and enter PHP exception handling
         }
         Arch::X86_64 => {
-            emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the catchable builtin throwable
-            abi::emit_load_int_immediate(
-                emitter,
-                "r10",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
-            );
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical throwable heap kind
-            emitter.instruction("call __rt_object_handle_acquire");             // assign the object its runtime handle
+            throwable_storage::emit_allocate_cold(emitter, "eax");
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
                 class_id_symbol,
                 0,
             );
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the requested builtin throwable class
-            abi::emit_symbol_address(emitter, "r10", &message_label);
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
-            abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the diagnostic byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "rax",
+            elephc_memoir::values::object_storage::emit_store_class_id(
+                emitter,
+                "r10",
+                "rax",
             );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous exception defaults to null
+            abi::emit_symbol_address(emitter, "r10", &message_label);
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
+            abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(emitter, "rax");
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // release argument guards and enter PHP exception handling
         }
@@ -4073,7 +4032,7 @@ mod tests {
         for offset in [
             INVOKER_BOUNDARY_BASE_OFFSET,
             INVOKER_BOUNDARY_BASE_OFFSET - 8,
-            INVOKER_BOUNDARY_BASE_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+            INVOKER_BOUNDARY_BASE_OFFSET - elephc_memoir::layout::TRY_HANDLER_DIAG_DEPTH_OFFSET,
         ] {
             assert!(output.contains(&format!("    sub x9, x29, #{}\n", offset)));
         }

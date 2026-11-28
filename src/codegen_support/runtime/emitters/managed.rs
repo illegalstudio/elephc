@@ -210,6 +210,7 @@ arrays::emit_hash_sort_require_scalars(emitter);
     arrays::emit_gc_frame_children(emitter);
     arrays::emit_gc_frame_slots(emitter);
     arrays::emit_gc_mark_reachable(emitter);
+    arrays::emit_published_graph_destructors(emitter);
     arrays::emit_gc_control(emitter);
     arrays::emit_memory(emitter);
     arrays::emit_gc_destructors(emitter);

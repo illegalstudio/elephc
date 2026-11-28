@@ -10,6 +10,10 @@
 //! - Sources remain rooted by the caller, including while an overwritten result cell is released.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch, sentinels::emit_branch_if_null_container};
+use elephc_memoir::{
+    hash_layout::{self, EntryField},
+    values::packed_slots,
+};
 
 /// Emits the two-layout merge helper for every supported native target.
 pub fn emit_array_merge_boxed(emitter: &mut Emitter) {
@@ -50,7 +54,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x11, #0");                                         // packed arrays start at numeric slot zero
     emitter.instruction("cmp x9, #4");                                          // hashes use their first live bucket instead
     emitter.instruction("b.eq __rt_array_merge_boxed_cursor");                  // keep the packed zero-based cursor
-    emitter.instruction("ldr x11, [x10, #24]");                                 // borrow the hash's insertion-order head
+    hash_layout::emit_order_edge(emitter, "x11", "x10", false);
     emitter.label("__rt_array_merge_boxed_cursor");
     emitter.instruction("str x11, [sp, #40]");                                  // preserve the next source position
 
@@ -68,27 +72,26 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #64]");                                  // record the integer source key before renumbering
     emitter.instruction("mov x9, #-1");                                         // the negative high word identifies integer keys
     emitter.instruction("str x9, [sp, #72]");                                   // preserve the key kind across value boxing
-    emitter.instruction("ldr x0, [x11, #-8]");                                  // read the packed array's element metadata
-    emitter.instruction("ubfx x0, x0, #8, #7");                                 // isolate the real scalar, string, or heap value tag
-    emitter.instruction("ldr x12, [x11, #16]");                                 // load the physical element stride
-    emitter.instruction("madd x11, x10, x12, x11");                             // locate the indexed slot relative to the array header
-    emitter.instruction("ldr x1, [x11, #24]");                                  // borrow the low value word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x0", "x11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x11", "x12");
+    emitter.instruction("mul x9, x10, x12");                                    // convert the logical index to a packed payload byte offset
+    packed_slots::emit_load_packed_byte_offset_word(emitter, "x1", "x11", "x9");
     emitter.instruction("mov x2, #0");                                          // single-word payloads have no high word
     emitter.instruction("cmp x12, #16");                                        // only paired slots contain a second word
     emitter.instruction("b.ne __rt_array_merge_boxed_value");                   // avoid reading past an eight-byte final slot
-    emitter.instruction("ldr x2, [x11, #32]");                                  // preserve a paired payload such as a string length
+    packed_slots::emit_load_packed_byte_offset_word_delta(emitter, "x2", "x11", "x9", 1);
     emitter.instruction("b __rt_array_merge_boxed_value");                      // acquire an independent result owner
 
     emitter.label("__rt_array_merge_boxed_hash");
     emitter.instruction("tbnz x10, #63, __rt_array_merge_boxed_source_done");   // minus one terminates the live insertion-order chain
-    emitter.instruction("ldr x11, [x11, #40]");                                 // locate the separately allocated hash entries
-    emitter.instruction("add x11, x11, x10, lsl #6");                           // each bucket occupies sixty-four bytes
-    emitter.instruction("ldr x9, [x11, #56]");                                  // follow the next live bucket rather than probing tombstones
+    hash_layout::emit_entries(emitter, "x11", "x11");
+    hash_layout::emit_consume_index_entry_address(emitter, "x11", "x10");
+    hash_layout::emit_load_entry_field(emitter, "x9", "x11", EntryField::Next);
     emitter.instruction("str x9, [sp, #40]");                                   // preserve traversal across helper calls
-    emitter.instruction("ldp x9, x10, [x11, #8]");                              // borrow the normalized key pair
+    hash_layout::emit_entry_key(emitter, "x11", "x9", "x10");
     emitter.instruction("stp x9, x10, [sp, #64]");                              // retain the source key words while the value is boxed
-    emitter.instruction("ldr x0, [x11, #40]");                                  // the per-entry tag is authoritative for heterogeneous hashes
-    emitter.instruction("ldp x1, x2, [x11, #24]");                              // borrow both payload words
+    hash_layout::emit_entry_value(emitter, "x11", "x0", "x1", "x2");
     emitter.instruction("cmp x0, #11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("b.eq __rt_array_merge_boxed_reference");               // retain the shared cell instead of copying its value
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_merge_boxed_deref_done", "x0", "x1", "x2");
@@ -193,7 +196,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r10d, r10d");                                      // packed sources begin at numeric slot zero
     emitter.instruction("cmp QWORD PTR [rbp - 16], 4");                         // hashes begin at their first live bucket
     emitter.instruction("je __rt_array_merge_boxed_cursor");                    // keep the zero-based packed cursor
-    emitter.instruction("mov r10, QWORD PTR [r11 + 24]");                       // borrow the hash's insertion-order head
+    hash_layout::emit_order_edge(emitter, "r10", "r11", false);
     emitter.label("__rt_array_merge_boxed_cursor");
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve the current source position
 
@@ -209,34 +212,30 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // preserve the following packed index
     emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // retain the integer source key before renumbering
     emitter.instruction("mov QWORD PTR [rbp - 80], -1");                        // mark this as an integer key
-    emitter.instruction("mov rax, QWORD PTR [r11 - 8]");                        // read packed element metadata
-    emitter.instruction("shr rax, 8");                                          // move the runtime value tag into the low bits
-    emitter.instruction("and rax, 127");                                        // exclude heap and copy-on-write flags
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 16]");                       // read the physical element stride
-    emitter.instruction("imul r10, rcx");                                       // locate this slot within the packed payload
-    emitter.instruction("add r11, r10");                                        // keep the fixed array header offset separate
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "r11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rax", "rax");
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "r11", "rcx");
+    emitter.instruction("mov r9, r10");                                         // preserve the logical source index while forming its byte offset
+    emitter.instruction("imul r9, rcx");                                        // locate this slot within the packed payload
+    packed_slots::emit_load_packed_byte_offset_word(emitter, "rdi", "r11", "r9");
     emitter.instruction("xor esi, esi");                                        // single-word payloads have no high word
     emitter.instruction("cmp rcx, 16");                                         // only paired slots contain a second word
     emitter.instruction("jne __rt_array_merge_boxed_value");                    // avoid reading outside the final eight-byte slot
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // preserve a string length or other paired payload
+    packed_slots::emit_load_packed_byte_offset_word_delta(emitter, "rsi", "r11", "r9", 1);
     emitter.instruction("jmp __rt_array_merge_boxed_value");                    // acquire the result's value owner
 
     emitter.label("__rt_array_merge_boxed_hash");
     emitter.instruction("test r10, r10");                                       // minus one terminates the insertion-order chain
     emitter.instruction("js __rt_array_merge_boxed_source_done");               // no live entries remain in this source
-    emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
-    emitter.instruction("shl r10, 6");                                          // each bucket occupies sixty-four bytes
-    emitter.instruction("add r11, r10");                                        // locate the live entry in the separate storage
-    emitter.instruction("mov r10, QWORD PTR [r11 + 56]");                       // follow the next live bucket, skipping tombstones
+    hash_layout::emit_entries(emitter, "r11", "r11");
+    hash_layout::emit_consume_index_entry_address(emitter, "r11", "r10");
+    hash_layout::emit_load_entry_field(emitter, "r10", "r11", EntryField::Next);
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve traversal across allocations
-    emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // borrow the key's low word
+    hash_layout::emit_load_entry_field(emitter, "r10", "r11", EntryField::KeyLow);
     emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // preserve the integer key or string pointer
-    emitter.instruction("mov r10, QWORD PTR [r11 + 16]");                       // read the integer marker or string length
+    hash_layout::emit_load_entry_field(emitter, "r10", "r11", EntryField::KeyHigh);
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // preserve the source key kind
-    emitter.instruction("mov rax, QWORD PTR [r11 + 40]");                       // each hash entry supplies its actual runtime tag
-    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low value word
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // borrow the high value word
+    hash_layout::emit_entry_value(emitter, "r11", "rax", "rdi", "rsi");
     emitter.instruction("cmp rax, 11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("je __rt_array_merge_boxed_reference");                 // retain the shared cell instead of copying its value
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_merge_boxed_deref_done", "rax", "rdi", "rsi");

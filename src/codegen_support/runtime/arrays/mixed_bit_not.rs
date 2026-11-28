@@ -83,13 +83,7 @@ fn emit_aarch64(e: &mut Emitter) {
     e.label("__rt_mixed_bit_not_bytes_done");
     e.instruction("ldr x1, [sp, #16]");                                         // return the reserved destination pointer
     e.instruction("ldr x2, [sp, #8]");                                          // return the unchanged byte length
-    abi::emit_call_label(e, "__rt_concat_publish");
-    e.instruction("mov x0, #1");                                                // runtime tag one identifies a byte string
-    abi::emit_call_label(e, "__rt_mixed_from_value");
-    e.instruction("str x0, [sp, #24]");                                         // preserve the independent boxed result
-    e.instruction("ldr x0, [sp, #16]");                                         // retire only the reservation's producer reference
-    abi::emit_call_label(e, "__rt_heap_free");
-    e.instruction("ldr x0, [sp, #24]");                                         // restore the fresh boxed string owner
+    elephc_memoir::strings::concat_scratch::emit_box_string_and_retire(e, 16, 24);
     e.instruction("b __rt_mixed_bit_not_done");                                 // leave through the common epilogue
     e.label("__rt_mixed_bit_not_bool");
     e.instruction("cmp x1, #0");                                                // inspect the boolean payload
@@ -108,13 +102,18 @@ fn emit_aarch64(e: &mut Emitter) {
     e.instruction("mov x10, #5");                                               // select the Closure class row
     e.instruction("b __rt_mixed_bit_not_row");                                  // build the catchable TypeError
     e.label("__rt_mixed_bit_not_object");
-    e.instruction("ldr x13, [x1]");                                             // read the concrete runtime class id
-    abi::emit_load_symbol_to_reg(e, "x10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(e, "x13", "x1");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(e, "x10");
     e.instruction("cmp x13, x10");                                              // reject ids outside the metadata table
     e.instruction("b.hs __rt_mixed_bit_not_object_fallback");                   // malformed classes use the object spelling
-    abi::emit_symbol_address(e, "x11", "_class_name_entries");
-    e.instruction("add x2, x11, x13, lsl #4");                                  // select the persistent concrete class-name row
-    e.instruction("ldr x12, [x2, #8]");                                         // inspect the concrete name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(e, "x11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(e, "x2", "x11", "x13", "x12");
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        e,
+        "x12",
+        "x2",
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
     e.instruction("cbnz x12, __rt_mixed_bit_not_error");                        // use the declared class name when available
     e.label("__rt_mixed_bit_not_object_fallback");
     e.instruction("mov x10, #6");                                               // select the generic object spelling
@@ -197,15 +196,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.label("__rt_mixed_bit_not_bytes_done");
     e.instruction("mov rax, QWORD PTR [rbp - 24]");                             // publish the reserved destination pointer
     e.instruction("mov rdx, QWORD PTR [rbp - 16]");                             // publish the original byte length
-    abi::emit_call_label(e, "__rt_concat_publish");
-    e.instruction("mov rdi, rax");                                              // pass the new string as the low payload word
-    e.instruction("mov rsi, rdx");                                              // pass the new string length as the high payload word
-    e.instruction("mov eax, 1");                                                // runtime tag one identifies a byte string
-    abi::emit_call_label(e, "__rt_mixed_from_value");
-    e.instruction("mov QWORD PTR [rbp - 32], rax");                             // preserve the independent boxed result
-    e.instruction("mov rax, QWORD PTR [rbp - 24]");                             // retire only the reservation's producer reference
-    abi::emit_call_label(e, "__rt_heap_free");
-    e.instruction("mov rax, QWORD PTR [rbp - 32]");                             // restore the fresh boxed string owner
+    elephc_memoir::strings::concat_scratch::emit_box_string_and_retire(e, 24, 32);
     e.instruction("jmp __rt_mixed_bit_not_done");                               // leave through the common epilogue
     e.label("__rt_mixed_bit_not_bool");
     e.instruction("xor r10d, r10d");                                            // true uses row zero
@@ -225,14 +216,19 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("mov r10, 5");                                                // select the Closure class row
     e.instruction("jmp __rt_mixed_bit_not_row");                                // build the catchable TypeError
     e.label("__rt_mixed_bit_not_object");
-    e.instruction("mov r9, QWORD PTR [rdi]");                                   // read the concrete runtime class id
-    abi::emit_load_symbol_to_reg(e, "r10", "_class_name_count", 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(e, "r9", "rdi");
+    elephc_memoir::values::class_metadata::emit_load_class_name_count(e, "r10");
     e.instruction("cmp r9, r10");                                               // reject ids outside the metadata table
     e.instruction("jae __rt_mixed_bit_not_object_fallback");                    // malformed classes use the object spelling
-    abi::emit_symbol_address(e, "r11", "_class_name_entries");
-    e.instruction("shl r9, 4");                                                 // compute the class-name row byte offset
-    e.instruction("lea rdx, [r11 + r9]");                                       // select the persistent concrete class-name row
-    e.instruction("cmp QWORD PTR [rdx + 8], 0");                                // inspect the concrete name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(e, "r11");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(e, "rdx", "r11", "r9", "r10");
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        e,
+        "r10",
+        "rdx",
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
+    e.instruction("test r10, r10");                                            // inspect the concrete name length
     e.instruction("jne __rt_mixed_bit_not_error");                              // use the declared class name when available
     e.label("__rt_mixed_bit_not_object_fallback");
     e.instruction("mov r10, 6");                                                // select the generic object spelling
@@ -252,4 +248,31 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("mov rsp, rbp");                                              // release the helper frame
     e.instruction("pop rbp");                                                   // restore the caller frame
     e.instruction("ret");                                                       // return the fresh Mixed owner
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// String complement boxes before retiring its scratch-or-heap reservation.
+    #[test]
+    fn memoir_transfer_mixed_bit_not_string_retires_reservation_on_every_target() {
+        for target_name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(target_name).unwrap());
+            emit_mixed_bit_not(&mut emitter);
+            let asm = emitter.output();
+            let string_path = asm.find("__rt_mixed_bit_not_string:").unwrap();
+            let boxed = asm[string_path..].find("__rt_mixed_from_value").unwrap() + string_path;
+            let retired = asm[string_path..].find("__rt_heap_free_safe").unwrap() + string_path;
+            let done = asm[string_path..].find("__rt_mixed_bit_not_done").unwrap() + string_path;
+            assert!(boxed < retired && retired < done, "{target_name}: {asm}");
+        }
+    }
 }

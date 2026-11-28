@@ -8,7 +8,11 @@
 //! - A native cleanup activation restores suspended ownership during unwinding.
 //! - A callback-installed replacement survives; otherwise the old handler is restored.
 
+use elephc_memoir::{frame_owners, handler_owners, owner_records, RecordOffset};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+
+const ACTIVATION_HEAD: &str = "_exc_call_frame_top";
 
 const SAVED_FIELDS: [(usize, &str); 4] = [
     (32, "_php_error_handler_value"),
@@ -39,21 +43,10 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
         abi::emit_load_symbol_to_reg(emitter, scratch, symbol, 0);
         abi::emit_store_to_address(emitter, scratch, stack, offset);
     }
-    for (offset, symbol) in SAVED_FIELDS {
-        abi::emit_load_symbol_to_reg(emitter, scratch, symbol, 0);
-        abi::emit_store_to_address(emitter, scratch, stack, offset);
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    }
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_call_frame_top", 0);
-    abi::emit_store_to_address(emitter, scratch, stack, 0);
-    abi::emit_symbol_address(emitter, scratch, "__rt_error_handler_restore");
-    abi::emit_store_to_address(emitter, scratch, stack, 8);
-    abi::emit_reg_move(emitter, scratch, stack);
-    abi::emit_store_to_address(emitter, scratch, stack, 16);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::emit_store_to_address(emitter, scratch, stack, 24);
-    abi::emit_store_to_address(emitter, scratch, stack, 72);
+    handler_owners::emit_suspend(emitter, stack, scratch, &SAVED_FIELDS);
+    abi::emit_store_zero_to_address(emitter, stack, 72);
+    abi::emit_temporary_stack_address(emitter, result, 0);
+    owner_records::publish_compact_stack(emitter, result, 0, ACTIVATION_HEAD, "__rt_error_handler_restore");
     abi::emit_load_from_address(emitter, arg0, stack, 40);
     abi::emit_load_from_address(emitter, arg1, stack, 64);
     abi::emit_load_from_address(
@@ -71,8 +64,7 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
         abi::emit_load_from_address(emitter, scratch, stack, offset);
         abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
     }
-    abi::emit_load_from_address(emitter, scratch, stack, 0);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
+    owner_records::pop_stack(emitter, 0, ACTIVATION_HEAD);
     abi::emit_load_from_address(emitter, result, stack, 72);
     emit_frame_leave(emitter, 112);
     emit_restore(emitter);
@@ -87,7 +79,6 @@ fn emit_restore(emitter: &mut Emitter) {
     let stack = if arm { "sp" } else { "rsp" };
     let scratch = if arm { "x10" } else { "r10" };
     let record = if arm { "x11" } else { "r11" };
-    let result = if arm { "x0" } else { "rax" };
     let arg0 = if arm { "x0" } else { "rdi" };
     emitter.blank();
     emitter.label_global("__rt_error_handler_restore");
@@ -100,19 +91,14 @@ fn emit_restore(emitter: &mut Emitter) {
         emitter.instruction("test r10, r10");                                   // inspect the post-callback active registration
         emitter.instruction("jnz __rt_error_handler_discard");                  // keep any replacement installed by the callback
     }
-    for (offset, symbol) in SAVED_FIELDS {
-        abi::emit_load_from_address(emitter, record, stack, 0);
-        abi::emit_load_from_address(emitter, scratch, record, offset);
-        abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
-    }
+    abi::emit_load_from_address(emitter, record, stack, 0);
+    handler_owners::emit_resume(emitter, record, scratch, &SAVED_FIELDS);
     emit_frame_leave(emitter, 32);
 
     emitter.label("__rt_error_handler_discard");
     for (offset, helper) in [(32, "__rt_decref_mixed"), (40, "__rt_callable_descriptor_release")] {
         abi::emit_load_from_address(emitter, record, stack, 0);
-        abi::emit_load_from_address(emitter, result, record, offset);
-        abi::emit_load_int_immediate(emitter, scratch, 0);
-        abi::emit_store_to_address(emitter, scratch, record, offset);
+        frame_owners::emit_take_addressed(emitter, record, RecordOffset::new(offset));
         abi::emit_call_label(emitter, helper);
     }
     abi::emit_load_from_address(emitter, record, stack, 0);
@@ -124,6 +110,8 @@ fn emit_restore(emitter: &mut Emitter) {
         emitter.instruction("jz __rt_error_handler_restore_done");              // native registrations have no eval context owner
     }
     abi::emit_load_from_address(emitter, arg0, record, 48);
+    abi::emit_store_zero_to_address(emitter, record, 48);
+    abi::emit_store_zero_to_address(emitter, record, 56);
     abi::emit_call_reg(emitter, scratch);
     emitter.label("__rt_error_handler_restore_done");
     emit_frame_leave(emitter, 32);

@@ -7,6 +7,7 @@
 //! Key details:
 //! - Only layouts representable by emitted EIR method metadata are accepted.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::*;
 
 /// Returns true when implemented interfaces require method-wrapper metadata not emitted here.
@@ -113,7 +114,7 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
                 && !(class_info.property_slot_owns_reference(index)
                     && class_info.property_slot_is_reference(index, property));
             if starts_uninitialized {
-                Some(8 + index * 16 + 8)
+                Some(object_declared_slot_offset(index) + 8)
             } else {
                 None
             }
@@ -139,7 +140,7 @@ pub(super) fn owned_reference_property_offsets(
                         .defaults
                         .get(index)
                         .is_some_and(|default| default.is_none());
-                Some((8 + index * 16, php_type.clone(), starts_uninitialized))
+                Some((object_declared_slot_offset(index), php_type.clone(), starts_uninitialized))
             } else {
                 None
             }

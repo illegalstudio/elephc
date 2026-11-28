@@ -9,6 +9,7 @@
 //!   iteration order.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_values",
@@ -37,14 +38,16 @@ pub(in crate::interpreter) fn eval_array_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.array_new(len)?;
+    let mut result = EvalArrayBuilder::indexed(values, len)?;
     for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
-        let index = values.int(position as i64)?;
-        result = values.array_set(result, index, value)?;
+        result.update(|values, owners, _| {
+            let source_key = owners.stage(values.array_iter_key(array, position)?);
+            let value = owners.stage(values.array_get(array, source_key)?);
+            let index = owners.stage(values.int(position as i64)?);
+            Ok(Some((index, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 /// Dispatches direct eval calls for the `array_values` array builtin.
 pub(in crate::interpreter) fn eval_array_values_declared_call(

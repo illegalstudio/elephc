@@ -31,18 +31,31 @@ pub(crate) use phpext::emit_phpext_exports;
 pub(crate) const STATUS_OK: i32 = 0;
 pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
 pub(crate) const STATUS_PHP_EXCEPTION: i32 = 2;
-pub(crate) const STATUS_ALLOCATION_FAILURE: i32 = 3;
+pub(crate) use elephc_memoir::layout::STATUS_ALLOCATION_FAILURE;
 pub(crate) const STATUS_RUNTIME_FAILURE: i32 = 4;
 pub(crate) const STATUS_REPLACEMENT_LIMIT: i32 = 6;
 
-pub(crate) const BOUNDARY_ACTIVE: &str = "_elephc_boundary_active";
-pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
+pub(crate) use elephc_memoir::layout::BOUNDARY_ACTIVE;
+pub(crate) use elephc_memoir::layout::BOUNDARY_STATUS;
 pub(crate) const PHPEXT_REPLACEMENT_OWNER_COUNT: &str =
     "_elephc_phpext_replacement_owner_count";
 pub(crate) const PHPEXT_REPLACEMENT_OWNER_BASE: &str =
     "_elephc_phpext_replacement_owner_base";
 pub(crate) const PHPEXT_REPLACEMENT_OWNERS: &str = "_elephc_phpext_replacement_owners";
 pub(crate) const PHPEXT_REPLACEMENT_OWNER_LIMIT: usize = 64;
+
+/// Native replacement-owner table shared by hosted chaining and export cleanup.
+pub(crate) const REPLACEMENT_OWNER_STORAGE: elephc_memoir::interop::replacement_owners::ReplacementOwners<'static> =
+    elephc_memoir::interop::replacement_owners::ReplacementOwners {
+        count: PHPEXT_REPLACEMENT_OWNER_COUNT,
+        base: PHPEXT_REPLACEMENT_OWNER_BASE,
+        limit: PHPEXT_REPLACEMENT_OWNER_LIMIT,
+    };
+
+/// Materializes the hosted replacement table through the compiler's external ABI.
+pub(crate) fn emit_replacement_owners_address(emitter: &mut Emitter, dest: &str) {
+    abi::emit_extern_symbol_address(emitter, dest, PHPEXT_REPLACEMENT_OWNERS);
+}
 
 /// Converts a guarded host callback failure into a contained native cleanup unwind.
 pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
@@ -175,12 +188,7 @@ fn label_suffix(name: &str) -> String {
 /// Pushes the cdylib exception handler record and snapshots it with `setjmp` on AArch64.
 fn emit_boundary_push_aarch64(emitter: &mut Emitter, escaped: &str, handler_base: usize) {
     abi::emit_frame_slot_address(emitter, "x11", handler_base);
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_handler_top", 0);
-    emitter.instruction("str x9, [x11]");                                       // snapshot the previous native exception-handler record
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_call_frame_top", 0);
-    emitter.instruction("str x9, [x11, #8]");                                   // snapshot the current PHP cleanup-frame chain
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("str x9, [x11, #{TRY_HANDLER_DIAG_DEPTH_OFFSET}]")); // snapshot diagnostic-suppression depth
+    elephc_memoir::activation_records::emit_save_addressed_try_prefix(emitter, "x9", "x11");
     abi::emit_store_reg_to_symbol(emitter, "x11", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, x11, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // materialize the jump buffer embedded in the handler record
     emitter.save_exception_handler();
@@ -198,15 +206,7 @@ fn emit_boundary_pop_aarch64(emitter: &mut Emitter, handler_base: usize) {
 
 /// Pushes the cdylib exception handler record and snapshots it with `setjmp` on x86_64.
 fn emit_boundary_push_x86_64(emitter: &mut Emitter, escaped: &str, handler_base: usize) {
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {handler_base}], r10")); // snapshot the previous native exception-handler record
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // snapshot the current PHP cleanup-frame chain
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(                                               // snapshot diagnostic suppression in the boundary record
-        "mov QWORD PTR [rbp - {}], r10",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
     emitter.instruction(&format!("lea r10, [rbp - {handler_base}]"));           // materialize the current exception-handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(                                               // pass the embedded jump buffer to setjmp
@@ -297,7 +297,7 @@ fn emit_clear_error_inline(emitter: &mut Emitter) {
 
 /// Restores the process-global concat scratch cursor between native host calls.
 fn emit_reset_concat_inline(emitter: &mut Emitter) {
-    emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_boundary_reset(emitter);
 }
 
 /// Stores one small integer in a fixed cdylib state symbol.
@@ -326,6 +326,36 @@ mod tests {
     use crate::codegen_support::platform::{AppleVariant, Platform, Target};
     use crate::span::Span;
     use crate::types::{FunctionSig, PhpType};
+
+    /// Hosted storage accessors assemble with the Mach-O state snapshot footer.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "macos"), ignore = "requires clang with the Mach-O AArch64 assembler")]
+    fn phpext_hosted_storage_accessors_assemble_with_macho_subsections() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let mut emitter = Emitter::new_cdylib(target);
+        emitter.phpext_output = true;
+        let mut data = DataSection::new();
+        emit_phpext_exports(&mut emitter, &mut data, target, &[], false, None);
+        let asm = crate::phpext::state::combine(&[&emitter.output(), &data.emit(target)], target)
+            .expect("combine hosted exports and their state");
+        let mut assembler = Command::new("clang")
+            .args(["-target", "arm64-apple-macos11", "-x", "assembler", "-c", "-", "-o", "/dev/null"])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start Mach-O assembler");
+        assembler.stdin.take().unwrap().write_all(asm.as_bytes()).expect("write hosted assembly");
+        let output = assembler.wait_with_output().expect("assemble hosted exports");
+        assert!(
+            output.status.success(),
+            "Mach-O assembler rejected hosted exports:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     /// AArch64 host callbacks inspect C int results through w0 on every native host target.
     #[test]

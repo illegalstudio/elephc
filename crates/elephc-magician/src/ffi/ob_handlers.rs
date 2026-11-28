@@ -13,8 +13,8 @@
 //!   pointers and the ABI version before re-entering the interpreter.
 //! - The hook transfers a retained Mixed result or pending Throwable through separate
 //!   request fields; native code propagates PHP exceptions only after Rust returns.
-//! - Registry ids are never reused. Buffer closure and context teardown detach owners
-//!   before releasing them outside the registry lock; closed entries do not accumulate.
+//! - Registry ids are never reused. Buffer closure detaches and releases both owners
+//!   outside the lock, even when the buffer outlives the eval frame.
 
 #[cfg(not(test))]
 use crate::abi::ABI_VERSION;
@@ -28,51 +28,7 @@ use crate::value::RuntimeCell;
 use crate::value::RuntimeCellHandle;
 #[cfg(not(test))]
 use elephc_builtin_contract::output_abi::OutputHandlerCallV1;
-use std::{collections::HashMap, sync::{Mutex, OnceLock}};
-
-/// One registered eval output handler: the owning context and the retained
-/// handler callable, both stored as raw addresses.
-#[derive(Clone, Copy)]
-struct ObHandlerEntry {
-    context: usize,
-    callback: usize,
-}
-
-/// Active registrations and a monotonic identity counter independent of storage indices.
-#[derive(Default)]
-struct ObHandlers {
-    next: u64,
-    entries: HashMap<u64, ObHandlerEntry>,
-}
-
-impl ObHandlers {
-    /// Registers an owner with an identity representable by the native signed environment word.
-    fn register(&mut self, entry: ObHandlerEntry) -> Option<u64> {
-        if self.next > i64::MAX as u64 { return None; }
-        let id = self.next;
-        self.next += 1;
-        self.entries.insert(id, entry);
-        Some(id)
-    }
-
-    /// Detaches every owner of a retiring context without retaining tombstones.
-    fn take_context(&mut self, context: usize) -> Vec<ObHandlerEntry> {
-        let mut detached = Vec::new();
-        self.entries.retain(|_, entry| {
-            if entry.context != context { return true; }
-            detached.push(*entry);
-            false
-        });
-        detached
-    }
-}
-
-static OB_HANDLERS: OnceLock<Mutex<ObHandlers>> = OnceLock::new();
-
-/// Returns the process-local eval output-handler registry.
-fn ob_handlers() -> &'static Mutex<ObHandlers> {
-    OB_HANDLERS.get_or_init(|| Mutex::new(ObHandlers::default()))
-}
+use elephc_memoir::output_handlers::{self, OutputHandler};
 
 /// Installs the eval output-handler callback into the generated runtime.
 #[cfg(not(test))]
@@ -83,41 +39,30 @@ pub(crate) fn install_ob_handler_hook() {
     }
 }
 
-/// Registers one already-retained handler callable and returns its registry id.
+/// Registers an already-retained callable and keeps its eval context alive for the buffer.
 pub(crate) fn register_ob_handler(
-    context: *mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     callback: RuntimeCellHandle,
 ) -> Option<u64> {
-    if context.is_null() || callback.as_ptr().is_null() { return None; }
-    let mut handlers = ob_handlers().lock().ok()?;
-    handlers.register(ObHandlerEntry {
-        context: context as usize,
+    if callback.is_null() {
+        return None;
+    }
+    context.retain_abi_owner().ok()?;
+    let id = output_handlers::register(OutputHandler {
+        context: std::ptr::from_mut(context) as usize,
         callback: callback.as_ptr() as usize,
-    })
+    });
+    if id.is_none() {
+        context.release_abi_owner();
+    }
+    id
 }
 
-/// Returns a failed start's retained owner after checking its original eval context.
-pub(crate) fn unregister_ob_handler(id: u64, context: *mut ElephcEvalContext) -> Option<RuntimeCellHandle> {
-    let mut handlers = ob_handlers().lock().ok()?;
-    if handlers.entries.get(&id)?.context != context as usize { return None; }
-    let entry = handlers.entries.remove(&id)?;
+/// Rolls back a failed start and returns the detached callable owner for explicit cleanup.
+pub(crate) fn unregister_ob_handler(id: u64, context: &mut ElephcEvalContext) -> Option<RuntimeCellHandle> {
+    let entry = output_handlers::take(id, Some(std::ptr::from_mut(context) as usize)).ok()??;
+    context.release_abi_owner();
     Some(RuntimeCellHandle::from_raw(entry.callback as *mut crate::value::RuntimeCell))
-}
-
-/// Invalidates a retiring context's entries and transfers their retained owners for protected cleanup.
-pub(crate) fn unregister_ob_handlers_for_context(context: *mut ElephcEvalContext) -> Vec<RuntimeCellHandle> {
-    if context.is_null() { return Vec::new(); }
-    let Ok(mut handlers) = ob_handlers().lock() else { return Vec::new(); };
-    handlers.take_context(context as usize).into_iter().map(|entry|
-        RuntimeCellHandle::from_raw(entry.callback as *mut crate::value::RuntimeCell)).collect()
-}
-
-/// Looks up one registered handler's owning context and callable cell.
-#[cfg(not(test))]
-fn ob_handler_entry(id: u64) -> Option<(usize, usize)> {
-    let handlers = ob_handlers().lock().ok()?;
-    let entry = handlers.entries.get(&id)?;
-    Some((entry.context, entry.callback))
 }
 
 /// Detaches and releases a closed buffer's callback, returning any owned PHP Throwable to native code.
@@ -132,58 +77,25 @@ pub unsafe extern "C" fn __elephc_eval_ob_release_handler(id: u64, thrown: *mut 
     if thrown.is_null() { return 1; }
     unsafe { *thrown = std::ptr::null_mut(); }
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let entry = {
-            let Ok(mut handlers) = ob_handlers().lock() else { return 1; };
-            handlers.entries.remove(&id)
-        };
+        let Ok(entry) = output_handlers::take(id, None) else { return 1; };
         let Some(entry) = entry else { return 0; };
-        let Some(context) = (unsafe { (entry.context as *mut ElephcEvalContext).as_mut() }) else { return 1; };
+        let context_ptr = entry.context as *mut ElephcEvalContext;
+        let Some(context) = (unsafe { context_ptr.as_mut() }) else { return 1; };
         if context.abi_version() != ABI_VERSION { return 1; }
         let callback = RuntimeCellHandle::from_raw(entry.callback as *mut RuntimeCell);
-        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-        match crate::interpreter::release_ob_handler_callbacks(vec![callback], context, &mut values) {
-            Ok(()) => 0,
-            Err(_) => match context.take_pending_throw() {
-                Some(owner) => { unsafe { *thrown = owner.as_ptr(); } 2 },
-                None => 1,
-            },
+        let mut values = ElephcRuntimeOps::with_context(context_ptr);
+        let callbacks = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new([callback]);
+        let failed = crate::interpreter::release_ob_handler_callbacks(callbacks, context, &mut values).is_err();
+        let pending = if failed { context.take_pending_throw() } else { None };
+        // The buffer owns this lease even if the function that registered it already returned.
+        let pending = unsafe { super::context::release_eval_context(context_ptr, pending) };
+        if let Some(owner) = pending {
+            unsafe { *thrown = owner.as_ptr(); }
+            2
+        } else {
+            u64::from(failed)
         }
     })).unwrap_or(1)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Closed registrations discard their storage without ever reusing a stale buffer identity.
-    #[test]
-    fn output_handler_registry_retires_entries_without_reusing_ids() {
-        let mut handlers = ObHandlers::default();
-        for expected in 0..1024 {
-            let id = handlers.register(ObHandlerEntry { context: 1, callback: 2 }).unwrap();
-            assert_eq!(id, expected);
-            assert_eq!(handlers.entries.remove(&id).unwrap().callback, 2);
-            assert!(handlers.entries.is_empty());
-            assert!(!handlers.entries.contains_key(&id));
-        }
-        assert!(handlers.entries.capacity() < 16);
-    }
-
-    /// Context retirement removes only its own live registrations and transfers each owner once.
-    #[test]
-    fn output_handler_registry_detaches_context_owners_once() {
-        let mut handlers = ObHandlers::default();
-        handlers.register(ObHandlerEntry { context: 1, callback: 11 });
-        handlers.register(ObHandlerEntry { context: 2, callback: 22 });
-        handlers.register(ObHandlerEntry { context: 1, callback: 33 });
-        let mut detached: Vec<_> = handlers.take_context(1).into_iter().map(|entry| entry.callback).collect();
-        detached.sort_unstable();
-        assert_eq!(detached, [11, 33]);
-        assert!(handlers.take_context(1).is_empty());
-        assert_eq!(handlers.entries.len(), 1);
-        assert_eq!(handlers.take_context(2)[0].callback, 22);
-        assert!(handlers.entries.is_empty());
-    }
 }
 
 /// Runs one eval output handler and transfers its result or Throwable without unwinding through Rust.
@@ -208,7 +120,7 @@ pub unsafe extern "C" fn __elephc_eval_ob_handler_v1(request: *mut OutputHandler
 /// Mirrors `__elephc_eval_ob_handler_v1`.
 #[cfg(not(test))]
 unsafe fn ob_handler_inner(request: &mut OutputHandlerCallV1) -> u64 {
-    let Some((context, callback)) = ob_handler_entry(request.id) else {
+    let Some(OutputHandler { context, callback }) = output_handlers::get(request.id) else {
         return 0;
     };
     let context = context as *mut ElephcEvalContext;

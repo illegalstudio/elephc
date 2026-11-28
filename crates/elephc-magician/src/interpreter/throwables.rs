@@ -9,6 +9,7 @@
 //!   so surrounding try/catch execution can consume it.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Constructs a builtin exception, releasing borrowed constructor operands before publishing its owner.
 pub(in crate::interpreter) fn eval_throw_builtin_exception<T>(
@@ -17,22 +18,35 @@ pub(in crate::interpreter) fn eval_throw_builtin_exception<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object(class_name)?;
-    let constructed = (|| {
-        let message = values.string(message)?;
-        with_eval_value_lease(message, context, values, |message, context, values| {
-            let code = values.int(0)?;
-            with_eval_value_lease(code, context, values, |code, _, values| {
-                values.construct_object(exception, vec![message, code])
+    eval_throw_builtin_exception_with_code(class_name, message, 0, context, values)
+}
+
+/// Constructs a builtin exception with an explicit PHP code and publishes its owner.
+pub(in crate::interpreter) fn eval_throw_builtin_exception_with_code<T>(
+    class_name: &str,
+    message: &str,
+    code: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = RuntimeOwnerSlot::new(values.new_object(class_name)?);
+    with_runtime_owners(&exception, || {
+        let constructed = (|| {
+            let message = values.string(message)?;
+            with_eval_value_lease(message, context, values, |message, context, values| {
+                let code = values.int(code)?;
+                with_eval_value_lease(code, context, values, |code, _, values| {
+                    values.construct_object(exception.borrowed(), vec![message, code])
+                })
             })
-        })
-    })();
-    if let Err(status) = constructed {
-        let _ = eval_release_value(context, values, exception);
-        return Err(status);
-    }
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+        })();
+        if let Err(status) = constructed {
+            let _ = eval_release_value(context, values, exception.take());
+            return Err(status);
+        }
+        context.set_pending_throw(exception.take());
+        Err(EvalStatus::UncaughtThrowable)
+    })
 }
 
 /// Creates and schedules an `Error` through eval's normal Throwable channel.
@@ -117,12 +131,7 @@ pub(in crate::interpreter) fn eval_given_type_name(
         if let Some(name) = context.dynamic_object_class_name(identity) {
             return Ok(name);
         }
-        let class_name = values.object_class_name(value)?;
-        let copied = values.string_bytes(class_name);
-        let retired = values.release(class_name);
-        let bytes = copied?;
-        retired?;
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        return runtime_object_class_name(value, values);
     }
     let name = match tag {
         EVAL_TAG_NULL => "null",
@@ -154,25 +163,7 @@ pub(in crate::interpreter) fn eval_throw_argument_count_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ArgumentCountError")?;
-    let mut owners = Vec::new();
-    let constructed = (|| {
-        let message = values.string(message)?;
-        owners.push(message);
-        let code = values.int(0)?;
-        owners.push(code);
-        values.construct_object(exception, vec![message, code])
-    })();
-    let mut cleanup = Ok(());
-    for owner in owners.into_iter().rev() {
-        if let Err(status) = values.release(owner) { cleanup = Err(status); }
-    }
-    if let Err(status) = constructed.and(cleanup) {
-        let _ = values.release(exception);
-        return Err(status);
-    }
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("ArgumentCountError", message, context, values)
 }
 
 /// Creates and schedules a `ValueError` through eval's normal Throwable channel.

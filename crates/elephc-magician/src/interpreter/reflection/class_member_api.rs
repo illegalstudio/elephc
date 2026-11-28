@@ -8,6 +8,7 @@
 //! - Eval and AOT members share filtering, object construction, and missing-member errors.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Handles eval-backed `ReflectionClass::getReflectionConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constant_result(
@@ -57,17 +58,17 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
         return Ok(None);
     };
     let names = eval_reflection_constant_names(&reflected_name, context, values)?;
-    let mut result = values.object_array_new(names.len())?;
+    let mut result = EvalArrayBuilder::objects(values, names.len())?;
     for name in &names {
-        if !eval_reflection_constant_matches_filter(reflected_name.as_str(), name, filter, context, values)?
+        if !eval_reflection_constant_matches_filter(reflected_name.as_str(), name, filter, context, result.values())?
         {
             continue;
         }
-        let object =
-            eval_reflection_class_constant_object_result(&reflected_name, name, context, values)?;
-        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, object)?;
+        result.object(|values| {
+            eval_reflection_class_constant_object_result(&reflected_name, name, context, values)
+        })?;
     }
-    Ok(Some(result))
+    Ok(Some(result.finish()))
 }
 
 /// Handles eval-backed `ReflectionClass::getMethods()` and `getProperties()` calls.

@@ -36,7 +36,7 @@ pub fn emit_array_map_mixed(emitter: &mut Emitter) {
     emitter.instruction("mov x21, x2");                                         // keep descriptor callback environment pointer across the loop
 
     // -- read source metadata and allocate a mixed-slot destination array --
-    emitter.instruction("ldr x9, [x1]");                                        // read source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // read source array length
     emitter.instruction("str x9, [sp, #16]");                                   // save source length across callback calls
     emitter.instruction("ldr x10, [x1, #16]");                                  // read source element width for callback ABI dispatch
     emitter.instruction("str x10, [sp, #24]");                                  // save source element width across callback calls
@@ -58,7 +58,7 @@ pub fn emit_array_map_mixed(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_map_mixed_done");                      // exit once the loop index reaches the source length
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload source element width
-    emitter.instruction("add x1, x1, #24");                                     // advance to the source payload region
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("mul x11, x0, x10");                                    // compute current source element byte offset
     emitter.instruction("add x11, x1, x11");                                    // compute current source element address
     emitter.instruction("cmp x10, #16");                                        // does the source array hold string ptr/len pairs?
@@ -79,7 +79,7 @@ pub fn emit_array_map_mixed(emitter: &mut Emitter) {
     emitter.label("__rt_array_map_mixed_call");
     emitter.instruction("blr x19");                                             // call callback and receive owned boxed Mixed in x0
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload loop index after callback clobbers caller-saved registers
-    emitter.instruction("add x10, x20, #24");                                   // compute destination payload base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x20");
     emitter.instruction("str x0, [x10, x9, lsl #3]");                           // transfer owned boxed Mixed pointer into destination slot
     emitter.instruction("add x9, x9, #1");                                      // advance to the next source element
     emitter.instruction("str x9, [sp, #0]");                                    // save updated loop index
@@ -111,7 +111,7 @@ fn emit_array_map_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // keep callback address in a callee-saved register
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save source array pointer for every loop iteration
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save descriptor callback environment pointer
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rsi"); // load source array length
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save source length across destination allocation
     emitter.instruction("mov r11, QWORD PTR [rsi + 16]");                       // load source element width for ABI dispatch
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save source element width across callback calls
@@ -129,7 +129,12 @@ fn emit_array_map_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload source element width
     emitter.instruction("mov rcx, r13");                                        // copy loop index before byte-offset scaling
     emitter.instruction("imul rcx, r11");                                       // compute current source element byte offset
-    emitter.instruction("lea rcx, [r10 + rcx + 24]");                           // compute current source element address
+    elephc_memoir::values::packed_slots::emit_packed_byte_offset_address(
+        emitter,
+        "rcx",
+        "r10",
+        "rcx",
+    );
     emitter.instruction("cmp r11, 16");                                         // does the source slot hold a string pair?
     emitter.instruction("je __rt_array_map_mixed_load_str");                    // branch to string-input callback ABI
     emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // load scalar source element into first callback argument
@@ -144,14 +149,14 @@ fn emit_array_map_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_map_mixed_call");
     emitter.instruction("call r12");                                            // invoke descriptor callback and receive owned boxed Mixed in rax
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload destination array pointer after callback clobbers caller-saved regs
-    emitter.instruction("mov QWORD PTR [r10 + r13 * 8 + 24], rax");             // transfer owned boxed Mixed pointer into destination slot
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r10", "r13", "rax", "r11");
     emitter.instruction("add r13, 1");                                          // advance loop index after storing the mapped Mixed value
     emitter.instruction("jmp __rt_array_map_mixed_loop");                       // continue mapping boxed Mixed results
 
     emitter.label("__rt_array_map_mixed_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload destination array pointer for return
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload source length for destination length publication
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish destination array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "rax", "r10"); // publish destination array length
     emitter.instruction("add rsp, 48");                                         // release mixed-result map local slots
     emitter.instruction("pop r13");                                             // restore loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore callback-address callee-saved register

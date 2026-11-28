@@ -12,11 +12,14 @@ use crate::codegen_support::{
     abi,
     cdylib::{
         BOUNDARY_STATUS, PHPEXT_REPLACEMENT_OWNER_BASE, PHPEXT_REPLACEMENT_OWNER_COUNT,
-        PHPEXT_REPLACEMENT_OWNER_LIMIT, PHPEXT_REPLACEMENT_OWNERS, STATUS_REPLACEMENT_LIMIT,
+        REPLACEMENT_OWNER_STORAGE, STATUS_REPLACEMENT_LIMIT, emit_replacement_owners_address,
     },
     emit::Emitter,
     platform::Arch,
 };
+
+#[cfg(test)]
+use crate::codegen_support::cdylib::PHPEXT_REPLACEMENT_OWNERS;
 
 /// Emits exception chaining with raw-object and boxed-property ownership on every target.
 pub fn emit_exception_chain(emitter: &mut Emitter) {
@@ -40,9 +43,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
         emitter.instruction("cbz x0, __rt_exception_chain_return");             // only a native replacement can own a displaced host escape
         emit_aarch64_replacement_sweep(emitter);
         emitter.instruction("ldr x0, [sp]");                                    // recover the replacement clobbered by the stale-owner callback
-        abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-        emitter.instruction(&format!("cmp x9, #{}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound simultaneously live replacement pins
-        emitter.instruction("b.hs __rt_exception_chain_replacement_overflow");  // reject a pin beyond the bounded owner table
+        REPLACEMENT_OWNER_STORAGE.emit_check_capacity(emitter, "__rt_exception_chain_replacement_overflow");
         emitter.instruction("str x0, [sp, #40]");                               // seed the replacement's intrinsic previous-chain tail
         emitter.label("__rt_exception_chain_replacement_tail");
         emitter.instruction("bl __rt_throwable_previous");                      // borrow the next constructor/finally predecessor
@@ -51,12 +52,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
         emitter.instruction("b __rt_exception_chain_replacement_tail");         // continue walking the intrinsic previous chain
         emitter.label("__rt_exception_chain_replacement_ready");
         emitter.instruction("ldr x0, [sp]");                                    // retain the replacement identity through boundary copying
-        emitter.instruction("bl __rt_incref");                                  // retain the root across host-side identity tracking
-        abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-        abi::emit_extern_symbol_address(emitter, "x10", PHPEXT_REPLACEMENT_OWNERS);
-        emitter.instruction("str x0, [x10, x9, lsl #3]");                       // publish the retained owner before exposing its identity
-        emitter.instruction("add x9, x9, #1");                                  // publish one additional retained replacement owner
-        abi::emit_store_reg_to_symbol(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        REPLACEMENT_OWNER_STORAGE.emit_pin(emitter, emit_replacement_owners_address);
         emitter.instruction("ldr x0, [sp]");                                    // C receives the replacement root and its original chain tail
         emitter.instruction("ldr x1, [sp, #40]");                               // pass the original previous-chain tail to the adapter
         emitter.bl_c("elephc_php_finally_replacement");
@@ -99,27 +95,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp]");                                        // advance through the borrowed new chain
     emitter.instruction("b __rt_exception_chain_scan");                         // check the next node against every old-chain ancestor
 
-    // -- adopt the old owner using the actual previous-slot representation --
+    // -- delegate physical previous-owner adoption to Memoir --
     emitter.label("__rt_exception_chain_append");
     emitter.instruction("ldr x0, [sp]");                                        // recover the tail whose previous link is empty
-    emitter.instruction("bl __rt_throwable_previous_slot");                     // resolve raw, boxed, and reference property storage
-    emitter.instruction("cbz x0, __rt_exception_chain_release");                // absent storage cannot adopt an owner
-    emitter.instruction("cbz x1, __rt_exception_chain_raw");                    // raw slots adopt the existing object owner directly
-    emitter.instruction("str x0, [sp, #24]");                                   // preserve the effective slot across Mixed allocation
-    emitter.instruction("ldr x9, [x0]");                                        // borrow the existing null box before replacement
-    emitter.instruction("str x9, [sp, #32]");                                   // release the old null box only after publishing the new one
     emitter.instruction("ldr x1, [sp, #8]");                                    // supply the owned old exception as the boxed payload
-    emitter.instruction("mov x0, #6");                                          // runtime tag six denotes an object payload
-    emitter.instruction("mov x2, #0");                                          // object values have no high payload word
-    emitter.instruction("bl __rt_mixed_from_value");                            // create a Mixed box with its own retained object owner
-    emitter.instruction("ldr x9, [sp, #24]");                                   // recover the effective previous-property slot
-    emitter.instruction("str x0, [x9]");                                        // publish the box before releasing either displaced owner
-    emitter.instruction("ldr x0, [sp, #32]");                                   // recover the displaced null box
-    emitter.instruction("bl __rt_decref_any");                                  // release the box that no longer belongs to the property
-    emitter.instruction("b __rt_exception_chain_release");                      // balance the raw owner now retained by the new box
-    emitter.label("__rt_exception_chain_raw");
-    emitter.instruction("ldr x9, [sp, #8]");                                    // recover the raw owner to transfer
-    emitter.instruction("str x9, [x0]");                                        // the previous link adopts it without a redundant retain
+    emitter.instruction("bl __rt_throwable_append_previous");                   // consume the owner through Memoir's layout-aware kernel
+    emitter.instruction("str xzr, [sp, #8]");                                   // record that the incoming owner was consumed
     emitter.label("__rt_exception_chain_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller after successful ownership transfer
     emitter.instruction("add sp, sp, #64");                                     // release traversal storage
@@ -147,9 +128,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
         emitter.instruction("jz __rt_exception_chain_return");                  // a null host marker owns no replacement pin
         emit_x86_64_replacement_sweep(emitter);
         emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // recover the replacement clobbered by the stale-owner callback
-        abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-        emitter.instruction(&format!("cmp r10, {}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound simultaneously live replacement pins
-        emitter.instruction("jae __rt_exception_chain_replacement_overflow");   // reject a pin beyond the bounded owner table
+        REPLACEMENT_OWNER_STORAGE.emit_check_capacity(emitter, "__rt_exception_chain_replacement_overflow");
         emitter.instruction("mov QWORD PTR [rbp - 48], rax");                   // seed the intrinsic previous-chain tail
         emitter.label("__rt_exception_chain_replacement_tail");
         emitter.instruction("call __rt_throwable_previous");                    // borrow the next constructor/finally predecessor
@@ -159,12 +138,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
         emitter.instruction("jmp __rt_exception_chain_replacement_tail");       // continue walking the intrinsic previous chain
         emitter.label("__rt_exception_chain_replacement_ready");
         emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // pin the replacement against allocator address reuse
-        emitter.instruction("call __rt_incref");                                // retain the root across host-side identity tracking
-        abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-        abi::emit_extern_symbol_address(emitter, "r11", PHPEXT_REPLACEMENT_OWNERS);
-        emitter.instruction("mov QWORD PTR [r11 + r10*8], rax");                // publish the retained owner before the C identity mapping
-        emitter.instruction("add r10, 1");                                      // publish one additional retained replacement owner
-        abi::emit_store_reg_to_symbol(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        REPLACEMENT_OWNER_STORAGE.emit_pin(emitter, emit_replacement_owners_address);
         emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // pass root and original chain tail through SysV
         emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                   // pass the original previous-chain tail to the adapter
         emitter.bl_c("elephc_php_finally_replacement");
@@ -211,29 +185,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // advance the borrowed new-chain cursor
     emitter.instruction("jmp __rt_exception_chain_scan");                       // validate the next node against the old chain
 
-    // -- adopt the old owner using the actual previous-slot representation --
+    // -- delegate physical previous-owner adoption to Memoir --
     emitter.label("__rt_exception_chain_append");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the new-chain tail
-    emitter.instruction("call __rt_throwable_previous_slot");                   // resolve its effective previous-property slot
-    emitter.instruction("test rax, rax");                                       // check whether metadata supplied a writable slot
-    emitter.instruction("jz __rt_exception_chain_release");                     // absent storage cannot adopt the previous owner
-    emitter.instruction("test edx, edx");                                       // inspect the effective slot's boxed flag
-    emitter.instruction("jz __rt_exception_chain_raw");                         // raw slots consume the old object owner directly
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the effective slot across allocation
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // inspect the old null box being displaced
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save that box for post-publication release
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the old exception as the boxed object payload
-    emitter.instruction("mov eax, 6");                                          // runtime tag six denotes an object
-    emitter.instruction("xor esi, esi");                                        // object payloads have no second word
-    emitter.instruction("call __rt_mixed_from_value");                          // retain the object under a fresh Mixed box owner
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover the effective previous slot
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the new owner before releasing old storage
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the displaced null box
-    emitter.instruction("call __rt_decref_any");                                // release the box no longer owned by the property
-    emitter.instruction("jmp __rt_exception_chain_release");                    // balance the old raw owner retained by the new box
-    emitter.label("__rt_exception_chain_raw");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // recover the old raw owner
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // transfer that owner directly into the raw previous link
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the new-chain tail as the destination
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the old exception owner for consumption
+    emitter.instruction("call __rt_throwable_append_previous");                 // consume the owner through Memoir's layout-aware kernel
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // record that the incoming owner was consumed
     emitter.label("__rt_exception_chain_return");
     emitter.instruction("leave");                                               // restore the caller after ownership transfer
     emitter.instruction("ret");                                                 // leave no owner or cursor in this helper
@@ -246,98 +203,25 @@ fn emit_x86_64(emitter: &mut Emitter) {
 /// Reclaims AArch64 replacement pins whose objects have no owner besides equivalent pins.
 fn emit_aarch64_replacement_sweep(emitter: &mut Emitter) {
     emitter.label("__rt_exception_chain_replacement_sweep");
-    abi::emit_extern_symbol_address(emitter, "x0", PHPEXT_REPLACEMENT_OWNERS);
+    emit_replacement_owners_address(emitter, "x0");
     abi::emit_load_symbol_to_reg(emitter, "x1", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
     abi::emit_load_symbol_to_reg(emitter, "x2", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
     emitter.bl_c("elephc_php_stale_finally_replacement");
     emitter.instruction("cbz x0, __rt_exception_chain_replacement_swept");      // finish when every retained root is still live
-    emitter.instruction("str x0, [sp, #16]");                                   // keep the stale root across compaction and releases
-    abi::emit_load_symbol_to_reg(emitter, "x10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-    abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
-    abi::emit_extern_symbol_address(emitter, "x11", PHPEXT_REPLACEMENT_OWNERS);
-    emitter.instruction("mov x12, x9");                                         // read cursor starts at this export's first owner
-    emitter.instruction("mov x13, x9");                                         // write cursor compacts retained owners in place
-    emitter.instruction("mov x14, #0");                                         // number of identical pins to consume
-    emitter.label("__rt_exception_chain_replacement_compact");
-    emitter.instruction("cmp x12, x10");                                        // inspect whether the read cursor reached the published end
-    emitter.instruction("b.hs __rt_exception_chain_replacement_compacted");     // publish the compacted owner prefix after the scan
-    emitter.instruction("ldr x15, [x11, x12, lsl #3]");                         // borrow the next retained replacement owner
-    emitter.instruction("add x12, x12, #1");                                    // advance the read cursor before classifying this owner
-    emitter.instruction("ldr x16, [sp, #16]");                                  // recover the stale root selected by the adapter
-    emitter.instruction("cmp x15, x16");                                        // compare the retained owner with the stale root identity
-    emitter.instruction("b.eq __rt_exception_chain_replacement_remove");        // count identical pins instead of retaining them
-    emitter.instruction("str x15, [x11, x13, lsl #3]");                         // compact one live owner into the published prefix
-    emitter.instruction("add x13, x13, #1");                                    // advance the compacted write cursor
-    emitter.instruction("b __rt_exception_chain_replacement_compact");          // scan the next retained owner
-    emitter.label("__rt_exception_chain_replacement_remove");
-    emitter.instruction("add x14, x14, #1");                                    // record one pin that must release the stale root
-    emitter.instruction("b __rt_exception_chain_replacement_compact");          // continue compacting the retained owners
-    emitter.label("__rt_exception_chain_replacement_compacted");
-    emitter.instruction("str x14, [sp, #32]");                                  // releases left after publishing compaction
-    abi::emit_store_reg_to_symbol(emitter, "x13", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-    emitter.label("__rt_exception_chain_replacement_zero_tail");
-    emitter.instruction("cmp x13, x10");                                        // inspect whether every vacated owner slot is clear
-    emitter.instruction("b.hs __rt_exception_chain_replacement_release");       // release removed pins after clearing stale slots
-    emitter.instruction("str xzr, [x11, x13, lsl #3]");                         // clear one vacated owner slot before a destructor can escape
-    emitter.instruction("add x13, x13, #1");                                    // advance through the vacated owner tail
-    emitter.instruction("b __rt_exception_chain_replacement_zero_tail");        // clear every slot removed by compaction
-    emitter.label("__rt_exception_chain_replacement_release");
-    emitter.instruction("ldr x14, [sp, #32]");                                  // recover the number of stale pins still owned here
-    emitter.instruction("cbz x14, __rt_exception_chain_replacement_sweep");     // ask the adapter for the next stale identity
-    emitter.instruction("sub x14, x14, #1");                                    // claim one stale pin for the next release
-    emitter.instruction("str x14, [sp, #32]");                                  // make a throwing final decref idempotent
-    emitter.instruction("ldr x0, [sp, #16]");                                   // recover the stale root whose retained pin is consumed
-    emitter.instruction("bl __rt_decref_any");                                  // release one equivalent retained replacement owner
-    emitter.instruction("b __rt_exception_chain_replacement_release");          // consume every equivalent pin before the next sweep
+    REPLACEMENT_OWNER_STORAGE.emit_remove_selected(emitter, 16, 32, emit_replacement_owners_address);
     emitter.label("__rt_exception_chain_replacement_swept");
 }
 
 /// Reclaims System V replacement pins whose objects have no owner besides equivalent pins.
 fn emit_x86_64_replacement_sweep(emitter: &mut Emitter) {
     emitter.label("__rt_exception_chain_replacement_sweep");
-    abi::emit_extern_symbol_address(emitter, "rdi", PHPEXT_REPLACEMENT_OWNERS);
+    emit_replacement_owners_address(emitter, "rdi");
     abi::emit_load_symbol_to_reg(emitter, "rsi", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
     abi::emit_load_symbol_to_reg(emitter, "rdx", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
     emitter.bl_c("elephc_php_stale_finally_replacement");
     emitter.instruction("test rax, rax");                                       // inspect whether the adapter selected a stale root
     emitter.instruction("jz __rt_exception_chain_replacement_swept");           // finish when every retained root is still live
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the stale root across compaction
-    abi::emit_load_symbol_to_reg(emitter, "r8", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
-    abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-    abi::emit_extern_symbol_address(emitter, "r11", PHPEXT_REPLACEMENT_OWNERS);
-    emitter.instruction("mov r9, r8");                                          // write cursor starts at this export's first owner
-    emitter.instruction("xor edx, edx");                                        // number of identical pins to consume
-    emitter.label("__rt_exception_chain_replacement_compact");
-    emitter.instruction("cmp r8, r10");                                         // inspect whether the read cursor reached the published end
-    emitter.instruction("jae __rt_exception_chain_replacement_compacted");      // publish the compacted owner prefix after the scan
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r8*8]");                     // borrow the next retained replacement owner
-    emitter.instruction("add r8, 1");                                           // advance the read cursor before classifying this owner
-    emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // compare the retained owner with the stale root identity
-    emitter.instruction("je __rt_exception_chain_replacement_remove");          // count identical pins instead of retaining them
-    emitter.instruction("mov QWORD PTR [r11 + r9*8], rcx");                     // compact one live owner into the published prefix
-    emitter.instruction("add r9, 1");                                           // advance the compacted write cursor
-    emitter.instruction("jmp __rt_exception_chain_replacement_compact");        // scan the next retained owner
-    emitter.label("__rt_exception_chain_replacement_remove");
-    emitter.instruction("add rdx, 1");                                          // record one pin that must release the stale root
-    emitter.instruction("jmp __rt_exception_chain_replacement_compact");        // continue compacting the retained owners
-    emitter.label("__rt_exception_chain_replacement_compacted");
-    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // releases left after publishing compaction
-    abi::emit_store_reg_to_symbol(emitter, "r9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-    emitter.label("__rt_exception_chain_replacement_zero_tail");
-    emitter.instruction("cmp r9, r10");                                         // inspect whether every vacated owner slot is clear
-    emitter.instruction("jae __rt_exception_chain_replacement_release");        // release removed pins after clearing stale slots
-    emitter.instruction("mov QWORD PTR [r11 + r9*8], 0");                       // clear one vacated owner slot before a destructor can escape
-    emitter.instruction("add r9, 1");                                           // advance through the vacated owner tail
-    emitter.instruction("jmp __rt_exception_chain_replacement_zero_tail");      // clear every slot removed by compaction
-    emitter.label("__rt_exception_chain_replacement_release");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover the number of stale pins still owned here
-    emitter.instruction("test r10, r10");                                       // inspect whether another equivalent pin must be released
-    emitter.instruction("jz __rt_exception_chain_replacement_sweep");           // ask the adapter for the next stale identity
-    emitter.instruction("sub r10, 1");                                          // claim one stale pin for the next release
-    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // make a throwing final decref idempotent
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // recover the stale root whose retained pin is consumed
-    emitter.instruction("call __rt_decref_any");                                // release one equivalent retained replacement owner
-    emitter.instruction("jmp __rt_exception_chain_replacement_release");        // consume every equivalent pin before the next sweep
+    REPLACEMENT_OWNER_STORAGE.emit_remove_selected(emitter, 24, 32, emit_replacement_owners_address);
     emitter.label("__rt_exception_chain_replacement_swept");
 }
 
@@ -346,7 +230,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
-    /// Chaining uses layout-aware reads for both chains and publishes boxed links before releasing.
+    /// Chaining uses layout-aware reads and delegates physical owner adoption to Memoir.
     #[test]
     fn exception_chain_uses_storage_metadata_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -354,10 +238,33 @@ mod tests {
             emit_exception_chain(&mut emitter);
             let asm = emitter.output();
             assert_eq!(asm.matches("__rt_throwable_previous\n").count(), 2, "{name}");
-            assert!(asm.contains("__rt_throwable_previous_slot"), "{name}");
-            assert!(asm.find("__rt_mixed_from_value").unwrap() < asm.find("__rt_decref_any").unwrap(), "{name}");
-            assert!(asm.contains("__rt_exception_chain_ancestors:") && asm.contains("__rt_exception_chain_raw:"), "{name}");
+            assert!(asm.contains("__rt_throwable_append_previous"), "{name}");
+            assert!(!asm.contains("__rt_mixed_from_value"), "{name}");
+            assert!(asm.contains("__rt_exception_chain_ancestors:"), "{name}");
             assert!(!asm.contains("elephc_php_previous_exception"), "{name}");
+        }
+    }
+
+    /// Memoir clears inline raw-property padding without overwriting reference-cell storage.
+    #[test]
+    fn throwable_append_previous_distinguishes_inline_and_reference_slots() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            elephc_memoir::values::throwable_previous::emit_append_previous(&mut emitter);
+            elephc_memoir::values::throwable_previous::emit_throwable_previous(&mut emitter);
+            let arch = emitter.target.arch;
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_throwable_append_previous_raw_store:"), "{name}");
+            match arch {
+                Arch::AArch64 => {
+                    assert!(asm.contains("ubfx x2, x10, #1, #1"), "{name}");
+                    assert!(asm.contains("str xzr, [x0, #8]"), "{name}");
+                }
+                Arch::X86_64 => {
+                    assert!(asm.contains("and ecx, 2"), "{name}");
+                    assert!(asm.contains("mov QWORD PTR [rax + 8], 0"), "{name}");
+                }
+            }
         }
     }
 

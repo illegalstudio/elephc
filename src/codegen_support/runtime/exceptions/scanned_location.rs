@@ -21,11 +21,11 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction(&format!("orr x1, x1, #{}", THROWABLE_SCANNED_LOCATION_FLAG)); // distinguish buffer locations from ordinary source spans
             emitter.instruction("cbz x0, __rt_tokenizer_location_done");        // an invalid internal receiver has no writable metadata
             // -- resolve compact or ordinary Throwable metadata storage --
-            emitter.instruction("ldurb w9, [x0, #-8]");                         // inspect the physical heap kind
+            elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "w9", "x0");
             emitter.instruction("mov x10, #32");                                // compact Throwables reserve the fixed creation-line word
             emitter.instruction("cmp w9, #6");                                  // kind six is the compact Throwable payload
             emitter.instruction("b.eq __rt_tokenizer_location_store");          // preserve the compact storage layout
-            emitter.instruction("ldr x9, [x0]");                                // ordinary objects carry a runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
             abi::emit_symbol_address(emitter, "x10", "_class_throwable_line_offsets");
             emitter.instruction("ldr x10, [x10, x9, lsl #3]");                  // resolve the private line word after PHP properties
             emitter.instruction("cbz x10, __rt_tokenizer_location_done");       // non-Throwable objects have no location storage
@@ -42,11 +42,11 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction("test rax, rax");                               // an invalid internal receiver has no writable metadata
             emitter.instruction("jz __rt_tokenizer_location_done");             // skip the metadata write for a missing object
             // -- resolve compact or ordinary Throwable metadata storage --
-            emitter.instruction("movzx r9, BYTE PTR [rax - 8]");                // inspect the physical heap kind
+            elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "r9", "rax");
             emitter.instruction("mov r10, 32");                                 // compact Throwables reserve the fixed creation-line word
             emitter.instruction("cmp r9, 6");                                   // kind six is the compact Throwable payload
             emitter.instruction("je __rt_tokenizer_location_store");            // preserve the compact storage layout
-            emitter.instruction("mov r9, QWORD PTR [rax]");                     // resolve the ordinary runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rax");
             abi::emit_symbol_address(emitter, "r10", "_class_throwable_line_offsets");
             emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");           // locate private metadata after PHP properties
             emitter.instruction("test r10, r10");                               // non-Throwable objects have no location storage

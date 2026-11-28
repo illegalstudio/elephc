@@ -25,6 +25,10 @@ use crate::interpreter::RuntimeValueOps;
 use crate::parse_cache;
 #[cfg(not(test))]
 use crate::runtime_hooks::ElephcRuntimeOps;
+#[cfg(not(test))]
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, with_runtime_owners, with_runtime_scope_owners,
+};
 use std::slice;
 
 /// Returns the conservative caller-scope name mask for one cacheable eval fragment.
@@ -236,27 +240,36 @@ fn check_eval_escape(
     if !context.needs_pcntl_escape_scan() {
         return Ok(outcome);
     }
-    let owned = match &outcome {
+    let owner = RuntimeOwnerSlot::new(match &outcome {
         interpreter::EvalOutcome::Value(result) | interpreter::EvalOutcome::Throwable(result) => *result,
-    };
-    let checked = (|| {
-        if let interpreter::EvalOutcome::Value(result) = &outcome {
-            if interpreter::value_contains_foreign_pcntl_callable(*result, context, values)? {
-                return Err(EvalStatus::EscapingPcntlCallable);
+    });
+    with_runtime_scope_owners(scope, |scope| {
+        with_runtime_owners(&owner, || {
+            let checked = (|| {
+                if let interpreter::EvalOutcome::Value(result) = &outcome {
+                    if interpreter::value_contains_foreign_pcntl_callable(
+                        *result, context, values,
+                    )? {
+                        return Err(EvalStatus::EscapingPcntlCallable);
+                    }
+                }
+                for candidate in eval_escape_scope_cells(context, scope) {
+                    if interpreter::value_contains_foreign_pcntl_callable(
+                        candidate, context, values,
+                    )? {
+                        return Err(EvalStatus::EscapingPcntlCallable);
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(status) = checked {
+                let _ = values.release(owner.take());
+                return Err(status);
             }
-        }
-        for candidate in eval_escape_scope_cells(context, scope) {
-            if interpreter::value_contains_foreign_pcntl_callable(candidate, context, values)? {
-                return Err(EvalStatus::EscapingPcntlCallable);
-            }
-        }
-        Ok(())
-    })();
-    if let Err(status) = checked {
-        let _ = values.release(owned);
-        return Err(status);
-    }
-    Ok(outcome)
+            owner.take();
+            Ok(outcome)
+        })
+    })
 }
 
 /// Collects every visible local and global cell that could cross the eval-to-AOT boundary.

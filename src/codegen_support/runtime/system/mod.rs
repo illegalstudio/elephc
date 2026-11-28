@@ -103,8 +103,8 @@ pub(crate) use json_pretty::emit_json_pretty_helpers;
 pub(crate) use json_throw_error::emit_json_throw_error;
 pub(crate) use match_unhandled::emit_match_unhandled;
 pub(crate) use stack_guard::{
-    emit_stack_limit_init, emit_stack_overflow, STACK_GUARD_RESERVE_BYTES,
-    STACK_LIMIT_MAIN_SYMBOL, STACK_LIMIT_SYMBOL,
+    emit_stack_limit_init, emit_stack_overflow,
+    STACK_LIMIT_SYMBOL,
 };
 pub(crate) use microtime::emit_microtime;
 pub(crate) use microtime::emit_microtime_build_into;
@@ -138,3 +138,6 @@ pub(crate) use unserialize::emit_unserialize;
 
 #[cfg(test)]
 mod json_compatibility_tests;
+
+#[cfg(test)]
+pub(super) use unserialize::emit_owner_records_for_memoir_test;

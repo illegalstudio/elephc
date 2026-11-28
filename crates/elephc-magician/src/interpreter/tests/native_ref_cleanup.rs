@@ -8,9 +8,11 @@
 //! - Injected release errors consume their owner, matching throwing native destructors.
 //! - Staged replacement cells model owners already transferred by the native callee.
 
+use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
 use super::super::*;
 use super::support::*;
 use crate::runtime_hooks::owner_frames::RuntimeOwners;
+use elephc_memoir::runtime_invoker_slots::{InvokerMixedSlot, InvokerValidationPin};
 
 /// Native entry replaces exact source leases once and retires every root despite cleanup throws.
 #[test]
@@ -32,7 +34,7 @@ fn native_argument_evaluation_owners_transfer_and_cleanup_exact_leases() {
                 values: Vec::new(), named_keys: Vec::new(),
                 ref_slots: vec![BoundNativeFunctionRefSlot::ManagedMixed {
                     original: reference, cell: 0,
-                    pin: Box::new(std::cell::UnsafeCell::new([0; 4])),
+                    pin: InvokerValidationPin::default(),
                 }],
             };
             bound.evaluation_owners.push(bound.evaluation_owners[0].clone());
@@ -162,13 +164,24 @@ fn native_nullable_integer_reference_staging_preserves_payload_and_tag() {
         let BoundNativeFunctionRefSlot::TaggedScalar { slot, .. } = &mut bound.ref_slots[0] else {
             panic!("nullable integers must expose a full payload/tag slot");
         };
-        assert_eq!(**slot, [before.unwrap_or(0) as u64, if before.is_some() { EVAL_TAG_INT } else { EVAL_TAG_NULL }]);
-        let address = (slot.as_mut() as *mut [u64; 2]) as usize;
+        let expected = InvokerSlotWords::new(
+            before.unwrap_or(0) as u64,
+            if before.is_some() { EVAL_TAG_INT } else { EVAL_TAG_NULL },
+        );
+        assert_eq!(slot.as_ref().snapshot(), expected);
+        let address = slot.as_ref().as_ptr() as usize;
         let read = eval_invoker_slot_ref_target_value(address, EVAL_INVOKER_TAGGED_SCALAR_SOURCE, &mut values).unwrap();
         assert_eq!(values.get(read), before.map_or(FakeValue::Null, FakeValue::Int));
         values.release(read).unwrap();
         let replacement = match after { Some(value) => values.int(value).unwrap(), None => values.null().unwrap() };
-        write_back_invoker_slot_ref_target(address, EVAL_INVOKER_TAGGED_SCALAR_SOURCE, replacement, &mut values).unwrap();
+        write_back_invoker_slot_ref_target(
+            address,
+            EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
+            replacement,
+            &mut context,
+            &mut values,
+        )
+        .unwrap();
         values.release(replacement).unwrap();
         write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
         assert_eq!(values.get(scope.visible_cell("value").unwrap()), after.map_or(FakeValue::Null, FakeValue::Int));
@@ -211,10 +224,8 @@ fn native_scalar_reference_staging_reserves_a_full_marker_slot() {
     let BoundNativeFunctionRefSlot::RawWord { slot, .. } = &mut bound.ref_slots[0] else {
         panic!("integer references must use a raw scalar marker slot");
     };
-    assert_eq!(std::mem::size_of_val(slot.as_ref()), 16);
-    assert_eq!(**slot, [3, 0]);
-    slot[0] = 7;
-    slot[1] = u64::MAX;
+    assert_eq!(slot.as_ref().snapshot(), InvokerSlotWords::new(3, 0));
+    unsafe { slot.as_ref().as_ptr().write(InvokerSlotWords::new(7, u64::MAX)); }
     write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
     assert_eq!(values.get(scope.visible_cell("value").unwrap()), FakeValue::Int(7));
     for marker in bound.values { values.release(marker).unwrap(); }
@@ -254,9 +265,8 @@ fn native_iterable_reference_staging_reserves_a_full_marker_slot() {
     let BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } = &mut bound.ref_slots[0] else {
         panic!("iterable references must expose a full raw heap marker slot");
     };
-    assert_eq!(std::mem::size_of_val(slot.as_ref()), 16);
-    assert_eq!(**slot, [original.as_ptr() as u64, 0]);
-    slot[1] = u64::MAX;
+    assert_eq!(slot.as_ref().snapshot(), InvokerSlotWords::new(original.as_ptr() as u64, 0));
+    unsafe { slot.as_ref().as_ptr().write(InvokerSlotWords::new(original.as_ptr() as u64, u64::MAX)); }
     write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
     for marker in bound.values { values.release(marker).unwrap(); }
     let current = scope.visible_cell("value").unwrap();
@@ -319,7 +329,7 @@ fn native_array_reference_staging_owns_a_boxed_slot() {
         panic!("array references must stage a boxed value, not its raw payload");
     };
     assert_eq!(*original, array);
-    assert_eq!(**slot, array.as_ptr());
+    assert_eq!(unsafe { slot.as_ptr().read() }, array.as_ptr());
     assert_eq!(values.cell_owners[&(array.as_ptr() as usize)], 2);
     write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
     for marker in bound.values { values.release(marker).unwrap(); }
@@ -539,20 +549,20 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
             named_keys: Vec::new(),
             ref_slots: vec![
                 BoundNativeFunctionRefSlot::RawString {
-                    original: [string.as_ptr() as u64, 6],
-                    slot: Box::new([string.as_ptr() as u64, 6]), target: None,
+                    original: InvokerSlotWords::new(string.as_ptr() as u64, 6),
+                    slot: InvokerSlot::pin(InvokerSlotWords::new(string.as_ptr() as u64, 6)), target: None,
                     force_writeback: false,
                 },
                 BoundNativeFunctionRefSlot::OwnedRawWord {
                     original: array.as_ptr() as u64,
-                    slot: Box::new([array.as_ptr() as u64, 0]), target: None,
+                    slot: InvokerSlot::pin(InvokerSlotWords::new(array.as_ptr() as u64, 0)), target: None,
                 },
                 BoundNativeFunctionRefSlot::Mixed {
-                    original: mixed, slot: Box::new(mixed.as_ptr()), target: None,
+                    original: mixed, slot: InvokerMixedSlot::new(mixed), target: None,
                 },
                 BoundNativeFunctionRefSlot::ManagedMixed {
                     original: caller, cell: managed.as_ptr() as u64,
-                    pin: Box::new(std::cell::UnsafeCell::new([0; 4])),
+                    pin: InvokerValidationPin::default(),
                 },
             ],
         };
@@ -590,11 +600,11 @@ fn native_ref_writeback_preserves_published_values_and_finishes_later_slots() {
         named_keys: Vec::new(),
         ref_slots: vec![
             BoundNativeFunctionRefSlot::Mixed {
-                original: old_first, slot: Box::new(first.as_ptr()),
+                original: old_first, slot: InvokerMixedSlot::new(first),
                 target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "first".into() }),
             },
             BoundNativeFunctionRefSlot::Mixed {
-                original: old_second, slot: Box::new(second.as_ptr()),
+                original: old_second, slot: InvokerMixedSlot::new(second),
                 target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "second".into() }),
             },
         ],
@@ -641,11 +651,11 @@ fn native_function_discards_result_and_all_slots_when_writeback_fails() {
         named_keys: Vec::new(),
         ref_slots: vec![
             BoundNativeFunctionRefSlot::Mixed {
-                original, slot: Box::new(first.as_ptr()),
+                original, slot: InvokerMixedSlot::new(first),
                 target: Some(EvalReferenceTarget::Variable { scope: std::ptr::null_mut(), name: "missing".into() }),
             },
             BoundNativeFunctionRefSlot::Mixed {
-                original: later, slot: Box::new(later.as_ptr()), target: None,
+                original: later, slot: InvokerMixedSlot::new(later), target: None,
             },
         ],
     };
@@ -672,7 +682,7 @@ fn native_ref_writeback_retires_its_owner_after_a_retaining_setter() {
         values: Vec::new(),
         named_keys: Vec::new(),
         ref_slots: vec![BoundNativeFunctionRefSlot::Mixed {
-            original: old, slot: Box::new(value.as_ptr()),
+            original: old, slot: InvokerMixedSlot::new(value),
             target: Some(EvalReferenceTarget::InvokerSlot {
                 slot: (&mut caller_slot as *mut *mut crate::value::RuntimeCell) as usize,
                 source_tag: EVAL_TAG_MIXED,
@@ -708,11 +718,11 @@ fn native_reference_staging_preserves_typed_alias_on_rejection() {
     let BoundNativeFunctionRefSlot::Mixed { slot, .. } = &mut bound.ref_slots[0] else {
         panic!("array reference must use boxed staging");
     };
-    let staged = RuntimeCellHandle::from_raw(**slot);
+    let staged = RuntimeCellHandle::from_raw(unsafe { slot.as_ptr().read() });
     assert!(!values.is_reference(staged).unwrap());
     let bad = values.string("bad").unwrap();
     let replacement = values.alloc(FakeValue::Array(vec![bad]));
-    **slot = replacement.as_ptr();
+    unsafe { slot.as_ptr().write(replacement.as_ptr()); }
     values.release(staged).unwrap();
     assert_eq!(write_back_native_function_ref_args(&bound, &mut context, &mut values), Err(EvalStatus::UncaughtThrowable));
     assert_eq!(scope.visible_cell("a"), Some(original));
@@ -752,10 +762,10 @@ fn native_reference_staging_keeps_duplicate_persistent_aliases_shared() {
     let BoundNativeFunctionRefSlot::Mixed { slot, .. } = &mut bound.ref_slots[0] else {
         panic!("array reference must use boxed staging");
     };
-    let staged = RuntimeCellHandle::from_raw(**slot);
+    let staged = RuntimeCellHandle::from_raw(unsafe { slot.as_ptr().read() });
     let item = values.int(2).unwrap();
     let replacement = values.alloc(FakeValue::Array(vec![item]));
-    **slot = replacement.as_ptr();
+    unsafe { slot.as_ptr().write(replacement.as_ptr()); }
     values.release(staged).unwrap();
     let peer = eval_invoker_slot_ref_target_value(values.raw_value_word(bound.values[1]).unwrap() as usize,
         EVAL_TAG_MIXED, &mut values).unwrap();
@@ -783,10 +793,10 @@ fn native_by_value_reference_staging_detaches_persistent_caller() {
         panic!("untyped reference must use boxed staging");
     };
     assert!(target.is_none());
-    let staged = RuntimeCellHandle::from_raw(**slot);
+    let staged = RuntimeCellHandle::from_raw(unsafe { slot.as_ptr().read() });
     assert!(!values.is_reference(staged).unwrap(), "a by-value call must detach reference identity");
     let replacement = values.int(2).unwrap();
-    **slot = replacement.as_ptr();
+    unsafe { slot.as_ptr().write(replacement.as_ptr()); }
     values.release(staged).unwrap();
     write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
     assert_eq!(values.get(reference), FakeValue::Int(7));

@@ -49,8 +49,7 @@ pub(super) fn emit_zlib_flush_on_close_for_current_fd(ctx: &mut FunctionContext<
     let skip = ctx.next_label("fclose_zlib_skip");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_zstream_handles");
-            ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");               // load this descriptor's zlib stream handle
+            elephc_memoir::buffers::stream_tables::ZLIB_HANDLES.emit_load_indexed_word(ctx.emitter, "x10", "x0", "x9");
             ctx.emitter.instruction(&format!("cbz x10, {}", skip));             // skip flush when no zlib filter is attached
             abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_zlib_close_fn");
@@ -60,8 +59,7 @@ pub(super) fn emit_zlib_flush_on_close_for_current_fd(ctx: &mut FunctionContext<
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_zstream_handles");    // zlib stream handle table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load this descriptor's zlib stream handle
+            elephc_memoir::buffers::stream_tables::ZLIB_HANDLES.emit_load_indexed_word(ctx.emitter, "r10", "rax", "r9");
             ctx.emitter.instruction("test r10, r10");                           // test whether a zlib filter is attached
             ctx.emitter.instruction(&format!("je {}", skip));                   // skip flush when no zlib filter is attached
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -79,8 +77,7 @@ pub(super) fn emit_bz2_flush_on_close_for_current_fd(ctx: &mut FunctionContext<'
     let skip = ctx.next_label("fclose_bz2_skip");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_bzstream_handles");
-            ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");               // load this descriptor's bzip2 stream handle
+            elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_load_indexed_word(ctx.emitter, "x10", "x0", "x9");
             ctx.emitter.instruction(&format!("cbz x10, {}", skip));             // skip flush when no bzip2 filter is attached
             abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_bz2_close_fn");
@@ -90,8 +87,7 @@ pub(super) fn emit_bz2_flush_on_close_for_current_fd(ctx: &mut FunctionContext<'
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_bzstream_handles");   // bzip2 stream handle table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load this descriptor's bzip2 stream handle
+            elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.emit_load_indexed_word(ctx.emitter, "r10", "rax", "r9");
             ctx.emitter.instruction("test r10, r10");                           // test whether a bzip2 filter is attached
             ctx.emitter.instruction(&format!("je {}", skip));                   // skip flush when no bzip2 filter is attached
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -109,8 +105,7 @@ pub(super) fn emit_iconv_flush_on_close_for_current_fd(ctx: &mut FunctionContext
     let skip = ctx.next_label("fclose_iconv_skip");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_iconv_handles");
-            ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");               // load this descriptor's iconv transcoder handle
+            elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_load_indexed_word(ctx.emitter, "x10", "x0", "x9");
             ctx.emitter.instruction(&format!("cbz x10, {}", skip));             // skip close when no iconv write filter is attached
             abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_iconv_close_fn");
@@ -120,8 +115,7 @@ pub(super) fn emit_iconv_flush_on_close_for_current_fd(ctx: &mut FunctionContext
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_iconv_handles");      // iconv transcoder handle table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load this descriptor's iconv transcoder handle
+            elephc_memoir::buffers::stream_tables::ICONV_HANDLES.emit_load_indexed_word(ctx.emitter, "r10", "rax", "r9");
             ctx.emitter.instruction("test r10, r10");                           // test whether an iconv write filter is attached
             ctx.emitter.instruction(&format!("je {}", skip));                   // skip close when no iconv write filter is attached
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -151,8 +145,7 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
     ctx.emitter.instruction(&format!("cbnz x0, {}", peer_ok));                  // use ssl.peer_name when the context provides it
     ctx.emitter.instruction("ldr x10, [sp, #64]");                              // reload fd for the connect-host table lookup
-    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_connect_host");
-    ctx.emitter.instruction("add x9, x9, x10, lsl #4");                         // address this fd's saved host pointer/length pair
+    elephc_memoir::buffers::stream_tables::emit_connect_host_slot(ctx.emitter, "x9", "x10");
     ctx.emitter.instruction("ldr x11, [x9, #8]");                               // load the saved connection-host byte length
     ctx.emitter.instruction(&format!("cbz x11, {}", host_default));             // fall back to localhost when no connection host is known
     ctx.emitter.instruction("ldr x12, [x9, #0]");                               // load the saved connection-host pointer
@@ -233,9 +226,7 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_x86_64(
     ctx.emitter.instruction("test rax, rax");                                   // did the context provide ssl.peer_name?
     ctx.emitter.instruction(&format!("jnz {}", peer_ok));                       // use ssl.peer_name when present
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 64]");                   // reload fd for the connect-host table lookup
-    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_connect_host");
-    ctx.emitter.instruction("shl r10, 4");                                      // fd * 16, the host table stride
-    ctx.emitter.instruction("add r9, r10");                                     // address this fd's saved host pointer/length pair
+    elephc_memoir::buffers::stream_tables::emit_connect_host_slot(ctx.emitter, "r9", "r10");
     ctx.emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                     // load the saved connection-host byte length
     ctx.emitter.instruction("test r11, r11");                                   // is a connection host known for this fd?
     ctx.emitter.instruction(&format!("jz {}", host_default));                   // fall back to localhost when no host is known

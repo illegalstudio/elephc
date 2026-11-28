@@ -8,6 +8,10 @@
 //! - Key normalization and boxed Mixed ownership remain runtime-compatible.
 
 use super::*;
+use elephc_memoir::ValueTag;
+use elephc_memoir::hash_layout::{self, HeaderField};
+use elephc_memoir::values::container_header;
+use elephc_memoir::values::owned_payload::emit_owned_pointer_from_slot;
 
 /// Emits x86_64 array and object-property iteration eval wrappers.
 pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
@@ -20,22 +24,9 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cmovb rdi, r10");                                      // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov rsi, 8");                                          // Mixed indexed arrays store boxed-cell pointers
     emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for boxed Mixed slots
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed indexed-array heap kind word
-    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap magic, indexed-array kind, and COW metadata
-    emitter.instruction("and r10, r11");                                        // clear the default scalar value_type bits
-    emitter.instruction("mov r11, 7");                                          // runtime value_type 7 = boxed Mixed
-    emitter.instruction("shl r11, 8");                                          // move the value_type tag into the packed kind word
-    emitter.instruction("or r10, r11");                                         // stamp the array as carrying boxed Mixed slots
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(7));
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned array pointer while allocating the Mixed box
-    emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the mixed-cell heap kind with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov QWORD PTR [rax], 4");                              // runtime tag 4 = indexed array
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned indexed-array pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the array pointer as the Mixed low payload word
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // indexed arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "QWORD PTR [rbp - 8]");
     emitter.instruction("add rsp, 16");                                         // release the array-new wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
@@ -50,14 +41,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 16");                                         // direct string arrays store pointer/length pairs
     emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for direct string slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned direct-string array pointer while boxing it
-    emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the mixed-cell heap kind with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov QWORD PTR [rax], 4");                              // runtime tag 4 = indexed array
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned direct-string array pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the string-array pointer as the Mixed low payload word
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // indexed arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "QWORD PTR [rbp - 8]");
     emitter.instruction("add rsp, 16");                                         // release the string-array-new wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed direct-string array Mixed cell to Rust
@@ -79,7 +63,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the string length to append
     emitter.instruction("call __rt_array_push_str");                            // persist and append the string, returning the updated array payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the boxed string-array owner
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update the boxed payload in case the array grew
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov rax, r10");                                        // return the boxed string-array owner to Rust
     emitter.instruction("jmp __elephc_eval_value_string_array_push_done_x86");  // skip the malformed-input null result
     emitter.label("__elephc_eval_value_string_array_push_fail_x86");
@@ -102,22 +86,9 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cmovb rdi, r10");                                      // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov rsi, 8");                                          // direct object arrays store one object pointer per slot
     emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for direct object slots
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed indexed-array heap kind word
-    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap magic, indexed-array kind, and COW metadata
-    emitter.instruction("and r10, r11");                                        // clear the default scalar value_type bits
-    emitter.instruction("mov r11, 6");                                          // runtime value_type 6 = object
-    emitter.instruction("shl r11, 8");                                          // move the value_type tag into the packed kind word
-    emitter.instruction("or r10, r11");                                         // stamp the array as carrying direct object slots
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(6));
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned object-array pointer while boxing it
-    emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the mixed-cell heap kind with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov QWORD PTR [rax], 4");                              // runtime tag 4 = indexed array
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned object-array pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the object-array pointer as the Mixed low payload word
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // indexed arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "QWORD PTR [rbp - 8]");
     emitter.instruction("add rsp, 16");                                         // release the object-array-new wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed direct-object array Mixed cell to Rust
@@ -144,7 +115,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the borrowed object pointer as the pushed child; rdi already holds the array payload
     emitter.instruction("call __rt_array_push_refcounted");                     // retain the object and append it, keeping the object value_type stamp
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the boxed object-array owner
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update the boxed payload in case the array grew
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov rax, r10");                                        // return the boxed object-array owner to Rust
     emitter.instruction("jmp __elephc_eval_value_object_array_push_done_x86");  // skip the malformed-input null result
     emitter.label("__elephc_eval_value_object_array_push_fail_x86");
@@ -164,14 +135,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 7");                                          // runtime value_type 7 = boxed Mixed hash values
     emitter.instruction("call __rt_hash_new");                                  // allocate associative-array storage for boxed Mixed entries
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned hash pointer while allocating the Mixed box
-    emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new hash
-    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the mixed-cell heap kind with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov QWORD PTR [rax], 5");                              // runtime tag 5 = associative array
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned hash pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the hash pointer as the Mixed low payload word
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // associative arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(5), "QWORD PTR [rbp - 8]");
     emitter.instruction("add rsp, 16");                                         // release the assoc-new wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed associative-array Mixed cell to Rust
@@ -366,7 +330,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_array_len_zero",
     );
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the runtime container element count
+    container_header::emit_load_count(emitter, "rax", "r10");
     emitter.instruction("ret");                                                 // return the element count to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_property_len");
@@ -382,7 +346,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_object_property_len_zero",
     );
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");    // resolve the class-id table extent
     emitter.instruction("cmp rax, QWORD PTR [r11]");                            // is the class id within the metadata tables?
     emitter.instruction("jae __elephc_eval_value_object_property_len_zero");    // incomplete or unknown ids expose no properties
@@ -391,10 +355,12 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_object_property_len_zero");     // classes without the tail expose no dynamic properties
     abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes"); // resolve the class payload-size table
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the object payload size
-    emitter.instruction("mov r10, QWORD PTR [r10 + r11 - 8]");                  // load the dynamic-property hash pointer
+    elephc_memoir::values::object_storage::emit_load_trailing_word(
+        emitter, "r10", "r11", "r10",
+    );
     emitter.instruction("test r10, r10");                                       // is the property hash null?
     emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // null property hashes are treated as empty objects
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the hash entry count
+    hash_layout::emit_load_header_field(emitter, "rax", "r10", HeaderField::Count);
     emitter.instruction("ret");                                                 // return the public property count to Rust
     emitter.label("__elephc_eval_value_object_property_len_zero");
     emitter.instruction("xor eax, eax");                                        // report zero JSON-visible object properties
@@ -418,7 +384,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_object_property_iter_key_null",
     );
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");    // resolve the class-id table extent
     emitter.instruction("cmp rax, QWORD PTR [r11]");                            // is the class id within the metadata tables?
     emitter.instruction("jae __elephc_eval_value_object_property_iter_key_null"); // incomplete or unknown ids expose no properties
@@ -427,7 +393,9 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_object_property_iter_key_null"); // classes without the tail expose no keys
     abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes"); // resolve the class payload-size table
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the object payload size
-    emitter.instruction("mov r10, QWORD PTR [r10 + r11 - 8]");                  // load the dynamic-property hash pointer
+    elephc_memoir::values::object_storage::emit_load_trailing_word(
+        emitter, "r10", "r11", "r10",
+    );
     emitter.instruction("test r10, r10");                                       // is the property hash null?
     emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls

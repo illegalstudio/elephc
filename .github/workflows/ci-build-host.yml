@@ -121,6 +121,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
+      - name: Audit Memoir feature boundary
+        run: |
+          python3 -B -m unittest scripts.ci.test_memoir_boundary
+          python3 -B scripts/audit_memoir_boundary.py
+
       - name: Cache Rust build state
         # Dependencies only (registry, git checkouts, and the dependency
         # artifacts under target/); the action prunes the workspace crates'
@@ -140,6 +145,12 @@ jobs:
 
       - name: Install native test dependencies
         run: brew install freetds pcre2 unixodbc
+
+      - name: Test Memoir typed contracts
+        run: |
+          cargo test --locked -p elephc-memoir --features codegen --lib
+          cargo test --locked -p elephc-memoir --features codegen --doc
+          cargo test --locked -p elephc-memoir --features runtime --lib
 
       - name: Check (no warnings)
         shell: bash
@@ -214,6 +225,9 @@ jobs:
             --target-dir target/elephc-magician-curl-test-build
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
+          python3 -B scripts/audit_memoir_boundary.py \
+            --magician-archive target/debug/libelephc_magician.a \
+            --magician-archive target/debug/libelephc_magician_curl.a
 
       - name: Publish the shared compiler
         id: publish-compiler
@@ -512,6 +526,11 @@ jobs:
         with:
           ref: ${{ inputs.source-sha || github.sha }}
 
+      - name: Audit Memoir feature boundary
+        run: |
+          python3 -B -m unittest scripts.ci.test_memoir_boundary
+          python3 -B scripts/audit_memoir_boundary.py
+
       - name: Cache Rust build state
         # Dependencies only (registry, git checkouts, and the dependency
         # artifacts under target/); the action prunes the workspace crates'
@@ -525,6 +544,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
+
+      - name: Test Memoir typed contracts
+        run: |
+          cargo test --locked -p elephc-memoir --features codegen --lib
+          cargo test --locked -p elephc-memoir --features codegen --doc
+          cargo test --locked -p elephc-memoir --features runtime --lib
 
       - name: Check (no warnings)
         shell: bash
@@ -599,6 +624,9 @@ jobs:
             --target-dir target/elephc-magician-curl-test-build
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
+          python3 -B scripts/audit_memoir_boundary.py \
+            --magician-archive target/debug/libelephc_magician.a \
+            --magician-archive target/debug/libelephc_magician_curl.a
 
       - name: Ensure Python for Oniguruma bundle preparation
         shell: bash
@@ -891,6 +919,11 @@ jobs:
         with:
           ref: ${{ inputs.source-sha || github.sha }}
 
+      - name: Audit Memoir feature boundary
+        run: |
+          python3 -B -m unittest scripts.ci.test_memoir_boundary
+          python3 -B scripts/audit_memoir_boundary.py
+
       - name: Cache Rust build state
         # Dependencies only (registry, git checkouts, and the dependency
         # artifacts under target/); the action prunes the workspace crates'
@@ -904,6 +937,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
+
+      - name: Test Memoir typed contracts
+        run: |
+          cargo test --locked -p elephc-memoir --features codegen --lib
+          cargo test --locked -p elephc-memoir --features codegen --doc
+          cargo test --locked -p elephc-memoir --features runtime --lib
 
       - name: Check (no warnings)
         shell: bash
@@ -978,6 +1017,9 @@ jobs:
             --target-dir target/elephc-magician-curl-test-build
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
+          python3 -B scripts/audit_memoir_boundary.py \
+            --magician-archive target/debug/libelephc_magician.a \
+            --magician-archive target/debug/libelephc_magician_curl.a
 
       - name: Ensure Python for Oniguruma bundle preparation
         shell: bash

@@ -14,6 +14,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::{with_collection_cells, EvalArrayBuilder};
 use super::super::super::*;
 
 /// Evaluates `stream_bucket_prepend($brigade, $bucket)`.
@@ -49,9 +50,11 @@ pub(in crate::interpreter) fn eval_stream_bucket_prepend_result(
     bucket: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let buckets = super::stream_bucket_append::eval_brigade_buckets(brigade, values)?;
-    let buckets = eval_bucket_prepend(buckets, bucket, values)?;
-    values.property_set(brigade, "_buckets", buckets)?;
+    with_collection_cells(values, |values, owners| {
+        let buckets = owners.stage(super::stream_bucket_append::eval_brigade_buckets(brigade, values)?);
+        let buckets = owners.stage(eval_bucket_prepend(buckets, bucket, values)?);
+        values.property_set(brigade, "_buckets", buckets)
+    })?;
     values.null()
 }
 
@@ -62,15 +65,15 @@ fn eval_bucket_prepend(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(buckets)?;
-    let mut result = values.array_new(len + 1)?;
-    let zero = values.int(0)?;
-    result = values.array_set(result, zero, bucket)?;
+    let mut result = EvalArrayBuilder::indexed(values, len + 1)?;
+    result.index(0, |_| Ok(bucket.borrowed()))?;
     for index in 0..len {
-        let old_key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = values.array_get(buckets, old_key)?;
-        let new_key =
-            values.int(i64::try_from(index + 1).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, new_key, value)?;
+        result.update(|values, owners, _| {
+            let old_key = owners.stage(values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?);
+            let value = owners.stage(values.array_get(buckets, old_key)?);
+            let key = owners.stage(values.int(i64::try_from(index + 1).map_err(|_| EvalStatus::RuntimeFatal)?)?);
+            Ok(Some((key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

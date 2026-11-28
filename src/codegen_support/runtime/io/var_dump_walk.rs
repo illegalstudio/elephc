@@ -178,7 +178,7 @@ pub fn emit_var_dump_array_str(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload array pointer
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload index
     emitter.instruction("lsl x12, x11, #4");                                    // index * 16
-    emitter.instruction("add x12, x12, #24");                                   // element base offset = 24 + index*16
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("add x13, x9, x12");                                    // element address
     emitter.instruction("ldr x1, [x13]");                                       // load element string ptr
     emitter.instruction("ldr x2, [x13, #8]");                                   // load element string len
@@ -1414,7 +1414,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     // on, and the hash walker takes its argument in the same register, so this is a tail
     // jump. The conditional branch skips OVER an unconditional one because AArch64 cannot
     // point a conditional branch at an external label.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_var_dump_indexed_packed");                   // packed storage walks inline below
@@ -1429,7 +1429,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #8]");                                   // index = 0
     emitter.instruction("ldr x9, [x0]");                                        // load the element count from the header
     emitter.instruction("str x9, [sp, #16]");                                   // save the element count
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // shift the value_type stamp into the low byte
     emitter.instruction("and x9, x9, #0x0f");                                   // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("str x9, [sp, #24]");                                   // save the element value_type stamp
@@ -1461,7 +1461,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_idx_str");
     emitter.instruction("lsl x15, x14, #4");                                    // index * 16
-    emitter.instruction("add x15, x15, #24");                                   // element base offset = 24 + index*16
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x15", "x15");
     emitter.instruction("add x15, x13, x15");                                   // element address
     emitter.instruction("ldr x1, [x15]");                                       // string ptr → value low
     emitter.instruction("ldr x2, [x15, #8]");                                   // string len → value high
@@ -1503,7 +1503,7 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     // -- hand a run-time promoted array to the hash walker --
     // Same runtime-promotion probe as the AArch64 path; see its comment for why a statically
     // indexed argument can arrive holding hash storage.
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("and rax, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp rax, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_var_dump_indexed_packed");                    // packed storage walks inline below
@@ -1518,7 +1518,7 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // index = 0
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the element count from the header
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the element count
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("shr rax, 8");                                          // shift the value_type stamp into the low byte
     emitter.instruction("and rax, 0x0f");                                       // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the element value_type stamp
@@ -1741,7 +1741,9 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     // -- PHP prints `&` only while the reference cell has another owner --
     emitter.instruction("cmp x5, #11");                                         // does this entry belong to a PHP reference set?
     emitter.instruction("b.ne __rt_vd_hash_value_ready");                       // ordinary entries carry a value directly
-    emitter.instruction("ldr w9, [x3, #-12]");                                  // load the reference cell's owner count
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "x3", ("x9", "w9"), ("x10", "w10"), ("x10", "x11"), "__rt_vd_hash_reference",
+    );
     emitter.instruction("cmp w9, #1");                                          // is the cell shared with a live alias?
     emitter.instruction("b.ls __rt_vd_hash_value_ready");                       // a singleton reference prints as its value
     emitter.instruction("mov x9, #1");                                          // request the `&` marker on this value line
@@ -1833,7 +1835,9 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     // -- PHP prints `&` only while the reference cell has another owner --
     emitter.instruction("cmp r9, 11");                                          // does this entry belong to a PHP reference set?
     emitter.instruction("jne __rt_vd_hash_value_ready_x86");                    // ordinary entries carry a value directly
-    emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");                      // load the reference cell's owner count
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "rcx", ("r10", "r10d"), ("r11", "r11d"), ("r11", "rax"), "__rt_vd_hash_reference_x86",
+    );
     emitter.instruction("cmp r10d, 1");                                         // is the cell shared with a live alias?
     emitter.instruction("jbe __rt_vd_hash_value_ready_x86");                    // a singleton reference prints as its value
     emitter.instruction("mov QWORD PTR [rbp - 80], 1");                         // request the `&` marker on this value line

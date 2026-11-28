@@ -9,6 +9,7 @@
 //! - The bridge always sees raw bytes; this glue applies PHP's base64 option semantics.
 //! - GCM tags use owned heap storage transferred to the caller only for requested writeback.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -37,16 +38,12 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #16");                                     // CBC/ECB PKCS#7 needs at most one extra block
     emitter.instruction("str x9, [sp, #96]");                                   // save bridge output capacity
     emitter.instruction("mov x0, x9");                                          // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp raw ciphertext allocation
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #88]");                                   // retain raw output pointer
     emitter.instruction("str xzr, [sp, #104]");                                 // initialize ciphertext output length
     emitter.instruction("str xzr, [sp, #112]");                                 // initialize tag output length
     emitter.instruction("mov x0, #16");                                         // maximum supported GCM tag capacity
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp tag allocation
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #136]");                                  // retain tag output pointer
 
     emitter.instruction("ldr x10, [sp, #80]");                                  // reload caller field block
@@ -95,8 +92,7 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x10, #104]");                                 // publish produced tag length
     emitter.instruction("b __rt_openssl_encrypt_tag_ready");                    // tag published; skip the non-AEAD discard
     emitter.label("__rt_openssl_encrypt_discard_tag");
-    emitter.instruction("ldr x0, [sp, #136]");                                  // release the unused non-AEAD tag allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 136, 0);
     emitter.label("__rt_openssl_encrypt_tag_ready");
 
     emitter.instruction("ldr x10, [sp, #80]");                                  // recover field block after C call
@@ -106,12 +102,9 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #104]");                                  // base64 input length
     abi::emit_call_label(emitter, "__rt_base64_encode");
     abi::emit_call_label(emitter, "__rt_str_persist");                         // own the encoded result beyond concat scratch
-    emitter.instruction("str x1, [sp, #120]");                                  // save owned base64 pointer across raw free
-    emitter.instruction("str x2, [sp, #128]");                                  // save owned base64 length across raw free
-    emitter.instruction("ldr x0, [sp, #88]");                                   // release intermediate raw ciphertext allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    emitter.instruction("ldr x1, [sp, #120]");                                  // restore owned base64 result pointer
-    emitter.instruction("ldr x2, [sp, #128]");                                  // restore owned base64 result length
+    elephc_memoir::strings::owner_pair::emit_preserve_result_pair(emitter, 120, 0, "rax", |emitter| {
+        elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 88, 0);
+    });
     emitter.instruction("b __rt_openssl_encrypt_done");                         // return the base64-encoded ciphertext
 
     emitter.label("__rt_openssl_encrypt_raw");
@@ -120,10 +113,8 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("b __rt_openssl_encrypt_done");                         // return the raw ciphertext
 
     emitter.label("__rt_openssl_encrypt_fail");
-    emitter.instruction("ldr x0, [sp, #88]");                                   // release unused raw output allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    emitter.instruction("ldr x0, [sp, #136]");                                  // release unused tag output allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 88, 0);
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 136, 0);
     emitter.instruction("mov x1, #0");                                          // null pointer is the string|false failure sentinel
     emitter.instruction("mov x2, #0");                                          // clear failure length
 
@@ -146,22 +137,12 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r9, 16");                                          // CBC/ECB PKCS#7 needs at most one extra block
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save bridge output capacity
     emitter.instruction("mov rax, r9");                                         // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned-string heap-kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp raw ciphertext as owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain raw output pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize ciphertext output length
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize tag output length
     emitter.instruction("mov rax, 16");                                         // maximum supported GCM tag capacity
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned-string heap-kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp tag allocation as owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // retain tag output pointer
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload caller field block
@@ -212,8 +193,7 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10 + 104], r9");                       // publish produced tag length
     emitter.instruction("jmp __rt_openssl_encrypt_tag_ready_linux_x86_64");     // tag published; skip the non-AEAD discard
     emitter.label("__rt_openssl_encrypt_discard_tag_linux_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // release the unused non-AEAD tag allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 0, 64);
     emitter.label("__rt_openssl_encrypt_tag_ready_linux_x86_64");
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover field block after C call
@@ -223,12 +203,9 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // base64 input length
     abi::emit_call_label(emitter, "__rt_base64_encode");
     abi::emit_call_label(emitter, "__rt_str_persist");                         // own encoded result beyond concat scratch
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save owned base64 pointer across raw free
-    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save owned base64 length across raw free
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // release intermediate raw ciphertext
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // restore owned base64 result pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // restore owned base64 result length
+    elephc_memoir::strings::owner_pair::emit_preserve_result_pair(emitter, 0, 48, "rax", |emitter| {
+        elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 0, 16);
+    });
     emitter.instruction("jmp __rt_openssl_encrypt_done_linux_x86_64");          // return the base64-encoded ciphertext
 
     emitter.label("__rt_openssl_encrypt_raw_linux_x86_64");
@@ -237,10 +214,8 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_openssl_encrypt_done_linux_x86_64");          // return the raw ciphertext
 
     emitter.label("__rt_openssl_encrypt_fail_linux_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // release unused raw output allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // release unused tag output allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 0, 16);
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 0, 64);
     emitter.instruction("xor eax, eax");                                        // null pointer is the string|false failure sentinel
     emitter.instruction("xor edx, edx");                                        // clear failure length
 
@@ -286,9 +261,7 @@ fn emit_openssl_decrypt(emitter: &mut Emitter) {
     emitter.instruction("csel x9, x9, x10, hs");                                // allocate a non-null owner for empty plaintext
     emitter.instruction("str x9, [sp, #80]");                                   // save output capacity
     emitter.instruction("mov x0, x9");                                          // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp plaintext allocation
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #72]");                                   // retain plaintext pointer
     emitter.instruction("str xzr, [sp, #88]");                                  // initialize plaintext output length
 
@@ -327,8 +300,7 @@ fn emit_openssl_decrypt(emitter: &mut Emitter) {
     emitter.instruction("b __rt_openssl_decrypt_done");                         // success: skip the failure path
 
     emitter.label("__rt_openssl_decrypt_fail");
-    emitter.instruction("ldr x0, [sp, #72]");                                   // release unused plaintext allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 72, 0);
     emitter.instruction("mov x1, #0");                                          // null pointer is the string|false failure sentinel
     emitter.instruction("mov x2, #0");                                          // clear failure length
     emitter.label("__rt_openssl_decrypt_done");
@@ -369,12 +341,7 @@ fn emit_openssl_decrypt_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_openssl_decrypt_capacity_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save output capacity
     emitter.instruction("mov rax, r9");                                         // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned-string heap-kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp plaintext as owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain plaintext pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize plaintext output length
 
@@ -416,8 +383,7 @@ fn emit_openssl_decrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_openssl_decrypt_done_linux_x86_64");          // success: skip the failure path
 
     emitter.label("__rt_openssl_decrypt_fail_linux_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // release unused plaintext allocation
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    elephc_memoir::strings::owner_pair::emit_release_staged_bytes(emitter, 0, 16);
     emitter.instruction("xor eax, eax");                                        // null pointer is the string|false failure sentinel
     emitter.instruction("xor edx, edx");                                        // clear failure length
     emitter.label("__rt_openssl_decrypt_done_linux_x86_64");

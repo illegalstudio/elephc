@@ -10,6 +10,7 @@
 
 use super::super::*;
 use super::support::*;
+use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
 
 /// A by-value foreach receiver is retired after every normal or abrupt body exit.
 ///
@@ -72,7 +73,9 @@ fn program_return_retains_borrowed_scope_storage() {
     assert_eq!(returned, stored);
     assert!(!returned.is_borrowed());
     assert_eq!(values.cell_owners[&(stored.as_ptr() as usize)], 2);
-    for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+    crate::interpreter::scope_cells::retire_replaced_scope_cells(
+        scope.drain_owned_cells().transfer(), &mut context, &mut values,
+    ).unwrap();
     assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 1);
     values.release(returned).unwrap();
     assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 0);
@@ -122,7 +125,9 @@ fn pending_return_survives_finally_storage_mutations_and_overrides() {
         let EvalOutcome::Value(returned) = outcome else { panic!("expected return: {source}"); };
         assert_eq!(returned == original, kept, "{source}");
         assert!(!returned.is_borrowed(), "{source}");
-        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], usize::from(kept), "{source}");
         assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 1, "{source}");
         values.release(returned).unwrap();
@@ -151,7 +156,9 @@ fn thrown_storage_values_keep_an_independent_control_owner() {
         let EvalOutcome::Throwable(thrown) = outcome else { panic!("expected throw: {source}"); };
         assert_eq!(thrown, original, "{source}");
         assert!(!thrown.is_borrowed(), "{source}");
-        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], 1, "{source}");
         values.release(thrown).unwrap();
         assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], 0, "{source}");
@@ -190,12 +197,14 @@ fn native_function_ref_staging_releases_only_its_current_owner() {
                 let current_word = current.as_ptr() as u64;
                 let slot = if string {
                     BoundNativeFunctionRefSlot::RawString {
-                        original: [original_word, 3], slot: Box::new([current_word, 3]), target: None,
+                        original: InvokerSlotWords::new(original_word, 3),
+                        slot: InvokerSlot::pin(InvokerSlotWords::new(current_word, 3)), target: None,
                         force_writeback: false,
                     }
                 } else {
                     BoundNativeFunctionRefSlot::OwnedRawWord {
-                        original: original_word, slot: Box::new([current_word, 0]), target: None,
+                        original: original_word,
+                        slot: InvokerSlot::pin(InvokerSlotWords::new(current_word, 0)), target: None,
                     }
                 };
                 let bound = BoundNativeFunctionArgs {
@@ -553,7 +562,7 @@ $closure = function() {};"#,
 
     for (method_name, expected) in [("hit", true), ("missing", false)] {
         let method = values.string(method_name).unwrap();
-        let callback = values.alloc(FakeValue::Array(vec![object.owned(), method]));
+        let callback = values.alloc(FakeValue::Array(vec![RuntimeCellHandle::from_raw(object.as_ptr()), method]));
         values.retain(object).unwrap();
         let releases = values.releases.len();
         assert_eq!(
@@ -702,6 +711,39 @@ fn activation_surplus_snapshot_releases_its_own_lease() {
     assert!(context.current_function_args().is_none());
 }
 
+/// Activation cleanup retires every surplus owner and the unpublished result after an error.
+#[test]
+fn activation_surplus_cleanup_continues_after_the_first_release_error() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let first = values.string("first-extra").unwrap();
+    let second = values.string("second-extra").unwrap();
+    let result = values.int(42).unwrap();
+    let binding = bind_evaluated_function_args_with_ref_mode(
+        "f",
+        "f",
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        positional_args(vec![first.borrowed(), second.borrowed()]),
+        EvalByRefBindingMode::RequireTarget,
+        &mut context,
+        &mut values,
+    )
+    .unwrap();
+    context.push_function_args(binding.frame);
+    values.fail_release_call = Some(values.releases.len());
+
+    assert_eq!(
+        release_function_args(Ok(result), &mut context, &mut values),
+        Err(EvalStatus::UncaughtThrowable)
+    );
+    assert_eq!(values.releases, vec![first, second, result]);
+    assert!(context.current_function_args().is_none());
+}
+
 /// Borrowed reads acquire a temporary lease while freshly allocated scalar operands are consumed.
 #[test]
 fn scalar_operand_cleanup_preserves_borrowed_scope_owners() {
@@ -786,7 +828,10 @@ fn owned_assignments_balance_identical_reference_cells() {
         execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
         assert_eq!(values.retains.iter().filter(|cell| **cell == source).count(), 2);
         assert_eq!(values.releases.iter().filter(|cell| **cell == source).count(), 2);
-        assert_eq!(scope.drain_owned_cells(), vec![source]);
+        assert_eq!(
+            scope.drain_owned_cells().iter().collect::<Vec<_>>(),
+            vec![source],
+        );
     }
 }
 

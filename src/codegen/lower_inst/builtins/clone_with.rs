@@ -613,7 +613,11 @@ fn emit_declared_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
-    abi::emit_load_from_address(ctx.emitter, &class_id_reg, payload_reg, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        ctx.emitter,
+        &class_id_reg,
+        payload_reg,
+    );
     for ((class_id, _), label) in enums.iter().zip(labels.iter()) {
         emit_branch_if_reg_equals_immediate(ctx, &class_id_reg, *class_id, label);
     }
@@ -775,7 +779,11 @@ fn emit_clone_hook_class_dispatch(
         Arch::AArch64 => ("x9", "x10"),
         Arch::X86_64 => ("r11", "r10"),
     };
-    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        ctx.emitter,
+        class_id_reg,
+        receiver_reg,
+    );
     for (candidate, label) in candidates.iter().zip(labels.iter()) {
         abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
         ctx.emitter

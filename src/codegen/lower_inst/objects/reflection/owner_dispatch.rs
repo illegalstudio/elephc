@@ -200,7 +200,7 @@ pub(super) fn emit_runtime_object_class_dispatch(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz x0, {}", fallback_label));    // use fallback metadata for null object pointers
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the object's concrete runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "x9", "x0");
             for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
                 ctx.emitter.instruction("cmp x9, x10");                         // compare the object class id with this reflection candidate
@@ -211,7 +211,7 @@ pub(super) fn emit_runtime_object_class_dispatch(
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // use fallback metadata for null object pointers
             ctx.emitter.instruction(&format!("je {}", fallback_label));         // skip class-id loading when the object pointer is null
-            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the object's concrete runtime class id
+            elephc_memoir::values::object_storage::emit_load_class_id(ctx.emitter, "r11", "rax");
             for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
                 ctx.emitter.instruction("cmp r11, r10");                        // compare the object class id with this reflection candidate

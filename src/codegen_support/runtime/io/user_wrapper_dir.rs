@@ -25,6 +25,8 @@
 //!   result is normalized to a null pointer so `readdir()` boxes end-of-directory
 //!   as `false` (a real entry name is never empty).
 
+use elephc_memoir::buffers::stream_tables;
+
 use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -92,15 +94,14 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwod_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwod_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_uwod_none");                                 // no registered wrapper matched the scheme
-    emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
-    emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x12", "x11", "x10");
+    stream_tables::emit_load_registration_field(emitter, "x13", "x12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x13, __rt_uwod_slot_next");                        // empty slot — skip it
-    emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x14", "x12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x14, x9");                                         // does the stored length match the scheme length?
     emitter.instruction("b.ne __rt_uwod_slot_next");                            // length mismatch — try the next slot
     emitter.instruction("mov x15, #0");                                         // byte compare index
@@ -119,14 +120,14 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
 
     // -- matched scheme: x12 = registry slot base --
     emitter.label("__rt_uwod_match");
-    emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
-    emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
+    stream_tables::emit_load_registration_field(emitter, "x1", "x12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "x2", "x12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uwod_fail_noobj");                        // unknown class → false (no object to free)
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper instance
 
     // -- look up dir_opendir (vtable slot 19) for the object's class --
-    emitter.instruction("ldr x9, [x0]");                                        // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable
     emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
@@ -148,18 +149,9 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_uwod_fail");                              // dir_opendir returned false → free obj, false
 
     // -- success: allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("mov x12, #0");                                         // start scanning from handle slot 0
-    emitter.label("__rt_uwod_hslot");
-    emitter.instruction("cmp x12, #256");                                       // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("b.ge __rt_uwod_fail");                                 // no free handle slot → free obj, false
-    emitter.instruction("ldr x13, [x10, x12, lsl #3]");                         // load slot — null means free
-    emitter.instruction("cbz x13, __rt_uwod_hfound");                           // free slot found
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next handle slot
-    emitter.instruction("b __rt_uwod_hslot");                                   // keep scanning for a free handle slot
-    emitter.label("__rt_uwod_hfound");
+    stream_tables::emit_find_wrapper_slot(emitter, "__rt_uwod_hslot", "__rt_uwod_hfound", "__rt_uwod_fail");
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object
-    emitter.instruction("str x13, [x10, x12, lsl #3]");                         // _user_wrapper_handles[slot] = obj
+    stream_tables::emit_publish_wrapper_owner(emitter);
     emitter.instruction("mov x0, #0x4000");                                     // low 16 bits of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl x0, x0, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("orr x0, x0, x12");                                     // synthetic fd = USER_WRAPPER_FD_BASE | slot index
@@ -218,18 +210,15 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwod_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // base of the registered-wrapper table
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwod_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_uwod_none_x86");                              // no registered wrapper matched the scheme
-    emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r12, r10");                                        // slot base = table + offset
-    emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r12", "r11", "r10");
+    stream_tables::emit_load_registration_field(emitter, "r13", "r12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r13, r13");                                       // is this slot empty?
     emitter.instruction("jz __rt_uwod_slotnext_x86");                           // empty slot — skip it
-    emitter.instruction("mov r14, QWORD PTR [r12 + 8]");                        // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "r14", "r12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp r14, r9");                                         // does the stored length match the scheme length?
     emitter.instruction("jne __rt_uwod_slotnext_x86");                          // length mismatch — try the next slot
     emitter.instruction("xor r15, r15");                                        // byte compare index
@@ -248,15 +237,15 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
 
     // -- matched scheme: r12 = registry slot base --
     emitter.label("__rt_uwod_match_x86");
-    emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
-    emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length from the registry slot
+    stream_tables::emit_load_registration_field(emitter, "rax", "r12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "rdx", "r12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
     emitter.instruction("test rax, rax");                                       // did instantiation fail?
     emitter.instruction("jz __rt_uwod_failnoobj_x86");                          // unknown class → false (no object to free)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the wrapper instance
 
     // -- look up dir_opendir (vtable slot 19) for the object's class --
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rax");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
     emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
@@ -281,19 +270,9 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uwod_fail_x86");                               // dir_opendir returned false → free obj, false
 
     // -- success: allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("xor r12, r12");                                        // start scanning from handle slot 0
-    emitter.label("__rt_uwod_hslot_x86");
-    emitter.instruction("cmp r12, 256");                                        // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("jge __rt_uwod_fail_x86");                              // no free handle slot → free obj, false
-    emitter.instruction("mov r13, QWORD PTR [r10 + r12 * 8]");                  // load slot — null means free
-    emitter.instruction("test r13, r13");                                       // is this slot free?
-    emitter.instruction("jz __rt_uwod_hfound_x86");                             // free slot found
-    emitter.instruction("inc r12");                                             // advance to the next handle slot
-    emitter.instruction("jmp __rt_uwod_hslot_x86");                             // keep scanning for a free handle slot
-    emitter.label("__rt_uwod_hfound_x86");
+    stream_tables::emit_find_wrapper_slot(emitter, "__rt_uwod_hslot_x86", "__rt_uwod_hfound_x86", "__rt_uwod_fail_x86");
     emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload the wrapper object
-    emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
+    stream_tables::emit_publish_wrapper_owner(emitter);
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
     emitter.instruction("jmp __rt_uwod_ret_x86");                               // return the synthetic directory descriptor
@@ -337,12 +316,11 @@ pub fn emit_user_wrapper_dir_readdir(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "x10", "x9", "x0");
     emitter.instruction("cbz x0, __rt_uwrd_empty");                             // empty slot → end of directory
 
     // -- resolve dir_readdir (vtable slot 20) for the object's class --
-    emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
     emitter.instruction(&format!("ldr x12, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x11 is reused
@@ -394,13 +372,12 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "r10", "r9", "rdi");
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // empty slot → end of directory
 
     // -- resolve dir_readdir (vtable slot 20) for the object's class --
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
     emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
@@ -472,12 +449,11 @@ pub fn emit_user_wrapper_dir_closedir(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "x10", "x9", "x0");
     emitter.instruction("cbz x0, __rt_uwcd_clear");                             // empty slot → just clear and report success
 
     // -- resolve dir_closedir (vtable slot 21) for the object's class --
-    emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
     emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_CLOSEDIR_OFFSET)); // load the dir_closedir method pointer (slot 21)
@@ -489,8 +465,7 @@ pub fn emit_user_wrapper_dir_closedir(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic file descriptor
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the freed handle slot
+    stream_tables::emit_clear_wrapper_slot(emitter, "x10", "x9");
     emitter.instruction("mov x0, #1");                                          // closedir() on a wrapper always reports success
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
@@ -511,13 +486,12 @@ fn emit_user_wrapper_dir_closedir_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "r10", "r9", "rdi");
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwcd_clear_x86");                              // empty slot → just clear and report success
 
     // -- resolve dir_closedir (vtable slot 21) for the object's class --
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_CLOSEDIR_OFFSET)); // load the dir_closedir method pointer (slot 21)
@@ -530,8 +504,7 @@ fn emit_user_wrapper_dir_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic file descriptor
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear the freed handle slot
+    stream_tables::emit_clear_wrapper_slot(emitter, "r10", "r9");
     emitter.instruction("mov eax, 1");                                          // closedir() on a wrapper always reports success
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -560,12 +533,11 @@ pub fn emit_user_wrapper_dir_rewinddir(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "x10", "x9", "x0");
     emitter.instruction("cbz x0, __rt_uwrw_false");                             // empty slot → false
 
     // -- resolve dir_rewinddir (vtable slot 22) for the object's class --
-    emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
     emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_REWINDDIR_OFFSET)); // load the dir_rewinddir method pointer (slot 22)
@@ -596,13 +568,12 @@ fn emit_user_wrapper_dir_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "r10", "r9", "rdi");
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwrw_false_x86");                              // empty slot → false
 
     // -- resolve dir_rewinddir (vtable slot 22) for the object's class --
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_REWINDDIR_OFFSET)); // load the dir_rewinddir method pointer (slot 22)

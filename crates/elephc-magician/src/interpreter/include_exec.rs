@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::parse_cache::parse_fragment_cached;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 use crate::script_cache::{load_script, ScriptSegment};
 
 /// Copies and releases the source operand before parsing nested eval in the current scope.
@@ -29,10 +30,12 @@ pub(super) fn eval_nested_eval(
     let [code] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let source = eval_owned_expr(code, context, scope, values)?;
-    let code = values.string_bytes(source);
-    let released = eval_release_value(context, values, source);
-    let code = code.and_then(|code| released.map(|()| code))?;
+    let source = RuntimeOwnerSlot::new(eval_owned_expr(code, context, scope, values)?);
+    let code = with_runtime_owners(&source, || {
+        let code = values.string_bytes(source.borrowed());
+        let released = eval_release_value(context, values, source.take());
+        code.and_then(|code| released.map(|()| code))
+    })?;
     let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
     context.push_eval_backtrace_boundary();
     let outcome = with_executable_cache_key(&code, || {
@@ -51,8 +54,12 @@ pub(super) fn eval_include_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let path = eval_expr(path, context, scope, values)?;
-    let path = eval_path_string(path, values)?;
+    let path = RuntimeOwnerSlot::new(eval_owned_expr(path, context, scope, values)?);
+    let path = with_runtime_owners(&path, || {
+        let decoded = eval_path_string(path.borrowed(), values);
+        let released = eval_release_value(context, values, path.take());
+        decoded.and_then(|path| released.map(|()| path))
+    })?;
     let resolved_path = eval_resolve_include_path(&path, context);
     let include_key = eval_include_key(&resolved_path);
     if once && context.has_included_file(&include_key) {

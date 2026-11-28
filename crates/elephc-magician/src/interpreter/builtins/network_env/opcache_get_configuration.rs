@@ -28,6 +28,7 @@
 //!   maintained profile (PHP 8.5), matching the native default target.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 #[path = "../../../../../../src/opcache/directives.rs"]
 mod opcache_directive_table;
@@ -50,18 +51,11 @@ pub(in crate::interpreter) fn eval_opcache_get_configuration_result(
     if let Some(refused) = super::opcache_file_functions::eval_opcache_api_refusal(values)? {
         return Ok(refused);
     }
-    let directives = build_directives(values)?;
-    let version = build_version(values)?;
-    let blacklist = build_blacklist(values)?;
-
-    let mut configuration = values.assoc_new(3)?;
-    let directives_key = values.string("directives")?;
-    configuration = values.array_set(configuration, directives_key, directives)?;
-    let version_key = values.string("version")?;
-    configuration = values.array_set(configuration, version_key, version)?;
-    let blacklist_key = values.string("blacklist")?;
-    configuration = values.array_set(configuration, blacklist_key, blacklist)?;
-    Ok(configuration)
+    let mut configuration = EvalArrayBuilder::assoc(values, 3)?;
+    configuration.string("directives", build_directives)?;
+    configuration.string("version", build_version)?;
+    configuration.string("blacklist", build_blacklist)?;
+    Ok(configuration.finish())
 }
 
 /// Builds the `'blacklist'` sub-array from the patterns `opcache.blacklist_filename` resolved.
@@ -73,13 +67,11 @@ fn build_blacklist(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let patterns = crate::script_cache::blacklist_patterns();
-    let mut blacklist = values.array_new(patterns.len())?;
+    let mut blacklist = EvalArrayBuilder::indexed(values, patterns.len())?;
     for (index, pattern) in patterns.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let value = values.string(pattern)?;
-        blacklist = values.array_set(blacklist, key, value)?;
+        blacklist.index(index, |values| values.string(pattern))?;
     }
-    Ok(blacklist)
+    Ok(blacklist.finish())
 }
 
 /// Builds the `'directives'` sub-array from the shared directive matrix.
@@ -92,16 +84,14 @@ fn build_directives(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let entries = opcache_directives(crate::eval_php_profile::eval_php_version_id());
-    let mut directives = values.assoc_new(entries.len())?;
+    let mut directives = EvalArrayBuilder::assoc(values, entries.len())?;
     for (name, value) in &entries {
-        let key = values.string(name)?;
-        let value = match ini_set_override(name) {
-            Some(value) => build_directive_value(&value, values)?,
-            None => build_directive_value(value, values)?,
-        };
-        directives = values.array_set(directives, key, value)?;
+        directives.string(name, |values| match ini_set_override(name) {
+            Some(value) => build_directive_value(&value, values),
+            None => build_directive_value(value, values),
+        })?;
     }
-    Ok(directives)
+    Ok(directives.finish())
 }
 
 /// The typed value an `ini_set()` installed for directive `name`, if any.
@@ -136,13 +126,9 @@ fn build_directive_value(
 
 /// Builds the `'version'` sub-array (`version` + `opcache_product_name`).
 fn build_version(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut version = values.assoc_new(2)?;
-    let version_key = values.string("version")?;
+    let mut version = EvalArrayBuilder::assoc(values, 2)?;
     let spelling = opcache_version_string(crate::eval_php_profile::eval_php_version_id());
-    let version_value = values.string(spelling)?;
-    version = values.array_set(version, version_key, version_value)?;
-    let product_key = values.string("opcache_product_name")?;
-    let product_value = values.string(OPCACHE_PRODUCT_NAME)?;
-    version = values.array_set(version, product_key, product_value)?;
-    Ok(version)
+    version.string("version", |values| values.string(spelling))?;
+    version.string("opcache_product_name", |values| values.string(OPCACHE_PRODUCT_NAME))?;
+    Ok(version.finish())
 }

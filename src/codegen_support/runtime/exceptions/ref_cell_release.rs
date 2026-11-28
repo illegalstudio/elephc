@@ -1,96 +1,19 @@
 //! Purpose:
-//! Retires an owned local reference cell even when its payload destructor throws.
+//! Preserves compiler imports and tests for Memoir boxed-value ownership.
 //!
 //! Called from:
-//! - The typed ABI release helper used by explicit reference retirement and function epilogues.
+//! - Compiler runtime emission and memory integration tests.
 //!
 //! Key details:
-//! - C arguments are a nullable unary payload-release entry, the owned cell pointer, and a defer flag.
-//! - The cell is freed before an accumulated exception rejoins the enclosing exception chain.
+//! - Assembly implementation lives in the Memoir codegen feature.
 
+pub use elephc_memoir::reference_cells::local_release::*;
+
+#[cfg(test)]
+use crate::codegen_support::{emit::Emitter};
+
+#[cfg(test)]
 use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-
-const FRAME: usize = 64;
-const ENTRY: usize = 8;
-const CELL: usize = 16;
-const THROWN: usize = 24;
-const DEFER: usize = 32;
-
-/// Releases one cell owner and retires its payload and allocation only after the final alias is gone.
-pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    let scratch = abi::secondary_scratch_reg(emitter);
-    emitter.blank();
-    emitter.label_global("__rt_local_ref_cell_release");
-    abi::emit_frame_prologue(emitter, FRAME);
-    for (index, offset) in [ENTRY, CELL, DEFER].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
-    }
-    abi::emit_store_zero_to_local_slot(emitter, THROWN);
-    abi::load_at_offset(emitter, result, CELL);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_return");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("ldr w9, [x0, #-12]");                          // load the reference cell's current owner count
-            emitter.instruction("cbz w9, __rt_local_ref_cell_release_return");  // ignore reentrant retirement of an already released cell
-            emitter.instruction("subs w9, w9, #1");                             // retire this alias without releasing shared contents
-            emitter.instruction("str w9, [x0, #-12]");                          // publish the remaining owner count
-            emitter.instruction("b.ne __rt_local_ref_cell_release_candidate");  // other aliases still own the cell and its value
-        }
-        Arch::X86_64 => {
-            emitter.instruction("cmp DWORD PTR [rax - 12], 0");                 // detect reentrant retirement before decrementing ownership
-            emitter.instruction("je __rt_local_ref_cell_release_return");       // already released cells own no payload
-            emitter.instruction("sub DWORD PTR [rax - 12], 1");                 // retire this alias from the uniform heap header
-            emitter.instruction("jne __rt_local_ref_cell_release_candidate");   // keep the cell and its contents while another owner remains
-        }
-    }
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("ldrb w9, [x0, #-8]");                          // distinguish managed property cells from typed local fallback cells
-            emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}")); // managed cells carry their own payload release metadata
-            emitter.instruction("b.eq __rt_local_ref_cell_release_managed");    // release the payload using its current cell shape
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!(                                       // managed cells carry their own payload release metadata
-                "cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}"
-            ));
-            emitter.instruction("je __rt_local_ref_cell_release_managed");      // release the payload using its current cell shape
-        }
-    }
-    abi::load_at_offset(emitter, result, ENTRY);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_free");
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), ENTRY);
-    abi::load_at_offset(emitter, scratch, CELL);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 1), scratch, 0);
-    abi::emit_jump(emitter, "__rt_local_ref_cell_release_invoke");
-    emitter.label("__rt_local_ref_cell_release_managed");
-    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "__rt_reference_cell_value_release");
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), CELL);
-    emitter.label("__rt_local_ref_cell_release_invoke");
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 2), THROWN);
-    abi::emit_call_label(emitter, "__rt_cleanup_invoke");
-    emitter.label("__rt_local_ref_cell_release_free");
-    abi::load_at_offset(emitter, result, CELL);
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    abi::load_at_offset(emitter, result, THROWN);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_return");
-    let older = match emitter.target.arch { Arch::AArch64 => "x1", Arch::X86_64 => "rdi" };
-    abi::emit_load_symbol_to_reg(emitter, older, "_exc_value", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_call_label(emitter, "__rt_exception_chain");
-    abi::load_at_offset(emitter, result, THROWN);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
-    abi::load_at_offset(emitter, result, DEFER);
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_local_ref_cell_release_return");
-    abi::emit_frame_restore(emitter, FRAME);
-    abi::emit_jump(emitter, "__rt_throw_current");
-    emitter.label("__rt_local_ref_cell_release_candidate");
-    abi::emit_call_label(emitter, "__rt_gc_note_candidate");
-    emitter.label("__rt_local_ref_cell_release_return");
-    abi::emit_frame_restore(emitter, FRAME);
-    abi::emit_return(emitter);
-}
 
 #[cfg(test)]
 mod tests {

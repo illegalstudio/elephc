@@ -55,7 +55,7 @@ fn emit_mixed_array_append_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x11", NULL_SENTINEL);
     emitter.instruction("cmp x10, x11");                                        // does the payload carry the in-band null-container sentinel?
     emitter.instruction("b.eq __rt_mixed_array_append_autovivify");             // sentinels are PHP null, never array pointers
-    emitter.instruction("ldr x1, [x10]");                                       // use the current logical length as the append key
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x1", "x10");
     emitter.instruction("b __rt_mixed_array_append_set");                       // delegate conversion, COW, growth, and ownership transfer
 
     emitter.label("__rt_mixed_array_append_assoc");
@@ -70,7 +70,7 @@ fn emit_mixed_array_append_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("bl __rt_hash_append");                                 // insert at PHP's next automatic integer key
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning Mixed cell
-    emitter.instruction("str x0, [x9, #8]");                                    // publish the possibly reallocated hash pointer
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
     emitter.instruction("b __rt_mixed_array_append_done");                      // value ownership was consumed by hash_append
 
     emitter.label("__rt_mixed_array_append_autovivify");
@@ -136,7 +136,7 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "r11", NULL_SENTINEL);
     emitter.instruction("cmp r10, r11");                                        // does the payload carry the in-band null-container sentinel?
     emitter.instruction("je __rt_mixed_array_append_autovivify");               // sentinels are PHP null, never array pointers
-    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // use the current logical length as the append key
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rsi", "r10");
     emitter.instruction("jmp __rt_mixed_array_append_set");                     // delegate conversion, COW, growth, and ownership transfer
 
     emitter.label("__rt_mixed_array_append_assoc");
@@ -152,7 +152,7 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, 7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("call __rt_hash_append");                               // insert at PHP's next automatic integer key
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the possibly reallocated hash pointer
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("jmp __rt_mixed_array_append_done");                    // value ownership was consumed by hash_append
 
     emitter.label("__rt_mixed_array_append_autovivify");

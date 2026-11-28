@@ -27,9 +27,10 @@ pub(super) fn emit_property_store(
     if is_pointer_sized_property_type(&slot.php_type)
         && is_pointer_slot_null_sentinel(ctx, value, &value_ty)?
     {
-        release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
-        abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset);
-        abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+        publish_declared_property(ctx, slot, base_reg, |emitter| {
+            abi::emit_store_zero_to_address(emitter, base_reg, slot.offset);
+            abi::emit_store_zero_to_address(emitter, base_reg, slot.offset + 8);
+        });
         return Ok(());
     }
     match slot.php_type.codegen_repr() {
@@ -38,15 +39,10 @@ pub(super) fn emit_property_store(
             abi::emit_push_reg(ctx.emitter, base_reg);
             load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
-            release_previous_property_value(
-                ctx,
-                base_reg,
-                &slot.php_type,
-                slot.offset,
-                Some(&slot.php_type),
-            );
-            abi::emit_store_to_address(ctx.emitter, ptr_reg, base_reg, slot.offset);
-            abi::emit_store_to_address(ctx.emitter, len_reg, base_reg, slot.offset + 8);
+            publish_declared_property(ctx, slot, base_reg, |emitter| {
+                abi::emit_store_to_address(emitter, ptr_reg, base_reg, slot.offset);
+                abi::emit_store_to_address(emitter, len_reg, base_reg, slot.offset + 8);
+            });
         }
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
@@ -81,15 +77,10 @@ pub(super) fn emit_property_store(
             abi::emit_push_reg(ctx.emitter, base_reg);
             load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
-            release_previous_property_value(
-                ctx,
-                base_reg,
-                &slot.php_type,
-                slot.offset,
-                Some(&slot.php_type),
-            );
-            abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
-            abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+            publish_declared_property(ctx, slot, base_reg, |emitter| {
+                abi::emit_store_to_address(emitter, int_reg, base_reg, slot.offset);
+                abi::emit_store_zero_to_address(emitter, base_reg, slot.offset + 8);
+            });
         }
         _ => {
             return Err(CodegenIrError::unsupported(format!(
@@ -140,11 +131,11 @@ pub(super) fn store_mutated_container_property(
             ctx,
             pointer_reg,
             &slot.php_type,
-            &value_ty,
         )?;
     } else {
-        release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, Some(&value_ty));
-        abi::emit_store_to_address(ctx.emitter, value_reg, base_reg, slot.offset);
+        publish_declared_property(ctx, slot, base_reg, |emitter| {
+            abi::emit_store_to_address(emitter, value_reg, base_reg, slot.offset);
+        });
     }
     Ok(())
 }
@@ -335,20 +326,16 @@ pub(super) fn emit_reference_property_write(
         ctx,
         pointer_reg,
         &slot.php_type,
-        &slot.php_type,
     )
 }
 
 /// Publishes a reference-property replacement before retiring the old pointee.
 ///
-/// The incoming result and cell address are saved while the old pointer is snapshotted. The new
-/// value becomes visible to every alias before cleanup runs user code, and the old owner is then
-/// retired through the exception-preserving cleanup boundary.
+/// The new value becomes visible to every alias before cleanup runs user code.
 pub(super) fn publish_reference_cell_result_then_release_previous(
     ctx: &mut FunctionContext<'_>,
     pointer_reg: &str,
     prop_ty: &PhpType,
-    incoming_result_ty: &PhpType,
 ) -> Result<()> {
     let prop_ty = prop_ty.codegen_repr();
     if prop_ty == PhpType::Mixed {
@@ -362,22 +349,13 @@ pub(super) fn publish_reference_cell_result_then_release_previous(
     let releases_value =
         matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();
     if !releases_value {
-        return store_current_result_to_reference_cell(ctx, pointer_reg, &prop_ty);
+        return store_current_result_to_reference_cell(ctx.emitter, pointer_reg, &prop_ty);
     }
-    abi::emit_push_result_value(ctx.emitter, &incoming_result_ty.codegen_repr());
-    abi::emit_push_reg(ctx.emitter, pointer_reg);
-    abi::emit_load_from_address(
+    elephc_memoir::symbol_owners::emit_publish_address_owner(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        pointer_reg,
-        0,
-    );
-    let old_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_reg_move(ctx.emitter, old_reg, abi::int_result_reg(ctx.emitter));
-    abi::emit_pop_reg(ctx.emitter, pointer_reg);
-    restore_property_store_result(ctx, &incoming_result_ty.codegen_repr());
-    store_current_result_to_reference_cell(ctx, pointer_reg, &prop_ty)?;
-    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), old_reg);
+        pointer_reg, 0,
+        |emitter| store_current_result_to_reference_cell(emitter, pointer_reg, &prop_ty),
+    )?;
     if prop_ty == PhpType::Str {
         abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
     } else {
@@ -399,35 +377,35 @@ pub(super) fn publish_reference_cell_result_then_release_previous(
 }
 
 /// Stores the current result registers into a reference cell.
-pub(super) fn store_current_result_to_reference_cell(
-    ctx: &mut FunctionContext<'_>,
+fn store_current_result_to_reference_cell(
+    emitter: &mut crate::codegen::emit::Emitter,
     pointer_reg: &str,
     prop_ty: &PhpType,
 ) -> Result<()> {
     match prop_ty.codegen_repr() {
         PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_store_to_address(ctx.emitter, ptr_reg, pointer_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, len_reg, pointer_reg, 8);
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_store_to_address(emitter, ptr_reg, pointer_reg, 0);
+            abi::emit_store_to_address(emitter, len_reg, pointer_reg, 8);
         }
         PhpType::Float => {
             abi::emit_store_to_address(
-                ctx.emitter,
-                abi::float_result_reg(ctx.emitter),
+                emitter,
+                abi::float_result_reg(emitter),
                 pointer_reg,
                 0,
             );
         }
         PhpType::TaggedScalar => {
             abi::emit_store_to_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
+                emitter,
+                abi::int_result_reg(emitter),
                 pointer_reg,
                 0,
             );
             abi::emit_store_to_address(
-                ctx.emitter,
-                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
+                emitter,
+                crate::codegen::sentinels::tagged_scalar_tag_reg(emitter),
                 pointer_reg,
                 8,
             );
@@ -439,8 +417,8 @@ pub(super) fn store_current_result_to_reference_cell(
             ) =>
         {
             abi::emit_store_to_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
+                emitter,
+                abi::int_result_reg(emitter),
                 pointer_reg,
                 0,
             );
@@ -465,42 +443,29 @@ pub(super) fn reference_pointer_reg(ctx: &FunctionContext<'_>, base_reg: &str) -
     }
 }
 
-/// Releases the old value in a declared property slot before overwriting it.
-pub(super) fn release_previous_property_value(
+/// Publishes all words of the property before retiring its displaced owner.
+fn publish_declared_property(
     ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
     base_reg: &str,
-    prop_ty: &PhpType,
-    offset: usize,
-    preserve_result_ty: Option<&PhpType>,
+    publish: impl FnOnce(&mut crate::codegen::emit::Emitter),
 ) {
-    let prop_ty = prop_ty.codegen_repr();
-    let releases_value =
-        matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();
-    if !releases_value {
+    let prop_ty = slot.php_type.codegen_repr();
+    let release = match &prop_ty {
+        PhpType::Str => Some("__rt_heap_free_safe"),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some("__rt_decref_any"),
+        ty => abi::refcount_release_helper(ty),
+    };
+    let Some(release) = release else {
+        publish(ctx.emitter);
         return;
-    }
-    if let Some(result_ty) = preserve_result_ty {
-        abi::emit_push_result_value(ctx.emitter, &result_ty.codegen_repr());
-    }
-    abi::emit_push_reg(ctx.emitter, base_reg);
-    abi::emit_load_from_address(
+    };
+    elephc_memoir::symbol_owners::emit_publish_address_owner(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        base_reg,
-        offset,
+        base_reg, slot.offset,
+        publish,
     );
-    match prop_ty {
-        PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe"),
-        PhpType::Callable => callable_descriptor::emit_release_current_descriptor(ctx.emitter),
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-        }
-        ty => abi::emit_decref_if_refcounted(ctx.emitter, &ty),
-    }
-    abi::emit_pop_reg(ctx.emitter, base_reg);
-    if let Some(result_ty) = preserve_result_ty {
-        restore_property_store_result(ctx, &result_ty.codegen_repr());
-    }
+    abi::emit_call_label(ctx.emitter, release);
 }
 
 /// Restores a property-store result value saved around previous-slot release.

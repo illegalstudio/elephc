@@ -10,6 +10,7 @@
 //! - Candidate retirement contains Throwable exits in the validation context's pending slot.
 
 use super::*;
+use elephc_memoir::owner_layout::NativeValidationContext;
 
 /// Emits the three native callbacks paired with the protected declaration coercer.
 pub(super) fn emit(emitter: &mut Emitter) {
@@ -99,25 +100,13 @@ fn emit_identical(emitter: &mut Emitter) {
 
 /// Consumes a candidate inside the same Throwable boundary used for declaration coercion.
 fn emit_release(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    let done = "__rt_reference_validation_release_done";
-    emitter.label_global("__rt_reference_validation_release");
-    abi::emit_frame_prologue(emitter, 32);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), 8);
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("add x2, x2, #8"),                 // accumulate a contained Throwable in this validation's owned slot
-        Arch::X86_64 => emitter.instruction("add rdx, 8"),                      // accumulate a contained Throwable in this validation's owned slot
-    }
-    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "__rt_decref_mixed");
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
-    abi::emit_call_label(emitter, "__rt_cleanup_invoke");
-    abi::emit_branch_if_int_result_zero(emitter, done);
-    abi::emit_load_int_immediate(emitter, result, 2);
-    emitter.label(done);
-    abi::emit_frame_restore(emitter, 32);
-    abi::emit_return(emitter);
+    elephc_memoir::reference_cells::validated_commit::emit_release(
+        emitter,
+        "__rt_reference_validation_release",
+        elephc_memoir::RecordOffset::new(NativeValidationContext::PENDING_THROWABLE),
+        "__rt_decref_mixed",
+        super::validation_commit::THROW_STATUS,
+    );
 }
 
 #[cfg(test)]

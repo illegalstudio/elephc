@@ -560,14 +560,7 @@ Lparse_url_component_fragment:
 Lparse_url_component_string:
     bl Lparse_url_copy_component
     stp x1, x2, [sp, #176]
-    mov x0, #24
-    bl __rt_heap_alloc
-    mov x9, #5
-    str x9, [x0, #-8]
-    mov x9, #1
-    str x9, [x0]
-    ldp x10, x11, [sp, #176]
-    stp x10, x11, [x0, #8]
+{{OWNED_STRING_BOX}}
     b Lparse_url_return
 
 Lparse_url_component_port:
@@ -683,15 +676,7 @@ Lparse_url_array_fragment:
     str x0, [sp, #184]
 
 Lparse_url_box_array:
-    mov x0, #24
-    bl __rt_heap_alloc
-    mov x9, #5
-    str x9, [x0, #-8]
-    mov x9, #5
-    str x9, [x0]
-    ldr x9, [sp, #184]
-    str x9, [x0, #8]
-    str xzr, [x0, #16]
+{{OWNED_HASH_BOX}}
 
 Lparse_url_return:
     ldp x29, x30, [sp, #208]

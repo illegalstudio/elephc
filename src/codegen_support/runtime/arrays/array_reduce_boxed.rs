@@ -11,10 +11,9 @@
 //! - A native exception boundary owns every intermediate, including a pending callback result.
 
 use crate::codegen_support::{abi, arrays, emit::Emitter, platform::Arch, value_boxing};
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
-};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::types::PhpType;
+use elephc_memoir::{FrameOffset, cleanup::boundary::CleanupBoundary};
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 160;
 const HANDLER: usize = FRAME - 16;
@@ -56,10 +55,10 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, BORROWED_SOURCE);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     abi::store_at_offset(emitter, value_low_reg(emitter), PAYLOAD);
-    box_unboxed_value(emitter);
+    elephc_memoir::values::mixed_from_value::emit_rebox_unboxed_value(emitter);
     abi::store_at_offset(emitter, result, SOURCE);
     abi::load_at_offset(emitter, result, BORROWED_INITIAL);
-    acquire_borrowed_cell(emitter);
+    elephc_memoir::values::mixed_from_value::emit_snapshot_borrowed_cell(emitter);
     abi::store_at_offset(emitter, result, CARRY);
 
     // -- the logical iterator handles packed widths, hash holes and insertion order --
@@ -76,7 +75,7 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
         abi::store_at_offset(emitter, reg, ENTRY - index * 8);
     }
     abi::emit_frame_slot_address(emitter, result, ENTRY);
-    acquire_borrowed_cell(emitter);
+    elephc_memoir::values::mixed_from_value::emit_snapshot_borrowed_cell(emitter);
     abi::store_at_offset(emitter, result, INPUT);
     prepare_callback_arguments(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
@@ -134,20 +133,6 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_array_reduce_boxed_cleanup");
 }
 
-/// Acquires real heap ownership from a stack triple without retaining the stack cell itself.
-fn acquire_borrowed_cell(emitter: &mut Emitter) {
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
-    box_unboxed_value(emitter);
-}
-
-/// Adapts the unboxer's high payload register before invoking the retaining value constructor.
-fn box_unboxed_value(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rsi, rdx");                                    // preserve string lengths and resource kinds across the constructor ABI
-    }
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-}
-
 /// Builds an owned two-cell argument array, borrowing the carry and transferring the input owner.
 fn prepare_callback_arguments(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -175,48 +160,26 @@ fn prepare_callback_arguments(emitter: &mut Emitter) {
 
 /// Publishes a local handler before snapshot or carry ownership can require unwinding.
 fn install_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_value", PREVIOUS),
-        ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.save_exception_handler();                                           // keep intermediate owners reachable when a callback or destructor throws
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_reduce_boxed_caught");
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_install_with_previous(
+        emitter,
+        FrameOffset::new(PREVIOUS),
+        "__rt_array_reduce_boxed_caught",
+    );
 }
 
 /// Restores the caller's handler and diagnostic depth after all reduction owners are retired.
 fn restore_boundary(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    CleanupBoundary::new(FrameOffset::new(HANDLER)).emit_restore(emitter);
 }
 
 /// Clears an owner without clobbering either exception-chain or outgoing callback arguments.
 fn clear_slot(emitter: &mut Emitter, offset: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, offset);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(offset));
 }
 
 /// Retires an owner with zero-before-release ordering for resumable destructor cleanup.
 fn release_slot(emitter: &mut Emitter, offset: usize, helper: &str) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-    clear_slot(emitter, offset);
-    abi::emit_call_label(emitter, helper);
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(offset), helper);
 }
 
 /// Returns the unboxed low-word register, also used as the exception-chain's older owner.

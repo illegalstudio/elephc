@@ -11,6 +11,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::guards;
+use elephc_memoir::buffers::stream_tables;
 
 /// `__rt_stream_filter_attach_user`: end-to-end attach helper for a user
 /// filter. Resolves the filter name into an id, instantiates the
@@ -65,10 +66,9 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
 
     // -- look up class_name in the registry slot --
     emitter.instruction("sub x9, x0, #128");                                    // slot_index = id - USER_FILTER_ID_BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_filter_registry");
-    emitter.instruction("add x10, x10, x9, lsl #5");                            // registry entry = base + slot_index * 32
-    emitter.instruction("ldr x1, [x10, #16]");                                  // class_name pointer
-    emitter.instruction("ldr x2, [x10, #24]");                                  // class_name length
+    stream_tables::emit_registration_entry_address(stream_tables::USER_FILTER_REGISTRY, emitter, "x10", "x9", "x10");
+    stream_tables::emit_load_registration_field(emitter, "x1", "x10", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "x2", "x10", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("bl __rt_new_by_name");                                 // x0 = obj or 0
     emitter.instruction("cbz x0, __rt_sfau_fail_guarded_params");               // class missing → fail and release params
     emitter.instruction("str x0, [sp, #32]");                                   // save the obj pointer for the instances table
@@ -79,16 +79,21 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the guarded receiver before publishing params
 
     // -- seed php_user_filter::$params before onCreate() observes $this --
-    emitter.instruction("ldr x6, [x0]");                                        // class_id at the head of the obj
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x6", "x0");
     abi::emit_symbol_address(emitter, "x7", "_user_filter_vtable_ptrs");
     emitter.instruction("ldr x7, [x7, x6, lsl #3]");                            // per-class user-filter vtable
-    emitter.instruction("ldr x9, [x7, #32]");                                   // slot 4 = params property byte offset
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "x9",
+        "x7",
+        stream_tables::UserFilterVtableField::ParamsOffset,
+    );
     emitter.instruction("cbz x9, __rt_sfau_params_no_slot");                    // no params slot → release the unused boxed value
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload boxed params for transfer into the object
-    emitter.instruction("ldr x12, [x0, x9]");                                   // preserve the initialized property's previous owner
-    emitter.instruction("str x10, [x0, x9]");                                   // store params in the inherited public property slot
-    emitter.instruction("add x11, x0, x9");                                     // compute the params property slot address
-    emitter.instruction("str xzr, [x11, #8]");                                  // clear the high word for the Mixed pointer slot
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "x11", "x0", "x9"); // compute the params property slot address
+    elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "x12", "x11"); // preserve the initialized property's previous owner
+    elephc_memoir::values::object_storage::emit_store_slot_low(emitter, "x10", "x11"); // store params in the inherited public property slot
+    elephc_memoir::values::object_storage::emit_clear_slot_high(emitter, "x11"); // clear the high word for the Mixed pointer slot
     emitter.instruction("mov x0, x12");                                         // release the displaced default after publishing its replacement
     emitter.instruction("bl __rt_decref_any");                                  // the object guard owns the replacement if cleanup throws
     emitter.instruction("ldr x0, [sp, #32]");                                   // restore the guarded receiver after property cleanup
@@ -113,15 +118,12 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #0]");                                    // reload fd
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload mode
     emitter.instruction("ldr x6, [sp, #24]");                                   // reload resolved id (u8 in the low byte)
-    abi::emit_symbol_address(emitter, "x10", "_user_filter_instances");
-
     // mode & 1 → read direction
     emitter.instruction("tst x5, #1");                                          // STREAM_FILTER_READ bit set?
     emitter.instruction("b.eq __rt_sfau_skip_read");                            // skip read-direction state otherwise
     emitter.instruction("add x11, x4, x4");                                     // fd*2 , read slot
-    emitter.instruction("str x0, [x10, x11, lsl #3]");                          // _user_filter_instances[fd*2] = obj
-    abi::emit_symbol_address(emitter, "x12", "_stream_read_filters");
-    emitter.instruction("strb w6, [x12, x4]");                                  // _stream_read_filters[fd] = id (low 8 bits)
+    stream_tables::emit_store_filter_instance(emitter, "x0", "x11", "x10");
+    stream_tables::READ_FILTERS.emit_store_indexed_byte(emitter, "w6", "x4", "x12");
     emitter.label("__rt_sfau_skip_read");
 
     // mode & 2 → write direction
@@ -129,19 +131,23 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_sfau_skip_write");                           // skip write-direction state otherwise
     emitter.instruction("add x11, x4, x4");                                     // fd*2
     emitter.instruction("add x11, x11, #1");                                    // fd*2 + 1 , write slot
-    emitter.instruction("str x0, [x10, x11, lsl #3]");                          // _user_filter_instances[fd*2 + 1] = obj
-    abi::emit_symbol_address(emitter, "x12", "_stream_write_filters");
-    emitter.instruction("strb w6, [x12, x4]");                                  // _stream_write_filters[fd] = id (low 8 bits)
+    stream_tables::emit_store_filter_instance(emitter, "x0", "x11", "x10");
+    stream_tables::WRITE_FILTERS.emit_store_indexed_byte(emitter, "w6", "x4", "x12");
     emitter.label("__rt_sfau_skip_write");
 
     // -- onCreate() lifecycle hook (vtable slot 1). When present, the
     //    user's filter class can refuse the attach by returning false.
     //    If the method is absent in the vtable, the slot is null and we
     //    fall through. --
-    emitter.instruction("ldr x6, [x0]");                                        // class_id at the head of the obj
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x6", "x0");
     abi::emit_symbol_address(emitter, "x7", "_user_filter_vtable_ptrs");
     emitter.instruction("ldr x7, [x7, x6, lsl #3]");                            // per-class user-filter vtable
-    emitter.instruction("ldr x8, [x7, #8]");                                    // slot 1 = onCreate() method pointer
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "x8",
+        "x7",
+        stream_tables::UserFilterVtableField::OnCreate,
+    );
     emitter.instruction("cbz x8, __rt_sfau_oncreate_skip");                     // method absent → skip the hook
     emitter.instruction("blr x8");                                              // call onCreate($this) → x0 = bool
     emitter.instruction("cbnz x0, __rt_sfau_oncreate_skip");                    // truthy result → proceed with the attach
@@ -204,11 +210,9 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     // -- look up class_name in the registry slot --
     emitter.instruction("mov r9, rax");                                         // copy id into a scratch register
     emitter.instruction("sub r9, 128");                                         // slot_index = id - USER_FILTER_ID_BASE
-    emitter.instruction("shl r9, 5");                                           // slot offset = slot_index * 32
-    abi::emit_symbol_address(emitter, "r10", "_user_filter_registry");          // registry base
-    emitter.instruction("add r10, r9");                                         // entry pointer = base + offset
-    emitter.instruction("mov rax, QWORD PTR [r10 + 16]");                       // class_name pointer (loaded into the new_by_name name-ptr reg)
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // class_name length
+    stream_tables::emit_registration_entry_address(stream_tables::USER_FILTER_REGISTRY, emitter, "r10", "r9", "r11");
+    stream_tables::emit_load_registration_field(emitter, "rax", "r10", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "rdx", "r10", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("call __rt_new_by_name");                               // rax = obj or 0
     emitter.instruction("test rax, rax");                                       // class missing?
     emitter.instruction("jz __rt_sfau_fail_guarded_params_x86");                // fail and release guarded params without touching state
@@ -220,16 +224,22 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the guarded receiver before publishing params
 
     // -- seed php_user_filter::$params before onCreate() observes $this --
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of the obj
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rax");
     abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");       // load runtime data address
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-filter vtable
-    emitter.instruction("mov r9, QWORD PTR [r11 + 32]");                        // slot 4 = params property byte offset
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "r9",
+        "r11",
+        stream_tables::UserFilterVtableField::ParamsOffset,
+    );
     emitter.instruction("test r9, r9");                                         // does the filter class expose params?
     emitter.instruction("jz __rt_sfau_params_no_slot_x86");                     // no params slot → release the unused boxed value
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload boxed params for transfer into the object
-    emitter.instruction("mov r11, QWORD PTR [rax + r9]");                       // preserve the initialized property's previous owner
-    emitter.instruction("mov QWORD PTR [rax + r9], r10");                       // store params in the inherited public property slot
-    emitter.instruction("mov QWORD PTR [rax + r9 + 8], 0");                     // clear the high word for the Mixed pointer slot
+    elephc_memoir::values::object_storage::emit_slot_address(emitter, "rcx", "rax", "r9"); // compute the params property slot address
+    elephc_memoir::values::object_storage::emit_load_slot_low(emitter, "r11", "rcx"); // preserve the initialized property's previous owner
+    elephc_memoir::values::object_storage::emit_store_slot_low(emitter, "r10", "rcx"); // store params in the inherited public property slot
+    elephc_memoir::values::object_storage::emit_clear_slot_high(emitter, "rcx"); // clear the high word for the Mixed pointer slot
     emitter.instruction("mov rax, r11");                                        // release the displaced default after publishing its replacement
     emitter.instruction("call __rt_decref_any");                                // the object guard owns the replacement if cleanup throws
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the guarded receiver after property cleanup
@@ -253,16 +263,13 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload mode
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload resolved id (u8 in the low byte)
-    abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");          // instances table base
-
     // mode & 1 → read direction
     emitter.instruction("test rsi, 1");                                         // STREAM_FILTER_READ bit set?
     emitter.instruction("jz __rt_sfau_skip_read_x86");                          // skip read-direction state otherwise
     emitter.instruction("mov r10, rdi");                                        // fd
     emitter.instruction("add r10, r10");                                        // fd*2 , read slot
-    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2] = obj
-    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // load runtime data address
-    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_read_filters[fd] = id (low 8 bits)
+    stream_tables::emit_store_filter_instance(emitter, "rax", "r10", "r9");
+    stream_tables::READ_FILTERS.emit_store_indexed_byte(emitter, "dl", "rdi", "r11");
     emitter.label("__rt_sfau_skip_read_x86");
 
     // mode & 2 → write direction
@@ -271,16 +278,20 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rdi");                                        // fd
     emitter.instruction("add r10, r10");                                        // fd*2
     emitter.instruction("add r10, 1");                                          // fd*2 + 1 , write slot
-    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2 + 1] = obj
-    abi::emit_symbol_address(emitter, "r11", "_stream_write_filters");          // load runtime data address
-    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_write_filters[fd] = id (low 8 bits)
+    stream_tables::emit_store_filter_instance(emitter, "rax", "r10", "r9");
+    stream_tables::WRITE_FILTERS.emit_store_indexed_byte(emitter, "dl", "rdi", "r11");
     emitter.label("__rt_sfau_skip_write_x86");
 
     // -- onCreate() lifecycle hook (vtable slot 1) , see ARM64 path. --
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of the obj
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rax");
     abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");       // load runtime data address
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-filter vtable
-    emitter.instruction("mov r11, QWORD PTR [r11 + 8]");                        // slot 1 = onCreate
+    stream_tables::emit_load_user_filter_vtable_field(
+        emitter,
+        "r11",
+        "r11",
+        stream_tables::UserFilterVtableField::OnCreate,
+    );
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_sfau_oncreate_skip_x86");                      // method absent → skip the hook
     emitter.instruction("mov rdi, rax");                                        // $this in SysV first arg

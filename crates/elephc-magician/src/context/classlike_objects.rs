@@ -194,14 +194,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_cases.insert(
+        self.enum_cases.replace_distinct(
             (
                 normalize_class_name(enum_name),
                 normalize_enum_case_name(case_name),
             ),
             cell,
-        );
-        previous.filter(|previous| *previous != cell)
+        )
     }
 
     /// Returns a materialized backing value for one eval backed-enum case.
@@ -225,14 +224,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_case_values.insert(
+        self.enum_case_values.replace_distinct(
             (
                 normalize_class_name(enum_name),
                 normalize_enum_case_name(case_name),
             ),
             cell,
-        );
-        previous.filter(|previous| *previous != cell)
+        )
     }
 
     /// Records that one runtime object handle was created for an eval-declared class.
@@ -481,7 +479,7 @@ impl ElephcEvalContext {
     pub(crate) fn clear_array_metadata(&mut self, array: RuntimeCellHandle) {
         let identity = array.as_ptr() as usize;
         self.array_element_aliases.remove(&identity);
-        self.array_cursors.remove(&identity);
+        let _ = self.array_cursors.remove(identity);
     }
 
     /// Copies array references and cursor state to an independently owned array box.
@@ -489,12 +487,8 @@ impl ElephcEvalContext {
         let source_id = source.as_ptr() as usize;
         let target_id = target.as_ptr() as usize;
         if source_id == target_id { return; }
-        let cursor = self.array_cursors.get(&source_id).copied();
         self.clone_array_element_aliases(source, target, None);
-        self.array_cursors.remove(&target_id);
-        if let Some(cursor) = cursor {
-            self.array_cursors.insert(target_id, cursor);
-        }
+        let _ = self.array_cursors.copy(source_id, target_id);
     }
 
     /// Drops only retired allocation records, preserving any newer allocation at the same address.

@@ -131,43 +131,31 @@ fn emit_owned_property_cell_set(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #64");                         // reserve a cleanup record and the three write operands
-            ctx.emitter.instruction("str x0, [sp, #24]");                       // transfer the getter's owned Mixed cell to the unwind record
             ctx.emitter.instruction("str x0, [sp, #56]");                       // preserve normal ownership after unguard clears its record slot
             ctx.emitter.instruction("stp x1, x2, [sp, #32]");                   // preserve both normalized key words across guard publication
             ctx.emitter.instruction("str x3, [sp, #48]");                       // preserve the value consumed by the runtime setter
-            abi::emit_symbol_address(ctx.emitter, "x9", "__rt_exception_release_owned");
-            ctx.emitter.instruction("str x9, [sp, #8]");                        // install the callback that releases an abandoned getter result
-            ctx.emitter.instruction("mov x0, sp");                              // pass the stack-local cleanup record
-            ctx.emitter.instruction("mov x1, #0");                              // prepend this independent owner to the unwind chain
-            abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
-            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // borrow the guarded property cell for mutation
+            abi::emit_guard_owned_at_stack(ctx.emitter, "x0", "__rt_exception_release_owned", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 56);
             ctx.emitter.instruction("ldp x1, x2, [sp, #32]");                   // restore the normalized key
             ctx.emitter.instruction("ldr x3, [sp, #48]");                       // restore the setter's consumed value
             abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
-            ctx.emitter.instruction("mov x0, sp");                              // remove the exact guard before normal-path destruction
-            abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
+            abi::emit_unguard_owned_at_stack(ctx.emitter, 0);
             ctx.emitter.instruction("ldr x0, [sp, #56]");                       // recover the independent owner outside the cleared guard record
             ctx.emitter.instruction("add sp, sp, #64");                         // retire the record before a destructor can throw
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 64");                             // reserve an aligned cleanup record and write operands
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rdi");           // transfer the getter's owned Mixed cell to the unwind record
             ctx.emitter.instruction("mov QWORD PTR [rsp + 56], rdi");           // preserve normal ownership after unguard clears its record slot
             ctx.emitter.instruction("mov QWORD PTR [rsp + 32], rsi");           // preserve the normalized key payload
             ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rdx");           // preserve the normalized key tag or length
             ctx.emitter.instruction("mov QWORD PTR [rsp + 48], rcx");           // preserve the setter's consumed value
-            abi::emit_symbol_address(ctx.emitter, "r9", "__rt_exception_release_owned");
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r9");             // install the abandoned-owner cleanup callback
-            ctx.emitter.instruction("mov rdi, rsp");                            // pass the stack-local cleanup record
-            ctx.emitter.instruction("xor esi, esi");                            // prepend this independent owner to the unwind chain
-            abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");           // borrow the guarded property cell for mutation
+            abi::emit_guard_owned_at_stack(ctx.emitter, "rdi", "__rt_exception_release_owned", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 56);
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 32]");           // restore the key payload
             ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 40]");           // restore the key tag or length
             ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 48]");           // restore the setter's consumed value
             abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
-            ctx.emitter.instruction("mov rdi, rsp");                            // remove the exact guard before normal-path destruction
-            abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
+            abi::emit_unguard_owned_at_stack(ctx.emitter, 0);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 56]");           // recover the independent owner outside the cleared guard record
             ctx.emitter.instruction("add rsp, 64");                             // retire the record before a destructor can throw
         }
@@ -222,10 +210,20 @@ pub(super) fn lower_mixed_cell_runtime_assign(
         }
     }
     box_value_for_mixed_cell_replacement(ctx, value)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_cell_runtime_assign_aarch64(ctx, target)?,
-        Arch::X86_64 => lower_mixed_cell_runtime_assign_x86_64(ctx, target)?,
-    }
+    let drop_new = ctx.next_label("mixed_cell_assign_drop_new");
+    let release_string = ctx.next_label("mixed_cell_assign_release_string");
+    let copy_new = ctx.next_label("mixed_cell_assign_copy_new");
+    let done = ctx.next_label("mixed_cell_assign_done");
+    let result = abi::int_result_reg(ctx.emitter);
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, result, 8);
+    ctx.load_value_to_reg(target, result)?;
+    abi::emit_store_to_sp(ctx.emitter, result, 0);
+    elephc_memoir::reference_cells::eval_writeback::emit_replace_staged_if_present(
+        ctx.emitter, &release_string, &copy_new, &drop_new, &done,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
 
@@ -244,107 +242,6 @@ pub(super) fn box_value_for_mixed_cell_replacement(
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
-    Ok(())
-}
-
-/// Replaces the payload inside an existing boxed Mixed cell on AArch64.
-pub(super) fn lower_mixed_cell_runtime_assign_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    target: ValueId,
-) -> Result<()> {
-    let drop_new = ctx.next_label("mixed_cell_assign_drop_new");
-    let release_string = ctx.next_label("mixed_cell_assign_release_string");
-    let copy_new = ctx.next_label("mixed_cell_assign_copy_new");
-    let done = ctx.next_label("mixed_cell_assign_done");
-
-    ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for target and replacement Mixed cells
-    ctx.emitter.instruction("str x0, [sp, #8]");                                // preserve the boxed replacement while loading the target cell
-    ctx.load_value_to_reg(target, "x0")?;
-    ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the target Mixed cell across payload-release helpers
-    ctx.emitter.instruction(&format!("cbz x0, {}", drop_new));                  // drop the replacement when the target cell is missing
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // inspect the old payload tag before overwriting the cell
-    ctx.emitter.instruction("cmp x9, #1");                                      // strings own a persisted heap payload that needs safe free
-    ctx.emitter.instruction(&format!("b.eq {}", release_string));               // release string payloads through the string-safe free path
-    ctx.emitter.instruction("cmp x9, #4");                                      // tags below array/hash/object/mixed are scalar payloads
-    ctx.emitter.instruction(&format!("b.lo {}", copy_new));                     // scalar payloads can be overwritten directly
-    ctx.emitter.instruction("cmp x9, #7");                                      // tags above the refcounted payload range are not released here
-    ctx.emitter.instruction(&format!("b.hi {}", copy_new));                     // unknown/null payload tags can be overwritten directly
-    ctx.emitter.instruction("ldr x0, [x0, #8]");                                // pass the old refcounted child payload to the generic release helper
-    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-    ctx.emitter.instruction(&format!("b {}", copy_new));                        // continue with replacement after releasing the old child
-    ctx.emitter.label(&release_string);
-    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the target cell before reading its string payload
-    ctx.emitter.instruction("ldr x0, [x0, #8]");                                // pass the old string payload pointer to the safe free helper
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction(&format!("b {}", copy_new));                        // continue with replacement after freeing the old string
-    ctx.emitter.label(&drop_new);
-    ctx.emitter.instruction("ldr x0, [sp, #8]");                                // reload the unused replacement Mixed cell
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.instruction(&format!("b {}", done));                            // skip payload copy because there is no target cell
-    ctx.emitter.label(&copy_new);
-    ctx.emitter.instruction("ldr x10, [sp, #0]");                               // reload the destination Mixed cell pointer
-    ctx.emitter.instruction("ldr x11, [sp, #8]");                               // reload the replacement Mixed cell pointer
-    ctx.emitter.instruction("ldr x12, [x11]");                                  // copy the replacement runtime tag
-    ctx.emitter.instruction("str x12, [x10]");                                  // overwrite the target cell tag
-    ctx.emitter.instruction("ldr x12, [x11, #8]");                              // copy the replacement low payload word
-    ctx.emitter.instruction("str x12, [x10, #8]");                              // overwrite the target cell low payload word
-    ctx.emitter.instruction("ldr x12, [x11, #16]");                             // copy the replacement high payload word
-    ctx.emitter.instruction("str x12, [x10, #16]");                             // overwrite the target cell high payload word
-    ctx.emitter.instruction("mov x0, x11");                                     // pass the now-empty replacement cell storage to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
-    ctx.emitter.label(&done);
-    ctx.emitter.instruction("add sp, sp, #32");                                 // release replacement temporaries
-    Ok(())
-}
-
-/// Replaces the payload inside an existing boxed Mixed cell on x86_64.
-pub(super) fn lower_mixed_cell_runtime_assign_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    target: ValueId,
-) -> Result<()> {
-    let drop_new = ctx.next_label("mixed_cell_assign_drop_new");
-    let release_string = ctx.next_label("mixed_cell_assign_release_string");
-    let copy_new = ctx.next_label("mixed_cell_assign_copy_new");
-    let done = ctx.next_label("mixed_cell_assign_done");
-
-    ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned temporary slots for target and replacement Mixed cells
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the boxed replacement while loading the target cell
-    ctx.load_value_to_reg(target, "rax")?;
-    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // preserve the target Mixed cell across payload-release helpers
-    ctx.emitter.instruction("test rax, rax");                                   // check whether the nested lookup produced a writable cell
-    ctx.emitter.instruction(&format!("jz {}", drop_new));                       // drop the replacement when the target cell is missing
-    ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                         // inspect the old payload tag before overwriting the cell
-    ctx.emitter.instruction("cmp r9, 1");                                       // strings own a persisted heap payload that needs safe free
-    ctx.emitter.instruction(&format!("je {}", release_string));                 // release string payloads through the string-safe free path
-    ctx.emitter.instruction("cmp r9, 4");                                       // tags below array/hash/object/mixed are scalar payloads
-    ctx.emitter.instruction(&format!("jl {}", copy_new));                       // scalar payloads can be overwritten directly
-    ctx.emitter.instruction("cmp r9, 7");                                       // tags above the refcounted payload range are not released here
-    ctx.emitter.instruction(&format!("jg {}", copy_new));                       // unknown/null payload tags can be overwritten directly
-    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // pass the old refcounted child payload to the generic release helper
-    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-    ctx.emitter.instruction(&format!("jmp {}", copy_new));                      // continue with replacement after releasing the old child
-    ctx.emitter.label(&release_string);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                        // reload the target cell before reading its string payload
-    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // pass the old string payload pointer to the safe free helper
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction(&format!("jmp {}", copy_new));                      // continue with replacement after freeing the old string
-    ctx.emitter.label(&drop_new);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // reload the unused replacement Mixed cell
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip payload copy because there is no target cell
-    ctx.emitter.label(&copy_new);
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the destination Mixed cell pointer
-    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                    // reload the replacement Mixed cell pointer
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11]");                         // copy the replacement runtime tag
-    ctx.emitter.instruction("mov QWORD PTR [r10], r9");                         // overwrite the target cell tag
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                     // copy the replacement low payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9");                     // overwrite the target cell low payload word
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 16]");                    // copy the replacement high payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], r9");                    // overwrite the target cell high payload word
-    ctx.emitter.instruction("mov rax, r11");                                    // pass the now-empty replacement cell storage to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
-    ctx.emitter.label(&done);
-    ctx.emitter.instruction("add rsp, 32");                                     // release replacement temporaries
     Ok(())
 }
 

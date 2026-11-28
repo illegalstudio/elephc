@@ -28,6 +28,10 @@
 //!   slot's high word holds `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`) and counts only the rest,
 //!   as PHP does; an unset `Closure` property therefore serializes instead of throwing.
 
+use elephc_memoir::values::incomplete_object::{CLASS_ID, NAME_LEN, NAME_PTR, PROPERTY_HASH};
+use elephc_memoir::values::property_descriptor::{self, SerializedField};
+use elephc_memoir::values::{object_storage, serialize_registry};
+use elephc_memoir::strings::scoped_stream;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -348,9 +352,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_serialize_float_finite");
     // The formatter writes at `_concat_off`, so commit "d:" and point that offset past the
     // stream first (or at its opening offset once the stream lives on the heap).
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x0, [x9]");                                        // active stream descriptor
-    emitter.instruction("str x11, [x0, #8]");                                   // commit "d:" to the stream
+    scoped_stream::emit_load_active(emitter, "x0");
+    scoped_stream::emit_store_cursor(emitter, "x11", "x0");
     emitter.instruction("bl __rt_strbuf_sync");                                 // the formatter must not write over the stream
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the raw float bit pattern
     emitter.instruction("fmov d0, x9");                                         // move the bits into the FP argument register
@@ -369,14 +372,12 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     // -- finalize: commit the scalar bytes and return the slice pointer/length --
     emitter.label("__rt_serialize_done");
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the final write pointer
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("str x11, [x9, #8]");                                   // commit the written bytes to the stream
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_store_cursor(emitter, "x11", "x9");
     emitter.label("__rt_serialize_result");
     emitter.instruction("bl __rt_ser_tell");                                    // x0 = stream length after this value
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("ldr x9, [x9]");                                        // current stream start (it may have moved)
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_load_start(emitter, "x9", "x9");
     emitter.instruction("ldr x10, [sp, #0]");                                   // this value's start offset
     emitter.instruction("add x1, x9, x10");                                     // result pointer = serialized-slice start
     emitter.instruction("sub x2, x0, x10");                                     // result length = end offset - start offset
@@ -411,9 +412,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_serialize_uint_copy");                          // continue copying digits
     emitter.label("__rt_serialize_uint_done");
     emitter.instruction("add x11, x11, x2");                                    // advance the write pointer past the digits
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("str x11, [x9, #8]");                                   // commit the digits to the stream
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_store_cursor(emitter, "x11", "x9");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the digit-helper frame
     emitter.instruction("ret");                                                 // return with digits appended
@@ -429,7 +429,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     // byte, the same one `__rt_array_edge_key` dispatches on. It runs BEFORE the `a:` prefix
     // is appended, because `__rt_serialize_hash` appends its own — jumping after would emit
     // it twice. The hash entry takes the pointer in x0 exactly as this one does.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_serialize_indexed_packed");                  // packed storage appends its own prefix below
@@ -447,7 +447,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the array pointer
     emitter.instruction("ldr x1, [x0]");                                        // load the element count from the header
     emitter.instruction("str x1, [sp, #8]");                                    // save the element count
-    emitter.instruction("ldur x2, [x0, #-8]");                                  // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x2", "x0");
     emitter.instruction("lsr x2, x2, #8");                                      // shift the value_type field into the low bits
     emitter.instruction("and x2, x2, #0x7f");                                   // isolate the 7-bit value_type
     emitter.instruction("str x2, [sp, #16]");                                   // save the array value_type
@@ -593,9 +593,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     //    of the body [body_start, tail_start), for a count only known once the body is written. Leaf. --
     emitter.label_global("__rt_ser_hoist_tail");
     emitter.instruction("sub sp, sp, #32");                                     // scratch copy of the tail bytes
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x9, [x9]");                                        // active stream descriptor
-    emitter.instruction("ldr x10, [x9, #8]");                                   // the tail ends at the stream cursor
+    scoped_stream::emit_load_active(emitter, "x9");
+    scoped_stream::emit_load_cursor(emitter, "x10", "x9");
     emitter.instruction("ldr x9, [x9]");                                        // stream start: offsets are relative to it
     emitter.instruction("sub x10, x10, x9");                                    // tail end as a stream offset
     emitter.instruction("sub x11, x10, x1");                                    // tail length
@@ -660,16 +659,15 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_ser_tell");                                    // x0 = stream offset where this object starts
     emitter.instruction("str x0, [sp, #56]");                                   // retain the prefix start if an invalid sleep return serializes as null
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("ldr x1, [x0]");                                        // load the class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x1", "x0");
     emitter.instruction("str x1, [sp, #8]");                                    // save the class id
-    emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
+    emitter.instruction(&format!("mov x10, #{CLASS_ID}"));                      // synthetic __PHP_Incomplete_Class id
     emitter.instruction("cmp x1, x10");                                         // is this a semantic __PHP_Incomplete_Class payload?
     emitter.instruction("b.eq __rt_serialize_object_incomplete");               // serialize its retained class name and property hash
     custom::emit_probe(emitter);
-    emit_symbol_address(emitter, "x9", "_class_name_entries");
-    emitter.instruction("add x10, x9, x1, lsl #4");                             // entry = base + class_id*16
-    emitter.instruction("ldr x11, [x10]");                                      // class name pointer
-    emitter.instruction("ldr x12, [x10, #8]");                                  // class name length
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "x9");
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "x10", "x9", "x1", "x13");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "x11", "x12", "x10");
     emitter.instruction("str x11, [sp, #40]");                                  // save the class name pointer
     emitter.instruction("str x12, [sp, #48]");                                  // save the class name length
     emit_append_literal_aarch64(emitter, &[b'O', b':'], "the object prefix");
@@ -704,16 +702,16 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload
     emit_append_literal_aarch64(emitter, &[b'O', b':'], "the incomplete-object prefix");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload after literal append
-    emitter.instruction("ldr x0, [x10, #16]");                                  // persisted original class-name length
+    emitter.instruction(&format!("ldr x0, [x10, #{NAME_LEN}]"));                // persisted original class-name length
     emitter.instruction("bl __rt_serialize_uint");                              // append the original class-name length digits
     emit_append_literal_aarch64(emitter, &[b':', b'"'], "the incomplete class-name open quote");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload
-    emitter.instruction("ldr x0, [x10, #8]");                                   // persisted original class-name pointer
-    emitter.instruction("ldr x1, [x10, #16]");                                  // persisted original class-name length
+    emitter.instruction(&format!("ldr x0, [x10, #{NAME_PTR}]"));                // persisted original class-name pointer
+    emitter.instruction(&format!("ldr x1, [x10, #{NAME_LEN}]"));                // persisted original class-name length
     emitter.instruction("bl __rt_ser_append");                                  // append original class-name bytes
     emit_append_literal_aarch64(emitter, &[b'"', b':'], "the incomplete class-name close");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload
-    emitter.instruction("ldr x0, [x10, #24]");                                  // semantic property hash with boxed Mixed values
+    emitter.instruction(&format!("ldr x0, [x10, #{PROPERTY_HASH}]"));           // semantic property hash with boxed Mixed values
     emitter.instruction("bl __rt_serialize_hash_body");                         // emit count/body while rebasing nested references
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
@@ -746,7 +744,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "x9", "_class_serprop_ptrs");
     emitter.instruction("ldr x13, [x9, x1, lsl #3]");                           // property-info table pointer
     emitter.instruction("str x13, [sp, #16]");                                  // save the property-info pointer
-    emitter.instruction("ldr x3, [x13]");                                       // load the property row count
+    property_descriptor::emit_load_count(emitter, "x3", "x13");
     emitter.instruction("str x3, [sp, #24]");                                   // save the property row count
     // -- PHP leaves a typed property that was never initialized out of the payload, so the
     //    declared count only covers the rows whose slot does not carry the uninitialized marker.
@@ -760,11 +758,20 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_serialize_object_count");
     emitter.instruction("cmp x4, x3");                                          // counted every property row?
     emitter.instruction("b.ge __rt_serialize_object_counted");                  // the count is complete
-    emitter.instruction("add x14, x13, #8");                                    // skip the count to the first row
-    emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + cursor*32
-    emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
-    emitter.instruction("add x9, x7, x9");                                      // address of the property slot
-    emitter.instruction("ldr x10, [x14, #24]");                                 // load the logical tag and native storage flags
+    property_descriptor::emit_serialized_row_address(emitter, "x14", "x13", "x4", "x15");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x9",
+        "x14",
+        SerializedField::ObjectOffset,
+    );
+    object_storage::emit_slot_address(emitter, "x9", "x7", "x9");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x10",
+        "x14",
+        SerializedField::ValueTag,
+    );
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x9", "x10", "x15", "__rt_serialize_count_slot");
     emitter.instruction("mov x9, x15");                                         // compare the marker selected for the physical storage
     emitter.instruction("cmp x9, x16");                                         // is this property still uninitialized?
@@ -781,30 +788,58 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x4, x3");                                          // processed every property?
     emitter.instruction("b.ge __rt_serialize_object_close");                    // close the body when done
     emitter.instruction("ldr x13, [sp, #16]");                                  // reload the property-info pointer
-    emitter.instruction("add x14, x13, #8");                                    // skip the count to the first row
-    emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + cursor*32
-    emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
+    property_descriptor::emit_serialized_row_address(emitter, "x14", "x13", "x4", "x15");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x9",
+        "x14",
+        SerializedField::ObjectOffset,
+    );
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("add x7, x7, x9");                                      // address of the property slot
-    emitter.instruction("ldr x10, [x14, #24]");                                 // load the logical tag and native storage flags
+    object_storage::emit_slot_address(emitter, "x7", "x7", "x9");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x10",
+        "x14",
+        SerializedField::ValueTag,
+    );
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_object_slot");
     abi::emit_load_int_immediate(emitter, "x16", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x9, x16");                                         // is this property still uninitialized?
     emitter.instruction("b.eq __rt_serialize_object_next");                     // PHP leaves it out of the payload
-    emitter.instruction("ldr x0, [x14]");                                       // mangled key pointer
-    emitter.instruction("ldr x1, [x14, #8]");                                   // mangled key length
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x0",
+        "x14",
+        SerializedField::Key,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x1",
+        "x14",
+        SerializedField::KeyLength,
+    );
     emitter.instruction("bl __rt_serialize_pstr");                              // append the mangled property key
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload the property cursor
     emitter.instruction("ldr x13, [sp, #16]");                                  // reload the property-info pointer
-    emitter.instruction("add x14, x13, #8");                                    // skip the count to the first row
-    emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + cursor*32
-    emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
-    emitter.instruction("ldr x10, [x14, #24]");                                 // property value tag
+    property_descriptor::emit_serialized_row_address(emitter, "x14", "x13", "x4", "x15");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x9",
+        "x14",
+        SerializedField::ObjectOffset,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x10",
+        "x14",
+        SerializedField::ValueTag,
+    );
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    object_storage::emit_slot_address(emitter, "x7", "x7", "x9");
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_object_value_slot");
-    emitter.instruction("ldr x1, [x7]");                                        // value low payload word
-    emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
+    object_storage::emit_load_slot_low(emitter, "x1", "x7");
+    object_storage::emit_load_slot_high(emitter, "x2", "x7");
     emitter.instruction("mov x0, x10");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
@@ -835,11 +870,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the target name pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the target name length
-    emitter.instruction("ldr x9, [x0]");                                        // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     emit_symbol_address(emitter, "x10", "_class_serprop_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // property-info table for this class
     emitter.instruction("str x10, [sp, #24]");                                  // save the property-info pointer
-    emitter.instruction("ldr x11, [x10]");                                      // property count
+    property_descriptor::emit_load_count(emitter, "x11", "x10");
     emitter.instruction("str x11, [sp, #32]");                                  // save the property count
     emitter.instruction("str xzr, [sp, #40]");                                  // row index = 0
     emitter.label("__rt_serialize_named_prop_loop");
@@ -848,10 +883,19 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x4, x3");                                          // scanned every row?
     emitter.instruction("b.ge __rt_serialize_named_prop_none");                 // unknown name → emit nothing
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the property-info pointer
-    emitter.instruction("add x14, x10, #8");                                    // skip the count word to the rows
-    emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + index*32
-    emitter.instruction("ldr x5, [x14]");                                       // mangled key pointer
-    emitter.instruction("ldr x6, [x14, #8]");                                   // mangled key length
+    property_descriptor::emit_serialized_row_address(emitter, "x14", "x10", "x4", "x13");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x5",
+        "x14",
+        SerializedField::Key,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x6",
+        "x14",
+        SerializedField::KeyLength,
+    );
     // -- compute the short-name offset: index just past the last NUL byte --
     emitter.instruction("mov x7, #0");                                          // scan cursor
     emitter.instruction("mov x12, #0");                                         // short-name offset (no NUL → whole key)
@@ -884,12 +928,21 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_serialize_named_prop_match");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the property-info pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the row index
-    emitter.instruction("add x14, x10, #8");                                    // skip the count word to the rows
-    emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + index*32
-    emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
+    property_descriptor::emit_serialized_row_address(emitter, "x14", "x10", "x4", "x13");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x9",
+        "x14",
+        SerializedField::ObjectOffset,
+    );
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("add x7, x7, x9");                                      // address of the property slot
-    emitter.instruction("ldr x10, [x14, #24]");                                 // load the logical tag and native storage flags
+    object_storage::emit_slot_address(emitter, "x7", "x7", "x9");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x10",
+        "x14",
+        SerializedField::ValueTag,
+    );
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_named_slot");
     abi::emit_load_int_immediate(emitter, "x16", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x9, x16");                                         // is the named property still uninitialized?
@@ -899,15 +952,24 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_serialize_pstr");                              // append the s:len:"\0*\0name"; key
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the property-info pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the row index
-    emitter.instruction("add x14, x10, #8");                                    // skip the count word to the rows
-    emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + index*32
-    emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
-    emitter.instruction("ldr x10, [x14, #24]");                                 // property value tag
+    property_descriptor::emit_serialized_row_address(emitter, "x14", "x10", "x4", "x13");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x9",
+        "x14",
+        SerializedField::ObjectOffset,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "x10",
+        "x14",
+        SerializedField::ValueTag,
+    );
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    object_storage::emit_slot_address(emitter, "x7", "x7", "x9");
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_named_value_slot");
-    emitter.instruction("ldr x1, [x7]");                                        // value low payload word
-    emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
+    object_storage::emit_load_slot_low(emitter, "x1", "x7");
+    object_storage::emit_load_slot_high(emitter, "x2", "x7");
     emitter.instruction("mov x0, x10");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
@@ -932,8 +994,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_serialize_begin");
     emit_symbol_address(emitter, "x9", "_ser_value_counter");
     emitter.instruction("str xzr, [x9]");                                       // value counter = 0
-    emit_symbol_address(emitter, "x9", "_ser_obj_count");
-    emitter.instruction("str xzr, [x9]");                                       // seen-objects count = 0
+    serialize_registry::emit_reset(emitter);
     emitter.instruction("ret");                                                 // reference tracking is reset
 
     // -- __rt_serialize_obj_ref(x0=obj): dedup objects by identity. If the object
@@ -947,22 +1008,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
-    emit_symbol_address(emitter, "x9", "_ser_obj_count");
-    emitter.instruction("ldr x9, [x9]");                                        // number of registered objects
-    emitter.instruction("mov x10, #0");                                         // scan index = 0
-    emitter.label("__rt_serialize_obj_ref_scan");
-    emitter.instruction("cmp x10, x9");                                         // scanned every registered object?
-    emitter.instruction("b.ge __rt_serialize_obj_ref_new");                     // not seen → register a new index
-    emit_symbol_address(emitter, "x11", "_ser_obj_ptrs");
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // registered object pointer
-    emitter.instruction("ldr x13, [sp, #0]");                                   // this object pointer
-    emitter.instruction("cmp x12, x13");                                        // same identity?
-    emitter.instruction("b.eq __rt_serialize_obj_ref_found");                   // already serialized → emit a back-reference
-    emitter.instruction("add x10, x10, #1");                                    // next registered object
-    emitter.instruction("b __rt_serialize_obj_ref_scan");                       // continue scanning
-    emitter.label("__rt_serialize_obj_ref_found");
-    emit_symbol_address(emitter, "x11", "_ser_obj_idxs");
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // the recorded reference index
+    serialize_registry::emit_lookup_aarch64(emitter);
     emitter.instruction("str x0, [sp, #8]");                                    // save it across the literal appends
     emit_append_literal_aarch64(emitter, &[b'r', b':'], "the back-reference prefix");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the reference index
@@ -975,19 +1021,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the running value counter
     emitter.instruction("add x10, x10, #1");                                    // this object takes the next index
     emitter.instruction("str x10, [x9]");                                       // publish the advanced counter
-    emit_symbol_address(emitter, "x11", "_ser_obj_count");
-    emitter.instruction("ldr x12, [x11]");                                      // current registered-object count
-    emitter.instruction("mov x13, #65536");                                     // object-map capacity
-    emitter.instruction("cmp x12, x13");                                        // is the map full?
-    emitter.instruction("b.ge __rt_serialize_obj_ref_done");                    // full → keep counting but stop deduping
-    emit_symbol_address(emitter, "x13", "_ser_obj_ptrs");
-    emitter.instruction("ldr x14, [sp, #0]");                                   // object pointer
-    emitter.instruction("str x14, [x13, x12, lsl #3]");                         // record the object pointer
-    emit_symbol_address(emitter, "x13", "_ser_obj_idxs");
-    emitter.instruction("str x10, [x13, x12, lsl #3]");                         // record its reference index
-    emitter.instruction("add x12, x12, #1");                                    // grow the map
-    emitter.instruction("str x12, [x11]");                                      // publish the new count
-    emitter.label("__rt_serialize_obj_ref_done");
+    serialize_registry::emit_publish_aarch64(emitter);
     emitter.instruction("mov x0, #0");                                          // signal: registered, serialize the object
     emitter.label("__rt_serialize_obj_ref_ret");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -1040,9 +1074,7 @@ fn emit_framed_append_literal_aarch64(emitter: &mut Emitter, bytes: &[u8], what:
 /// scratch, so the active stream pointer is parked at `[sp + slot]` and `_concat_off` is moved
 /// past a scratch-backed stream first. Clobbers x0 and x9-x13.
 fn emit_hook_guard_enter_aarch64(emitter: &mut Emitter, slot: usize) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("ldr x0, [x9]");                                        // active stream descriptor
+    scoped_stream::emit_load_active(emitter, "x0");
     emitter.instruction(&format!("str x0, [sp, #{}]", slot));                   // park it across the hook
     emitter.instruction("bl __rt_strbuf_sync");                                 // hook scratch must start past the stream bytes
 }
@@ -1050,10 +1082,8 @@ fn emit_hook_guard_enter_aarch64(emitter: &mut Emitter, slot: usize) {
 /// Emits the AArch64 exit of a user-hook call: reinstates the parked stream pointer.
 /// Clobbers x9 and x10 only.
 fn emit_hook_guard_exit_aarch64(emitter: &mut Emitter, slot: usize) {
-    use crate::codegen_support::abi::emit_symbol_address;
     emitter.instruction(&format!("ldr x10, [sp, #{}]", slot));                  // reload the parked stream descriptor
-    emit_symbol_address(emitter, "x9", "_ser_stream");
-    emitter.instruction("str x10, [x9]");                                       // reinstate it as the active stream
+    scoped_stream::emit_store_active(emitter, "x10");
 }
 
 /// Emits the AArch64 digit-copy run shared by the integer and string-length paths.
@@ -1333,8 +1363,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // The formatter writes at `_concat_off`, so commit "d:" and point that offset past the
     // stream first (or at its opening offset once the stream lives on the heap).
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the cursor past "d:"
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_ser_stream", 0);
-    emitter.instruction("mov QWORD PTR [rdi + 8], r11");                        // commit "d:" to the stream
+    scoped_stream::emit_load_active(emitter, "rdi");
+    scoped_stream::emit_store_cursor(emitter, "r11", "rdi");
     emitter.instruction("call __rt_strbuf_sync");                               // the formatter must not write over the stream
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the raw float bit pattern
     emitter.instruction("movq xmm0, r9");                                       // move the bits into the FP argument register
@@ -1352,14 +1382,14 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // -- finalize: commit the scalar bytes and return the slice pointer/length --
     emitter.label("__rt_serialize_done");
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the final write pointer
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_ser_stream", 0);
-    emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // commit the written bytes to the stream
+    scoped_stream::emit_load_active(emitter, "r10");
+    scoped_stream::emit_store_cursor(emitter, "r11", "r10");
     emitter.label("__rt_serialize_result");
     emitter.instruction("call __rt_ser_tell");                                  // rax = stream length after this value
     emitter.instruction("mov rdx, rax");                                        // end offset
     emitter.instruction("sub rdx, QWORD PTR [rbp - 8]");                        // result length = end offset - start offset
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_ser_stream", 0);
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // current stream start (it may have moved)
+    scoped_stream::emit_load_active(emitter, "r10");
+    scoped_stream::emit_load_start(emitter, "rax", "r10");
     emitter.instruction("add rax, QWORD PTR [rbp - 8]");                        // result pointer = serialized-slice start
     emitter.instruction("add rsp, 48");                                         // deallocate the serialize scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -1392,8 +1422,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_serialize_uint_copy");                        // continue copying digits
     emitter.label("__rt_serialize_uint_done");
     emitter.instruction("add r11, r8");                                         // advance the write pointer past the digits
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_ser_stream", 0);
-    emitter.instruction("mov QWORD PTR [r9 + 8], r11");                         // commit the digits to the stream
+    scoped_stream::emit_load_active(emitter, "r9");
+    scoped_stream::emit_store_cursor(emitter, "r11", "r9");
     emitter.instruction("add rsp, 32");                                         // deallocate the digit-helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with digits appended
@@ -1406,7 +1436,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // Same runtime-promotion probe as the AArch64 path, before the `a:` prefix for the same
     // reason. NOTE the register: this serializer carries the array in RAX, not rdi, so the
     // probe reads through rax and the scratch is a different register.
-    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rax");
     emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_serialize_indexed_packed");                   // packed storage appends its own prefix below
@@ -1424,9 +1454,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the element count from the header
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the element count
-    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the packed array kind word
-    emitter.instruction("shr rcx, 8");                                          // shift the value_type field into the low bits
-    emitter.instruction("and rcx, 0x7f");                                       // isolate the 7-bit value_type
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rcx", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rcx", "rcx");
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the array value_type
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the element count
     emitter.instruction("call __rt_serialize_uint");                            // append the element count digits
@@ -1571,9 +1600,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     //    of the body [body_start, tail_start), for a count only known once the body is written. Leaf. --
     emitter.label_global("__rt_ser_hoist_tail");
     emitter.instruction("sub rsp, 32");                                         // scratch copy of the tail bytes
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_ser_stream", 0);
-    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                         // the tail ends at the stream cursor
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // stream start: offsets are relative to it
+    scoped_stream::emit_load_active(emitter, "r9");
+    scoped_stream::emit_load_cursor(emitter, "r10", "r9");
+    scoped_stream::emit_load_start(emitter, "r9", "r9");
     emitter.instruction("sub r10, r9");                                         // tail end as a stream offset
     emitter.instruction("mov r11, r10");                                        // copy the tail end for the length
     emitter.instruction("sub r11, rsi");                                        // tail length
@@ -1638,17 +1667,15 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_ser_tell");                                  // rax = stream offset where this object starts
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // retain the prefix start if an invalid sleep return serializes as null
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the class id
-    emitter.instruction("cmp rax, -2");                                         // synthetic __PHP_Incomplete_Class id
+    emitter.instruction(&format!("cmp rax, {CLASS_ID}"));                       // synthetic __PHP_Incomplete_Class id
     emitter.instruction("je __rt_serialize_object_incomplete_x");               // serialize its retained class name and property hash
     custom::emit_probe(emitter);
-    emit_symbol_address(emitter, "r10", "_class_name_entries");
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, "r10");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
-    emitter.instruction("shl rcx, 4");                                          // class_id * 16 (entry stride)
-    emitter.instruction("add r10, rcx");                                        // entry = base + class_id*16
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // class name pointer
-    emitter.instruction("mov r8, QWORD PTR [r10 + 8]");                         // class name length
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(emitter, "r10", "r10", "rcx", "r11");
+    elephc_memoir::values::class_metadata::emit_load_class_name_pair(emitter, "rdx", "r8", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the class name pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save the class name length
     emit_append_literal_x86_64(emitter, &[b'O', b':'], "the object prefix");
@@ -1683,16 +1710,16 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload
     emit_append_literal_x86_64(emitter, &[b'O', b':'], "the incomplete-object prefix");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload after literal append
-    emitter.instruction("mov rax, QWORD PTR [r10 + 16]");                       // persisted original class-name length
+    emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {NAME_LEN}]"));     // persisted original class-name length
     emitter.instruction("call __rt_serialize_uint");                            // append the original class-name length digits
     emit_append_literal_x86_64(emitter, &[b':', b'"'], "the incomplete class-name open quote");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // persisted original class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // persisted original class-name length
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r10 + {NAME_PTR}]"));     // persisted original class-name pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [r10 + {NAME_LEN}]"));     // persisted original class-name length
     emitter.instruction("call __rt_ser_append");                                // append original class-name bytes
     emit_append_literal_x86_64(emitter, &[b'"', b':'], "the incomplete class-name close");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload
-    emitter.instruction("mov rax, QWORD PTR [r10 + 24]");                       // semantic property hash with boxed Mixed values
+    emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {PROPERTY_HASH}]")); // semantic property hash with boxed Mixed values
     emitter.instruction("call __rt_serialize_hash_body");                       // emit count/body while rebasing nested references
     emitter.instruction("add rsp, 64");                                         // deallocate the object frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -1727,7 +1754,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, rcx");                                        // slot = base + class_id*8
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // property-info table pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the property-info pointer
-    emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the property row count
+    property_descriptor::emit_load_count(emitter, "rax", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the property row count
     // -- PHP leaves a typed property that was never initialized out of the payload, so the
     //    declared count only covers the rows whose slot does not carry the uninitialized marker.
@@ -1741,11 +1768,20 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_serialize_object_count");
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // counted every property row?
     emitter.instruction("jae __rt_serialize_object_counted");                   // the count is complete
-    emitter.instruction("mov rdx, rcx");                                        // copy the row cursor for scaling
-    emitter.instruction("shl rdx, 5");                                          // cursor * 32 (row stride)
-    emitter.instruction("mov r8, QWORD PTR [r11 + rdx + 24]");                  // property byte offset (after the count word)
-    emitter.instruction("add r8, rdi");                                         // address of the property slot
-    emitter.instruction("mov r10, QWORD PTR [r11 + rdx + 32]");                 // load this row's logical tag and native storage flags
+    property_descriptor::emit_serialized_row_address(emitter, "r8", "r11", "rcx", "rdx");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "rdx",
+        "r8",
+        SerializedField::ObjectOffset,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r10",
+        "r8",
+        SerializedField::ValueTag,
+    );
+    object_storage::emit_slot_address(emitter, "r8", "rdi", "rdx");
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r8", "r10", "rdx", "__rt_serialize_count_slot");
     emitter.instruction("cmp rdx, r9");                                         // compare the marker selected for the physical storage
     emitter.instruction("je __rt_serialize_object_count_skip");                 // an uninitialized property is not counted
@@ -1763,31 +1799,58 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_serialize_object_close");                     // close the body when done
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the property-info pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the property cursor
-    emitter.instruction("shl rax, 5");                                          // cursor * 32 (row stride)
-    emitter.instruction("add r11, rax");                                        // advance to the row
-    emitter.instruction("add r11, 8");                                          // skip the count word to the row fields
-    emitter.instruction("mov r8, QWORD PTR [r11 + 16]");                        // property byte offset
-    emitter.instruction("add r8, QWORD PTR [rbp - 8]");                         // address of the property slot
+    property_descriptor::emit_serialized_row_address(emitter, "r11", "r11", "rax", "r10");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r8",
+        "r11",
+        SerializedField::ObjectOffset,
+    );
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    object_storage::emit_slot_address(emitter, "r8", "rcx", "r8");
     abi::emit_load_int_immediate(emitter, "r9", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // load the logical tag and native storage flags
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "rcx",
+        "r11",
+        SerializedField::ValueTag,
+    );
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r8", "rcx", "rdx", "__rt_serialize_object_slot");
     emitter.instruction("cmp rdx, r9");                                         // compare the marker selected for the physical storage
     emitter.instruction("je __rt_serialize_object_next");                       // PHP leaves an uninitialized property out
-    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // mangled key pointer
-    emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // mangled key length
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "rdi",
+        "r11",
+        SerializedField::Key,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "rsi",
+        "r11",
+        SerializedField::KeyLength,
+    );
     emitter.instruction("call __rt_serialize_pstr");                            // append the mangled property key
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the property-info pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the property cursor
-    emitter.instruction("shl rax, 5");                                          // cursor * 32 (row stride)
-    emitter.instruction("add r11, rax");                                        // advance to the row
-    emitter.instruction("add r11, 8");                                          // skip the count word to the row fields
-    emitter.instruction("mov r8, QWORD PTR [r11 + 16]");                        // property byte offset
-    emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // property value tag
+    property_descriptor::emit_serialized_row_address(emitter, "r11", "r11", "rax", "r10");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r8",
+        "r11",
+        SerializedField::ObjectOffset,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r9",
+        "r11",
+        SerializedField::ValueTag,
+    );
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("add rcx, r8");                                         // address of the property slot
+    object_storage::emit_slot_address(emitter, "rcx", "rcx", "r8");
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "rcx", "r9", "rax", "__rt_serialize_object_value_slot");
-    emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
-    emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
+    object_storage::emit_load_slot_low(emitter, "rsi", "rcx");
+    object_storage::emit_load_slot_high(emitter, "rdx", "rcx");
     emitter.instruction("mov rdi, r9");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
@@ -1817,11 +1880,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the target name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the target name length
-    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "rdi");
     emit_symbol_address(emitter, "r10", "_class_serprop_ptrs");
     emitter.instruction("mov r10, QWORD PTR [r10 + rax*8]");                    // property-info table for this class
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the property-info pointer
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // property count
+    property_descriptor::emit_load_count(emitter, "rax", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the property count
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // row index = 0
     emitter.label("__rt_serialize_named_prop_loop");
@@ -1829,12 +1892,19 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 40]");                       // scanned every row?
     emitter.instruction("jae __rt_serialize_named_prop_none");                  // unknown name → emit nothing
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the property-info pointer
-    emitter.instruction("add r10, 8");                                          // skip the count word to the rows
-    emitter.instruction("mov rax, rcx");                                        // row index
-    emitter.instruction("shl rax, 5");                                          // index * 32 (row stride)
-    emitter.instruction("add r10, rax");                                        // r10 = row pointer
-    emitter.instruction("mov r8, QWORD PTR [r10]");                             // mangled key pointer
-    emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // mangled key length
+    property_descriptor::emit_serialized_row_address(emitter, "r10", "r10", "rcx", "rax");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r8",
+        "r10",
+        SerializedField::Key,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r9",
+        "r10",
+        SerializedField::KeyLength,
+    );
     // -- compute the short-name offset: index just past the last NUL byte --
     emitter.instruction("xor rcx, rcx");                                        // scan cursor
     emitter.instruction("xor r11, r11");                                        // short-name offset (no NUL → whole key)
@@ -1869,11 +1939,22 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_serialize_named_prop_match");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the property-info pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the row index
-    emitter.instruction("shl rax, 5");                                          // index * 32 (row stride)
-    emitter.instruction("mov rcx, QWORD PTR [r10 + rax + 24]");                 // property byte offset (after the count word)
-    emitter.instruction("add rcx, QWORD PTR [rbp - 8]");                        // address of the property slot
+    property_descriptor::emit_serialized_row_address(emitter, "r10", "r10", "rax", "rcx");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "rcx",
+        "r10",
+        SerializedField::ObjectOffset,
+    );
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    object_storage::emit_slot_address(emitter, "rcx", "rdx", "rcx");
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("mov rsi, QWORD PTR [r10 + rax + 32]");                 // load this row's logical tag and native storage flags
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "rsi",
+        "r10",
+        SerializedField::ValueTag,
+    );
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "rcx", "rsi", "rdx", "__rt_serialize_named_slot");
     emitter.instruction("cmp rdx, r11");                                        // compare the marker selected for the physical storage
     emitter.instruction("je __rt_serialize_named_prop_none");                   // PHP leaves an uninitialized property out
@@ -1881,17 +1962,25 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, r9");                                         // mangled key length
     emitter.instruction("call __rt_serialize_pstr");                            // append the s:len:"\0*\0name"; key
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the property-info pointer
-    emitter.instruction("add r10, 8");                                          // skip the count word to the rows
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the row index
-    emitter.instruction("shl rax, 5");                                          // index * 32 (row stride)
-    emitter.instruction("add r10, rax");                                        // r10 = row pointer
-    emitter.instruction("mov r8, QWORD PTR [r10 + 16]");                        // property byte offset
-    emitter.instruction("mov r9, QWORD PTR [r10 + 24]");                        // property value tag
+    property_descriptor::emit_serialized_row_address(emitter, "r10", "r10", "rax", "rcx");
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r8",
+        "r10",
+        SerializedField::ObjectOffset,
+    );
+    property_descriptor::emit_load_serialized_field(
+        emitter,
+        "r9",
+        "r10",
+        SerializedField::ValueTag,
+    );
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("add rcx, r8");                                         // address of the property slot
+    object_storage::emit_slot_address(emitter, "rcx", "rcx", "r8");
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "rcx", "r9", "rax", "__rt_serialize_named_value_slot");
-    emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
-    emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
+    object_storage::emit_load_slot_low(emitter, "rsi", "rcx");
+    object_storage::emit_load_slot_high(emitter, "rdx", "rcx");
     emitter.instruction("mov rdi, r9");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
@@ -1916,8 +2005,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_serialize_begin");
     emit_symbol_address(emitter, "r9", "_ser_value_counter");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // value counter = 0
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("mov QWORD PTR [r9], 0");                               // seen-objects count = 0
+    serialize_registry::emit_reset(emitter);
     emitter.instruction("ret");                                                 // reference tracking is reset
 
     // -- __rt_serialize_obj_ref(rdi=obj): dedup objects by identity. If the object
@@ -1931,21 +2019,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the dedup frame
     emitter.instruction("sub rsp, 32");                                         // reserve frame slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // number of registered objects
-    emitter.instruction("xor r10, r10");                                        // scan index = 0
-    emitter.label("__rt_serialize_obj_ref_scan");
-    emitter.instruction("cmp r10, r9");                                         // scanned every registered object?
-    emitter.instruction("jge __rt_serialize_obj_ref_new");                      // not seen → register a new index
-    emit_symbol_address(emitter, "r11", "_ser_obj_ptrs");
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // registered object pointer
-    emitter.instruction("cmp rax, QWORD PTR [rbp - 8]");                        // same identity?
-    emitter.instruction("je __rt_serialize_obj_ref_found");                     // already serialized → emit a back-reference
-    emitter.instruction("add r10, 1");                                          // next registered object
-    emitter.instruction("jmp __rt_serialize_obj_ref_scan");                     // continue scanning
-    emitter.label("__rt_serialize_obj_ref_found");
-    emit_symbol_address(emitter, "r11", "_ser_obj_idxs");
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // the recorded reference index
+    serialize_registry::emit_lookup_x86_64(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save it across the literal appends
     emit_append_literal_x86_64(emitter, &[b'r', b':'], "the back-reference prefix");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the reference index
@@ -1959,20 +2033,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, 1");                                          // this object takes the next index
     emitter.instruction("mov QWORD PTR [r9], rax");                             // publish the advanced counter
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the assigned index
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("mov rcx, QWORD PTR [r9]");                             // current registered-object count
-    emitter.instruction("cmp rcx, 65536");                                      // is the object map full?
-    emitter.instruction("jge __rt_serialize_obj_ref_done");                     // full → keep counting but stop deduping
-    emit_symbol_address(emitter, "r11", "_ser_obj_ptrs");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // object pointer
-    emitter.instruction("mov QWORD PTR [r11 + rcx*8], rax");                    // record the object pointer
-    emit_symbol_address(emitter, "r11", "_ser_obj_idxs");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // assigned index
-    emitter.instruction("mov QWORD PTR [r11 + rcx*8], rax");                    // record its reference index
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("add rcx, 1");                                          // grow the map
-    emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the new count
-    emitter.label("__rt_serialize_obj_ref_done");
+    serialize_registry::emit_publish_x86_64(emitter);
     emitter.instruction("mov rax, 0");                                          // signal: registered, serialize the object
     emitter.label("__rt_serialize_obj_ref_ret");
     emitter.instruction("add rsp, 32");                                         // deallocate the dedup frame
@@ -2022,7 +2083,7 @@ fn emit_framed_append_literal_x86_64(emitter: &mut Emitter, bytes: &[u8], what: 
 /// [`emit_hook_guard_enter_aarch64`]. Parks `_ser_stream` at `[rbp - slot]`. Clobbers rdi and
 /// r8-r11.
 fn emit_hook_guard_enter_x86_64(emitter: &mut Emitter, slot: usize) {
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_ser_stream", 0);
+    scoped_stream::emit_load_active(emitter, "rdi");
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rdi", slot));       // park the active stream across the hook
     emitter.instruction("call __rt_strbuf_sync");                               // hook scratch must start past the stream bytes
 }
@@ -2031,7 +2092,7 @@ fn emit_hook_guard_enter_x86_64(emitter: &mut Emitter, slot: usize) {
 /// Clobbers r10 only.
 fn emit_hook_guard_exit_x86_64(emitter: &mut Emitter, slot: usize) {
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", slot));       // reload the parked stream descriptor
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_ser_stream", 0);
+    scoped_stream::emit_store_active(emitter, "r10");
 }
 
 /// Emits the x86_64 digit-copy run shared by the integer and string-length paths.

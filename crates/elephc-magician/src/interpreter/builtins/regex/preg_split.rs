@@ -9,6 +9,7 @@
 //! - result assembly for `preg_split()`.
 use super::super::super::*;
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "preg_split",
@@ -25,27 +26,13 @@ pub(in crate::interpreter) fn eval_builtin_preg_split(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [pattern, subject] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            eval_preg_split_result(pattern, subject, None, None, values)
-        }
-        [pattern, subject, limit] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            let limit = eval_expr(limit, context, scope, values)?;
-            eval_preg_split_result(pattern, subject, Some(limit), None, values)
-        }
-        [pattern, subject, limit, flags] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            let limit = eval_expr(limit, context, scope, values)?;
-            let flags = eval_expr(flags, context, scope, values)?;
-            eval_preg_split_result(pattern, subject, Some(limit), Some(flags), values)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
+    if !(2..=4).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
     }
+    let operands = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&operands, context, scope, values, |operands, _, _, values| {
+        eval_preg_split_values_result(operands, values)
+    })
 }
 
 /// Splits a subject string with eval-supported `preg_split()` flags.
@@ -92,13 +79,11 @@ pub(in crate::interpreter) fn eval_preg_split_result(
     }
     eval_preg_split_push_piece(&mut pieces, &subject[cursor..], cursor, no_empty);
 
-    let mut result = values.array_new(pieces.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, pieces.len())?;
     for (index, piece) in pieces.iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = eval_preg_split_piece_value(piece, offset_capture, values)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| eval_preg_split_piece_value(piece, offset_capture, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Dispatches by-value `preg_split()` calls after argument binding.

@@ -3895,3 +3895,36 @@ echo defined('LC_TIME') ? '1' : '0';
     );
     assert_eq!(out, "1111111");
 }
+
+/// Long formatted output preserves both scalar fields and borrowed timezone text.
+#[test]
+fn test_gmdate_buffer_preserves_long_and_nested_format_tokens() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+function format_timestamp(int $stamp): void {
+    $format = str_repeat("UeT", 4096) . "c";
+    $text = gmdate($format, $stamp);
+    echo strlen($text), "|", substr($text, 0, 16), "|", substr($text, -25);
+}
+format_timestamp(1700000000);
+"#,
+        262144,
+    );
+    assert_eq!(out, "65561|1700000000UTCGMT|2023-11-14T22:13:20+00:00");
+}
+
+/// A formatter can grow off the scratch tail and retire the heap result at its last use.
+#[test]
+fn test_gmdate_buffer_preserves_long_and_nested_format_tokens_at_scratch_limit() {
+    let out = compile_cli_file_and_run_with_flags(
+        r#"<?php
+$allocations = memory_get_allocations();
+$frees = memory_get_frees();
+echo ord(str_repeat("z", 65520)) > strlen(gmdate("c", 1700000000));
+echo "|", memory_get_allocations() > $allocations ? "allocated" : "scratch";
+echo "|", memory_get_frees() > $frees ? "released" : "retained";
+"#,
+        &["--heap-size=65536", "--no-ir-opt"],
+    );
+    assert_eq!(out, "1|allocated|released");
+}

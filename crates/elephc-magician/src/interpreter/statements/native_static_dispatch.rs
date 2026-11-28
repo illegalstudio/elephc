@@ -8,6 +8,7 @@
 //! - Native receiver metadata, enum backing values, and PHP-visible errors share this boundary.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Dispatches one generated/AOT method reached through PHP static-call syntax.
 pub(super) fn eval_native_static_syntax_method_result(
@@ -193,15 +194,13 @@ pub(super) fn eval_builtin_property_hook_type_cases(
         return Err(EvalStatus::RuntimeFatal);
     }
     let case_names = ["Get", "Set"];
-    let mut array = values.array_new(case_names.len())?;
+    let mut array = EvalArrayBuilder::indexed(values, case_names.len())?;
     for (index, case_name) in case_names.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let case =
-            eval_builtin_property_hook_type_case("PropertyHookType", case_name, context, values)?
-                .ok_or(EvalStatus::RuntimeFatal)?;
-        array = values.array_set(array, key, case)?;
+        array.index(index, |values| {
+            eval_builtin_property_hook_type_case("PropertyHookType", case_name, context, values)?.ok_or(EvalStatus::RuntimeFatal)
+        })?;
     }
-    Ok(array)
+    Ok(array.finish())
 }
 
 /// Evaluates builtin `PropertyHookType::from()` or `tryFrom()` inside eval.
@@ -321,14 +320,13 @@ pub(super) fn eval_enum_cases_result(
         .iter()
         .map(|case| case.name().to_string())
         .collect::<Vec<_>>();
-    let mut array = values.array_new(case_names.len())?;
+    let mut array = EvalArrayBuilder::indexed(values, case_names.len())?;
     for (index, case_name) in case_names.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let case = eval_enum_case_object(enum_name, case_name, context, values)?
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        array = values.array_set(array, key, case)?;
+        array.index(index, |values| {
+            eval_enum_case_object(enum_name, case_name, context, values)?.ok_or(EvalStatus::RuntimeFatal)
+        })?;
     }
-    Ok(array)
+    Ok(array.finish())
 }
 
 /// Evaluates `EnumName::from()` or `EnumName::tryFrom()` for eval-backed enums.
@@ -352,15 +350,26 @@ pub(super) fn eval_enum_from_result(
     let mut args = bind_evaluated_function_args(&[String::from("value")], evaluated_args)?;
     let value = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
     for case_name in case_names {
-        let case = eval_enum_case_object(enum_name, &case_name, context, values)?
-            .ok_or(EvalStatus::RuntimeFatal)?;
+        let case = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(
+            eval_enum_case_object(enum_name, &case_name, context, values)?
+                .ok_or(EvalStatus::RuntimeFatal)?,
+        );
         let case_value = context
             .enum_case_value(enum_name, &case_name)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        let equal = values.compare(EvalBinOp::StrictEq, value, case_value)?;
-        if values.truthy(equal)? {
-            return Ok(case);
+        let equal = crate::runtime_hooks::owner_frames::with_runtime_owners(&case, || {
+            values.compare(EvalBinOp::StrictEq, value, case_value)
+        })
+        .map(crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new)?;
+        let matches = crate::runtime_hooks::owner_frames::with_runtime_owners(&(&case, &equal), || {
+            values.truthy(equal.borrowed())
+        });
+        let equal_cleanup = release_expr_result(equal.take(), context, values);
+        let matches = matches.and_then(|matches| equal_cleanup.map(|()| matches))?;
+        if matches {
+            return Ok(case.take());
         }
+        release_expr_result(case.take(), context, values)?;
     }
     if nullable_miss {
         values.null()
@@ -400,12 +409,7 @@ pub(super) fn eval_throw_value_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("ValueError", message, context, values)
 }
 
 /// Creates and schedules a `ReflectionException` through eval's normal Throwable channel.
@@ -414,12 +418,7 @@ pub(super) fn eval_throw_reflection_exception(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ReflectionException")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("ReflectionException", message, context, values)
 }
 
 /// Schedules the Throwable category required by one ReflectionClass instantiation error.

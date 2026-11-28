@@ -45,14 +45,14 @@ pub fn emit_array_filter_int_direct(emitter: &mut Emitter) {
     emitter.label("__rt_array_filter_int_direct_loop");
     emitter.instruction("cmp x20, x23");                                        // has every source element been visited?
     emitter.instruction("b.ge __rt_array_filter_int_direct_done");              // finish once the source is exhausted
-    emitter.instruction("add x9, x22, #24");                                    // address the packed source payload
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x22");
     emitter.instruction("ldr x0, [x9, x20, lsl #3]");                           // load the current int element
     emitter.instruction("blr x19");                                             // call the raw bool predicate
     emitter.instruction("cbz x0, __rt_array_filter_int_direct_next");           // skip elements the predicate rejects
     emitter.instruction("mov x0, x21");                                         // pass the result hash
     emitter.instruction("mov x1, x20");                                         // preserve the original integer key
     emitter.instruction("mov x2, #-1");                                         // mark the key as an integer key
-    emitter.instruction("add x9, x22, #24");                                    // address the packed source payload again
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x22");
     emitter.instruction("ldr x3, [x9, x20, lsl #3]");                           // copy the kept int value
     emitter.instruction("mov x4, #0");                                          // int values use no high payload word
     emitter.instruction("mov x5, #0");                                          // runtime tag 0 = int
@@ -97,7 +97,7 @@ fn emit_array_filter_int_direct_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_filter_int_direct_loop_x86_64");
     emitter.instruction("cmp rbx, r15");                                        // has every source element been visited?
     emitter.instruction("jge __rt_array_filter_int_direct_done_x86_64");        // finish once the source is exhausted
-    emitter.instruction("mov rax, QWORD PTR [r13 + rbx * 8 + 24]");             // load the current int element
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r13", "rbx", "rax", "r11");
     emitter.instruction("mov rdi, rax");                                        // pass the element to the raw predicate
     emitter.instruction("call r12");                                            // call the raw bool predicate
     emitter.instruction("test eax, eax");                                       // did the predicate keep this element?
@@ -105,7 +105,7 @@ fn emit_array_filter_int_direct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r14");                                        // pass the result hash
     emitter.instruction("mov rsi, rbx");                                        // preserve the original integer key
     emitter.instruction("mov rdx, -1");                                         // mark the key as an integer key
-    emitter.instruction("mov rcx, QWORD PTR [r13 + rbx * 8 + 24]");             // copy the kept int value
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r13", "rbx", "rcx", "r11");
     emitter.instruction("xor r8d, r8d");                                        // int values use no high payload word
     emitter.instruction("xor r9d, r9d");                                        // runtime tag 0 = int
     emitter.instruction("call __rt_hash_set");                                  // insert the kept entry without boxing its value

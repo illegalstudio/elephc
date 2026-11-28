@@ -169,7 +169,7 @@ pub(super) fn lower_mixed_array_slice_aarch64(
     }
     ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
     abi::emit_call_label(ctx.emitter, "__rt_incref");
-    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
     ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
     ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -226,9 +226,8 @@ pub(super) fn lower_mixed_array_slice_x86_64(
     ctx.emitter.instruction("mov rax, rdi");                                    // retain an independent source owner before consuming conversion
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the retained array to the consuming conversion helper
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     slice_owned_mixed_payload(ctx, offset, length)?;
     normalize_indexed_array_result(ctx, "array_slice", &PhpType::Mixed, result_elem_ty)?;
@@ -325,12 +324,12 @@ pub(super) fn lower_mixed_array_splice_aarch64(
     ctx.emitter.instruction(&format!("b.ne {}", drop_label));                   // return an empty removed-elements array for non-array Mixed payloads
     ctx.emitter.instruction(&format!("cbz x1, {}", drop_label));                // return an empty removed-elements array for null array payloads
     ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
-    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
     ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
     ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "x0", "x10");
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
@@ -360,12 +359,11 @@ pub(super) fn lower_mixed_array_splice_x86_64(
     ctx.emitter.instruction(&format!("jne {}", drop_label));                    // return an empty removed-elements array for non-array Mixed payloads
     ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
     ctx.emitter.instruction(&format!("je {}", drop_label));                     // return an empty removed-elements array for null array payloads
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "rax", "r10");
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");

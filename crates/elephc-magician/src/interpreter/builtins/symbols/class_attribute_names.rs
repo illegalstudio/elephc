@@ -15,6 +15,8 @@ eval_builtin! {
     values: Symbols,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 use super::super::super::*;
 use super::super::eval_class_metadata_name;
 
@@ -133,13 +135,11 @@ fn eval_class_attribute_names_result(
     attributes: &[EvalAttribute],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(attributes.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, attributes.len())?;
     for (index, attribute) in attributes.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let value = values.string(attribute.name())?;
-        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
+        result.entry_key_first(|values| values.int(index as i64), |values| values.string(attribute.name()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds an indexed `ReflectionAttribute` array from eval-retained attribute metadata.
@@ -149,22 +149,27 @@ pub(in crate::interpreter) fn eval_reflection_attribute_array_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(attributes.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, attributes.len())?;
     for (index, attribute) in attributes.iter().enumerate() {
-        let Some(args) = attribute.args() else {
-            return Err(EvalStatus::RuntimeFatal);
-        };
-        let key = values.int(index as i64)?;
-        let args = eval_class_attribute_args_result(args, values)?;
+        let args = attribute.args().ok_or(EvalStatus::RuntimeFatal)?;
         let repeated = eval_attribute_is_repeated(attributes, attribute.name());
-        let reflection_attribute =
-            values.reflection_attribute_new(attribute.name(), args, target, repeated)?;
-        let identity = values.object_identity(reflection_attribute)?;
-        context.register_eval_reflection_attribute(identity, attribute.clone(), target, repeated);
-        values.release(args)?;
-        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, reflection_attribute)?;
+        result.entry_key_first(|values| values.int(index as i64), |values| {
+            let args = RuntimeOwnerSlot::new(eval_class_attribute_args_result(args, values)?);
+            let reflector = RuntimeOwnerSlot::empty();
+            with_runtime_owners(&(&args, &reflector), || {
+                let operation = (|| {
+                    let object = values.reflection_attribute_new(attribute.name(), args.borrowed(), target, repeated)?;
+                    reflector.replace(Some(object));
+                    let identity = values.object_identity(object)?;
+                    context.register_eval_reflection_attribute(identity, attribute.clone(), target, repeated);
+                    Ok(())
+                })();
+                let released = values.release(args.take());
+                reflector.finish(operation.and(released), |cell| values.release(cell))
+            })
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns true when an attribute name appears more than once on the same owner.
@@ -182,19 +187,20 @@ pub(in crate::interpreter) fn eval_class_attribute_args_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = if args.iter().any(|arg| arg.name().is_some()) {
-        values.assoc_new(args.len())?
+        EvalArrayBuilder::assoc(values, args.len())?
     } else {
-        values.array_new(args.len())?
+        EvalArrayBuilder::indexed(values, args.len())?
     };
     for (index, arg) in args.iter().enumerate() {
-        let key = match arg.name() {
-            Some(name) => values.string(name)?,
-            None => values.int(index as i64)?,
-        };
-        let value = eval_class_attribute_arg_value(arg.value(), values)?;
-        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
+        result.entry_key_first(
+            |values| match arg.name() {
+                Some(name) => values.string(name),
+                None => values.int(index as i64),
+            },
+            |values| eval_class_attribute_arg_value(arg.value(), values),
+        )?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Materializes one retained eval attribute argument as a runtime cell.
@@ -223,21 +229,21 @@ fn eval_class_attribute_array_arg_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = if elements
         .iter()
-        .any(|element| element.name().is_some() || element.int_key().is_some())
-    {
-        values.assoc_new(elements.len())?
+        .any(|element| element.name().is_some() || element.int_key().is_some()) {
+        EvalArrayBuilder::assoc(values, elements.len())?
     } else {
-        values.array_new(elements.len())?
+        EvalArrayBuilder::indexed(values, elements.len())?
     };
     for (index, element) in elements.iter().enumerate() {
-        let key = match element.name() {
-            Some(name) => values.string(name)?,
-            None => values.int(element.int_key().unwrap_or(index as i64))?,
-        };
-        let value = eval_class_attribute_arg_value(element.value(), values)?;
-        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
+        result.entry_key_first(
+            |values| match element.name() {
+                Some(name) => values.string(name),
+                None => values.int(element.int_key().unwrap_or(index as i64)),
+            },
+            |values| eval_class_attribute_arg_value(element.value(), values),
+        )?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns whether a query names the same PHP attribute class case-insensitively.

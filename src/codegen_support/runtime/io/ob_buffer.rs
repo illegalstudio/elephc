@@ -34,6 +34,7 @@
 //! - `__rt_ob_flush_all` drains top-down with FINAL handler phases behind the
 //!   `_ob_flushing` re-entry guard and retires each drained buffer's owners.
 
+
 use crate::codegen_support::abi;
 use crate::codegen_support::runtime::data::{
     OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL, OB_NTC_G_CLEAN,
@@ -43,8 +44,9 @@ use crate::codegen_support::runtime::data::{
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Maximum output-buffer nesting depth (slots in the `_ob_*` parallel arrays).
-pub(crate) const OB_MAX_LEVELS: i64 = 64;
+use elephc_memoir::buffers::output;
+
+pub(crate) use elephc_memoir::buffers::output::MAX_LEVELS as OB_MAX_LEVELS;
 
 /// Default capacity of a chunk-less output buffer (PHP reports 16384).
 const OB_DEFAULT_CAPACITY: i64 = 16384;
@@ -93,7 +95,7 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the chunk size
     emitter.instruction("str x3, [sp, #24]");                                   // save the flags word
     // -- PHP forbids starting a buffer from inside a running handler --
-    abi::emit_symbol_address(emitter, "x9", "_ob_in_handler");                  // materialize the in-handler flag address
+    output::emit_control_address(emitter, "x9", output::ControlField::InHandler);
     emitter.instruction("ldr x9, [x9]");                                        // load the in-handler flag
     emitter.instruction("cbz x9, __rt_ob_start_allowed");                       // not inside a handler — proceed
     abi::emit_symbol_address(emitter, "x1", "_ob_fatal_in_handler");            // load the nested-handler fatal message
@@ -109,7 +111,7 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // copy the display name into an owned heap string
     emitter.instruction("stp x1, x2, [sp, #32]");                               // save the owned name pair
     // -- refuse past the nesting limit with PHP's failed-create notice --
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction(&format!("cmp x10, #{}", OB_MAX_LEVELS));               // is the nesting limit reached?
     emitter.instruction("b.lt __rt_ob_start_capacity");                         // room available — size the buffer
@@ -130,43 +132,8 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("lsr x10, x9, #12");                                    // whole 4 KiB pages in the chunk size
     emitter.instruction("add x10, x10, #1");                                    // round up to the next page
     emitter.instruction("lsl x0, x10, #12");                                    // capacity = ((chunk >> 12) + 1) << 12
-    emitter.label("__rt_ob_start_alloc");
-    emitter.instruction("str x0, [sp, #48]");                                   // save the chosen capacity
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the capture buffer (raw kind)
-    // -- record every per-slot field --
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // reload the depth (the new slot index)
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // record the new buffer base pointer
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // the new buffer starts empty
-    abi::emit_symbol_address(emitter, "x11", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the chosen capacity
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the capacity
-    abi::emit_symbol_address(emitter, "x11", "_ob_handler_stubs");              // materialize the handler-stub slot array
-    emitter.instruction("ldr x12, [sp, #0]");                                   // reload the handler stub
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the handler stub
-    abi::emit_symbol_address(emitter, "x11", "_ob_handler_envs");               // materialize the handler-env slot array
-    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the handler env word
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the handler env word
-    abi::emit_symbol_address(emitter, "x11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
-    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the owned name pointer
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the owned name pointer
-    abi::emit_symbol_address(emitter, "x11", "_ob_name_lens");                  // materialize the handler-name length array
-    emitter.instruction("ldr x12, [sp, #40]");                                  // reload the owned name length
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the owned name length
-    abi::emit_symbol_address(emitter, "x11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
-    emitter.instruction("ldr x12, [sp, #16]");                                  // reload the chunk size
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the chunk size
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
-    emitter.instruction("ldr x12, [sp, #24]");                                  // reload the flags word
-    emitter.instruction("and x12, x12, #0xfffffffffffffff0");                   // handler type is selected by the runtime rather than caller flags
-    emitter.instruction("bic x12, x12, #0xf000");                               // PHP 8.4 and later forbid caller-supplied status bits
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the flags word
-    abi::emit_symbol_address(emitter, "x11", "_ob_started");                    // materialize the started-flag slot array
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // the handler has not run yet
-    emitter.instruction("add x10, x10, #1");                                    // the stack is now one level deeper
-    emitter.instruction("str x10, [x9]");                                       // publish the new depth
+    output::emit_allocate_slot(emitter);
+    output::emit_publish_slot(emitter);
     emitter.instruction("mov x0, #1");                                          // report success
     emitter.label("__rt_ob_start_done");
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -200,7 +167,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the chunk size
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the flags word
     // -- PHP forbids starting a buffer from inside a running handler --
-    abi::emit_symbol_address(emitter, "r10", "_ob_in_handler");                 // materialize the in-handler flag address
+    output::emit_control_address(emitter, "r10", output::ControlField::InHandler);
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the in-handler flag
     emitter.instruction("test r10, r10");                                       // is a user output handler running?
     emitter.instruction("jz __rt_ob_start_allowed_x86");                        // not inside a handler — proceed
@@ -220,7 +187,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the owned name pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the owned name length
     // -- refuse past the nesting limit with PHP's failed-create notice --
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction(&format!("cmp r10, {}", OB_MAX_LEVELS));                // is the nesting limit reached?
     emitter.instruction("jl __rt_ob_start_capacity_x86");                       // room available — size the buffer
@@ -243,42 +210,8 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // round up to the next page
     emitter.instruction("shl r10, 12");                                         // capacity = ((chunk >> 12) + 1) << 12
     emitter.instruction("mov rax, r10");                                        // pass the capacity to the allocator
-    emitter.label("__rt_ob_start_alloc_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the chosen capacity
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the capture buffer (raw kind)
-    // -- record every per-slot field --
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload the depth (the new slot index)
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rax");                    // record the new buffer base pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // the new buffer starts empty
-    abi::emit_symbol_address(emitter, "r11", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the chosen capacity
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the capacity
-    abi::emit_symbol_address(emitter, "r11", "_ob_handler_stubs");              // materialize the handler-stub slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the handler stub
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the handler stub
-    abi::emit_symbol_address(emitter, "r11", "_ob_handler_envs");               // materialize the handler-env slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the handler env word
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the handler env word
-    abi::emit_symbol_address(emitter, "r11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the owned name pointer
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the owned name pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_name_lens");                  // materialize the handler-name length array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the owned name length
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the owned name length
-    abi::emit_symbol_address(emitter, "r11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the chunk size
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the chunk size
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the flags word
-    emitter.instruction("and rcx, -61456");                                     // clear caller-supplied handler type and lifecycle status bits
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the flags word
-    abi::emit_symbol_address(emitter, "r11", "_ob_started");                    // materialize the started-flag slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // the handler has not run yet
-    emitter.instruction("add r10, 1");                                          // the stack is now one level deeper
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the new depth
+    output::emit_allocate_slot(emitter);
+    output::emit_publish_slot(emitter);
     emitter.instruction("mov eax, 1");                                          // report success
     emitter.label("__rt_ob_start_done_x86");
     emitter.instruction("add rsp, 64");                                         // release the ob_start local slots
@@ -331,74 +264,9 @@ pub fn emit_ob_append(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish the ob_append frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the source byte pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the source byte length
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cbz x10, __rt_ob_append_done");                        // no active buffer — defensive no-op
-    emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
-    emitter.instruction("str x10, [sp, #16]");                                  // save the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the top buffer's used byte count
-    emitter.instruction("str x12, [sp, #24]");                                  // save the used byte count
-    abi::emit_symbol_address(emitter, "x13", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("ldr x14, [x13, x10, lsl #3]");                         // load the top buffer's capacity
-    emitter.instruction("ldr x15, [sp, #8]");                                   // reload the incoming byte length
-    emitter.instruction("add x15, x12, x15");                                   // needed bytes = used + incoming length
-    emitter.instruction("cmp x15, x14");                                        // does the payload fit the current capacity?
-    emitter.instruction("b.ls __rt_ob_append_copy");                            // fits — skip the growth path
-    // -- grow: double the capacity until the payload fits --
-    emitter.label("__rt_ob_append_grow_size");
-    emitter.instruction("lsl x14, x14, #1");                                    // double the candidate capacity
-    emitter.instruction("cmp x14, x15");                                        // does the doubled capacity fit the payload?
-    emitter.instruction("b.lo __rt_ob_append_grow_size");                       // keep doubling until it fits
-    emitter.instruction("str x14, [sp, #32]");                                  // save the new capacity
-    emitter.instruction("mov x0, x14");                                         // request the new capacity from the allocator
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the replacement buffer (raw kind)
-    // -- copy the used prefix from the old buffer into the replacement --
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the old buffer base pointer
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the used byte count
-    emitter.instruction("mov x14, #0");                                         // start the copy at offset zero
-    emitter.label("__rt_ob_append_grow_copy");
-    emitter.instruction("cmp x14, x13");                                        // copied all used bytes?
-    emitter.instruction("b.ge __rt_ob_append_grow_swap");                       // yes — publish the replacement buffer
-    emitter.instruction("ldrb w15, [x12, x14]");                                // load the next byte from the old buffer
-    emitter.instruction("strb w15, [x0, x14]");                                 // store the byte into the replacement buffer
-    emitter.instruction("add x14, x14, #1");                                    // advance the copy cursor
-    emitter.instruction("b __rt_ob_append_grow_copy");                          // continue copying the used prefix
-    emitter.label("__rt_ob_append_grow_swap");
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // publish the replacement buffer base pointer
-    abi::emit_symbol_address(emitter, "x13", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("ldr x14, [sp, #32]");                                  // reload the new capacity
-    emitter.instruction("str x14, [x13, x10, lsl #3]");                         // publish the new capacity
-    emitter.instruction("mov x0, x12");                                         // pass the old buffer to the deallocator
-    emitter.instruction("bl __rt_heap_free");                                   // release the old buffer block
-    // -- copy the incoming bytes to buffer base + used --
-    emitter.label("__rt_ob_append_copy");
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the (possibly replaced) buffer base pointer
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the used byte count
-    emitter.instruction("add x12, x12, x13");                                   // destination cursor = base + used
-    emitter.instruction("ldr x14, [sp, #0]");                                   // reload the source byte pointer
-    emitter.instruction("ldr x15, [sp, #8]");                                   // reload the source byte length
-    emitter.label("__rt_ob_append_copy_loop");
-    emitter.instruction("cbz x15, __rt_ob_append_publish");                     // no bytes left — publish the new length
-    emitter.instruction("ldrb w9, [x14]");                                      // load the next source byte
-    emitter.instruction("strb w9, [x12]");                                      // store the byte at the destination cursor
-    emitter.instruction("add x14, x14, #1");                                    // advance the source cursor
-    emitter.instruction("add x12, x12, #1");                                    // advance the destination cursor
-    emitter.instruction("sub x15, x15, #1");                                    // one byte fewer to copy
-    emitter.instruction("b __rt_ob_append_copy_loop");                          // continue copying the incoming bytes
-    emitter.label("__rt_ob_append_publish");
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the used byte count
-    emitter.instruction("ldr x14, [sp, #8]");                                   // reload the incoming byte length
-    emitter.instruction("add x13, x13, x14");                                   // new used count = used + incoming length
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("str x13, [x11, x10, lsl #3]");                         // publish the new used byte count
+    output::emit_append_bytes(emitter);
     // -- PHP chunk-size auto-flush: reaching the threshold flushes the buffer --
-    abi::emit_symbol_address(emitter, "x11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
+    output::emit_slot_field_address(emitter, "x11", output::SlotField::ChunkSize);
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's chunk size
     emitter.instruction("cbz x12, __rt_ob_append_done");                        // chunking disabled — done
     emitter.instruction("cmp x13, x12");                                        // did the buffer reach the chunk threshold?
@@ -424,74 +292,9 @@ fn emit_ob_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve the ob_append local slots (16-aligned)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source byte pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source byte length
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
-    emitter.instruction("test r10, r10");                                       // is any buffer active?
-    emitter.instruction("jz __rt_ob_append_done_x86");                          // no active buffer — defensive no-op
-    emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
-    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the top buffer's used byte count
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the used byte count
-    abi::emit_symbol_address(emitter, "r11", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // load the top buffer's capacity
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the incoming byte length
-    emitter.instruction("add r8, rcx");                                         // needed bytes = used + incoming length
-    emitter.instruction("cmp r8, rdx");                                         // does the payload fit the current capacity?
-    emitter.instruction("jbe __rt_ob_append_copy_x86");                         // fits — skip the growth path
-    // -- grow: double the capacity until the payload fits --
-    emitter.label("__rt_ob_append_grow_size_x86");
-    emitter.instruction("shl rdx, 1");                                          // double the candidate capacity
-    emitter.instruction("cmp rdx, r8");                                         // does the doubled capacity fit the payload?
-    emitter.instruction("jb __rt_ob_append_grow_size_x86");                     // keep doubling until it fits
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the new capacity
-    emitter.instruction("mov rax, rdx");                                        // request the new capacity from the allocator
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the replacement buffer (raw kind)
-    // -- copy the used prefix from the old buffer into the replacement --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the old buffer base pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload the used byte count
-    emitter.instruction("xor r8d, r8d");                                        // start the copy at offset zero
-    emitter.label("__rt_ob_append_grow_copy_x86");
-    emitter.instruction("cmp r8, rdx");                                         // copied all used bytes?
-    emitter.instruction("jge __rt_ob_append_grow_swap_x86");                    // yes — publish the replacement buffer
-    emitter.instruction("mov r9b, BYTE PTR [rcx + r8]");                        // load the next byte from the old buffer
-    emitter.instruction("mov BYTE PTR [rax + r8], r9b");                        // store the byte into the replacement buffer
-    emitter.instruction("add r8, 1");                                           // advance the copy cursor
-    emitter.instruction("jmp __rt_ob_append_grow_copy_x86");                    // continue copying the used prefix
-    emitter.label("__rt_ob_append_grow_swap_x86");
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rax");                    // publish the replacement buffer base pointer
-    abi::emit_symbol_address(emitter, "r9", "_ob_caps");                        // materialize the capacity slot array
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the new capacity
-    emitter.instruction("mov QWORD PTR [r9 + r10*8], rdx");                     // publish the new capacity
-    emitter.instruction("mov rax, rcx");                                        // pass the old buffer to the deallocator
-    emitter.instruction("call __rt_heap_free");                                 // release the old buffer block
-    // -- copy the incoming bytes to buffer base + used --
-    emitter.label("__rt_ob_append_copy_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the (possibly replaced) buffer base pointer
-    emitter.instruction("add rcx, QWORD PTR [rbp - 32]");                       // destination cursor = base + used
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the source byte pointer
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the source byte length
-    emitter.label("__rt_ob_append_copy_loop_x86");
-    emitter.instruction("test r8, r8");                                         // any bytes left to copy?
-    emitter.instruction("jz __rt_ob_append_publish_x86");                       // no bytes left — publish the new length
-    emitter.instruction("mov r9b, BYTE PTR [rdx]");                             // load the next source byte
-    emitter.instruction("mov BYTE PTR [rcx], r9b");                             // store the byte at the destination cursor
-    emitter.instruction("add rdx, 1");                                          // advance the source cursor
-    emitter.instruction("add rcx, 1");                                          // advance the destination cursor
-    emitter.instruction("sub r8, 1");                                           // one byte fewer to copy
-    emitter.instruction("jmp __rt_ob_append_copy_loop_x86");                    // continue copying the incoming bytes
-    emitter.label("__rt_ob_append_publish_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the used byte count
-    emitter.instruction("add rcx, QWORD PTR [rbp - 16]");                       // new used count = used + incoming length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // publish the new used byte count
+    output::emit_append_bytes(emitter);
     // -- PHP chunk-size auto-flush: reaching the threshold flushes the buffer --
-    abi::emit_symbol_address(emitter, "r11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
+    output::emit_slot_field_address(emitter, "r11", output::SlotField::ChunkSize);
     emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // load the slot's chunk size
     emitter.instruction("test rdx, rdx");                                       // is chunking enabled for this buffer?
     emitter.instruction("jz __rt_ob_append_done_x86");                          // chunking disabled — done
@@ -507,65 +310,7 @@ fn emit_ob_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// Emits `__rt_ob_contents`: return a persisted copy of the top buffer contents.
-///
-/// No inputs. Returns the platform string result pair (AArch64 `x1`=ptr, `x2`=len /
-/// x86_64 `rax`=ptr, `rdx`=len); a null pointer signals "no active buffer" so the
-/// caller can box PHP `false`.
-pub fn emit_ob_contents(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_ob_contents_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: ob_contents ---");
-    emitter.label_global("__rt_ob_contents");
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the persist call
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cbz x10, __rt_ob_contents_none");                      // no active buffer — return the null failure pair
-    emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // load the top buffer base pointer
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x2, [x11, x10, lsl #3]");                          // load the top buffer's used byte count
-    emitter.instruction("bl __rt_str_persist");                                 // copy the contents into an owned heap string
-    emitter.instruction("b __rt_ob_contents_done");                             // return the persisted string pair
-    emitter.label("__rt_ob_contents_none");
-    emitter.instruction("mov x1, #0");                                          // null pointer signals "no active buffer"
-    emitter.instruction("mov x2, #0");                                          // zero length for the failure pair
-    emitter.label("__rt_ob_contents_done");
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return the string result pair
-}
-
-/// Emits the Linux x86_64 variant of `__rt_ob_contents`.
-fn emit_ob_contents_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: ob_contents ---");
-    emitter.label_global("__rt_ob_contents");
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the persist call
-    emitter.instruction("mov rbp, rsp");                                        // establish a frame pointer for the persist call
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
-    emitter.instruction("test r10, r10");                                       // is any buffer active?
-    emitter.instruction("jz __rt_ob_contents_none_x86");                        // no active buffer — return the null failure pair
-    emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer base pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // load the top buffer's used byte count
-    emitter.instruction("call __rt_str_persist");                               // copy the contents into an owned heap string
-    emitter.instruction("jmp __rt_ob_contents_done_x86");                       // return the persisted string pair
-    emitter.label("__rt_ob_contents_none_x86");
-    emitter.instruction("xor eax, eax");                                        // null pointer signals "no active buffer"
-    emitter.instruction("xor edx, edx");                                        // zero length for the failure pair
-    emitter.label("__rt_ob_contents_done_x86");
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the string result pair
-}
+pub use elephc_memoir::buffers::output::emit_ob_contents;
 
 /// Emits `__rt_ob_length` and `__rt_ob_level`: the buffer-stack integer queries.
 ///
@@ -581,12 +326,11 @@ pub fn emit_ob_queries(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ob_length / ob_level ---");
     emitter.label_global("__rt_ob_length");
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction("cbz x10, __rt_ob_length_none");                        // no active buffer — return the -1 sentinel
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // return the top buffer's used byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "x11", "x10", "x0");
     emitter.instruction("ret");                                                 // return the length
     emitter.label("__rt_ob_length_none");
     emitter.instruction("mov x0, #-1");                                         // -1 signals "no active buffer"
@@ -594,7 +338,7 @@ pub fn emit_ob_queries(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_ob_level");
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x0, [x9]");                                        // return the current nesting depth
     emitter.instruction("ret");                                                 // return the level
 }
@@ -604,13 +348,12 @@ fn emit_ob_queries_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ob_length / ob_level ---");
     emitter.label_global("__rt_ob_length");
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction("jz __rt_ob_length_none_x86");                          // no active buffer — return the -1 sentinel
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // return the top buffer's used byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "r11", "r10", "rax");
     emitter.instruction("ret");                                                 // return the length
     emitter.label("__rt_ob_length_none_x86");
     emitter.instruction("mov rax, -1");                                         // -1 signals "no active buffer"
@@ -618,7 +361,7 @@ fn emit_ob_queries_x86_64(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_ob_level");
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // return the current nesting depth
     emitter.instruction("ret");                                                 // return the level
 }
@@ -650,12 +393,12 @@ fn emit_gated_op(
     emitter.instruction("sub sp, sp, #32");                                     // allocate the gated-op frame
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the gated-op frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction(&format!("cbz x10, {fail}"));                           // no active buffer — refuse
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
     emitter.instruction("str x10, [sp, #0]");                                   // save the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "x11", output::SlotField::Flags);
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's flags word
     emitter.instruction(&format!("tst x12, #{}", required_flag));               // does the buffer allow this operation?
     emitter.instruction(&format!("b.eq {gated}"));                              // flag missing — refuse with the gated notice
@@ -706,13 +449,13 @@ fn emit_gated_op_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the gated-op frame pointer
     emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the top index
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction(&format!("jz {fail}"));                                 // no active buffer — refuse
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "r11", output::SlotField::Flags);
     emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the slot's flags word
     emitter.instruction(&format!("test rcx, {}", required_flag));               // does the buffer allow this operation?
     emitter.instruction(&format!("jz {gated}"));                                // flag missing — refuse with the gated notice
@@ -817,35 +560,27 @@ fn emit_get_pop_op(
     emitter.instruction("sub sp, sp, #80");                                     // allocate the get-pop frame
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish the get-pop frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction(&format!("cbz x10, {fail}"));                           // no active buffer ; refuse
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
     emitter.instruction("str x10, [sp, #0]");                                   // save the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "x11", output::SlotField::Flags);
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's flags word
     emitter.instruction(&format!("tst x12, #{}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
     emitter.instruction(&format!("b.eq {gated}"));                              // not removable ; refuse with the gated notice
     // -- persist the raw contents before the handler runs --
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // persist source pointer = the raw buffer base
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x2, [x11, x10, lsl #3]");                          // persist source length = the raw byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Pointer, "x11", "x10", "x1");
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "x11", "x10", "x2");
     emitter.instruction("bl __rt_str_persist");                                 // copy the raw contents into an owned heap string
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the raw contents pair
-    emitter.instruction("str x1, [sp, #48]");                                   // transfer exceptional ownership of the copied string into its guard
-    abi::emit_symbol_address(emitter, "x9", "__rt_exception_release_owned");
-    emitter.instruction("str x9, [sp, #32]");                                   // register the existing protected heap-owner cleanup callback
-    emitter.instruction("add x0, sp, #24");                                     // pass the stack-local result guard to the activation chain
-    emitter.instruction("mov x1, #0");                                          // insert this result owner at the current cleanup chain head
-    emitter.instruction("bl __rt_exception_guard_owned");                       // release the raw copy if handler execution or callback retirement throws
+    elephc_memoir::guarded_owners::emit_publish_frame_owner(emitter, "x1", 24, 64);
     // -- run the handler (flush paths emit the survivors), then pop --
     emitter.instruction("ldr x0, [sp, #0]");                                    // process the saved top slot
     emitter.instruction(&format!("mov x1, #{}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov x2, #{}", i64::from(write)));             // write flag: get_flush emits to the parent sink
     emitter.instruction("bl __rt_ob_process_and_write");                        // run the handler and clean/flush the buffer
-    emitter.instruction("add x0, sp, #24");                                     // identify the completed result's exact cleanup guard
-    emitter.instruction("bl __rt_exception_unguard_owned");                     // transfer the copied string to the normal return path
+    elephc_memoir::guarded_owners::emit_detach_in_frame(emitter, 24, 64);
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // return the raw contents pair
     emitter.instruction(&format!("b {done}"));                                  // finish
     emitter.label(&fail);
@@ -893,37 +628,29 @@ fn emit_get_pop_op_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the get-pop frame pointer
     emitter.instruction("sub rsp, 64");                                         // reserve the get-pop local slots (16-aligned)
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction(&format!("jz {fail}"));                                 // no active buffer ; refuse
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
+    output::emit_slot_field_address(emitter, "r11", output::SlotField::Flags);
     emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the slot's flags word
     emitter.instruction(&format!("test rcx, {}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
     emitter.instruction(&format!("jz {gated}"));                                // not removable ; refuse with the gated notice
     // -- persist the raw contents before the handler runs --
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // persist source pointer = the raw buffer base
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // persist source length = the raw byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Pointer, "r11", "r10", "rax");
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "r11", "r10", "rdx");
     emitter.instruction("call __rt_str_persist");                               // copy the raw contents into an owned heap string
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the raw contents pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the raw contents length
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // transfer exceptional ownership of the persisted string to the result guard
-    abi::emit_symbol_address(emitter, "r10", "__rt_exception_release_owned");
-    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // reuse the protected heap-owner cleanup callback
-    emitter.instruction("lea rdi, [rbp - 64]");                                 // pass the aligned stack-local ownership record
-    emitter.instruction("xor esi, esi");                                        // insert the result owner at the activation chain head
-    emitter.instruction("call __rt_exception_guard_owned");                     // guard the copy throughout handler execution and buffer retirement
+    elephc_memoir::guarded_owners::emit_publish_in_frame(emitter, 24, 64);
     // -- run the handler (flush paths emit the survivors), then pop --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // process the saved top slot
     emitter.instruction(&format!("mov esi, {}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov edx, {}", i64::from(write)));             // write flag: get_flush emits to the parent sink
     emitter.instruction("call __rt_ob_process_and_write");                      // run the handler and clean/flush the buffer
-    emitter.instruction("lea rdi, [rbp - 64]");                                 // identify the exact result guard after successful callback retirement
-    emitter.instruction("call __rt_exception_unguard_owned");                   // remove exceptional ownership before transferring the raw result
+    elephc_memoir::guarded_owners::emit_detach_in_frame(emitter, 24, 64);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the raw contents pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // return the raw contents length
     emitter.instruction(&format!("jmp {done}"));                                // finish
@@ -988,13 +715,13 @@ pub fn emit_ob_flush_all(emitter: &mut Emitter) {
     emitter.label_global("__rt_ob_flush_all");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the flush_all frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_ob_flushing");                    // materialize the re-entry guard address
+    output::emit_control_address(emitter, "x9", output::ControlField::Flushing);
     emitter.instruction("ldr x10, [x9]");                                       // load the re-entry guard
     emitter.instruction("cbnz x10, __rt_ob_flush_all_done");                    // already draining — nested exits are a no-op
     emitter.instruction("mov x10, #1");                                         // mark the drain as active
     emitter.instruction("str x10, [x9]");                                       // publish the re-entry guard
     emitter.label("__rt_ob_flush_all_loop");
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction("cbz x10, __rt_ob_flush_all_done");                     // stack drained — done
     emitter.instruction("sub x0, x10, #1");                                     // drain the top slot next
@@ -1014,13 +741,13 @@ fn emit_ob_flush_all_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_ob_flush_all");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the flush_all frame pointer
-    abi::emit_symbol_address(emitter, "r9", "_ob_flushing");                    // materialize the re-entry guard address
+    output::emit_control_address(emitter, "r9", output::ControlField::Flushing);
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the re-entry guard
     emitter.instruction("test r10, r10");                                       // is a drain already running?
     emitter.instruction("jnz __rt_ob_flush_all_done_x86");                      // already draining — nested exits are a no-op
     emitter.instruction("mov QWORD PTR [r9], 1");                               // publish the re-entry guard
     emitter.label("__rt_ob_flush_all_loop_x86");
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
+    output::emit_depth_address(emitter, "r9");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is anything still buffered?
     emitter.instruction("jz __rt_ob_flush_all_done_x86");                       // stack drained — done

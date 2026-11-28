@@ -190,7 +190,7 @@ pub fn emit_base64_decode(emitter: &mut Emitter) {
     // -- strict rejection: release the reservation and report PHP's `false` --
     emitter.label("__rt_b64dec_fail");
     emitter.instruction("mov x0, x9");                                          // release the reservation that will never be published
-    emitter.instruction("bl __rt_heap_free_safe");                              // free an oversized heap reservation; scratch pointers are skipped
+    elephc_memoir::strings::concat_scratch::emit_abandon_reservation(emitter);
     emitter.instruction("mov x0, #0");                                          // report the strict-mode rejection to the caller
     emitter.instruction("mov x1, #0");                                          // hand back a null payload pointer with the failure
     emitter.instruction("mov x2, #0");                                          // hand back a zero payload length with the failure
@@ -375,7 +375,7 @@ fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_b64dec_fail_x86");
     emitter.instruction("mov rax, r9");                                         // release the reservation that will never be published
-    emitter.instruction("call __rt_heap_free_safe");                            // free an oversized heap reservation; scratch pointers are skipped
+    elephc_memoir::strings::concat_scratch::emit_abandon_reservation(emitter);
     emitter.instruction("xor eax, eax");                                        // hand back a null payload pointer with the failure
     emitter.instruction("xor edx, edx");                                        // hand back a zero payload length with the failure
     emitter.instruction("xor r8d, r8d");                                        // report the strict-mode rejection to the caller

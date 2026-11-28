@@ -74,6 +74,89 @@ echo "main\n";
     assert_eq!(out, "main\nbye\n");
 }
 
+/// `exit()` unwinds active function and main owners before terminating the process.
+#[test]
+fn test_exit_unwinds_all_active_destructor_owners() {
+    let out = compile_and_run(
+        r#"<?php
+final class Marker {
+    public function __construct(private string $name) {}
+    public function __destruct() { echo $this->name, "|"; }
+}
+$main = new Marker("main");
+function stop_now(): void {
+    $local = new Marker("local");
+    exit(0);
+}
+stop_now();
+"#,
+    );
+    assert_eq!(out, "local|main|");
+}
+
+/// Static aggregate retirement pins the old graph while a destructor reads and replaces its root.
+#[test]
+fn test_static_array_destructor_replaces_same_root_at_shutdown() {
+    let out = compile_and_run(
+        r#"<?php
+final class StaticArrayOwner {
+    public static array $items = [];
+    public function __construct(private string $name) {}
+    public function __destruct() {
+        echo $this->name, ":", count(self::$items), "|";
+        if ($this->name === "first") {
+            self::$items = [new self("second")];
+        }
+    }
+}
+StaticArrayOwner::$items = [new StaticArrayOwner("first")];
+"#,
+    );
+    assert_eq!(out, "first:1|second:1|");
+}
+
+/// Associative static storage exposes the same graph-wide replacement guarantee as packed arrays.
+#[test]
+fn test_static_hash_destructor_replaces_same_root_at_shutdown() {
+    let out = compile_and_run(
+        r#"<?php
+final class StaticHashOwner {
+    public static array $items = [];
+    public function __construct(private string $name) {}
+    public function __destruct() {
+        echo $this->name, ":", count(self::$items), "|";
+        if ($this->name === "first") {
+            self::$items = ["owner" => new self("second")];
+        }
+    }
+}
+StaticHashOwner::$items = ["owner" => new StaticHashOwner("first")];
+"#,
+    );
+    assert_eq!(out, "first:1|second:1|");
+}
+
+/// Boxed static retirement keeps nested object callbacks valid across same-root replacement.
+#[test]
+fn test_static_mixed_destructor_replaces_same_root_at_shutdown() {
+    let out = compile_and_run(
+        r#"<?php
+final class StaticMixedOwner {
+    public static mixed $value = null;
+    public function __construct(private string $name) {}
+    public function __destruct() {
+        echo $this->name, ":", self::$value === null ? "null" : "set", "|";
+        if ($this->name === "first") {
+            self::$value = new self("second");
+        }
+    }
+}
+StaticMixedOwner::$value = new StaticMixedOwner("first");
+"#,
+    );
+    assert_eq!(out, "first:set|second:set|");
+}
+
 /// The object a narrowed receiver's call returns is destructed like any other: a method the
 /// receiver's static interface does not declare dispatches through a boxed `Mixed` result,
 /// and that box owns the returned object, whether the result is chained, bound or discarded.

@@ -8,7 +8,9 @@
 //! - Parent metadata lookup, constructor visibility, and compound default ownership stay centralized.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::with_runtime_owners;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 
 /// Finds generated/AOT method metadata on a class or its native parent chain.
 pub(in crate::interpreter) fn eval_aot_method_dispatch_metadata_in_hierarchy(
@@ -275,29 +277,26 @@ pub(super) fn materialize_native_callable_object_default(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object(class_name)?;
+    let object = RuntimeOwnerSlot::new(values.new_object(class_name)?);
+    let owners = StagedRuntimeOwners::default();
     let mut constructor_args = Vec::with_capacity(args.len());
-    let constructed = (|| {
-        for arg in args {
-            constructor_args.push(EvaluatedCallArg {
-                evaluation_owner: None,
-                name: arg.name.clone(),
-                value: materialize_native_callable_default(&arg.value, context, values)?,
-                ref_target: None,
-            });
-        }
-        eval_native_constructor_with_evaluated_args(
-            class_name, object, constructor_args.clone(), context, values,
-        )
-    })();
-    let mut released = Ok(());
-    for arg in constructor_args {
-        let cleanup = release_expr_result(arg.value, context, values);
-        if released.is_ok() { released = cleanup; }
-    }
-    if let Err(err) = constructed.and(released) {
-        let _ = values.release(object);
-        return Err(err);
-    }
-    Ok(object)
+    with_runtime_owners(&(&object, &owners), || {
+        let constructed = (|| {
+            for arg in args {
+                let value = materialize_native_callable_default(&arg.value, context, values)?;
+                owners.stage(value);
+                constructor_args.push(EvaluatedCallArg {
+                    evaluation_owner: None,
+                    name: arg.name.clone(),
+                    value: value.borrowed(),
+                    ref_target: None,
+                });
+            }
+            eval_native_constructor_with_evaluated_args(
+                class_name, object.borrowed(), constructor_args, context, values,
+            )
+        })();
+        owners.finish(constructed, &object,
+            |value| release_expr_result(value, context, values))
+    })
 }

@@ -396,8 +396,9 @@ echo (string)staticDimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
         "{target}: updating storage must not transfer on each load");
     assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release
         && inst.operands.contains(&old)), "{target}: arithmetic must not consume the slot's old owner");
-    assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ReleaseLocalSlot
-        && inst.immediate == Some(Immediate::LocalSlot(slot))).count(), 2,
+    assert_eq!(function.instructions.iter().filter(|inst|
+        (inst.op == Op::ReleaseLocalSlot || inst.replaces_local_owner())
+            && inst.immediate == Some(Immediate::LocalSlot(slot))).count(), 2,
         "{target}: overwrite retires the old owner and final cleanup retires the replacement");
     let static_step = module.functions.iter().find(|function|
         function.name == "staticDimensionOwnerStep").unwrap();

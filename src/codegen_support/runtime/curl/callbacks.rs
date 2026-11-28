@@ -54,6 +54,7 @@
 //!   can re-raise it the moment `curl_easy_perform`/`curl_multi_perform` returns, which is
 //!   what makes `try { curl_exec($ch); } catch (…)` behave as it does in php-src.
 
+use elephc_memoir::callables::argument_storage;
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
@@ -124,10 +125,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #264]");                                  // stash the cell across the append
     emitter.instruction("mov x1, x0");                                          // append value = the boxed object cell
     emitter.instruction("ldr x0, [sp, #248]");                                  // append target = the args array
-    emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the cell
-    emitter.instruction("str x0, [sp, #248]");                                  // save the (possibly grown) args array
-    emitter.instruction("ldr x0, [sp, #264]");                                  // reload the boxed object cell
-    emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 248, 264);
     emitter.instruction("str xzr, [sp, #264]");                                 // the stash slot is free again
 
     // -- arguments 1..argc: one boxed Mixed per (tag, lo, hi) triple the bridge built --
@@ -150,10 +148,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #264]");                                  // stash the cell across the append
     emitter.instruction("mov x1, x0");                                          // append value = the boxed argument
     emitter.instruction("ldr x0, [sp, #248]");                                  // append target = the args array
-    emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the cell
-    emitter.instruction("str x0, [sp, #248]");                                  // save the (possibly grown) args array
-    emitter.instruction("ldr x0, [sp, #264]");                                  // reload the boxed argument cell
-    emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 248, 264);
     emitter.instruction("str xzr, [sp, #264]");                                 // the stash slot is free again
     emitter.instruction("ldr x9, [sp, #272]");                                  // reload the loop index
     emitter.instruction("add x9, x9, #1");                                      // advance it
@@ -162,23 +157,12 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.label("__rt_curl_invoke_cb_loop_done");
 
     // -- box the argument array itself as a Mixed indexed array (tag 4 increfs it) --
-    emitter.instruction("ldr x1, [sp, #248]");                                  // Mixed payload lo = the args array
-    emitter.instruction("mov x2, #0");                                          // heap payloads use no high word
-    emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
-    emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed argument container
-    emitter.instruction("str x0, [sp, #256]");                                  // save the container (released in cleanup)
-    emitter.instruction("ldr x0, [sp, #248]");                                  // reload the raw args array
-    emitter.instruction("bl __rt_decref_any");                                  // drop the extra retain (the box owns it)
+    argument_storage::emit_box_arguments(emitter, 248, 256);
 
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction("str x10, [sp, #0]");                                   // handler record: previous handler-stack top
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction("str x10, [sp, #8]");                                   // handler record: frame cleanup stops here
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction("str x10, [sp, #16]");                                  // handler record: saved diagnostic depth
+    elephc_memoir::activation_records::emit_save_arm_runtime_try_prefix(emitter, "x10");
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link it as active
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
     emitter.save_exception_handler();                                           // 0 on the first pass, 1 when a throw longjmps back
     emitter.instruction("cbnz x0, __rt_curl_invoke_cb_threw");                  // nonzero → arrived via longjmp
@@ -191,10 +175,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #264]");                                  // save the boxed return for decode + release
 
     // -- pop the firewall before any further runtime call --
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
 
     // -- decode the return according to spec.result_kind --
     emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
@@ -223,7 +204,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("b.le __rt_curl_invoke_cb_release_return");             // no → leave out_len at 0
     emitter.instruction("str x2, [x11, #40]");                                  // spec.out_len = the copied byte count
     emitter.instruction("mov x0, x12");                                         // memcpy dst = spec.out_buf
-    emitter.bl_c("memcpy"); // src (x1) and length (x2) are already in place
+    elephc_memoir::strings::strcopy::emit_copy_bytes(emitter);
     emitter.instruction("b __rt_curl_invoke_cb_release_return");                // release the owned string-return cell after copying bytes
 
     // -- release the invoker's owned boxed return --
@@ -235,10 +216,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
 
     // -- longjmp path: the PHP callable threw --
     emitter.label("__rt_curl_invoke_cb_threw");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
     // `_exc_value` is deliberately LEFT SET: the throwable stays pending so
     // `__rt_curl_rethrow_pending` can re-raise it once libcurl has unwound its own
     // frames. Swallowing it here (as the PDO adapters do) would lose the exception.
@@ -310,10 +288,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // stash the cell across the append
     emitter.instruction("mov rsi, rax");                                        // append value = the boxed object cell
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // append target = the args array
-    emitter.instruction("call __rt_array_push_refcounted");                     // append (and retain) the cell
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the (possibly grown) array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the boxed object cell
-    emitter.instruction("call __rt_decref_any");                                // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 32, 48);
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // the stash slot is free again
 
     // -- arguments 1..argc --
@@ -335,10 +310,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // stash the cell across the append
     emitter.instruction("mov rsi, rax");                                        // append value = the boxed argument
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // append target = the args array
-    emitter.instruction("call __rt_array_push_refcounted");                     // append (and retain) the cell
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the (possibly grown) array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the boxed argument cell
-    emitter.instruction("call __rt_decref_any");                                // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 32, 48);
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // the stash slot is free again
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the loop index
     emitter.instruction("add r9, 1");                                           // advance it
@@ -347,23 +319,12 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_curl_invoke_cb_loop_done_x86");
 
     // -- box the argument array itself as a Mixed indexed array (tag 4 increfs it) --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // Mixed payload lo = the args array
-    emitter.instruction("xor esi, esi");                                        // heap payloads use no high word
-    emitter.instruction("mov eax, 4");                                          // runtime tag 4 = indexed array
-    emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed Mixed argument container
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the container (released in cleanup)
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the raw args array
-    emitter.instruction("call __rt_decref_any");                                // drop the extra retain (the box owns it)
+    argument_storage::emit_box_arguments(emitter, 32, 40);
 
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 288], r10");                      // handler record: record.next
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 280], r10");                      // handler record: survivor frame
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 272], r10");                      // handler record: saved diag depth
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", 288);
     emitter.instruction("lea r10, [rbp - 288]");                                // r10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link it as active
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction("lea rdi, [rbp - 264]");                                // rdi = &jmp_buf inside the handler record
     emitter.save_exception_handler();                                           // 0 on the first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
@@ -377,10 +338,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed return
 
     // -- pop the firewall before any further runtime call --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 272]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 288);
 
     // -- decode the return according to spec.result_kind --
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
@@ -412,7 +370,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + 40], rdx");                       // spec.out_len = the copied byte count
     emitter.instruction("mov rsi, rdi");                                        // memcpy src = the string bytes
     emitter.instruction("mov rdi, r8");                                         // memcpy dst = spec.out_buf
-    emitter.bl_c("memcpy"); // length is already in rdx
+    elephc_memoir::strings::strcopy::emit_copy_bytes(emitter);
     emitter.instruction("jmp __rt_curl_invoke_cb_release_return_x86");          // release the owned string-return cell after copying bytes
 
     // -- release the invoker's owned boxed return --
@@ -425,10 +383,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
 
     // -- longjmp path: the PHP callable threw --
     emitter.label("__rt_curl_invoke_cb_threw_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 272]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 288);
     // `_exc_value` stays SET on purpose — see the AArch64 body's comment.
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
     emitter.instruction("mov QWORD PTR [r11 + 48], -1");                        // spec.status = -1 (the callable threw)

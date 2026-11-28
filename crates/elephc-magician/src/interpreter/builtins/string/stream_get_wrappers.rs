@@ -15,6 +15,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates PHP `stream_get_wrappers()` with no arguments.
 pub(in crate::interpreter) fn eval_builtin_stream_get_wrappers(
@@ -68,12 +69,9 @@ pub(in crate::interpreter) fn eval_owned_string_array_result(
     items: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(items.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, items.len())?;
     for (index, item) in items.iter().enumerate() {
-        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let key = values.int(index)?;
-        let value = values.string(item)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string(item))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

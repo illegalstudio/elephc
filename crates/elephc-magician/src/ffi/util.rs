@@ -64,7 +64,7 @@ pub(crate) fn release_owned_scope_cells(scope: &mut ElephcEvalScope) -> Option<R
     let cells = scope.drain_owned_cells();
     #[cfg(not(test))]
     {
-        crate::runtime_hooks::release::release_native_cells(cells, None)
+        crate::runtime_hooks::release::release_native_owner_batch(cells, None)
     }
     #[cfg(test)]
     {
@@ -121,8 +121,6 @@ pub(crate) unsafe fn write_outcome(outcome: EvalOutcome, out: *mut ElephcEvalRes
 /// # Safety
 /// A non-null pointer must be readable for `data_len` bytes; null is accepted only for length zero.
 pub(crate) unsafe fn abi_data_bytes(data_ptr: *const u8, data_len: u64) -> Result<Vec<u8>, EvalStatus> {
-    if data_len > 0 && data_ptr.is_null() { return Err(EvalStatus::RuntimeFatal); }
-    let len = usize::try_from(data_len).map_err(|_| EvalStatus::RuntimeFatal)?;
-    if len == 0 { return Ok(Vec::new()); }
-    Ok(unsafe { slice::from_raw_parts(data_ptr, len) }.to_vec())
+    unsafe { elephc_memoir::runtime_bytes::copy_borrowed(data_ptr, data_len) }
+        .ok_or(EvalStatus::RuntimeFatal)
 }

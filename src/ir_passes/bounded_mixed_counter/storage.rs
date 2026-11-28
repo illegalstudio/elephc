@@ -180,6 +180,16 @@ fn increment_writer(function: &Function, slot: LocalSlotId, mut value: ValueId) 
 
 /// Proves every update on a discarded scalar SSA trial, including nested-loop invariants.
 fn trial_safe(function: &Function, slots: &HashSet<LocalSlotId>, proof: &CounterProof, data: &mut DataPool) -> bool {
+    proven_trial(function, slots, proof, data).is_some()
+}
+
+/// Returns the promoted scalar trial only when every recurrence is proven nonoverflowing.
+pub(super) fn proven_trial(
+    function: &Function,
+    slots: &HashSet<LocalSlotId>,
+    proof: &CounterProof,
+    data: &mut DataPool,
+) -> Option<Function> {
     let mut trial = function.clone();
     // Discovery runs before finalization. An unfinished exit is a sink, never a backedge.
     for block in &mut trial.blocks {
@@ -188,18 +198,19 @@ fn trial_safe(function: &Function, slots: &HashSet<LocalSlotId>, proof: &Counter
         }
     }
     proof.scalarize_slots(&mut trial, slots);
-    if crate::ir::validate_function(&trial).is_err() { return false; }
+    if crate::ir::validate_function(&trial).is_err() { return None; }
     super::super::mem2reg::Mem2Reg.run(&mut trial, data);
     if trial.instructions.iter().any(|inst| {
         matches!(inst.op, Op::LoadLocal | Op::StoreLocal)
             && matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if slots.contains(&slot))
-    }) { return false; }
+    }) { return None; }
     for _ in 0..16 {
         let changed = fold_trivial_parameters(&mut trial);
         if !super::super::loop_optimize::LoopOptimize.run(&mut trial, data) && !changed { break; }
     }
     super::super::integer_range::IntegerRange.run(&mut trial, data);
-    proof.proven_unchecked(&trial) && crate::ir::validate_function(&trial).is_ok()
+    (proof.proven_unchecked(&trial) && crate::ir::validate_function(&trial).is_ok())
+        .then_some(trial)
 }
 
 /// Removes unchanged scalar joins only on the discarded trial before induction recognition.

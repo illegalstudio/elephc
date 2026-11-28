@@ -71,7 +71,11 @@ fn lower_native_method_lookup(ctx: &mut FunctionContext<'_>, object: ValueId, me
     let scratch = abi::secondary_scratch_reg(ctx.emitter);
     crate::codegen::sentinels::emit_branch_if_null_container(ctx.emitter, receiver, scratch, &done);
     let class_id = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, class_id, receiver, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(
+        ctx.emitter,
+        class_id,
+        receiver,
+    );
     let labels = candidates.iter().map(|_| ctx.next_label("abstract_method_lookup_error")).collect::<Vec<_>>();
     for ((id, _), label) in candidates.iter().zip(&labels) {
         abi::emit_load_int_immediate(ctx.emitter, scratch, *id as i64);

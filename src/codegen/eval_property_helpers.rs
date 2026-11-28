@@ -12,6 +12,7 @@
 //!   properties when the active eval class scope satisfies PHP visibility.
 //! - Setters borrow their boxed input; property hashes acquire independent references.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::BTreeMap;
 
 use crate::codegen::data_section::DataSection;
@@ -169,7 +170,7 @@ fn collect_class_property_slots(
             allowed_scopes: visibility_scope_names(module, &declaring_class, &visibility),
             property: property.clone(),
             visibility,
-            offset: 8 + index * 16,
+            offset: object_declared_slot_offset(index),
             ty: super::eval_argument_helpers::bridge_storage_type(ty),
             is_declared: class_info.property_slot_is_declared(index, property),
             is_reference: class_info.property_slot_is_reference(index, property),
@@ -428,7 +429,7 @@ fn emit_property_get_aarch64(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("b.ne {}", null_label));                       // non-object receivers read as PHP null
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property loads
-    emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x1");
     emit_aarch64_property_dispatch(module, emitter, data, slots, "get", fail_label);
     emit_dynamic_property_get_fallback(emitter, null_label);
     emitter.instruction(&format!("b {}", done_label));                          // return after stdClass fallback get or null result
@@ -470,7 +471,7 @@ fn emit_property_get_x86_64(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("jne {}", null_label));                        // non-object receivers read as PHP null
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property loads
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     emit_x86_64_property_dispatch(module, emitter, data, slots, "get", fail_label);
     emit_dynamic_property_get_fallback(emitter, null_label);
     emitter.instruction(&format!("jmp {}", done_label));                        // return after stdClass fallback get or null result
@@ -508,7 +509,7 @@ fn emit_property_is_initialized_aarch64(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot have initialized declared properties
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for marker loads
-    emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x1");
     emit_aarch64_property_dispatch(module, emitter, data, slots, "is_initialized", fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported declared property matched the request
     emit_aarch64_initialized_slot_bodies(module, emitter, slots, done_label);
@@ -544,7 +545,7 @@ fn emit_property_is_initialized_x86_64(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // non-object receivers cannot have initialized declared properties
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for marker loads
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     emit_x86_64_property_dispatch(module, emitter, data, slots, "is_initialized", fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported declared property matched the request
     emit_x86_64_initialized_slot_bodies(module, emitter, slots, done_label);
@@ -580,7 +581,7 @@ fn emit_property_set_aarch64(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers reject the property write
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property stores
-    emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x1");
     emit_aarch64_property_dispatch(module, emitter, data, slots, "set", fail_label);
     emit_dynamic_property_set_fallback(emitter, fail_label, done_label);
     emit_aarch64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
@@ -618,7 +619,7 @@ fn emit_property_set_x86_64(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // non-object receivers reject the property write
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property stores
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r11", "rdi");
     emit_x86_64_property_dispatch(module, emitter, data, slots, "set", fail_label);
     emit_dynamic_property_set_fallback(emitter, fail_label, done_label);
     emit_x86_64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);

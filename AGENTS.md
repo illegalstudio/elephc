@@ -133,9 +133,12 @@ features, builtins, runtime semantics, optimizer behavior, ownership paths, and
 target support must be implemented through the AST → EIR → EIR codegen path.
 
 Shared target/runtime infrastructure remains active under `src/codegen_support/`,
-including ABI helpers, runtime emitters, runtime data emission, target
-convention helpers, and linking support. New PHP-visible behavior must be driven
-by EIR lowering and `src/codegen/`.
+including ABI helpers, runtime orchestration and data emission, target convention
+helpers, and linking support. Memory-management assembly emitters live in the
+`codegen` feature of `crates/elephc-memoir` and use the compiler's emitter/ABI
+adapter. Magician uses Memoir's `runtime` feature for eval buffer storage and
+links that Rust code through the existing Magician bridge. EIR lowering and
+`src/codegen/` drive new PHP-visible behavior.
 
 ### Key modules
 
@@ -156,7 +159,8 @@ by EIR lowering and `src/codegen/`.
 | `src/ir_passes/` | `optimize_module()` / `allocate_registers()` | EIR analyses and transformations over lowered functions: fixed-point optimization pass driver (identity folding, …; gated by `--ir-opt`) and linear-scan register allocation, before codegen |
 | `src/codegen/` | `generate()` | Active EIR → target assembly backend |
 | `src/codegen_support/abi/` | ABI helpers | Target-specific argument materialization, frame layout, registers, stack slots, symbols, and call helpers |
-| `src/codegen_support/runtime/` | Runtime emitters | Shared `__rt_*` helpers and runtime data used by generated programs |
+| `crates/elephc-memoir/` | Memory emitters, host `Emitter` trait and eval buffer registry | Heap, GC, COW, deep release, strings, buffers, reference lifetimes and fixed memory data for codegen, plus Rust eval buffer storage for Magician |
+| `src/codegen_support/runtime/` | Runtime integration | Runtime ordering, semantic data, compiler-to-Memoir adapter and PHP validation |
 | `src/codegen/program_usage/` | Program scans | Collects codegen metadata such as required classes and variables before emission |
 | `src/runtime_cache.rs` | `prepare_runtime_object()` | Builds/reuses the target runtime object before final linking |
 | `src/errors/` | `report()` | Error formatting with line:col |

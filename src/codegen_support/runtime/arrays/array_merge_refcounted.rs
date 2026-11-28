@@ -30,9 +30,9 @@ pub fn emit_array_merge_refcounted(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save first array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save second array pointer
-    emitter.instruction("ldr x9, [x0]");                                        // load first array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load first array length
     emitter.instruction("str x9, [sp, #16]");                                   // save first array length
-    emitter.instruction("ldr x10, [x1]");                                       // load second array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x1"); // load second array length
     emitter.instruction("str x10, [sp, #24]");                                  // save second array length
 
     // -- create destination array with combined capacity --
@@ -48,14 +48,14 @@ pub fn emit_array_merge_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x4, x9");                                          // compare index with first array length
     emitter.instruction("b.ge __rt_array_merge_ref_copy2_setup");               // move to second array when first is done
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload first array pointer
-    emitter.instruction("add x2, x1, #24");                                     // compute first array data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("ldr x5, [x2, x4, lsl #3]");                            // load first array element pointer
     emitter.instruction("str x5, [sp, #40]");                                   // preserve element pointer across incref call
     emitter.instruction("mov x0, x5");                                          // move element pointer into incref argument register
     emitter.instruction("bl __rt_incref");                                      // retain borrowed payload for destination ownership
     emitter.instruction("ldr x5, [sp, #40]");                                   // restore retained payload pointer
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload destination array pointer
-    emitter.instruction("add x3, x0, #24");                                     // compute destination data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("str x5, [x3, x4, lsl #3]");                            // store retained payload into destination
     emitter.instruction("add x4, x4, #1");                                      // increment first loop index
     emitter.instruction("b __rt_array_merge_ref_copy1");                        // continue copying first array
@@ -68,7 +68,7 @@ pub fn emit_array_merge_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x4, x10");                                         // compare index with second array length
     emitter.instruction("b.ge __rt_array_merge_ref_done");                      // finish once second array is copied
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload second array pointer
-    emitter.instruction("add x2, x1, #24");                                     // compute second array data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("ldr x5, [x2, x4, lsl #3]");                            // load second array element pointer
     emitter.instruction("str x5, [sp, #40]");                                   // preserve element pointer across incref call
     emitter.instruction("mov x0, x5");                                          // move element pointer into incref argument register
@@ -77,7 +77,7 @@ pub fn emit_array_merge_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload destination array pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload first array length as destination offset
     emitter.instruction("add x6, x9, x4");                                      // compute destination index after first segment
-    emitter.instruction("add x3, x0, #24");                                     // compute destination data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("str x5, [x3, x6, lsl #3]");                            // store retained payload into destination
     emitter.instruction("add x4, x4, #1");                                      // increment second loop index
     emitter.instruction("b __rt_array_merge_ref_copy2");                        // continue copying second array
@@ -108,9 +108,9 @@ fn emit_array_merge_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the refcounted merge bookkeeping while keeping helper calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the first source indexed-array pointer across constructor and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the second source indexed-array pointer across constructor and append helper calls
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the first source indexed-array logical length before sizing the merged destination array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the first source indexed-array logical length before sizing the merged destination array
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve the first source indexed-array logical length across the destination constructor call
-    emitter.instruction("mov r11, QWORD PTR [rsi]");                            // load the second source indexed-array logical length before sizing the merged destination array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r11", "rsi"); // load the second source indexed-array logical length before sizing the merged destination array
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // preserve the second source indexed-array logical length across the destination constructor call
     emitter.instruction("mov rdi, r10");                                        // seed the merged destination capacity from the first source indexed-array logical length
     emitter.instruction("add rdi, r11");                                        // add the second source indexed-array logical length to compute the merged destination capacity
@@ -124,7 +124,7 @@ fn emit_array_merge_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // compare the first-source merge loop index against the first source indexed-array logical length
     emitter.instruction("jge __rt_array_merge_ref_copy_second_setup_x86");      // switch to the second source indexed array once the first source has been exhausted
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the first source indexed-array pointer before reading the current payload
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the first source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rsi, QWORD PTR [r10 + rcx * 8]");                  // load the current borrowed refcounted payload from the first source indexed array
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the merged destination indexed-array pointer before appending the retained payload
     emitter.instruction("call __rt_array_push_refcounted");                     // append the retained first-source payload into the merged destination indexed array
@@ -141,7 +141,7 @@ fn emit_array_merge_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare the second-source merge loop index against the second source indexed-array logical length
     emitter.instruction("jge __rt_array_merge_ref_done_x86");                   // finish once every refcounted payload from the second source indexed array has been appended
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the second source indexed-array pointer before reading the current payload
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the second source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rsi, QWORD PTR [r10 + rcx * 8]");                  // load the current borrowed refcounted payload from the second source indexed array
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the merged destination indexed-array pointer before appending the retained payload
     emitter.instruction("call __rt_array_push_refcounted");                     // append the retained second-source payload into the merged destination indexed array

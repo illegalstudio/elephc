@@ -8,6 +8,8 @@
 //! - A protected zero-argument hook returns a cell; a separate adapter produces the owned hash.
 //! - Cleanup records protect the receiver, snapshot, indentation, and recursion state.
 
+use elephc_memoir::strings::capture_buffer::{self, CaptureField};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
@@ -46,7 +48,7 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     load_argument(emitter, 0, RECEIVER);
     abi::emit_call_label(emitter, "__rt_vd_seen_find");
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_native_debug_miss");
-    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, "_vd_seen_n")] {
+    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, elephc_memoir::values::diagnostic_stack::DEPTH)] {
         abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
         abi::store_at_offset(emitter, result, offset);
     }
@@ -165,7 +167,7 @@ fn emit_lookup_hook(emitter: &mut Emitter) {
     let object = abi::int_arg_reg_name(emitter.target, 0);
     let class = abi::secondary_scratch_reg(emitter);
     let result = abi::int_result_reg(emitter);
-    abi::emit_load_from_address(emitter, class, object, 0);
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, class, object);
     abi::emit_load_symbol_to_reg(emitter, result, "_class_gc_desc_count", 0);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -206,7 +208,7 @@ fn load_argument(emitter: &mut Emitter, index: usize, offset: usize) {
 /// Restores the containing renderer after PHP callbacks or nested debug walks.
 fn restore_walk_state(emitter: &mut Emitter) {
     let scratch = abi::secondary_scratch_reg(emitter);
-    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, "_vd_seen_n")] {
+    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, elephc_memoir::values::diagnostic_stack::DEPTH)] {
         abi::load_at_offset(emitter, scratch, offset);
         abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
     }
@@ -225,8 +227,7 @@ fn emit_native_debug_cleanup(emitter: &mut Emitter) {
     for (offset, release) in [(0, "__rt_decref_any"), (24, "__rt_decref_any"),
         (32, "__rt_heap_free_safe"), (64, "__rt_decref_any")] {
         abi::load_at_offset(emitter, state, 8);
-        abi::emit_load_from_address(emitter, result, state, offset);
-        abi::emit_store_zero_to_address(emitter, state, offset);
+        elephc_memoir::frame_owners::emit_take_addressed(emitter, state, elephc_memoir::RecordOffset::new(offset));
         abi::emit_unary_cleanup_preserving_exception(emitter, release, result);
     }
     restore_callback_walk(emitter);
@@ -235,27 +236,23 @@ fn emit_native_debug_cleanup(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
+
+const CAPTURE_FIELDS: [(CaptureField, usize); 4] = [
+    (CaptureField::Buffer, BUFFER),
+    (CaptureField::Capacity, CAPACITY),
+    (CaptureField::Mode, PRINT_MODE),
+    (CaptureField::Length, PRINT_OFFSET),
+];
+
 /// Moves the outer capture owner into the guarded frame before arbitrary PHP code runs.
 fn save_output_state(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (offset, symbol) in [(BUFFER, "_print_r_ptr"), (CAPACITY, "_print_r_cap"),
-        (PRINT_MODE, "_print_r_mode"), (PRINT_OFFSET, "_print_r_off")] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    }
+    capture_buffer::emit_save_state(emitter, &CAPTURE_FIELDS);
 }
 
 /// Transfers the saved capture owner back after nested PHP calls have finalized their own output.
 fn restore_output_state(emitter: &mut Emitter) {
-    discard_capture(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    for (offset, symbol) in [(BUFFER, "_print_r_ptr"), (CAPACITY, "_print_r_cap"),
-        (PRINT_MODE, "_print_r_mode"), (PRINT_OFFSET, "_print_r_off")] {
-        abi::load_at_offset(emitter, scratch, offset);
-        abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
-    }
-    abi::emit_store_zero_to_local_slot(emitter, BUFFER);
+    capture_buffer::emit_restore_state(emitter, &CAPTURE_FIELDS, scratch);
 }
 
 /// Discards an abandoned raw capture without retaining a stale pointer across request reset.
@@ -267,7 +264,7 @@ fn discard_capture(emitter: &mut Emitter) {
 fn restore_callback_walk(emitter: &mut Emitter) {
     let state = abi::tertiary_scratch_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    for (offset, symbol) in [(8, "_vd_indent"), (16, "_vd_seen_n")] {
+    for (offset, symbol) in [(8, "_vd_indent"), (16, elephc_memoir::values::diagnostic_stack::DEPTH)] {
         abi::load_at_offset(emitter, state, 8);
         abi::emit_load_from_address(emitter, scratch, state, offset);
         abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);

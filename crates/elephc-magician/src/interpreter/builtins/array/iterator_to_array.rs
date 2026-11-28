@@ -7,6 +7,7 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 
 eval_builtin! {
@@ -84,11 +85,12 @@ pub(in crate::interpreter) fn eval_array_copy_preserve_keys(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
+    let mut result = EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        result = values.array_set(result, key, value)?;
+        result.entry_from_key(
+            |values| values.array_iter_key(array, position),
+            |values, key| values.array_get(array, key),
+        )?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

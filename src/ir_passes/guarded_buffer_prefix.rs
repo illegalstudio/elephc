@@ -7,6 +7,7 @@
 //! Key details:
 //! - The first scalar header and checked prefix run in their original order on a taken entry.
 //! - Cold terminal throws are cloned with initial SSA operands and the original owner slots.
+//! - Numeric owner bookkeeping may preserve the loop, but only proven numeric loads are cloned.
 //! - Only read-only loops qualify; zero-trip exits and instructions' lexical scopes are preserved.
 
 use std::collections::{HashMap, HashSet};
@@ -29,8 +30,10 @@ struct Prefix {
 /// Caches the first guarded buffer property's invariant prefix, at most once per property.
 pub(super) fn hoist(function: &mut Function, loop_ref: &NaturalLoop) -> bool {
     let Some((entry, split)) = entry_edge(function, loop_ref) else { return false; };
+    let numeric = super::buffer_access::numeric::preserving_instructions(function);
     if !loop_ref.blocks.iter().all(|&block| function.blocks[block.as_raw() as usize]
-        .instructions.iter().all(|id| keeps_reads_stable(function, &function.instructions[id.as_raw() as usize])))
+        .instructions.iter().all(|id| numeric.contains(id)
+            || keeps_reads_stable(function, &function.instructions[id.as_raw() as usize])))
     { return false; }
     let header = &function.blocks[loop_ref.header.as_raw() as usize];
     let Some(Terminator::CondBr { then_target, else_target, .. }) = header.terminator else { return false; };
@@ -39,10 +42,11 @@ pub(super) fn hoist(function: &mut Function, loop_ref: &NaturalLoop) -> bool {
         (false, true) => (else_target, then_target),
         _ => return false,
     };
-    if !header.instructions.iter().all(|&id| can_duplicate(function, id))
+    if !header.instructions.iter().all(|&id| can_duplicate(function, id)
+        || duplicable_numeric_load(function, id, &numeric))
         || header_values_escape(function, loop_ref, exit)
     { return false; }
-    let Some(prefix) = collect_prefix(function, loop_ref, body, entry) else { return false; };
+    let Some(prefix) = collect_prefix(function, loop_ref, body, entry, &numeric) else { return false; };
     let preheader = if let Some((taken, args)) = split {
         let preheader = new_block(function, "buffer_guard_preheader");
         function.blocks[preheader.as_raw() as usize].terminator = Some(Terminator::Br { target: loop_ref.header, args });
@@ -129,7 +133,13 @@ fn entry_edge(function: &Function, loop_ref: &NaturalLoop) -> Option<(BlockId, O
 }
 
 /// Collects a bounded entry chain ending at an inlined invariant buffer-property read.
-fn collect_prefix(function: &Function, loop_ref: &NaturalLoop, body: BlockId, preheader: BlockId) -> Option<Vec<Prefix>> {
+fn collect_prefix(
+    function: &Function,
+    loop_ref: &NaturalLoop,
+    body: BlockId,
+    preheader: BlockId,
+    numeric: &HashSet<InstId>,
+) -> Option<Vec<Prefix>> {
     let dominance = super::dominance::compute_dominance(function);
     let mut available: HashSet<_> = function.blocks[loop_ref.header.as_raw() as usize].params.iter().copied().collect();
     available.extend(function.blocks[loop_ref.header.as_raw() as usize].instructions.iter()
@@ -152,7 +162,7 @@ fn collect_prefix(function: &Function, loop_ref: &NaturalLoop, body: BlockId, pr
                 && (is_buffer_property_read(function, inst) || is_inlined_scalar_property_read(function, inst))
                 && function.inlined_scopes.contains_key(&id)
                 && inst.operands.first().is_some_and(|&receiver| invariant_receiver(function, loop_ref, receiver));
-            if !(can_duplicate(function, id) || property
+            if !(can_duplicate(function, id) || duplicable_numeric_load(function, id, numeric) || property
                 || (inst.op == Op::IsNull && inst.operands.first().is_some_and(|&value| invariant_receiver(function, loop_ref, value))))
                 || !inst.operands.iter().all(|value| available.contains(value) || value_block(function, *value)
                     .is_some_and(|block| !loop_ref.contains(block) && dominance.dominates(block, preheader)))
@@ -189,6 +199,15 @@ fn collect_prefix(function: &Function, loop_ref: &NaturalLoop, body: BlockId, pr
         prefix.push(Prefix { instructions, next: Some((*cond, failure, failure_when_true)) });
         block = success;
     }
+}
+
+/// Allows cloning only a read from a proven numeric local, never its store or owner cleanup.
+fn duplicable_numeric_load(
+    function: &Function,
+    id: InstId,
+    numeric: &HashSet<InstId>,
+) -> bool {
+    numeric.contains(&id) && function.instructions[id.as_raw() as usize].op == Op::LoadLocal
 }
 
 /// Proves an immutable scalar prefix value without treating loop-carried indexes as invariant.

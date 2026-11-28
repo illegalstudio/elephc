@@ -7,6 +7,9 @@
 //! Key details:
 //! - The entry owns throw-safe cleanup; the decoder assumes the allocation-free preflight succeeded.
 
+use elephc_memoir::values::incomplete_object::{self, PROPERTY_HASH};
+use elephc_memoir::{FrameOffset, ValueTag, values::owned_payload};
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
@@ -16,7 +19,6 @@ use crate::codegen_support::try_handlers::{
 pub(super) fn emit_entry(emitter: &mut Emitter) {
     let boundary_bytes = TRY_HANDLER_SLOT_SIZE + 32;
     let previous_handler_offset = boundary_bytes;
-    let survivor_offset = previous_handler_offset - 8;
 
     // -- entry wrapper: protect begin/end cleanup across hydration-hook throws --
     emitter.blank();
@@ -29,12 +31,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve source length across setjmp
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // checkpoint legacy sharing before a hydration hook can throw
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", previous_handler_offset)); // handler.next = previous exception-handler head
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", survivor_offset)); // preserve the activation frame that survives this boundary
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", previous_handler_offset);
     emitter.instruction(&format!("lea r10, [rbp - {}]", previous_handler_offset)); // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rbp - {}]", boundary_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
@@ -335,14 +332,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // source base
     emitter.instruction("cmp BYTE PTR [r9 + r8], 125");                         // exact `}`
     emitter.instruction("jne __rt_unser_at_array_fail");                        // anything but '}' fails the array
-    emitter.instruction("mov rax, 24");                                         // box the hash: Mixed cell = tag + two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the hash pointer
-    emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 boxed-Mixed heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the Mixed box without discarding the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax], 5");                              // value tag 5 = associative array (hash)
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the hash pointer (ownership transferred)
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the high payload word
+    owned_payload::emit_owned_pointer_from_x86_frame_before_kind(
+        emitter, ValueTag::new(5), FrameOffset::new(32),
+    );
     emitter.instruction("mov rdi, rax");                                        // pass the completed array box to registry publication
     emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // pass this array's reserved zero-based index
     emitter.instruction("call __rt_unserialize_register_array");                // retain a context lease for references after hydration
@@ -401,35 +393,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // unknown classes suppress hooks and use opaque properties
     emitter.instruction("jmp __rt_unser_obj_incomplete_x");                     // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete_x");
-    emitter.instruction("mov rax, 32");                                         // class id, original class name, and opaque property hash
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the incomplete-object payload
-    emitter.instruction(&format!(                                               // materialize the full-width object heap marker before storing it
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object header without an unencodable imm64 memory move
-    emitter.instruction("mov rdi, rax");                                        // object handle allocator input
-    emitter.instruction("call __rt_object_handle_acquire");                     // give the incomplete object a normal PHP handle
-    emitter.instruction("mov QWORD PTR [rax], -2");                             // reserved class id for __PHP_Incomplete_Class
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve incomplete object across string persistence
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // original serialized class-name bytes
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // original serialized class-name length
-    emitter.instruction("call __rt_str_persist");                               // own the class name independently of the source wire
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload incomplete object payload
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // persisted original class-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // persisted original class-name length
-    emitter.instruction("mov QWORD PTR [r10 + 24], 0");                         // property hash is created after its count is parsed
-    emitter.instruction("mov rax, r10");                                        // restore object pointer for the shared allocated path
+    incomplete_object::emit_new(emitter, 32, 48, 56);
     emitter.label("__rt_unser_obj_allocated_x");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the new object pointer
-    emitter.instruction("mov rax, 24");                                         // allocate the object's stable boxed Mixed cell
-    emitter.instruction("call __rt_heap_alloc");                                // create the box before decoding any property values
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the boxed-Mixed heap kind
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the Mixed box with the target heap marker
-    emitter.instruction("mov QWORD PTR [rax], 6");                              // value tag 6 = object
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the object pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // transfer object ownership into the box
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the high payload word
+    owned_payload::emit_owned_pointer_from_slot(emitter, ValueTag::new(6), "QWORD PTR [rbp - 32]");
     emitter.instruction("mov QWORD PTR [rbp - 96], rax");                       // retain the stable result box through hooks and parsing
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reserved value index for this object
     emitter.instruction("cmp r10, 65536");                                      // is the reserved slot inside the registry?
@@ -462,7 +429,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __unserialize magic: parse the body into an assoc array, then call
     //    __unserialize($this, $data) instead of injecting properties by name --
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // object pointer
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_unserialize_ptrs");
     emitter.instruction("mov r10, QWORD PTR [r11 + rax*8]");                    // __unserialize method symbol (0 if none)
     emitter.instruction("test r10, r10");                                       // does the class define __unserialize?
@@ -513,7 +480,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 7");                                          // values are boxed Mixed cells
     emitter.instruction("call __rt_hash_new");                                  // allocate property hash before parsing values
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // incomplete-object payload
-    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // transfer hash ownership into incomplete object
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {PROPERTY_HASH}], rax")); // transfer hash ownership into incomplete object
     emitter.label("__rt_unser_obj_default_props_x");
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the property index
     emitter.label("__rt_unser_at_obj_loop");
@@ -544,12 +511,12 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_unser_obj_skip_prop_store_x");                // transferred value now belongs to the hydrated object
     emitter.label("__rt_unser_obj_store_opaque_prop_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // incomplete-object payload
-    emitter.instruction("mov rdi, QWORD PTR [rdi + 24]");                       // opaque property hash
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {PROPERTY_HASH}]")); // opaque property hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // serialized property key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // serialized property key length
     emitter.instruction("call __rt_unser_store_entry");                         // insert the property, reusing a duplicate key's box
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // incomplete-object payload after a possible hash grow
-    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // retain updated property hash pointer
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {PROPERTY_HASH}], rax")); // retain updated property hash pointer
     emitter.label("__rt_unser_obj_skip_prop_store_x");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the property index
     emitter.instruction("add rcx, 1");                                          // advance the property index
@@ -561,7 +528,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_at_obj_box");                            // incomplete objects never run class hooks
     emitter.label("__rt_unser_obj_wakeup_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // object pointer
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // class id from the object header
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "rax", "r10");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_wakeup_ptrs");
     emitter.instruction("mov r10, QWORD PTR [r11 + rax*8]");                    // __wakeup method symbol (0 if none)
     emitter.instruction("test r10, r10");                                       // does the class define __wakeup?

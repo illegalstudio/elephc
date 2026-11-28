@@ -10,39 +10,70 @@
 //! - A pre-existing throw is preserved without turning successful cleanup or writeback into a failure.
 
 use super::{ElephcRuntimeOps, EvalStatus, RuntimeCellHandle};
+use elephc_memoir::runtime_owners::{
+    CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch,
+};
 
 /// Consumes every supplied owner and returns the accumulated owned destructor exception, if any.
 pub(crate) fn release_native_cells(
     cells: impl IntoIterator<Item = RuntimeCellHandle>,
     pending: Option<RuntimeCellHandle>,
 ) -> Option<RuntimeCellHandle> {
-    release_native_cells_with_status(cells, pending).0
+    release_native_owner_batch(RuntimeOwnerBatch::new(cells), pending)
 }
 
-/// Separates new cleanup failures from the exception already escaping through the caller.
-fn release_native_cells_with_status(
-    cells: impl IntoIterator<Item = RuntimeCellHandle>,
+/// Releases one detached Memoir batch while its outstanding slots remain collector roots.
+pub(crate) fn release_native_owner_batch(
+    cells: RuntimeOwnerBatch,
+    pending: Option<RuntimeCellHandle>,
+) -> Option<RuntimeCellHandle> {
+    release_native_owner_batch_with_status(cells, pending).0
+}
+
+/// Releases a rooted batch while reporting whether cleanup caught a new native exception.
+fn release_native_owner_batch_with_status(
+    cells: RuntimeOwnerBatch,
     pending: Option<RuntimeCellHandle>,
 ) -> (Option<RuntimeCellHandle>, bool) {
     let mut thrown = pending.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr);
     let mut caught = false;
-    for cell in cells {
-        let status = unsafe { super::externs::__elephc_eval_value_release_v3(cell.as_ptr(), &mut thrown) };
-        caught |= status != 0;
-    }
-    ((!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)), caught)
+    super::owner_frames::with_runtime_owners(&cells, || {
+        let released: Result<(), std::convert::Infallible> = cells.release(
+            ReleaseOrder::Forward,
+            CleanupErrorPolicy::Ignore,
+            |cell| {
+                caught |= unsafe {
+                    super::externs::__elephc_eval_value_release_v3(cell.as_ptr(), &mut thrown)
+                } != 0;
+                Ok(())
+            },
+        );
+        let _ = released;
+    });
+    (
+        (!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)),
+        caught,
+    )
 }
 
 impl ElephcRuntimeOps {
+    /// Releases a detached group while every not-yet-retired owner remains collector-visible.
+    pub(in crate::runtime_hooks) fn release_owner_batch(
+        &mut self,
+        cells: RuntimeOwnerBatch,
+    ) -> Result<(), EvalStatus> {
+        let pending = unsafe { (self.context as *mut super::ElephcEvalContext).as_mut() }
+            .and_then(super::ElephcEvalContext::take_pending_throw);
+        let (thrown, caught) = release_native_owner_batch_with_status(cells, pending);
+        self.finish_native_cleanup(thrown, caught)
+    }
+
     /// Releases a group completely, chaining new failures with the context's already pending throw.
     pub(in crate::runtime_hooks) fn release_cells(
         &mut self,
         cells: impl IntoIterator<Item = RuntimeCellHandle>,
     ) -> Result<(), EvalStatus> {
-        let pending = unsafe { (self.context as *mut super::ElephcEvalContext).as_mut() }
-            .and_then(super::ElephcEvalContext::take_pending_throw);
-        let (thrown, caught) = release_native_cells_with_status(cells, pending);
-        self.finish_native_cleanup(thrown, caught)
+        self.release_owner_batch(RuntimeOwnerBatch::new(cells))
     }
 
     /// Unlinks a staging record before consuming its owner inside the native cleanup boundary.

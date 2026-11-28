@@ -8,6 +8,8 @@
 //! - Indexed and associative arrays share PHP weak integer coercion, warnings, and deprecations.
 //! - Fresh normalization arrays are released on success, OS failure, and catchable validation errors.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, CodegenIrError, Result};
@@ -122,7 +124,7 @@ fn emit_load_indexed_signal_value(
             ctx.emitter.instruction(&format!("b.ge {done}"));                   // finish the normalized array
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", NORMALIZE_SOURCE_OFFSET);
             ctx.emitter.instruction(&format!("add x11, x11, x10, lsl #{}", if wide { 4 } else { 3 })); // select the source slot
-            ctx.emitter.instruction("add x11, x11, #24");                       // skip the indexed-array header
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x11");
             ctx.emitter.instruction("ldr x3, [x11]");                           // load the source payload low word
             if wide {
                 ctx.emitter.instruction("ldr x4, [x11, #8]");                   // load the source payload high word
@@ -136,7 +138,7 @@ fn emit_load_indexed_signal_value(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", NORMALIZE_SOURCE_OFFSET);
             ctx.emitter.instruction(&format!("shl r10, {}", if wide { 4 } else { 3 })); // scale by the source slot width
             ctx.emitter.instruction("add r11, r10");                            // select the source slot
-            ctx.emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");           // load the source payload low word
+            packed_slots::emit_load_packed_word(ctx.emitter, "rcx", "r11", 0);
             if wide {
                 ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 32]");        // load the source payload high word
             }
@@ -207,7 +209,7 @@ fn store_normalized_signal_value(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", NORMALIZE_INDEX_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", NORMALIZE_DEST_OFFSET);
-            ctx.emitter.instruction("add x11, x11, #24");                       // address the normalized payload base
+            elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x11");
             ctx.emitter.instruction("str x0, [x11, x10, lsl #3]");              // store the normalized signal value
             ctx.emitter.instruction("add x10, x10, #1");                        // advance the destination index
             abi::emit_store_to_sp(ctx.emitter, "x10", NORMALIZE_INDEX_OFFSET);
@@ -215,7 +217,7 @@ fn store_normalized_signal_value(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", NORMALIZE_INDEX_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", NORMALIZE_DEST_OFFSET);
-            ctx.emitter.instruction("mov QWORD PTR [r11 + r10 * 8 + 24], rax"); // store the normalized signal value
+            elephc_memoir::values::packed_slots::emit_store_indexed_word(ctx.emitter, "r11", "r10", "rax", "r8");
             ctx.emitter.instruction("add r10, 1");                              // advance the destination index
             abi::emit_store_to_sp(ctx.emitter, "r10", NORMALIZE_INDEX_OFFSET);
         }

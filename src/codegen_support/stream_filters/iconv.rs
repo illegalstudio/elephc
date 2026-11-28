@@ -27,11 +27,11 @@
 //!   after, so it always converts under its own options and needs none of the
 //!   write filter's `iconvctl()` restore (#811).
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
-/// Capacity of the shared `_stream_filter_buf` scratch, reused as the input slurp buffer.
-const FILTER_BUF_SIZE: i64 = 65536;
+use elephc_memoir::buffers::stream_scratch::CAPACITY as FILTER_BUF_SIZE;
 
 /// ARM64: 160-byte scratch frame.
 /// [0]=fd [8]=input len [16]=out buf [24]=out cap [32]=temp fd [40]=iconv cd
@@ -61,7 +61,7 @@ pub(crate) fn emit_read_arm64<F>(
     emitter.instruction("str xzr, [sp, #8]");                                   // input length = 0
     emitter.label(&slurp);
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd to read from
-    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x1");
     emitter.instruction("ldr x9, [sp, #8]");                                    // current input length
     emitter.instruction("add x1, x1, x9");                                      // write pointer = scratch base + length
     emitter.instruction(&format!("mov x2, #{}", FILTER_BUF_SIZE));              // scratch capacity
@@ -87,9 +87,7 @@ pub(crate) fn emit_read_arm64<F>(
     emitter.label(&sized);
     emitter.instruction("str x9, [sp, #24]");                                   // save the output buffer capacity
     emitter.instruction("mov x0, x9");                                          // buffer size into the allocator argument
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the converted-data buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #16]");                                   // save the output buffer pointer
 
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
@@ -101,7 +99,7 @@ pub(crate) fn emit_read_arm64<F>(
     emitter.instruction("str x0, [sp, #40]");                                   // save the iconv conversion descriptor
 
     // -- set up the iconv in/out cursors and remaining-byte counts --
-    abi::emit_symbol_address(emitter, "x9", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x9");
     emitter.instruction("str x9, [sp, #48]");                                   // iconv inbuf = scratch base
     emitter.instruction("ldr x9, [sp, #8]");                                    // input length
     emitter.instruction("str x9, [sp, #56]");                                   // iconv inbytesleft = input length
@@ -197,7 +195,7 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // input length = 0
     emitter.label(&slurp);
     emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                        // fd to read from
-    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // scratch base address
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "rsi"); // scratch base address
     emitter.instruction("add rsi, QWORD PTR [rsp + 8]");                        // write pointer = scratch base + length
     emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE));              // scratch capacity
     emitter.instruction("sub rdx, QWORD PTR [rsp + 8]");                        // remaining scratch capacity
@@ -220,12 +218,7 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.label(&sized);
     emitter.instruction("mov QWORD PTR [rsp + 24], r9");                        // save the output buffer capacity
     emitter.instruction("mov rax, r9");                                         // buffer size into the allocator argument
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the converted-data buffer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer
 
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
@@ -237,7 +230,7 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.instruction("mov QWORD PTR [rsp + 40], rax");                       // save the iconv conversion descriptor
 
     // -- set up the iconv in/out cursors and remaining-byte counts --
-    abi::emit_symbol_address(emitter, "r9", "_stream_filter_buf"); // scratch base address
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "r9"); // scratch base address
     emitter.instruction("mov QWORD PTR [rsp + 48], r9");                        // iconv inbuf = scratch base
     emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                         // input length
     emitter.instruction("mov QWORD PTR [rsp + 56], r9");                        // iconv inbytesleft = input length

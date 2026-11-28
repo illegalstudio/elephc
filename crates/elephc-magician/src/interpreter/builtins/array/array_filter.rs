@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_filter",
@@ -122,22 +123,24 @@ fn eval_array_filter_result_from_scope(
         };
 
         let len = values.array_len(array)?;
-        let mut result = values.assoc_new(len)?;
+        let mut result = EvalArrayBuilder::assoc(values, len)?;
         for position in 0..len {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let keep = if let Some(callback) = callback.as_ref() {
-                let args = eval_array_filter_callback_args(mode, key, value)?;
-                let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-                values.truthy(result)?
-            } else {
-                values.truthy(value)?
-            };
-            if keep {
-                result = values.array_set(result, key, value)?;
-            }
+            result.update(|values, owners, _| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let value = owners.stage(values.array_get(array, key)?);
+                let keep = if let Some(callback) = callback.as_ref() {
+                    let args = eval_array_filter_callback_args(mode, key.borrowed(), value.borrowed())?;
+                    let result = owners.stage(eval_evaluated_callable_with_values(
+                        callback, args, context, values,
+                    )?);
+                    values.truthy(result)?
+                } else {
+                    values.truthy(value)?
+                };
+                Ok(keep.then_some((key, value)))
+            })?;
         }
-        Ok(result)
+        Ok(result.finish())
     })
 }
 

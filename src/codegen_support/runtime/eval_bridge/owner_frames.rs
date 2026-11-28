@@ -7,6 +7,7 @@
 //! Key details:
 //! - Rust pins each complete 48-byte record on the current coroutine stack.
 //! - Rust retains cleanup responsibility; native visitors only borrow its real pointer fields.
+//! - Memoir initializes and publishes records; versioned C ABI adaptation stays here.
 //! - Detachment uses the shared exact-record splice and never releases PHP values.
 
 use super::*;
@@ -16,17 +17,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     let record = abi::int_arg_reg_name(emitter.target, 0);
     let visitor = abi::int_arg_reg_name(emitter.target, 1);
     let data = abi::int_arg_reg_name(emitter.target, 2);
-    let scratch = abi::secondary_scratch_reg(emitter);
     label_c_global(emitter, "__elephc_eval_owner_frame_enter_v1");
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_call_frame_top", 0);
-    abi::emit_store_to_address(emitter, scratch, record, 0);
-    abi::emit_store_to_address(emitter, data, record, 16);
-    abi::emit_store_to_address(emitter, visitor, record, 40);
-    abi::emit_store_zero_to_address(emitter, record, 24);
-    abi::emit_store_zero_to_address(emitter, record, 32);
-    abi::emit_symbol_address(emitter, scratch, "__rt_eval_owner_frame_noop");
-    abi::emit_store_to_address(emitter, scratch, record, 8);
-    abi::emit_store_reg_to_symbol(emitter, record, "_exc_call_frame_top", 0);
+    elephc_memoir::owner_records::publish_external(emitter,
+        elephc_memoir::owner_records::ExternalRecord {
+            record_address: record, visitor, data,
+            head_symbol: "_exc_call_frame_top", cleanup_symbol: "__rt_eval_owner_frame_noop",
+        });
     abi::emit_return(emitter);
 
     label_c_global(emitter, "__elephc_eval_owner_frame_leave_v1");

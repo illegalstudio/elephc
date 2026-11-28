@@ -10,6 +10,7 @@
 //! - Returned aliases are retained before receiver cleanup; earlier failures keep precedence.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// A normalized callback plus the receiver owner acquired by an array read.
 #[must_use = "finish the callable scope or transfer its receiver owner"]
@@ -33,17 +34,30 @@ impl ResolvedEvalCallable {
             -> Result<RuntimeCellHandle, EvalStatus>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let result = invoke(&self.callable, context, values);
-        finish_eval_argument_values(result, self.receiver_owner, context, values)
+        let result = finish_eval_argument_values(result, self.receiver_owner, context, values);
+        if !matches!(self.callable, EvaluatedCallable::ForeignContext { .. }) {
+            return result;
+        }
+        let result = result.map(RuntimeOwnerSlot::new);
+        let inventory = result.as_ref().ok();
+        with_runtime_owners(&inventory, || {
+            let retired = finish_callable_contexts(self.callable, context);
+            match &result {
+                Ok(result) => result.finish(retired, |cell| eval_release_value(context, values, cell)),
+                Err(status) => Err(*status),
+            }
+        })
     }
 
     /// Ends a normalization-only probe without transferring its temporary receiver.
     pub(in crate::interpreter) fn release(
         self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
     ) -> Result<(), EvalStatus> {
-        match self.receiver_owner {
+        let released = match self.receiver_owner {
             Some(owner) => release_expr_result(owner, context, values),
             None => Ok(()),
-        }
+        };
+        released.and(finish_callable_contexts(self.callable, context))
     }
 
     /// Validates a registration callback while balancing its temporary receiver on failure too.
@@ -68,6 +82,17 @@ impl ResolvedEvalCallable {
     }
 }
 
+/// Releases nested foreign contexts before their enclosing invocation metadata.
+fn finish_callable_contexts(callable: EvaluatedCallable, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
+    match callable {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let nested = finish_callable_contexts(*callback, context);
+            nested.and(owner.finish(context))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Keeps an optional array builtin callback leased across its entire iteration.
 pub(in crate::interpreter) fn with_optional_evaluated_callable<V: RuntimeValueOps>(
     callback: Option<ResolvedEvalCallable>,
@@ -76,7 +101,13 @@ pub(in crate::interpreter) fn with_optional_evaluated_callable<V: RuntimeValueOp
     invoke: impl FnOnce(Option<&EvaluatedCallable>, &mut ElephcEvalContext, &mut V)
         -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = invoke(callback.as_ref().map(|callback| &callback.callable), context, values);
-    let owners = callback.as_ref().and_then(|callback| callback.receiver_owner);
-    finish_eval_argument_values(result, owners, context, values)
+    match callback {
+        Some(callback) => callback.with_values(context, values, |callback, context, values| {
+            invoke(Some(callback), context, values)
+        }),
+        None => {
+            let result = invoke(None, context, values);
+            finish_eval_argument_values(result, None, context, values)
+        }
+    }
 }

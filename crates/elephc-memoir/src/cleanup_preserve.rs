@@ -1,0 +1,81 @@
+//! Purpose:
+//! Completes one frame-local cleanup while preserving the exception already being unwound.
+//!
+//! Called from:
+//! - Exceptional PHP frame callbacks through the shared typed ABI cleanup helpers.
+//!
+//! Key details:
+//! - C arguments are a unary release entry and its owned payload.
+//! - Destructor exceptions join the active chain and never escape this cleanup call.
+//! - The integer result reports whether this cleanup caught a new throw.
+
+use crate::{abi, Arch, Emitter, FrameOffset, TargetAbi};
+
+const FRAME: usize = 64;
+const ENTRY: usize = 8;
+const PAYLOAD: usize = 16;
+const PENDING: usize = 24;
+const CAUGHT: usize = 32;
+
+/// Emits a bounded release that republishes the accumulated Throwable and returns its caught flag.
+pub fn emit_cleanup_preserve_exception(emitter: &mut impl Emitter) {
+    let result = abi::int_result_reg(emitter);
+    emitter.blank();
+    emitter.label_global("__rt_cleanup_preserve_exception");
+    abi::emit_frame_prologue(emitter, FRAME);
+    for (index, offset) in [ENTRY, PAYLOAD].into_iter().enumerate() {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter, index), offset);
+    }
+    emit_take_exception(emitter, FrameOffset::new(PENDING));
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter, 0), ENTRY);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter, 1), PAYLOAD);
+    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter, 2), PENDING);
+    abi::emit_call_label(emitter, "__rt_cleanup_invoke");
+    abi::store_at_offset(emitter, result, CAUGHT);
+    emit_restore_exception(emitter, FrameOffset::new(PENDING));
+    abi::load_at_offset(emitter, result, CAUGHT);
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_return(emitter);
+}
+
+/// Calls unary cleanup, accumulating its exception and returning whether this call caught one.
+pub fn emit_unary_cleanup_preserving_exception(emitter: &mut impl TargetAbi, entry: &str, payload: &str) {
+    let arg0 = abi::int_arg_reg_name(emitter, 0);
+    let arg1 = abi::int_arg_reg_name(emitter, 1);
+    abi::emit_reg_move(emitter, arg1, payload);
+    abi::emit_symbol_address(emitter, arg0, entry);
+    abi::emit_call_label(emitter, "__rt_cleanup_preserve_exception");
+}
+
+/// Transfers the current exception owner into the frame slot used by guarded releases.
+pub fn emit_take_exception(emitter: &mut impl TargetAbi, pending: FrameOffset) {
+    let result = emitter.int_result_reg();
+    emitter.emit_load_symbol_to_reg(result, "_exc_value", 0);
+    emitter.store_at_offset(result, pending.bytes());
+    emitter.emit_store_zero_to_symbol("_exc_value", 0);
+}
+
+/// Republishes the accumulated exception from the retiring cleanup frame.
+pub fn emit_restore_exception(emitter: &mut impl TargetAbi, pending: FrameOffset) {
+    let result = emitter.int_result_reg();
+    emitter.load_at_offset(result, pending.bytes());
+    emitter.emit_store_reg_to_symbol(result, "_exc_value", 0);
+}
+
+/// Takes and clears the intercepted exception before conditionally releasing its owner.
+pub fn emit_discard_caught_exception(emitter: &mut impl Emitter, released: &str) {
+    let result = emitter.int_result_reg();
+    emitter.emit_load_symbol_to_reg(result, "_exc_value", 0);
+    emitter.emit_store_zero_to_symbol("_exc_value", 0);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz x0, {released}"));                // skip release when there is no intercepted owner
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // check for an intercepted owner
+            emitter.instruction(&format!("jz {released}"));                     // skip release when the pending slot was empty
+        }
+    }
+    emitter.emit_call_label("__rt_decref_any");
+    emitter.label(released);
+}

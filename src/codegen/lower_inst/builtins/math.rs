@@ -9,6 +9,7 @@
 //! - Mixed PHP comparison semantics stay unsupported until the backend can
 //!   materialize and compare boxed `Mixed` values.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Instruction, MinMaxRule};
@@ -724,21 +725,15 @@ fn emit_throw_value_error_aarch64(
     message_symbol: &str,
     message_len: usize,
 ) {
-    ctx.emitter.instruction("mov x0, #56");                                     // request Throwable payload storage for the clamp ValueError
-    ctx.emitter.instruction("bl __rt_heap_alloc");                              // allocate the ValueError object payload
-    ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 marks an object instance allocation
-    ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp the allocation header as a runtime object
-    ctx.emitter.instruction("bl __rt_object_handle_acquire");                   // bind the new object to its PHP object handle
+    throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, "x9", "_spl_value_error_class_id");
     ctx.emitter.instruction("ldr x9, [x9]");                                    // load ValueError's runtime class id for this program
-    ctx.emitter.instruction("str x9, [x0]");                                    // store the ValueError class id in the Throwable header
+    elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "x9", "x0");
     abi::emit_symbol_address(ctx.emitter, "x9", message_symbol);
-    ctx.emitter.instruction("str x9, [x0, #8]");                                // store the static ValueError message pointer
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     ctx.emitter.instruction(&format!("mov x9, #{}", message_len));              // materialize the static ValueError message length
-    ctx.emitter.instruction("str x9, [x0, #16]");                               // store the exception message length
-    ctx.emitter.instruction("str xzr, [x0, #24]");                              // store the default zero exception code
-    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-    ctx.emitter.instruction("str xzr, [x0, #40]");                              // previous defaults to null
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
+    throwable_storage::emit_default_fields(ctx.emitter, "x0");
     abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
     ctx.emitter.instruction("str x0, [x9]");                                    // publish the active ValueError object
     ctx.emitter.instruction("b __rt_throw_current");                            // enter the standard exception unwinder
@@ -753,25 +748,17 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("push rbp");                                        // preserve caller frame pointer for exception allocation
     ctx.emitter.instruction("mov rbp, rsp");                                    // establish an aligned helper frame for heap allocation
     ctx.emitter.instruction("sub rsp, 16");                                     // keep the nested heap allocation call 16-byte aligned
-    ctx.emitter.instruction("mov rax, 56");                                     // request Throwable payload storage for the clamp ValueError
-    ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the ValueError object payload
-    ctx.emitter.instruction(
-        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-    );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
-    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the allocation header as a runtime object
-    ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
+    throwable_storage::emit_allocate(ctx.emitter);
     ctx.emitter.instruction(
         "mov r10, QWORD PTR [rip + _spl_value_error_class_id]"
     );                                                                          // load ValueError's runtime class id for this program
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header
+    elephc_memoir::values::object_storage::emit_store_class_id(ctx.emitter, "r10", "rax");
     ctx.emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));   // materialize the static ValueError message pointer
-    ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store the static ValueError message pointer
+    abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     ctx.emitter.instruction(
         &format!("mov QWORD PTR [rax + 16], {}", message_len)
     );                                                                          // store the exception message length
-    ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // store the default zero exception code
-    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-    ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // previous defaults to null
+    throwable_storage::emit_default_fields(ctx.emitter, "rax");
     ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");           // publish the active ValueError object
     ctx.emitter.instruction("mov rsp, rbp");                                    // release the helper frame before throwing
     ctx.emitter.instruction("pop rbp");                                         // restore caller frame pointer before throwing

@@ -14,6 +14,93 @@
 
 use super::*;
 
+/// Issue #2526: generic object storage preserves a Closure's tag, identity and callable payload.
+#[test]
+fn test_mixed_closure_survives_generic_object_boundaries() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class Holder {
+    public object $value;
+    public static object $shared;
+}
+final class GenericPropertyTarget { public string $marker = 'property'; }
+function relay_object(object $value): object { return $value; }
+function widen_object(object $value): object|false { return $value; }
+function identity_mixed(mixed $value): mixed { return $value; }
+function invoke_mixed(mixed $callable, int $value): int { return $callable($value); }
+function read_generic_property(object $value): string { return $value->marker; }
+function read_nullable_generic_property(?object $value): string { return $value?->marker ?? 'null'; }
+$ordinary = new stdClass();
+$ordinaryReturned = relay_object($ordinary);
+$holder = new Holder();
+$holder->value = $ordinary;
+Holder::$shared = $ordinary;
+echo get_class($ordinaryReturned), '|', get_class($holder->value), '|',
+    get_class(Holder::$shared), "\n";
+echo (int) ($ordinaryReturned === $ordinary), '|', (int) ($holder->value === $ordinary), '|',
+    (int) (Holder::$shared === $ordinary), "\n";
+echo read_generic_property(new GenericPropertyTarget()), '|',
+    read_nullable_generic_property(new GenericPropertyTarget()), "\n";
+$ordinaryWeak = WeakReference::create(identity_mixed($ordinary));
+echo get_class($ordinaryWeak->get()), '|', (int) ($ordinaryWeak->get() === $ordinary), "\n";
+unset($ordinaryWeak, $ordinaryReturned, $holder, $ordinary);
+$closure = fn(int $value): int => $value + 1;
+$mixed = identity_mixed($closure);
+$returned = relay_object($mixed);
+$returnedFromUnion = relay_object(widen_object($closure));
+$holder = new Holder();
+$holder->value = $mixed;
+Holder::$shared = $mixed;
+echo get_class($returned), '|', get_class($holder->value), '|', get_class(Holder::$shared), "\n";
+echo (int) ($returned === $closure), '|', (int) ($holder->value === $closure), '|',
+    (int) (Holder::$shared === $closure), "\n";
+$instanceCall = $holder->value;
+$staticCall = Holder::$shared;
+echo invoke_mixed($returned, 1), '|', invoke_mixed($instanceCall, 2), '|',
+    invoke_mixed($staticCall, 3), "\n";
+echo get_class($returnedFromUnion), '|', (int) ($returnedFromUnion === $closure), '|',
+    invoke_mixed($returnedFromUnion, 4), "\n";
+echo (int) (spl_object_id($returned) === spl_object_id($closure)), '|',
+    (int) (spl_object_hash($returned) === spl_object_hash($closure)), "\n";
+$closureWeak = WeakReference::create($mixed);
+echo get_class($closureWeak->get()), '|', (int) ($closureWeak->get() === $closure), '|',
+    invoke_mixed($closureWeak->get(), 5), "\n";
+unset($closureWeak, $returned, $returnedFromUnion, $instanceCall, $staticCall, $holder, $mixed, $closure);
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "stdClass|stdClass|stdClass\n1|1|1\nproperty|property\nstdClass|1\nClosure|Closure|Closure\n1|1|1\n2|3|4\nClosure|1|5\n1|1\nClosure|1|6\n",
+        "{}",
+        out.stderr
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A closure loaded from an eval-visible Mixed local transfers its owner into object boxing.
+#[test]
+fn test_mixed_closure_object_argument_releases_eval_visible_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function accept_object(object $value): void {}
+$captured = str_repeat('c', 30);
+$closure = fn(): string => $captured;
+$weak = WeakReference::create($closure);
+accept_object($closure);
+unset($closure);
+echo $weak->get() === null ? 'dead' : 'live';
+unset($weak, $captured);
+gc_collect_cycles();
+$source = '; // ' . $argc;
+eval($source);
+"#,
+    );
+    assert_eq!(out.stdout, "dead", "{}", out.stderr);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Issue #2309 repro: an array element read (`mixed`) returned from `?Timer`, as revolt's
 /// `TimerQueue::extract()` does.
 #[test]
@@ -322,11 +409,9 @@ try { echo cleanup($a), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\
     assert_eq!(out, "caught\nfinally|narrow(): Return value must be of type ?T, ArrayObject returned\n");
 }
 
-/// A `Closure` cannot live in elephc's raw `object` storage, so a bare `object` return or
-/// parameter rejects it with the boundary `TypeError` (PHP accepts it), as the `object`
-/// property store already does; boxed `?object` storage keeps it.
+/// Issue #2526: every generic `object` boundary accepts Closure through boxed storage.
 #[test]
-fn test_closure_is_rejected_at_raw_object_boundaries() {
+fn test_closure_is_accepted_at_generic_object_boundaries() {
     let out = compile_and_run(
         r#"<?php
 function asObject(mixed $m): object { return $m; }
@@ -344,18 +429,18 @@ try { echo take($m), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
 echo get_class(asObject(new ArrayObject([]))), "\n";
 "#,
     );
-    assert_eq!(out, r#"asObject(): Return value must be of type object, Closure returned
+    assert_eq!(out, r#"accepted
 bool(true)
-take(): Argument #1 ($o) must be of type object, Closure given
-take(): Argument #1 ($o) must be of type object, Closure given
-take(): Argument #1 ($o) must be of type object, Closure given
+Closure
+Closure
+Closure
 ArrayObject
 "#);
 }
 
 /// PHP evaluates every argument before it checks a declared parameter type, so a rejected
 /// `mixed` argument still lets a later argument's side effects run, positional or named; a
-/// raw `object`/class declaration still receives the unboxed object when the check passes.
+/// named-class declaration still receives the unboxed object when the check passes.
 #[test]
 fn test_mixed_class_parameter_checks_run_after_later_arguments() {
     let out = compile_and_run(

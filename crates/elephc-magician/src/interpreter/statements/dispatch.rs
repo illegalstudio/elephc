@@ -14,6 +14,7 @@
 //!   execute in source order.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Checks program provenance, seeds CLI globals, and binds templates and early declarations
 /// before eval/include execution.
@@ -333,9 +334,10 @@ pub(in crate::interpreter) fn execute_stmt(
         )?)),
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
-            for replaced in set_reference_alias(context, scope, target, source, values)? {
-                values.release(replaced)?;
-            }
+            let replaced = set_reference_alias(context, scope, target, source, values)?;
+            crate::interpreter::scope_cells::retire_replaced_scope_cells(
+                replaced, context, values,
+            )?;
             Ok(EvalControl::None)
         }
         stmt @ (
@@ -377,64 +379,75 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::TypedVar { name, declared, value } => {
-            let value = eval_owned_expr(value, context, scope, values)?;
-            let checked = validate_generic_local(declared, name, value, context, values);
-            if let Err(error) = checked { let _ = eval_release_value(context, values, value); return Err(error); }
-            let previous = scope.local_type(name).cloned();
-            scope.declare_local_type(name.clone(), declared.clone());
-            let replaced = match set_owned_scope_cell(context, scope, name.clone(), value, values) {
-                Ok(replaced) => replaced,
-                Err(status) => {
-                    if let Some(previous) = previous { scope.declare_local_type(name.clone(), previous); }
-                    else { scope.clear_local_type(name); }
-                    return Err(status);
+            let value = RuntimeOwnerSlot::new(eval_owned_expr(value, context, scope, values)?);
+            with_runtime_owners(&value, || {
+                let checked = validate_generic_local(
+                    declared,
+                    name,
+                    value.borrowed(),
+                    context,
+                    values,
+                );
+                if let Err(error) = checked {
+                    let _ = eval_release_value(context, values, value.take());
+                    return Err(error);
                 }
-            };
-            for replaced in replaced {
-                eval_release_value(context, values, replaced)?;
-            }
-            if let Some(cell) = visible_scope_cell(context, scope, name) {
-                if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[declared.clone()]); }
-            }
-            Ok(EvalControl::None)
+                let previous = scope.local_type(name).cloned();
+                scope.declare_local_type(name.clone(), declared.clone());
+                let replaced = match set_owned_scope_cell(
+                    context,
+                    scope,
+                    name.clone(),
+                    value.take(),
+                    values,
+                ) {
+                    Ok(replaced) => replaced,
+                    Err(status) => {
+                        if let Some(previous) = previous {
+                            scope.declare_local_type(name.clone(), previous);
+                        } else {
+                            scope.clear_local_type(name);
+                        }
+                        return Err(status);
+                    }
+                };
+                crate::interpreter::scope_cells::retire_replaced_scope_cells(
+                    replaced, context, values,
+                )?;
+                if let Some(cell) = visible_scope_cell(context, scope, name) {
+                    if values.is_reference(cell)? {
+                        context.bind_local_reference_types(cell, &[declared.clone()]);
+                    }
+                }
+                Ok(EvalControl::None)
+            })
         }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_owned_expr(value, context, scope, values)?;
-            for replaced in set_owned_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                values,
-            )? {
-                eval_release_value(context, values, replaced)?;
-            }
+            let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+            crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::IncDecVar { name, increment } => {
-            let current = eval_owned_expr(
+            let current = RuntimeOwnerSlot::new(eval_owned_expr(
                 &EvalExpr::LoadVar(name.clone()),
                 context,
                 scope,
                 values,
-            )?;
-            let value = match eval_inc_dec_value(current, *increment, values) {
-                Ok(value) => value,
-                Err(status) => {
-                    let _ = eval_release_value(context, values, current);
-                    return Err(status);
-                }
-            };
-            eval_release_value(context, values, current)?;
-            for replaced in set_owned_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                values,
-            )? {
-                eval_release_value(context, values, replaced)?;
-            }
+            )?);
+            let value = RuntimeOwnerSlot::empty();
+            let value = with_runtime_owners(&(&current, &value), || {
+                let operation = eval_inc_dec_value(current.borrowed(), *increment, values)
+                    .map(|next| {
+                        value.replace(Some(next));
+                    });
+                let released = eval_release_value(context, values, current.take());
+                value.finish(operation.and(released), |value| {
+                    eval_release_value(context, values, value)
+                })
+            })?;
+            let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+            crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Switch { expr, cases } => {

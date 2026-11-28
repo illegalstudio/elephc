@@ -701,6 +701,15 @@ impl TableGate {
     /// `RESET_TAKEOVER` is a reset whose process died, which this one takes
     /// over.
     pub(crate) fn exclusive<T>(base: usize, reset: impl FnOnce() -> T) -> T {
+        Self::exclusive_with_writer_deadline(base, reset, |started| started.elapsed() < GATE_WAIT)
+    }
+
+    /// Runs an exclusive reset while the caller's deadline permits waiting for active writers.
+    pub(crate) fn exclusive_with_writer_deadline<T>(
+        base: usize,
+        reset: impl FnOnce() -> T,
+        mut before_writer_deadline: impl FnMut(std::time::Instant) -> bool,
+    ) -> T {
         let _turn = RESETS.lock().unwrap_or_else(|e| e.into_inner());
         let word = shared_word(base, ROUTES_GATE_OFFSET);
         let claimed = std::time::Instant::now();
@@ -721,7 +730,7 @@ impl TableGate {
             }
         }
         let started = std::time::Instant::now();
-        while word.load(Ordering::Acquire) & !GATE_RESETTING != 0 && started.elapsed() < GATE_WAIT {
+        while word.load(Ordering::Acquire) & !GATE_RESETTING != 0 && before_writer_deadline(started) {
             std::thread::yield_now();
         }
         let result = reset();

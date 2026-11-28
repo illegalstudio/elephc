@@ -8,6 +8,8 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -42,7 +44,7 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #32]");                                   // save result value_type tag
 
     // -- create hash table with capacity = length * 2 --
-    emitter.instruction("ldr x0, [x0]");                                        // x0 = keys array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x0", "x0"); // x0 = keys array length
     emitter.instruction("lsl x0, x0, #1");                                      // x0 = length * 2 (capacity with headroom)
     emitter.instruction("mov x9, #16");                                         // x9 = minimum capacity
     emitter.instruction("cmp x0, x9");                                          // compare with minimum
@@ -56,7 +58,7 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_combine_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload keys array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // x3 = keys array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x3", "x0"); // x3 = keys array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // x4 = i
     emitter.instruction("cmp x4, x3");                                          // compare i with length
     emitter.instruction("b.ge __rt_array_combine_done");                        // if i >= length, done
@@ -64,14 +66,14 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
     // -- load key string from keys[i] (16 bytes per string element) --
     emitter.instruction("lsl x5, x4, #4");                                      // x5 = i * 16 (byte offset for string element)
     emitter.instruction("add x5, x0, x5");                                      // x5 = keys_array + byte offset
-    emitter.instruction("add x5, x5, #24");                                     // x5 = skip header to data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x5");
     emitter.instruction("ldr x1, [x5]");                                        // x1 = key_ptr = keys[i].ptr
     emitter.instruction("ldr x2, [x5, #8]");                                    // x2 = key_len = keys[i].len
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
 
     // -- load value from values[i] (8 bytes per int element) --
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload values array pointer
-    emitter.instruction("add x5, x5, #24");                                     // x5 = values data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x5");
     emitter.instruction("ldr x3, [x5, x4, lsl #3]");                            // x3 = values[i]
     emitter.instruction("mov x4, #0");                                          // x4 = value_hi = 0
 
@@ -110,7 +112,7 @@ fn emit_array_combine_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the string-key indexed array across nested hash-constructor and insertion helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the scalar-value indexed array across nested hash-constructor and insertion helper calls
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the requested hash value_type tag across nested hash-constructor and insertion helper calls
-    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the string-key indexed-array logical length before deriving the result hash capacity
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "rdi", "rdi"); // load the string-key indexed-array logical length before deriving the result hash capacity
     emitter.instruction("shl rdi, 1");                                          // double the string-key count to give the destination hash some insertion headroom
     emitter.instruction("cmp rdi, 16");                                         // clamp the destination hash capacity to the minimum bucket count expected by the runtime
     emitter.instruction("jge __rt_array_combine_capacity_x86");                 // keep the doubled key-count capacity when it already meets the minimum bucket count
@@ -123,12 +125,12 @@ fn emit_array_combine_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_combine_loop_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the array-combine loop index before reading the next key/value pair
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the string-key indexed array before reading its logical length and selected key slot
-    emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare the loop index against the string-key indexed-array logical length
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "rcx", "r10"); // compare the loop index against the string-key indexed-array logical length
     emitter.instruction("jge __rt_array_combine_done_x86");                     // finish once every key/value pair has been inserted into the destination hash table
     emitter.instruction("mov r11, rcx");                                        // copy the loop index before scaling it to the 16-byte string slot size
     emitter.instruction("shl r11, 4");                                          // scale the loop index by the 16-byte string slot size used by the key array
     emitter.instruction("add r10, r11");                                        // advance from the key-array base pointer to the selected string key slot
-    emitter.instruction("add r10, 24");                                         // skip the indexed-array header to reach the selected string key slot payload
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination hash pointer before inserting the selected key/value pair
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the selected key pointer from the string-key indexed array
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the selected key length from the string-key indexed array
@@ -138,7 +140,7 @@ fn emit_array_combine_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // move the normalized key low word back into the hash-set key register
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the array-combine loop index after key normalization clobbered caller-saved registers
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the scalar-value indexed array before reading the selected scalar payload
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the scalar-value indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rcx, QWORD PTR [r10 + rcx * 8]");                  // load the selected scalar payload into the low-word hash insertion register
     emitter.instruction("xor r8d, r8d");                                        // clear the high-word hash insertion register because scalar array-combine payloads use only the low word
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the requested hash value_type tag into the hash insertion tag register

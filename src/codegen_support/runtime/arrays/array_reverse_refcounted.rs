@@ -43,7 +43,7 @@ pub fn emit_array_reverse_refcounted(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
-    emitter.instruction("ldr x9, [x0]");                                        // load source array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load source array length
     emitter.instruction("str x9, [sp, #8]");                                    // save source length
 
     // -- create destination array with matching capacity --
@@ -59,7 +59,7 @@ pub fn emit_array_reverse_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x4, #0");                                          // test whether source index dropped below zero
     emitter.instruction("b.lt __rt_array_reverse_ref_done");                    // finish when every source element has been copied
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("add x2, x1, #24");                                     // compute source data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("ldr x1, [x2, x4, lsl #3]");                            // load borrowed source payload
     emitter.instruction("str x4, [sp, #24]");                                   // preserve source index across helper calls
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload destination array pointer
@@ -90,7 +90,7 @@ fn emit_array_reverse_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source indexed-array pointer, length, and reversed destination array
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the refcounted reverse bookkeeping while keeping helper calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across the destination constructor call
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before sizing the reversed destination array
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the source indexed-array logical length before sizing the reversed destination array
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the source indexed-array logical length across the destination constructor call and reverse loop
     emitter.instruction("mov rdi, r10");                                        // pass the source indexed-array logical length as the reversed destination capacity to the shared constructor
     emitter.instruction("mov rsi, 8");                                          // request 8-byte payload slots for the reversed refcounted indexed array
@@ -106,7 +106,7 @@ fn emit_array_reverse_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, rcx");                                        // back up from the source length by the number of already-copied payloads
     emitter.instruction("sub r10, 1");                                          // land on the current reverse-order source payload index
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before reading the reverse-order payload
-    emitter.instruction("lea r11, [r11 + 24]");                                 // compute the payload base address for the source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov rsi, QWORD PTR [r11 + r10 * 8]");                  // load the current borrowed refcounted payload from the source indexed array
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the reversed destination indexed-array pointer before appending the retained payload
     emitter.instruction("call __rt_array_push_refcounted");                     // append the retained reverse-order payload into the reversed destination indexed array

@@ -209,19 +209,23 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Creates a boxed resource Mixed cell through the generated runtime wrapper.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
-        let resource = Self::handle(unsafe { __elephc_eval_value_resource(value) })?;
-        if let Some(context) = unsafe { self.context.as_ref() } {
-            let subtype = match context.stream_resources().resource_type(value) {
-                Some("stream-context") => Some(10),
-                Some("stream filter") => Some(9),
-                Some("Unknown") => Some(-1),
-                _ => None,
-            };
-            if let Some(subtype) = subtype {
-                unsafe { __elephc_eval_resource_state(resource.as_ptr(), subtype); }
+        let resource = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(Self::handle(
+            unsafe { __elephc_eval_value_resource(value) },
+        )?);
+        crate::runtime_hooks::owner_frames::with_runtime_owners(&resource, || {
+            if let Some(context) = unsafe { self.context.as_ref() } {
+                let subtype = match context.stream_resources().resource_type(value) {
+                    Some("stream-context") => Some(10),
+                    Some("stream filter") => Some(9),
+                    Some("Unknown") => Some(-1),
+                    _ => None,
+                };
+                if let Some(subtype) = subtype {
+                    unsafe { __elephc_eval_resource_state(resource.borrowed().as_ptr(), subtype); }
+                }
             }
-        }
-        Ok(resource)
+            Ok(resource.take())
+        })
     }
 
     /// Creates a boxed inert hash-context Mixed cell through the generated runtime wrapper.

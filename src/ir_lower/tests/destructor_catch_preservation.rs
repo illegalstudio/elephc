@@ -299,8 +299,8 @@ fn mixed_local_overwrite_bounds_destructor_cleanup_on_every_target() {
             "{target}: the local overwrite must install an EIR handler",
         );
         assert!(
-            function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot),
-            "{target}: the old Mixed owner must retire before replacement",
+            function.instructions.iter().any(crate::ir::Instruction::replaces_local_owner),
+            "{target}: the replacing store must retire the old Mixed owner",
         );
         let body = function_assembly(&module, "rebindWithSameFrameCatch", target);
         assert_local_retirement_exception_gate(&body, target);
@@ -317,7 +317,7 @@ fn pending_finally_overwrite_bypasses_local_retirement_rethrow_on_every_target()
             "rebindDuringPendingFinally",
         );
         assert!(
-            function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot),
+            function.instructions.iter().any(crate::ir::Instruction::replaces_local_owner),
             "{target}: the replaced Mixed owner must retire inside finally",
         );
         let body = function_assembly(&module, "rebindDuringPendingFinally", target);
@@ -332,7 +332,7 @@ fn scalar_mixed_loop_uses_only_direct_retirement_on_every_target() {
         let (module, function) =
             lower_function(SCALAR_MIXED_LOOP_SOURCE, target, "accumulateScalars");
         assert!(
-            function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot),
+            function.instructions.iter().any(crate::ir::Instruction::replaces_local_owner),
             "{target}: the boxed accumulator must retire its previous owner",
         );
         let body = function_assembly(&module, "accumulateScalars", target);

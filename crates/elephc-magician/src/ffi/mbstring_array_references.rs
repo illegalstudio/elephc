@@ -14,6 +14,7 @@ use elephc_builtin_contract::mbstring_abi::{host::{MbHostValueV1, HOST_INT, HOST
 use crate::{abi::{ElephcEvalContext, ABI_VERSION}, context::EvalArrayReferenceKey,
     errors::EvalStatus, interpreter::array_references::read_owned_array_reference,
     runtime_hooks::ElephcRuntimeOps, value::RuntimeCellHandle};
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Copies the current referenced entry or returns success with no owner when no alias exists.
 ///
@@ -52,35 +53,47 @@ unsafe fn resolve(
     unsafe { *out = std::ptr::null_mut(); }
     if !identity.is_null() { unsafe { *identity = std::ptr::null_mut(); } }
     let Some(hooks) = (unsafe { hooks.as_ref() }) else { return 1; };
-    let mut owners = Vec::new();
-    let mut pending = None;
-    let mut status = catch_unwind(AssertUnwindSafe(|| {
-        let result = unsafe { lookup(context, original, key, &mut owners, &mut pending) };
-        match result {
-            Ok(Some(value)) => {
-                if identity.is_null() { owners.push(value); }
-                else { unsafe { *identity = value.as_ptr(); } }
-                normalized(unsafe { (hooks.clone_value)(std::ptr::null_mut(), value.as_ptr(), out) })
-            },
-            Ok(None) => 0,
-            Err(_) => 1,
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let mut pending = None;
+        let mut status = catch_unwind(AssertUnwindSafe(|| {
+            let result = unsafe { lookup(context, original, key, &owners, &mut pending) };
+            match result {
+                Ok(Some(value)) => {
+                    if identity.is_null() { owners.stage(value); }
+                    else { unsafe { *identity = value.as_ptr(); } }
+                    normalized(unsafe { (hooks.clone_value)(std::ptr::null_mut(), value.as_ptr(), out) })
+                },
+                Ok(None) => 0,
+                Err(_) => 1,
+            }
+        })).unwrap_or(1);
+        if let Some(throwable) = pending {
+            let published = normalized(unsafe { (hooks.publish_throw)(std::ptr::null_mut(), throwable.as_ptr()) });
+            status = if published == 0 { 2 } else { published };
         }
-    })).unwrap_or(1);
-    if let Some(throwable) = pending {
-        let published = normalized(unsafe { (hooks.publish_throw)(std::ptr::null_mut(), throwable.as_ptr()) });
-        status = if published == 0 { 2 } else { published };
-    }
-    for owner in owners.into_iter().rev() {
-        let released = normalized(unsafe { (hooks.release_owner)(std::ptr::null_mut(), owner.as_ptr()) });
-        if released == 2 || (released != 0 && status != 2) { status = released; }
-    }
-    status
+        let released: Result<(), std::convert::Infallible> = owners.take_all().release(
+            elephc_memoir::runtime_owners::ReleaseOrder::Reverse,
+            elephc_memoir::runtime_owners::CleanupErrorPolicy::Ignore,
+            |owner| {
+                let released = normalized(unsafe {
+                    (hooks.release_owner)(std::ptr::null_mut(), owner.as_ptr())
+                });
+                if released == 2 || (released != 0 && status != 2) {
+                    status = released;
+                }
+                Ok(())
+            },
+        );
+        let _ = released;
+        status
+    })
 }
 
 /// Resolves alias metadata and ends the context borrow before native copy or cleanup callbacks.
 unsafe fn lookup(
     context: *mut ElephcEvalContext, original: *const c_void, key: *const MbHostValueV1,
-    owners: &mut Vec<RuntimeCellHandle>, pending: &mut Option<RuntimeCellHandle>,
+    owners: &StagedRuntimeOwners, pending: &mut Option<RuntimeCellHandle>,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let context = unsafe { context.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
     if context.abi_version() != ABI_VERSION { return Err(EvalStatus::RuntimeFatal); }

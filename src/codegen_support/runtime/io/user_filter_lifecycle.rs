@@ -15,6 +15,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::guards;
+use elephc_memoir::buffers::stream_tables;
 
 /// Emits close and refused-creation rollback entries that consume every selected table owner.
 pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
@@ -33,14 +34,15 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, arg, frame, 0);
     abi::emit_store_to_address(emitter, selected, frame, 24);
     emitter.instruction(if arm { "add x10, x0, x0" } else { "lea r10, [rdi + rdi]" }); // derive the read-direction table index
-    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "_user_filter_instances");
     for direction in 0..2 {
         let detach = format!("__rt_user_filter_detach_{direction}");
         let saved = format!("__rt_user_filter_saved_{direction}");
         if direction == 1 {
             emitter.instruction(if arm { "add x10, x10, #1" } else { "inc r10" }); // select the write-direction table slot
         }
-        emitter.instruction(if arm { "ldr x0, [x9, x10, lsl #3]" } else { "mov rax, QWORD PTR [r9 + r10 * 8]" }); // transfer the table's object reference
+        stream_tables::emit_load_filter_instance(
+            emitter, result, if arm { "x10" } else { "r10" }, if arm { "x9" } else { "r9" },
+        );
         emitter.instruction(if arm { "cmp x1, #0" } else { "test rsi, rsi" });  // zero selects the ordinary close of every direction
         emitter.instruction(&format!("{} {detach}", if arm { "b.eq" } else { "jz" })); // a full close has no object selection filter
         emitter.instruction(if arm { "cmp x0, x1" } else { "cmp rax, rsi" });   // a refused attach owns only matching provisional roots
@@ -48,12 +50,16 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         abi::emit_load_int_immediate(emitter, result, 0);
         abi::emit_jump(emitter, &saved);
         emitter.label(&detach);
-        emitter.instruction(if arm { "str xzr, [x9, x10, lsl #3]" } else { "mov QWORD PTR [r9 + r10 * 8], 0" }); // retire the root before any PHP callback
+        stream_tables::emit_clear_filter_instance(
+            emitter, if arm { "x10" } else { "r10" }, if arm { "x9" } else { "r9" },
+        );
         emitter.instruction(if arm { "cmp x0, #0" } else { "test rax, rax" });  // preserve builtin filter IDs in slots without user objects
         emitter.instruction(&format!("{} {saved}", if arm { "b.eq" } else { "jz" })); // empty user slots have no filter ID to retire
         abi::emit_load_from_address(emitter, if arm { "x12" } else { "r8" }, frame, 0);
-        abi::emit_symbol_address(emitter, if arm { "x11" } else { "r11" }, if direction == 0 { "_stream_read_filters" } else { "_stream_write_filters" });
-        emitter.instruction(if arm { "strb wzr, [x11, x12]" } else { "mov BYTE PTR [r11 + r8], 0" }); // retire the matching user-filter ID with its instance
+        let filter_table = if direction == 0 { stream_tables::READ_FILTERS } else { stream_tables::WRITE_FILTERS };
+        filter_table.emit_clear_indexed_byte(
+            emitter, if arm { "x12" } else { "r8" }, if arm { "x11" } else { "r11" },
+        );
         emitter.label(&saved);
         abi::emit_store_to_address(emitter, result, frame, 8 + direction * 8);
     }
@@ -107,10 +113,17 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         emitter.instruction(if arm { "orr x9, x9, x11" } else { "or r9, r11" }); // merge saved resource policy after symbol addressing borrows scratch registers
         emitter.instruction(if arm { "cmp x9, #0" } else { "test r9, r9" });    // honor pending native-extension unwinding
         emitter.instruction(&format!("{} {release}", if arm { "b.ne" } else { "jnz" })); // skip PHP hooks while still releasing ownership
-        emitter.instruction(if arm { "ldr x10, [x0]" } else { "mov r10, QWORD PTR [rdi]" }); // resolve the instance's class id
+        elephc_memoir::values::object_storage::emit_load_class_id(
+            emitter, if arm { "x10" } else { "r10" }, arg,
+        );
         abi::emit_symbol_address(emitter, if arm { "x11" } else { "r11" }, "_user_filter_vtable_ptrs");
         emitter.instruction(if arm { "ldr x11, [x11, x10, lsl #3]" } else { "mov r11, QWORD PTR [r11 + r10 * 8]" }); // borrow the class filter method table
-        emitter.instruction(if arm { "ldr x11, [x11, #16]" } else { "mov r11, QWORD PTR [r11 + 16]" }); // slot two contains the optional onClose method
+        stream_tables::emit_load_user_filter_vtable_field(
+            emitter,
+            if arm { "x11" } else { "r11" },
+            if arm { "x11" } else { "r11" },
+            stream_tables::UserFilterVtableField::OnClose,
+        );
         emitter.instruction(if arm { "cmp x11, #0" } else { "test r11, r11" }); // detect an omitted lifecycle hook
         emitter.instruction(&format!("{} {release}", if arm { "b.eq" } else { "jz" })); // release objects without onClose as well
         abi::emit_call_reg(emitter, if arm { "x11" } else { "r11" });
@@ -136,15 +149,16 @@ fn emit_close_fd_guard(emitter: &mut Emitter) {
     emitter.label_global("__rt_user_filter_close_fd");
     // -- ordinary descriptors need no exception guard when no filter object can run PHP --
     emitter.instruction(if arm { "add x10, x0, x0" } else { "lea r10, [rdi + rdi]" }); // select both user-filter direction entries
-    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "_user_filter_instances");
+    stream_tables::emit_load_filter_instance_pair_presence(
+        emitter,
+        if arm { "x11" } else { "r11" },
+        if arm { "x12" } else { "r12" },
+        if arm { "x10" } else { "r10" },
+        if arm { "x9" } else { "r9" },
+    );
     if arm {
-        emitter.instruction("add x9, x9, x10, lsl #3");                         // derive the adjacent read/write instance pair
-        emitter.instruction("ldp x11, x12, [x9]");                              // inspect both owners without consuming them
-        emitter.instruction("orr x11, x11, x12");                               // either live instance can run a PHP lifecycle hook
         emitter.instruction("cbnz x11, __rt_user_filter_close_guard");          // guard descriptor ownership before running PHP
     } else {
-        emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");               // inspect the read-direction instance
-        emitter.instruction("or r11, QWORD PTR [r9 + r10 * 8 + 8]");            // include the write-direction instance
         emitter.instruction("jnz __rt_user_filter_close_guard");                // publish cleanup when either instance is live
     }
     abi::emit_jump(emitter, "__rt_user_filter_release_fd");
@@ -152,12 +166,7 @@ fn emit_close_fd_guard(emitter: &mut Emitter) {
     // -- publish descriptor ownership before a close hook can escape --
     abi::emit_frame_prologue(emitter, 64);
     abi::emit_store_to_address(emitter, arg, frame, 0);
-    abi::emit_store_to_address(emitter, arg, frame, 40);
-    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "__rt_user_filter_close_unwind");
-    abi::emit_store_to_address(emitter, if arm { "x9" } else { "r9" }, frame, 24);
-    emitter.instruction(if arm { "add x0, sp, #16" } else { "lea rdi, [rsp + 16]" }); // identify the stack-local descriptor cleanup guard
-    emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // publish this guard as a new activation group
-    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
+    abi::emit_guard_owned_at_stack(emitter, arg, "__rt_user_filter_close_unwind", 16);
     abi::emit_load_from_address(emitter, arg, frame, 0);
     abi::emit_call_label(emitter, "__rt_user_filter_release_fd");
     // -- normal completion leaves the final native close to the existing fclose lowerer --
@@ -168,13 +177,14 @@ fn emit_close_fd_guard(emitter: &mut Emitter) {
 
     // -- exceptional completion retires filter state and closes the descriptor without PHP --
     emitter.label_global("__rt_user_filter_close_unwind");
-    abi::emit_load_from_address(emitter, if arm { "x1" } else { "rax" }, arg, 24);
-    abi::emit_load_int_immediate(emitter, if arm { "x9" } else { "r9" }, -1);
-    abi::emit_store_to_address(emitter, if arm { "x9" } else { "r9" }, arg, 24);
+    elephc_memoir::guarded_owners::emit_take_resource(
+        emitter, arg, if arm { "x1" } else { "rax" }, if arm { "x9" } else { "r9" }, -1,
+    );
     emitter.instruction(if arm { "mov x0, x1" } else { "mov rdi, rax" });       // transfer the descriptor into the native close ABI
-    for symbol in ["_stream_read_filters", "_stream_write_filters"] {
-        abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, symbol);
-        emitter.instruction(if arm { "strb wzr, [x9, x0]" } else { "mov BYTE PTR [r9 + rdi], 0" }); // prevent filter IDs surviving descriptor reuse
+    for table in [stream_tables::READ_FILTERS, stream_tables::WRITE_FILTERS] {
+        table.emit_clear_indexed_byte(
+            emitter, arg, if arm { "x9" } else { "r9" },
+        );
     }
     if arm {
         emitter.syscall(6);

@@ -140,6 +140,106 @@ fn stack_numeric_mixed_numeric_domain_and_escape() {
     assert!(candidates(&function).is_empty());
 }
 
+/// A logical integer in physical Mixed storage keeps its seed and checked update in the frame.
+#[test]
+fn stack_numeric_physical_mixed_logical_int_uses_frame_cells() {
+    let mut function = Function::new("physical_mixed_int".into(), IrType::I64, PhpType::Int);
+    let slot = function.add_local(
+        Some("counter".into()),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Int,
+        LocalKind::PhpLocal,
+    );
+    let temporary = function.add_local(
+        Some("counter_owner".into()),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+        LocalKind::HiddenTemp,
+    );
+    let mut builder = Builder::new(&mut function);
+    let entry = builder.create_named_block("entry", vec![]);
+    builder.set_entry(entry);
+    builder.position_at_end(entry);
+    let zero = builder.emit_const_i64(0);
+    builder.emit_store_local(slot, zero);
+    let current = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+    let one = builder.emit_const_i64(1);
+    let updated = builder
+        .emit(
+            Op::ICheckedAdd,
+            vec![current, one],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    let owner = builder
+        .emit(
+            Op::Acquire,
+            vec![updated],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    let temporary_owner = builder
+        .emit(
+            Op::Acquire,
+            vec![updated],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    builder.emit_store_local(temporary, temporary_owner);
+    builder.emit(
+        Op::PushCallOperandOwner,
+        vec![],
+        Some(Immediate::LocalSlot(temporary)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    builder.emit(
+        Op::Release,
+        vec![updated],
+        None,
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    builder.emit_store_local(slot, owner);
+    builder.emit(
+        Op::PopCallOperandOwner,
+        vec![],
+        Some(Immediate::LocalSlot(temporary)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    builder.emit(
+        Op::ReleaseLocalSlot,
+        vec![],
+        Some(Immediate::LocalSlot(temporary)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+    );
+    let result = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+    builder.terminate(Terminator::Return {
+        value: Some(result),
+    });
+    crate::ir::validate_function(&function).unwrap();
+
+    let frame = plan(&function);
+    assert_eq!(frame.cells, vec![updated]);
+    assert_eq!(frame.seed_slots, vec![slot]);
+    assert_eq!(frame.locals, HashSet::from([slot, temporary]));
+}
+
 /// Converting an old pointer after the cell has been reused would read the new payload.
 #[test]
 fn stack_numeric_rejects_delayed_borrowed_read() {

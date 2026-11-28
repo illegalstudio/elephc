@@ -227,9 +227,8 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
         None => {
             // PHP creates an absent source as null even when the property bind is refused.
             let value = values.null()?;
-            for previous in set_owned_scope_cell(context, scope, source.to_string(), value, values)? {
-                eval_release_value(context, values, previous)?;
-            }
+            let previous = set_owned_scope_cell(context, scope, source.to_string(), value, values)?;
+            super::scope_cells::retire_replaced_scope_cells(previous, context, values)?;
             value
         }
     };

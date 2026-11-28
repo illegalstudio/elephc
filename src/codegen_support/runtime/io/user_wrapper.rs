@@ -29,6 +29,8 @@
 //!   pair, int/bool in the int-result register — so wrapper classes should
 //!   declare `: string`/`: int`/`: bool` on the methods they implement.
 
+use elephc_memoir::buffers::stream_tables;
+
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::runtime::exceptions::guards;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -68,7 +70,7 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
     emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_done");                  // resolve the object and leave its slot index in x9
     emitter.instruction("str x0, [sp, #0]");                                    // transfer the handle's reference into local ownership
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // retire the old slot before PHP can open another wrapper
+    stream_tables::emit_clear_wrapper_slot(emitter, "x10", "x9");
     emitter.instruction("mov x11, #0x40000000");                                // reconstruct the synthetic descriptor from its slot
     emitter.instruction("orr x9, x9, x11");                                     // compare the complete descriptor rather than a reusable slot
     emitter.instruction("mov x0, x9");                                          // resolve the descriptor's stable PHP resource identity
@@ -116,7 +118,7 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve the object owner and a 32-byte exception guard
     emit_x86_handle_lookup(emitter, "__rt_uwfclose_done_x86");                 // resolve the object and leave its slot index in r9
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // transfer the handle's reference into local ownership
-    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // allow callbacks to reuse the retired slot safely
+    stream_tables::emit_clear_wrapper_slot(emitter, "r10", "r9");
     emitter.instruction("or r9, 0x40000000");                                   // reconstruct the complete synthetic descriptor
     emitter.instruction("mov rax, r9");                                         // resolve the descriptor's stable PHP resource identity
     abi::emit_call_label(emitter, "__rt_resource_id_of");
@@ -894,8 +896,7 @@ fn emit_aarch64_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
 /// (cleared after fclose) jumps to `missing_label`.
 fn emit_aarch64_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "x10", "x9", "x0");
     emitter.instruction(&format!("cbz x0, {}", missing_label));                 // slot empty (already fclose'd or never registered): take the fallback
 }
 
@@ -938,7 +939,7 @@ fn emit_x86_scalar_slot_call(emitter: &mut Emitter, vtable_slot: usize, tag: &st
 
 /// Emits an AArch64 wrapper-vtable lookup that branches to the missing-method path when absent.
 fn emit_aarch64_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) {
-    emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x10", "x0");
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x13, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x11 is reused
@@ -958,8 +959,7 @@ fn emit_x86_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
 /// jumps to `missing_label`.
 fn emit_x86_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "r10", "r9", "rdi");
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction(&format!("jz {}", missing_label));                      // slot empty: take the fallback
 }
@@ -968,7 +968,7 @@ fn emit_x86_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
 /// class of the object currently held in `rdi`. Leaves the method pointer
 /// in `r11`. On a missing method jumps to `missing_label`.
 fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) {
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r10", "rdi");
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused

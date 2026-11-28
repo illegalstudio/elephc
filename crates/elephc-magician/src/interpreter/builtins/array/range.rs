@@ -10,6 +10,7 @@
 //!   (`$start` vs `$end` does), matching php-src and the AOT `__rt_range` helper.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "range",
@@ -100,16 +101,13 @@ pub(in crate::interpreter) fn eval_range_result(
     let count = usize::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?;
     let step = if start <= end { magnitude } else { -magnitude };
     let mut current = start;
-    let mut result = values.array_new(count)?;
+    let mut result = EvalArrayBuilder::indexed(values, count)?;
 
     for index in 0..count {
-        let key = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let key = values.int(key)?;
-        let value = values.int(current)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.int(current))?;
         if index + 1 < count {
             current = current.checked_add(step).ok_or(EvalStatus::RuntimeFatal)?;
         }
     }
-    Ok(result)
+    Ok(result.finish())
 }

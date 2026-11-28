@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use elephc_memoir::buffers::stream_tables;
 
 /// Records `php://filter` read/write filter ids on a successfully opened resource.
 pub(super) fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_bits: u8, filter_id: u8) {
@@ -19,14 +20,12 @@ pub(super) fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_b
             ctx.emitter.instruction(&format!("b.ne {}", done_label));           // leave false results unmodified
             ctx.emitter.instruction("ldr x1, [x0, #8]");                        // load the descriptor payload from the boxed resource
             if mode_bits & 1 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
                 ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));   // materialize the php://filter read filter id
-                ctx.emitter.instruction("strb w10, [x9, x1]");                  // attach the read filter to this descriptor
+                stream_tables::READ_FILTERS.emit_store_indexed_byte(ctx.emitter, "w10", "x1", "x9");
             }
             if mode_bits & 2 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
                 ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));   // materialize the php://filter write filter id
-                ctx.emitter.instruction("strb w10, [x9, x1]");                  // attach the write filter to this descriptor
+                stream_tables::WRITE_FILTERS.emit_store_indexed_byte(ctx.emitter, "w10", "x1", "x9");
             }
             ctx.emitter.label(&done_label);
         }
@@ -36,16 +35,14 @@ pub(super) fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_b
             ctx.emitter.instruction(&format!("jne {}", done_label));            // leave false results unmodified
             ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");            // load the descriptor payload from the boxed resource
             if mode_bits & 1 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "r8", "_stream_read_filters"); // read-filter table base
-                ctx.emitter.instruction(
-                    &format!("mov BYTE PTR [r8 + rcx], {}", filter_id)
-                );                                                              // attach the read filter to this descriptor
+                stream_tables::READ_FILTERS.emit_store_indexed_byte(
+                    ctx.emitter, &filter_id.to_string(), "rcx", "r8",
+                );
             }
             if mode_bits & 2 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "r8", "_stream_write_filters"); // write-filter table base
-                ctx.emitter.instruction(
-                    &format!("mov BYTE PTR [r8 + rcx], {}", filter_id)
-                );                                                              // attach the write filter to this descriptor
+                stream_tables::WRITE_FILTERS.emit_store_indexed_byte(
+                    ctx.emitter, &filter_id.to_string(), "rcx", "r8",
+                );
             }
             ctx.emitter.label(&done_label);
         }

@@ -25,6 +25,7 @@ eval_builtin! {
     values: Curl,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::*;
 
 /// Evaluates `curl_multi_get_handles($multi_handle)` over one eval expression.
@@ -66,11 +67,9 @@ fn eval_curl_multi_get_handles_result(
         .stream_resources()
         .curl_multi_attached(multi_id)
         .unwrap_or_default();
-    let mut array = values.array_new(attached.len())?;
+    let mut array = EvalArrayBuilder::indexed(values, attached.len())?;
     for (position, easy_id) in attached.into_iter().enumerate() {
-        let handle = values.curl_handle(easy_id)?;
-        let key = values.int(position as i64)?;
-        array = values.array_set(array, key, handle)?;
+        array.index(position, |values| values.curl_handle(easy_id))?;
     }
-    Ok(array)
+    Ok(array.finish())
 }

@@ -156,13 +156,17 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::with_runtime_scope_owners;
+
     let previous_strict_types = context.strict_types();
     context.set_strict_types(program.strict_types());
-    let executed = match bytecode::try_execute(context, program, scope, values) {
-        Ok(Some(control)) => Ok(control),
-        Ok(None) => execute_program_statements(program, context, scope, values),
-        Err(status) => Err(status),
-    };
+    let executed = with_runtime_scope_owners(scope, |scope| {
+        match bytecode::try_execute(context, program, scope, values) {
+            Ok(Some(control)) => Ok(control),
+            Ok(None) => execute_program_statements(program, context, scope, values),
+            Err(status) => Err(status),
+        }
+    });
     context.set_strict_types(previous_strict_types);
     match executed {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),

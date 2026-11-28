@@ -190,7 +190,7 @@ fn adopt_curl_easy_handle_retains_an_independent_private_reference() {
     assert_eq!(values.releases.len(), 2);
 }
 
-/// `release_curl_easy_private_values` must release
+/// `release_curl_easy_php_values` must release
 /// a retained `CURLOPT_PRIVATE` value that was NEVER explicitly reset/overwritten — the
 /// exact case `EvalStreamResources::drop` could never cover, because `Drop::drop` has no
 /// `RuntimeValueOps` to call `release` through. This is the storage-layer half of the fix;
@@ -198,7 +198,7 @@ fn adopt_curl_easy_handle_retains_an_independent_private_reference() {
 /// exercises the storage method directly, matching this file's own established pattern
 /// (see the module doc).
 #[test]
-fn release_curl_easy_private_values_releases_every_still_retained_entry() {
+fn release_curl_easy_php_values_releases_every_still_retained_entry() {
     let mut context = ElephcEvalContext::new();
     let mut values = FakeOps::default();
     let first_id = context.stream_resources_mut().open_curl_easy_handle(42);
@@ -221,7 +221,7 @@ fn release_curl_easy_private_values_releases_every_still_retained_entry() {
 
     context
         .stream_resources_mut()
-        .release_curl_easy_private_values(&mut values);
+        .release_curl_easy_php_values(&mut values);
 
     assert_eq!(values.releases.len(), 2, "both retained cells must be released");
     assert!(
@@ -237,21 +237,20 @@ fn release_curl_easy_private_values_releases_every_still_retained_entry() {
     // left to release, so no further `values.release()` calls and no double-release.
     context
         .stream_resources_mut()
-        .release_curl_easy_private_values(&mut values);
+        .release_curl_easy_php_values(&mut values);
     assert_eq!(values.releases.len(), 2, "a second call must not double-release");
 }
 
-/// A handle that never had `CURLOPT_PRIVATE` set at all must be a complete no-op —
-/// `release_curl_easy_private_values` must not touch `values` for it.
+/// A handle without private data or callbacks contributes no PHP owner to teardown.
 #[test]
-fn release_curl_easy_private_values_skips_handles_with_no_stored_private_value() {
+fn release_curl_easy_php_values_skips_handles_with_no_php_owner() {
     let mut context = ElephcEvalContext::new();
     let mut values = FakeOps::default();
     context.stream_resources_mut().open_curl_easy_handle(42);
 
     context
         .stream_resources_mut()
-        .release_curl_easy_private_values(&mut values);
+        .release_curl_easy_php_values(&mut values);
 
     assert!(values.releases.is_empty());
 }
@@ -472,12 +471,51 @@ fn callback_slots_retain_on_install_and_release_on_every_drop() {
         .expect("install header slot");
     context
         .stream_resources_mut()
-        .release_curl_easy_private_values(&mut values);
+        .release_curl_easy_php_values(&mut values);
     assert_eq!(
         values.releases,
         vec![first, second, third],
         "context teardown must release the callback roots too, not only CURLOPT_PRIVATE"
     );
+}
+
+/// Reset detaches the private owner and every callback before cleanup is allowed to run.
+#[test]
+fn curl_reset_detaches_the_complete_php_owner_batch() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let id = context.stream_resources_mut().open_curl_easy_handle(42);
+    let private = values.string("private").expect("private cell");
+    let write = values.string("write").expect("write callback");
+    let header = values.string("header").expect("header callback");
+    context
+        .stream_resources_mut()
+        .set_curl_easy_private(id, private, &mut values)
+        .expect("private owner");
+    for (slot, callback) in [(0, write), (1, header)] {
+        context
+            .stream_resources_mut()
+            .set_curl_easy_callback(
+                id,
+                slot,
+                crate::stream_resources::EvalCurlCallbackSlot::Callable(callback),
+                &mut values,
+            )
+            .expect("callback owner");
+    }
+
+    let detached = context
+        .stream_resources_mut()
+        .take_curl_easy_reset_owners(id)
+        .expect("known easy handle");
+    let mut detached = detached.iter().collect::<Vec<_>>();
+    detached.sort_by_key(|owner| owner.as_ptr() as usize);
+    let mut expected = vec![private, write, header];
+    expected.sort_by_key(|owner| owner.as_ptr() as usize);
+    assert_eq!(detached, expected);
+    assert!(context.stream_resources().curl_easy_private(id).is_none());
+    assert!(context.stream_resources().curl_easy_callbacks(id).is_empty());
+    assert!(values.releases.is_empty(), "detachment must not execute cleanup");
 }
 
 /// `EvalCurlCallbackSlot::Silent` (the `CURLOPT_DEBUGFUNCTION => null` state) holds no PHP
@@ -536,7 +574,7 @@ fn curl_callback_frame_partial_setup_releases_receivers() {
         values.release(result).unwrap();
         let object = scope.visible_cell("object").unwrap();
         let method = values.string("write").unwrap();
-        let valid = values.alloc(FakeValue::Array(vec![object.owned(), method]));
+        let valid = values.alloc(FakeValue::Array(vec![crate::value::RuntimeCellHandle::from_raw(object.as_ptr()), method]));
         let invalid = values.alloc(FakeValue::Array(vec![]));
         let first = context.stream_resources_mut().open_curl_easy_handle(42);
         let second = if separate_handles {
@@ -560,7 +598,7 @@ fn curl_callback_frame_partial_setup_releases_receivers() {
         assert!(!entered_transfer);
         assert!(values.releases[released..].contains(&object));
         assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], owners);
-        context.stream_resources_mut().release_curl_easy_private_values(&mut values);
+        context.stream_resources_mut().release_curl_easy_php_values(&mut values);
     }
 }
 

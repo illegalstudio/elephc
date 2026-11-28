@@ -47,9 +47,9 @@ pub fn emit_array_reduce_str(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // save the callback address for every loop iteration
     emitter.instruction("str x2, [sp, #24]");                                   // seed the accumulator with the initial value
     emitter.instruction("str x3, [sp, #40]");                                   // save the optional callback capture environment pointer
-    emitter.instruction("ldr x9, [x1]");                                        // x9 = source array length from the header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x1"); // x9 = source array length from the header
     emitter.instruction("str x9, [sp, #8]");                                    // save the source array length
-    emitter.instruction("add x9, x1, #24");                                     // x9 = base of the data region (skip header)
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x1");
     emitter.instruction("str x9, [sp, #0]");                                    // save the data base
     emitter.instruction("mov x9, xzr");                                         // loop index i = 0
     emitter.instruction("str x9, [sp, #16]");                                   // save i
@@ -100,9 +100,9 @@ fn emit_array_reduce_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the callback address for every loop iteration
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // seed the accumulator with the initial value
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the optional callback capture environment pointer
-    emitter.instruction("mov r8, QWORD PTR [rsi]");                             // r8 = source array length from the header
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r8", "rsi"); // r8 = source array length from the header
     emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // save the source array length
-    emitter.instruction("lea r8, [rsi + 24]");                                  // r8 = base of the data region (skip header)
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "rsi");
     emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save the data base
     emitter.instruction("xor r8d, r8d");                                        // loop index i = 0
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save i

@@ -105,12 +105,11 @@ pub(crate) fn lower_stream_set_chunk_size(
             ctx.emitter.instruction(&format!("b.lt {}", default_label));        // out-of-range descriptors report the default
             ctx.emitter.instruction("cmp x2, #256");                            // descriptors above the fixed table are ignored
             ctx.emitter.instruction(&format!("b.ge {}", default_label));        // out-of-range descriptors report the default
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_chunk_size");
-            ctx.emitter.instruction("ldr x10, [x9, x2, lsl #3]");               // load the previous per-fd chunk size
+            elephc_memoir::buffers::stream_tables::CHUNK_SIZES.emit_load_indexed_word(ctx.emitter, "x10", "x2", "x9");
             ctx.emitter.instruction(&format!("cbnz x10, {}", have_old_label));  // keep a previously stored size when present
             ctx.emitter.instruction("mov x10, #8192");                          // use PHP's default stream chunk size
             ctx.emitter.label(&have_old_label);
-            ctx.emitter.instruction("str x1, [x9, x2, lsl #3]");                // store the new chunk size for this fd
+            elephc_memoir::buffers::stream_tables::CHUNK_SIZES.emit_store_indexed_word(ctx.emitter, "x1", "x2", "x9");
             ctx.emitter.instruction("mov x0, x10");                             // return the previous chunk size
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the default-only path
             ctx.emitter.label(&default_label);
@@ -124,13 +123,12 @@ pub(crate) fn lower_stream_set_chunk_size(
             ctx.emitter.instruction(&format!("jl {}", default_label));          // out-of-range descriptors report the default
             ctx.emitter.instruction("cmp rdi, 256");                            // descriptors above the fixed table are ignored
             ctx.emitter.instruction(&format!("jge {}", default_label));         // out-of-range descriptors report the default
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_chunk_size");
-            ctx.emitter.instruction("mov rax, QWORD PTR [r9 + rdi * 8]");       // load the previous per-fd chunk size
+            elephc_memoir::buffers::stream_tables::CHUNK_SIZES.emit_load_indexed_word(ctx.emitter, "rax", "rdi", "r9");
             ctx.emitter.instruction("test rax, rax");                           // check whether a previous size exists
             ctx.emitter.instruction(&format!("jnz {}", have_old_label));        // keep a previously stored size when present
             ctx.emitter.instruction("mov eax, 8192");                           // use PHP's default stream chunk size
             ctx.emitter.label(&have_old_label);
-            ctx.emitter.instruction("mov QWORD PTR [r9 + rdi * 8], rsi");       // store the new chunk size for this fd
+            elephc_memoir::buffers::stream_tables::CHUNK_SIZES.emit_store_indexed_word(ctx.emitter, "rsi", "rdi", "r9");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the default-only path
             ctx.emitter.label(&default_label);
             ctx.emitter.instruction("mov eax, 8192");                           // report PHP's default chunk size

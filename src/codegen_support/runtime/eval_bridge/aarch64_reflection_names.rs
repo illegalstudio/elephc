@@ -8,6 +8,7 @@
 //! - Class-filtered tables retain their dense metadata layout.
 
 use super::*;
+use elephc_memoir::values::reflection_metadata::{self, NameField, NameRowKind};
 
 /// Emits the ARM64 eval hook that returns AOT ReflectionMethod names.
 pub(super) fn emit_aarch64_eval_reflection_method_names(emitter: &mut Emitter) {
@@ -18,7 +19,7 @@ pub(super) fn emit_aarch64_eval_reflection_method_names(emitter: &mut Emitter) {
         "_eval_reflection_methods",
         "__elephc_eval_reflection_method_names",
         "method",
-        56,
+        NameRowKind::Member,
     );
 }
 
@@ -31,7 +32,7 @@ pub(super) fn emit_aarch64_eval_reflection_property_names(emitter: &mut Emitter)
         "_eval_reflection_properties",
         "__elephc_eval_reflection_property_names",
         "property",
-        56,
+        NameRowKind::Member,
     );
 }
 
@@ -44,7 +45,7 @@ pub(super) fn emit_aarch64_eval_reflection_class_interface_names(emitter: &mut E
         "_eval_reflection_class_interfaces",
         "__elephc_eval_reflection_class_interface_names",
         "class interface",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -57,7 +58,7 @@ pub(super) fn emit_aarch64_eval_reflection_class_trait_names(emitter: &mut Emitt
         "_eval_reflection_class_traits",
         "__elephc_eval_reflection_class_trait_names",
         "class trait",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -70,7 +71,7 @@ pub(super) fn emit_aarch64_eval_reflection_class_trait_alias_names(emitter: &mut
         "_eval_reflection_class_trait_aliases",
         "__elephc_eval_reflection_class_trait_alias_names",
         "class trait alias",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -83,7 +84,7 @@ pub(super) fn emit_aarch64_eval_reflection_class_trait_alias_sources(emitter: &m
         "_eval_reflection_class_trait_alias_sources",
         "__elephc_eval_reflection_class_trait_alias_sources",
         "class trait alias source",
-        32,
+        NameRowKind::Relation,
     );
 }
 
@@ -109,7 +110,7 @@ pub(super) fn emit_aarch64_eval_reflection_member_names(
     table_symbol: &str,
     label_prefix: &str,
     member_kind: &str,
-    row_stride: u64,
+    row_kind: NameRowKind,
 ) {
     let loop_label = format!("{label_prefix}_loop");
     let skip_label = format!("{label_prefix}_skip");
@@ -142,14 +143,14 @@ pub(super) fn emit_aarch64_eval_reflection_member_names(
     emitter.instruction("cmp x11, x9");                                         // have all member metadata rows been scanned?
     emitter.instruction(&format!("b.ge {done_label}"));                         // return the accumulated names after the final row
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the current member metadata row
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    reflection_metadata::emit_load_name_field(emitter, "x12", "x10", NameField::ClassNameLength);
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
     emitter.instruction(&format!("b.ne {skip_label}"));                         // length mismatch means this row belongs to another class
     emitter.instruction("str x11, [sp, #40]");                                  // save the row index across the class-name compare
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
-    emitter.instruction("ldr x3, [x10]");                                       // pass the stored class-name pointer
+    reflection_metadata::emit_load_name_field(emitter, "x3", "x10", NameField::ClassName);
     emitter.instruction("mov x4, x12");                                         // pass the stored class-name length
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #40]");                                  // restore the row index after the class-name compare
@@ -158,15 +159,15 @@ pub(super) fn emit_aarch64_eval_reflection_member_names(
     emitter.instruction("str x11, [sp, #40]");                                  // save the row index across appending the member name
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed result string array
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the matched member metadata row
-    emitter.instruction("ldr x1, [x10, #16]");                                  // pass the stored member-name pointer
-    emitter.instruction("ldr x2, [x10, #24]");                                  // pass the stored member-name length
+    reflection_metadata::emit_load_name_field(emitter, "x1", "x10", NameField::Name);
+    reflection_metadata::emit_load_name_field(emitter, "x2", "x10", NameField::NameLength);
     emitter.instruction(&format!("bl {string_array_push_symbol}"));             // append the matched member name to the result array
     emitter.instruction(&format!("cbz x0, {miss_label}"));                      // malformed append state reports a null pointer to Rust
     emitter.instruction("str x0, [sp, #24]");                                   // save the updated boxed result string array
     emitter.instruction("ldr x11, [sp, #40]");                                  // restore the row index after appending the member name
     emitter.label(&skip_label);
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the current member metadata row
-    emitter.instruction(&format!("add x10, x10, #{row_stride}"));               // advance to the next reflection metadata row
+    reflection_metadata::emit_advance_name_row(emitter, "x10", row_kind);
     emitter.instruction("str x10, [sp, #32]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
     emitter.instruction(&format!("b {loop_label}"));                            // continue scanning member metadata rows

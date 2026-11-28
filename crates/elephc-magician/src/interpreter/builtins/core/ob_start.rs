@@ -77,7 +77,7 @@ pub(in crate::interpreter) fn eval_ob_start_result(
     let handler_id = match handler {
         Some(callback) => {
             let retained = values.retain(callback)?;
-            match crate::ffi::ob_handlers::register_ob_handler(context as *mut _, retained) {
+            match crate::ffi::ob_handlers::register_ob_handler(context, retained) {
                 Some(id) => Some(id),
                 None => {
                     eval_release_value(context, values, retained)?;
@@ -90,7 +90,7 @@ pub(in crate::interpreter) fn eval_ob_start_result(
     let started = values.ob_start_ex(handler_id, &name, chunk_size, flags);
     if !matches!(started, Ok(true)) {
         if let Some(id) = handler_id {
-            if let Some(owner) = crate::ffi::ob_handlers::unregister_ob_handler(id, context as *mut _) {
+            if let Some(owner) = crate::ffi::ob_handlers::unregister_ob_handler(id, context) {
                 eval_release_value(context, values, owner)?;
             }
         }

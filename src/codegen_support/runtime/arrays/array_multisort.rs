@@ -33,8 +33,8 @@ pub fn emit_array_multisort(emitter: &mut Emitter) {
     emitter.instruction("ldr x8, [x1]");                                        // x8 = arr2 length for the consistency check
     emitter.instruction("cmp x9, x8");                                          // PHP requires every sorted array to have equal length
     emitter.instruction("b.ne __rt_array_multisort_mismatch");                  // reject before moving either array
-    emitter.instruction("add x10, x0, #24");                                    // x10 = arr1 data base (skip header)
-    emitter.instruction("add x11, x1, #24");                                    // x11 = arr2 data base (skip header)
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x1");
     emitter.instruction("cmp x9, #2");                                          // arrays shorter than 2 elements are already sorted
     emitter.instruction("b.lt __rt_array_multisort_done");                      // nothing to sort
     emitter.label("__rt_array_multisort_outer");
@@ -87,10 +87,10 @@ fn emit_array_multisort_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_multisort ---");
     emitter.label_global("__rt_array_multisort");
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // r9 = arr1 length (used for both arrays)
-    emitter.instruction("cmp r9, QWORD PTR [rsi]");                             // PHP requires every sorted array to have equal length
+    elephc_memoir::values::packed_slots::emit_compare_index_to_length(emitter, "r9", "rsi"); // PHP requires every sorted array to have equal length
     emitter.instruction("jne __rt_array_multisort_mismatch");                   // reject before moving either array
-    emitter.instruction("lea r10, [rdi + 24]");                                 // r10 = arr1 data base (skip header)
-    emitter.instruction("lea r11, [rsi + 24]");                                 // r11 = arr2 data base (skip header)
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r10", "rdi");
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r11", "rsi");
     emitter.instruction("cmp r9, 2");                                           // arrays shorter than 2 elements are already sorted
     emitter.instruction("jl __rt_array_multisort_done");                        // nothing to sort
     emitter.label("__rt_array_multisort_outer");
@@ -148,8 +148,8 @@ fn emit_array_multisort_boxed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the caller across Mixed comparisons
     emitter.instruction("add x29, sp, #64");                                    // establish an aligned helper frame
     emitter.instruction("stp x0, x1, [sp]");                                    // retain both borrowed array payload pointers
-    emitter.instruction("ldr x9, [x0]");                                        // load the primary array length
-    emitter.instruction("ldr x10, [x1]");                                       // load the secondary array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x9", "x0"); // load the primary array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "x10", "x1"); // load the secondary array length
     emitter.instruction("cmp x9, x10");                                         // every row must have a value in both arrays
     emitter.instruction("b.ne __rt_array_multisort_boxed_mismatch");            // reject unequal lengths before moving cell owners
     emitter.instruction("str x9, [sp, #16]");                                   // preserve the common length across comparator calls
@@ -169,7 +169,7 @@ fn emit_array_multisort_boxed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_array_multisort_boxed_pass_end");            // inspect whether another pass is required
     emitter.instruction("add x10, x9, #1");                                     // form the right row index
     emitter.instruction("ldr x11, [sp]");                                       // reload the primary array payload
-    emitter.instruction("add x11, x11, #24");                                   // advance to its Mixed slot base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x0, [x11, x9, lsl #3]");                           // borrow the left primary Mixed cell
     emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // borrow the right primary Mixed cell
     emitter.instruction("stp x0, x1, [sp, #40]");                               // retain both primary cells across comparisons
@@ -180,7 +180,7 @@ fn emit_array_multisort_boxed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #32]");                                   // recover the left row index for the secondary lookup
     emitter.instruction("add x10, x9, #1");                                     // recover the adjacent right row index
     emitter.instruction("ldr x11, [sp, #8]");                                   // equal primary keys defer to the secondary array
-    emitter.instruction("add x11, x11, #24");                                   // advance to the secondary Mixed slot base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x0, [x11, x9, lsl #3]");                           // borrow the left secondary Mixed cell
     emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // borrow the right secondary Mixed cell
     emitter.instruction("bl __rt_php_compare_slots");                           // apply PHP ordering to the secondary keys
@@ -192,7 +192,7 @@ fn emit_array_multisort_boxed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #32]");                                   // recover the left row index after comparator calls
     emitter.instruction("add x10, x9, #1");                                     // recover the adjacent right row index
     emitter.instruction("ldr x11, [sp]");                                       // reload the primary array payload
-    emitter.instruction("add x11, x11, #24");                                   // advance to its Mixed slot base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldp x12, x13, [sp, #40]");                             // reload the borrowed primary cell pointers
     emitter.instruction("str x13, [x11, x9, lsl #3]");                          // transfer the right primary owner into the left slot
     emitter.instruction("str x12, [x11, x10, lsl #3]");                         // transfer the left primary owner into the right slot
@@ -200,7 +200,7 @@ fn emit_array_multisort_boxed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, x13");                                        // the same reference must exchange each pair only once
     emitter.instruction("b.eq __rt_array_multisort_boxed_swapped");             // skip the second exchange when the payloads coincide
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the secondary array payload
-    emitter.instruction("add x11, x11, #24");                                   // advance to its Mixed slot base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x12, [x11, x9, lsl #3]");                          // load the left secondary cell owner
     emitter.instruction("ldr x13, [x11, x10, lsl #3]");                         // load the right secondary cell owner
     emitter.instruction("str x13, [x11, x9, lsl #3]");                          // transfer the right secondary owner into the left slot
@@ -242,7 +242,7 @@ fn emit_array_multisort_boxed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve sorter state with SysV call alignment
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the borrowed primary array payload
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // retain the borrowed secondary array payload
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the primary array length
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the primary array length
     emitter.instruction("cmp r10, QWORD PTR [rsi]");                            // every row must have a value in both arrays
     emitter.instruction("jne __rt_array_multisort_boxed_mismatch");             // reject unequal lengths before moving cell owners
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve the common length across comparator calls
@@ -261,8 +261,8 @@ fn emit_array_multisort_boxed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, r11");                                        // has this pass compared every adjacent pair?
     emitter.instruction("jae __rt_array_multisort_boxed_pass_end");             // inspect whether another pass is required
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the primary array payload
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // borrow the left primary Mixed cell
-    emitter.instruction("mov rsi, QWORD PTR [r11 + r10 * 8 + 32]");             // borrow the right primary Mixed cell
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "rdi", "r9");
+    elephc_memoir::values::packed_slots::emit_load_indexed_word_delta(emitter, "r11", "r10", "rsi", "r9", 1);
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // retain the left primary cell across comparisons
     emitter.instruction("mov QWORD PTR [rbp - 56], rsi");                       // retain the right primary cell across comparisons
     emitter.instruction("call __rt_php_compare_slots");                         // apply PHP ordering to the primary keys
@@ -271,8 +271,8 @@ fn emit_array_multisort_boxed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_multisort_boxed_no_swap");               // ascending primary keys already determine the row order
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // recover the left row index for the secondary lookup
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // equal primary keys defer to the secondary array
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // borrow the left secondary Mixed cell
-    emitter.instruction("mov rsi, QWORD PTR [r11 + r10 * 8 + 32]");             // borrow the right secondary Mixed cell
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "rdi", "r9");
+    elephc_memoir::values::packed_slots::emit_load_indexed_word_delta(emitter, "r11", "r10", "rsi", "r9", 1);
     emitter.instruction("call __rt_php_compare_slots");                         // apply PHP ordering to the secondary keys
     emitter.instruction("cmp rax, 0");                                          // equal full tuples stay stable
     emitter.instruction("jle __rt_array_multisort_boxed_no_swap");              // ordered or equal secondary keys do not move
@@ -283,15 +283,15 @@ fn emit_array_multisort_boxed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the primary array payload
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the left primary cell owner
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the right primary cell owner
-    emitter.instruction("mov QWORD PTR [r11 + r10 * 8 + 24], rsi");             // transfer the right primary owner into the left slot
-    emitter.instruction("mov QWORD PTR [r11 + r10 * 8 + 32], rdi");             // transfer the left primary owner into the right slot
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r11", "r10", "rsi", "r11");
+    elephc_memoir::values::packed_slots::emit_store_indexed_word_delta(emitter, "r11", "r10", "rdi", "r9", 1);
     emitter.instruction("cmp r11, QWORD PTR [rbp - 16]");                       // the same reference must exchange each pair only once
     emitter.instruction("je __rt_array_multisort_boxed_swapped");               // skip the second exchange when the payloads coincide
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the secondary array payload
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // load the left secondary cell owner
-    emitter.instruction("mov rsi, QWORD PTR [r11 + r10 * 8 + 32]");             // load the right secondary cell owner
-    emitter.instruction("mov QWORD PTR [r11 + r10 * 8 + 24], rsi");             // transfer the right secondary owner into the left slot
-    emitter.instruction("mov QWORD PTR [r11 + r10 * 8 + 32], rdi");             // transfer the left secondary owner into the right slot
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(emitter, "r11", "r10", "rdi", "r9");
+    elephc_memoir::values::packed_slots::emit_load_indexed_word_delta(emitter, "r11", "r10", "rsi", "r9", 1);
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r11", "r10", "rsi", "r11");
+    elephc_memoir::values::packed_slots::emit_store_indexed_word_delta(emitter, "r11", "r10", "rdi", "r9", 1);
     emitter.label("__rt_array_multisort_boxed_swapped");
     emitter.instruction("mov QWORD PTR [rbp - 32], 1");                         // mark that this pass changed row order
 

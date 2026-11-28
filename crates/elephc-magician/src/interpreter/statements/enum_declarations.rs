@@ -12,6 +12,9 @@
 //!   (`constant_evaluation`).
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::with_collection_cells;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use elephc_memoir::runtime_owners::release_staged_cells;
 
 /// Registers an eval-declared enum and materializes its singleton cases.
 pub(in crate::interpreter) fn execute_enum_decl_stmt(
@@ -289,21 +292,32 @@ pub(super) fn initialize_eval_enum_case(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let object = values.new_object("stdClass")?;
-    let identity = values.object_identity(object)?;
-    context.register_dynamic_object(identity, enum_decl.name());
-    let name = values.string(case.name())?;
-    values.property_set(object, "name", name)?;
-    if let Some(value) = backing_value {
-        values.property_set(object, "value", value)?;
-        if let Some(replaced) = context.set_enum_case_value(enum_decl.name(), case.name(), value) {
-            values.release(replaced)?;
-        }
-    }
-    if let Some(replaced) = context.set_enum_case(enum_decl.name(), case.name(), object) {
-        values.release(replaced)?;
-    }
-    Ok(())
+    let backing = RuntimeOwnerSlot::empty();
+    backing.replace(backing_value);
+    let object = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&object, &backing), || {
+        let initialized = (|| {
+            object.replace(Some(values.new_object("stdClass")?));
+            let identity = values.object_identity(object.borrowed())?;
+            context.register_dynamic_object(identity, enum_decl.name());
+            with_collection_cells(values, |values, owners| {
+                let name = owners.stage(values.string(case.name())?);
+                values.property_set(object.borrowed(), "name", name.borrowed())
+            })?;
+            if backing_value.is_some() {
+                values.property_set(object.borrowed(), "value", backing.borrowed())?;
+                if let Some(replaced) = context.set_enum_case_value(enum_decl.name(), case.name(), backing.take()) {
+                    eval_release_value(context, values, replaced)?;
+                }
+            }
+            if let Some(replaced) = context.set_enum_case(enum_decl.name(), case.name(), object.take()) {
+                eval_release_value(context, values, replaced)?;
+            }
+            Ok(())
+        })();
+        let remaining = [&object, &backing].into_iter().map(RuntimeOwnerSlot::take);
+        release_staged_cells(initialized, remaining, |cell| values.release(cell))
+    })
 }
 
 /// Evaluates a class-like constant or property initializer with PHP magic and class scope.

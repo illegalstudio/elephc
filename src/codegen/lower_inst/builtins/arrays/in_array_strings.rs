@@ -21,8 +21,8 @@ pub(super) fn lower_in_array_bool_array_with_preloaded_needle_aarch64(
     let done_label = ctx.next_label("in_array_bool_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed bool-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed bool payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load indexed bool-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the bool membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
@@ -53,8 +53,8 @@ pub(super) fn lower_in_array_bool_array_with_preloaded_needle_x86_64(
     let done_label = ctx.next_label("in_array_bool_done");
 
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed bool-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed bool payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r12", "r11"); // load indexed bool-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r11", "r11");
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the bool membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length
@@ -99,8 +99,8 @@ pub(super) fn lower_in_array_string_aarch64(
     let done_label = ctx.next_label("in_array_str_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the string membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
@@ -186,8 +186,8 @@ pub(super) fn lower_in_array_mixed_string_aarch64(
     let done_label = ctx.next_label("in_array_mix_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load array<Mixed> length before scanning boxed slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first boxed Mixed cell slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "x9", "x10"); // load array<Mixed> length before scanning boxed slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
     ctx.emitter.instruction("mov x12, #0");                                     // start the membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against the array length
@@ -235,8 +235,8 @@ pub(super) fn lower_in_array_mixed_string_x86_64(
     let done_label = ctx.next_label("in_array_mix_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load array<Mixed> length before scanning boxed slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first boxed Mixed cell slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r10"); // load array<Mixed> length before scanning boxed slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r12", "r10");
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against the array length
@@ -283,8 +283,8 @@ pub(super) fn lower_in_array_string_x86_64(
     let done_label = ctx.next_label("in_array_str_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
+    elephc_memoir::values::packed_slots::emit_load_length(ctx.emitter, "r11", "r10"); // load indexed string-array length before scanning payload slots
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(ctx.emitter, "r12", "r10");
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the string membership scan at index zero
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against indexed-array length

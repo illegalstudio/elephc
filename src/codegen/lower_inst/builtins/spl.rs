@@ -1,12 +1,12 @@
 //! Purpose:
 //! Lowers SPL object-introspection builtins for the EIR backend.
-//! Handles stable object ids and object hashes using the concrete heap pointer.
+//! Handles stable object ids and object hashes using the concrete heap allocation.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - Object ids use the heap pointer as a process-stable identity.
+//! - Object ids accept raw named-class pointers and boxed generic-object or Closure payloads.
 //!   `spl_object_hash()` stringifies that identity with the shared itoa helper.
 //! - A boxed or callable argument is unwrapped at run time: a Closure keeps its own handle, an
 //!   invokable object converted to a callable stands for its receiver, and any other value raises
@@ -983,15 +983,14 @@ fn emit_clone_loaded_hash(ctx: &mut FunctionContext<'_>, mixed_values: bool) {
 fn emit_loaded_runtime_indexed_array_as_mixed(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before widening to Mixed slots
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rax - 8]");            // load indexed-array metadata before widening to Mixed slots
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
             ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded indexed array to the Mixed conversion helper
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }

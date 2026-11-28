@@ -9,8 +9,15 @@
 //! - Callback concat scratch is discarded before writing the final envelope; the active
 //!   serialize stream is parked across the callback and every envelope byte goes through it.
 
+use elephc_memoir::strings::concat_cursor::SavedConcatCursor;
+use elephc_memoir::{FrameOffset, strings::scoped_stream::StreamScope};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::SerializableReturnAbi;
+
+const OUTPUT_STREAM: StreamScope = StreamScope {
+    saved: FrameOffset::new(80),
+};
 
 /// Branches to the custom serializer before any O envelope has been written.
 pub(super) fn emit_probe(emitter: &mut Emitter) {
@@ -58,14 +65,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, arg0, 8);
     abi::emit_load_from_address(emitter, result, arg0, 0);
     abi::store_at_offset(emitter, result, 16);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
-    abi::store_at_offset(emitter, scratch, 24);
+    let cursor = SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(24));
+    cursor.emit_save(emitter, scratch);
     abi::emit_store_zero_to_local_slot(emitter, 48);
     // -- the legacy hook may run serialize() and uses the concat scratch: park the active stream
     //    and move `_concat_off` past a scratch-backed stream so the hook cannot overwrite it --
-    abi::emit_load_symbol_to_reg(emitter, arg0, "_ser_stream", 0);
-    abi::store_at_offset(emitter, arg0, 80);
-    abi::emit_call_label(emitter, "__rt_strbuf_sync");
+    OUTPUT_STREAM.emit_save_and_sync(emitter);
     load_table_entry(emitter, "_class_serializable_serialize_ptrs");
     abi::emit_reg_move(emitter, arg1, scratch);
     abi::load_at_offset(emitter, arg0, 8);
@@ -82,10 +87,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
             abi::store_at_offset(emitter, "rdx", 64);
         }
     }
-    abi::load_at_offset(emitter, result, 24);
-    abi::emit_store_reg_to_symbol(emitter, result, "_concat_off", 0);
-    abi::load_at_offset(emitter, result, 80);
-    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
+    cursor.emit_restore(emitter, result);
+    OUTPUT_STREAM.emit_restore(emitter);
     load_table_entry(emitter, "_class_serializable_serialize_return_abi");
     abi::emit_reg_move(emitter, result, scratch);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_serializable_string_ready");
@@ -135,22 +138,27 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_serializable_string_ready");
     abi::load_at_offset(emitter, result, 16);
     let name = abi::tertiary_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, scratch, "_class_name_entries");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("add x10, x10, x0, lsl #4");                    // select the class name entry by runtime class id
-            abi::emit_load_from_address(emitter, name, scratch, 0);
-            abi::store_at_offset(emitter, name, 32);
-            abi::emit_load_from_address(emitter, name, scratch, 8);
-        }
-        Arch::X86_64 => {
-            emitter.instruction("shl rax, 4");                                  // scale the runtime id to the class name entry stride
-            emitter.instruction("add r10, rax");                                // select the class name entry
-            abi::emit_load_from_address(emitter, name, scratch, 0);
-            abi::store_at_offset(emitter, name, 32);
-            abi::emit_load_from_address(emitter, name, scratch, 8);
-        }
-    }
+    elephc_memoir::values::class_metadata::emit_class_name_table_address(emitter, scratch);
+    elephc_memoir::values::class_metadata::emit_class_name_row_address(
+        emitter,
+        scratch,
+        scratch,
+        result,
+        name,
+    );
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        emitter,
+        name,
+        scratch,
+        elephc_memoir::values::class_metadata::ClassNameField::Name,
+    );
+    abi::store_at_offset(emitter, name, 32);
+    elephc_memoir::values::class_metadata::emit_load_class_name_field(
+        emitter,
+        name,
+        scratch,
+        elephc_memoir::values::class_metadata::ClassNameField::NameLength,
+    );
     abi::store_at_offset(emitter, name, 40);
     literal(emitter, b"C:");
     abi::load_at_offset(emitter, result, 40);

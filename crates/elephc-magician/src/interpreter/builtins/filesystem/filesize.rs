@@ -74,10 +74,12 @@ pub(in crate::interpreter) fn eval_filesize_result(
     {
         // A matched wrapper that reports no readable `size` field has failed to stat, which is
         // not the same as reporting a size of zero.
-        return match eval_user_wrapper_stat_int_field(stat, "size", values)? {
-            Some(size) => values.int(size),
-            None => values.bool_value(false),
-        };
+        return eval_with_user_wrapper_stat_lease(stat, context, values, |stat, values| {
+            match eval_user_wrapper_stat_int_field(stat, "size", values)? {
+                Some(size) => values.int(size),
+                None => values.bool_value(false),
+            }
+        });
     }
     if let Ok(bytes) = super::file_get_contents::eval_read_path_or_wrapper_bytes(&path) {
         return values.int(i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?);

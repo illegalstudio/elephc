@@ -26,6 +26,8 @@
 //!   whole URL to `StreamWrapper` path methods), plus the caller's extra int
 //!   arguments (`$mode`/`$options` for `mkdir`, `$options` for `rmdir`).
 
+use elephc_memoir::buffers::stream_tables;
+
 use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -89,15 +91,14 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwpo_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwpo_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_uwpo_false");                                // no registered wrapper matched the scheme → false
-    emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
-    emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x12", "x11", "x10");
+    stream_tables::emit_load_registration_field(emitter, "x13", "x12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x13, __rt_uwpo_slot_next");                        // empty slot — skip it
-    emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x14", "x12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x14, x9");                                         // does the stored length match the scheme length?
     emitter.instruction("b.ne __rt_uwpo_slot_next");                            // length mismatch — try the next slot
     emitter.instruction("mov x15, #0");                                         // byte compare index
@@ -118,14 +119,14 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
 
     // -- matched scheme: x12 = registry slot base --
     emitter.label("__rt_uwpo_match");
-    emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
-    emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
+    stream_tables::emit_load_registration_field(emitter, "x1", "x12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "x2", "x12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uwpo_false");                             // unknown class → false
     emitter.instruction("str x0, [sp, #56]");                                   // save the throwaway wrapper instance
 
     // -- look up the method in the per-class vtable at the requested slot --
-    emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
@@ -209,18 +210,15 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwpo_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwpo_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_uwpo_false_x86");                             // no registered wrapper matched the scheme → false
-    emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r12, r10");                                        // slot base = table + offset
-    emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r12", "r11", "r10");
+    stream_tables::emit_load_registration_field(emitter, "r13", "r12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r13, r13");                                       // is this slot empty?
     emitter.instruction("jz __rt_uwpo_slot_next_x86");                          // skip empty slots
-    emitter.instruction("mov r14, QWORD PTR [r12 + 8]");                        // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "r14", "r12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp r14, r9");                                         // does the stored length match the scheme length?
     emitter.instruction("jne __rt_uwpo_slot_next_x86");                         // length mismatch — try the next slot
     emitter.instruction("xor r15, r15");                                        // byte compare index
@@ -241,15 +239,15 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
 
     // -- matched scheme: r12 = registry slot base --
     emitter.label("__rt_uwpo_match_x86");
-    emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
-    emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
+    stream_tables::emit_load_registration_field(emitter, "rax", "r12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "rdx", "r12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uwpo_false_x86");                              // unknown class → false
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the throwaway wrapper instance
 
     // -- look up the method in the per-class vtable at the requested slot --
-    emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rax");
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the requested vtable slot index
@@ -360,15 +358,14 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwrn_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwrn_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_uwrn_false");                                // no registered wrapper matched the scheme → false
-    emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
-    emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "x12", "x11", "x10");
+    stream_tables::emit_load_registration_field(emitter, "x13", "x12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("cbz x13, __rt_uwrn_slot_next");                        // empty slot — skip it
-    emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "x14", "x12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp x14, x9");                                         // does the stored length match the scheme length?
     emitter.instruction("b.ne __rt_uwrn_slot_next");                            // length mismatch — try the next slot
     emitter.instruction("mov x15, #0");                                         // byte compare index
@@ -389,14 +386,14 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
 
     // -- matched scheme: x12 = registry slot base --
     emitter.label("__rt_uwrn_match");
-    emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
-    emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
+    stream_tables::emit_load_registration_field(emitter, "x1", "x12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "x2", "x12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uwrn_false");                             // unknown class → false
     emitter.instruction("str x0, [sp, #48]");                                   // save the throwaway wrapper instance
 
     // -- look up rename in the per-class user-wrapper vtable (slot 16) --
-    emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "x9", "x0");
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
@@ -476,18 +473,15 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwrn_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwrn_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_uwrn_false_x86");                             // no registered wrapper matched the scheme → false
-    emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r12, r10");                                        // slot base = table + offset
-    emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
+    stream_tables::emit_registration_entry_address(stream_tables::USER_WRAPPERS, emitter, "r12", "r11", "r10");
+    stream_tables::emit_load_registration_field(emitter, "r13", "r12", stream_tables::RegistrationField::NamePointer);
     emitter.instruction("test r13, r13");                                       // is this slot empty?
     emitter.instruction("jz __rt_uwrn_slot_next_x86");                          // skip empty slots
-    emitter.instruction("mov r14, QWORD PTR [r12 + 8]");                        // stored protocol length
+    stream_tables::emit_load_registration_field(emitter, "r14", "r12", stream_tables::RegistrationField::NameLength);
     emitter.instruction("cmp r14, r9");                                         // does the stored length match the scheme length?
     emitter.instruction("jne __rt_uwrn_slot_next_x86");                         // length mismatch — try the next slot
     emitter.instruction("xor r15, r15");                                        // byte compare index
@@ -508,15 +502,15 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
 
     // -- matched scheme: r12 = registry slot base --
     emitter.label("__rt_uwrn_match_x86");
-    emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
-    emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
+    stream_tables::emit_load_registration_field(emitter, "rax", "r12", stream_tables::RegistrationField::ClassPointer);
+    stream_tables::emit_load_registration_field(emitter, "rdx", "r12", stream_tables::RegistrationField::ClassLength);
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uwrn_false_x86");                              // unknown class → false
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the throwaway wrapper instance
 
     // -- look up rename in the per-class user-wrapper vtable (slot 16) --
-    emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
+    elephc_memoir::values::object_storage::emit_load_class_id(emitter, "r9", "rax");
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r9, QWORD PTR [r10 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r10 is reused

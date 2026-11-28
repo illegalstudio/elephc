@@ -59,25 +59,59 @@ pub(in crate::interpreter) fn eval_builtin_iterator_apply(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
-        [iterator, callback] => {
-            let iterator = eval_expr(iterator, context, scope, values)?;
-            let callback = eval_expr(callback, context, scope, values)?;
-            let callback = eval_callable_from_scope(callback, context, scope, values)?;
-            callback.with_values(context, values, |callback, context, values| {
-                eval_iterator_apply_result(iterator, callback, Vec::new(), context, values)
-            })
-        }
-        [iterator, callback, callback_args] => {
-            let iterator = eval_expr(iterator, context, scope, values)?;
-            let callback = eval_expr(callback, context, scope, values)?;
-            let callback = eval_callable_from_scope(callback, context, scope, values)?;
-            callback.with_values(context, values, |callback, context, values| {
-                let callback_args = eval_expr(callback_args, context, scope, values)?;
-                with_iterator_apply_arguments(callback_args, context, values, |arguments, context, values| {
-                    eval_iterator_apply_result(iterator, callback, arguments, context, values)
+        [iterator, callback] => with_eval_operands(
+            &[iterator, callback],
+            context,
+            scope,
+            values,
+            |operands, context, scope, values| {
+                let callback =
+                    eval_callable_from_scope(operands[1], context, scope, values)?;
+                callback.with_values(context, values, |callback, context, values| {
+                    eval_iterator_apply_result(
+                        operands[0],
+                        callback,
+                        Vec::new(),
+                        context,
+                        values,
+                    )
                 })
-            })
-        }
+            },
+        ),
+        [iterator, callback, callback_args] => with_eval_operands(
+            &[iterator, callback],
+            context,
+            scope,
+            values,
+            |operands, context, scope, values| {
+                let callback =
+                    eval_callable_from_scope(operands[1], context, scope, values)?;
+                callback.with_values(context, values, |callback, context, values| {
+                    with_eval_operands(
+                        &[callback_args],
+                        context,
+                        scope,
+                        values,
+                        |callback_args, context, _, values| {
+                            with_iterator_apply_arguments(
+                                callback_args[0],
+                                context,
+                                values,
+                                |arguments, context, values| {
+                                    eval_iterator_apply_result(
+                                        operands[0],
+                                        callback,
+                                        arguments,
+                                        context,
+                                        values,
+                                    )
+                                },
+                            )
+                        },
+                    )
+                })
+            },
+        ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -107,13 +141,26 @@ pub(in crate::interpreter) fn eval_iterator_apply_result(
     let aggregate = !eval_foreach_object_is_a(iterator, "Iterator", context, values)?
         && eval_foreach_object_is_a(iterator, "IteratorAggregate", context, values)?;
     let count = if aggregate {
-        let iterator = eval_method_call_result(iterator, "getIterator", Vec::new(), context, values)?;
-        let result = eval_iterator_apply_iterator_object(iterator, callback, &callback_args, context, values);
-        let released = eval_release_value(context, values, iterator);
-        match (result, released) {
-            (Ok(count), Ok(())) => count,
-            (Err(status), _) | (Ok(_), Err(status)) => return Err(status),
-        }
+        use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+
+        let iterator = RuntimeOwnerSlot::new(eval_method_call_result(
+            iterator,
+            "getIterator",
+            Vec::new(),
+            context,
+            values,
+        )?);
+        with_runtime_owners(&iterator, || {
+            let result = eval_iterator_apply_iterator_object(
+                iterator.borrowed(),
+                callback,
+                &callback_args,
+                context,
+                values,
+            );
+            let released = eval_release_value(context, values, iterator.take());
+            result.and_then(|count| released.map(|()| count))
+        })?
     } else {
         eval_iterator_apply_iterator_object(iterator, callback, &callback_args, context, values)?
     };
@@ -173,7 +220,12 @@ pub(in crate::interpreter) fn eval_iterator_apply_iterator_object(
 fn truthy_owned_result(
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let truth = values.truthy(value);
-    let released = eval_release_value(context, values, value);
-    truth.and_then(|truth| released.map(|()| truth))
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+
+    let value = RuntimeOwnerSlot::new(value);
+    with_runtime_owners(&value, || {
+        let truth = values.truthy(value.borrowed());
+        let released = eval_release_value(context, values, value.take());
+        truth.and_then(|truth| released.map(|()| truth))
+    })
 }

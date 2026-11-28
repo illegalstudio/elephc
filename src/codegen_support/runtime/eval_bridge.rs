@@ -21,11 +21,6 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 const EVAL_RUNTIME_TAG_MIXED: i64 = 7;
 const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
-/// Builds the x86_64 instruction that installs the Mixed heap-kind marker.
-fn x86_64_mixed_heap_kind_instruction() -> String {
-    format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
-}
-
 /// Emits every eval value wrapper required by `libelephc-magician`.
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_eval_value_runtime(emitter, features);
@@ -33,6 +28,7 @@ pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter, features: RuntimeF
     emit_magic_set_guard_eval_exports(emitter);
     scope_release::emit(emitter);
     owner_frames::emit(emitter);
+    callable_projection::emit(emitter);
 }
 
 /// Emits self-contained value wrappers shared by native eval fragments and Magician.
@@ -103,6 +99,7 @@ pub(crate) mod array_next_index;
 mod reference_values;
 mod native_reference_cells;
 mod callable_adapter;
+mod callable_projection;
 mod spl_storage_write;
 mod lifecycle;
 mod output;
@@ -745,3 +742,6 @@ mod tests {
         body
     }
 }
+
+#[cfg(test)]
+mod memoir_ownership_tests;

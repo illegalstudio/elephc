@@ -8,6 +8,7 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
@@ -305,7 +306,7 @@ impl ClassBuildState {
     fn inherit_properties(&mut self, parent: &ClassInfo) {
         for (index, (name, ty)) in parent.properties.iter().enumerate() {
             self.prop_types.push((name.clone(), ty.clone()));
-            self.property_offsets.insert(name.clone(), 8 + index * 16);
+            self.property_offsets.insert(name.clone(), object_declared_slot_offset(index));
             self.defaults.push(parent.defaults[index].clone());
             self.property_declared_slots.push(
                 parent

@@ -8,6 +8,8 @@
 //! - Direct calls stay on the source-sensitive by-reference path.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{with_collection_call, with_collection_cells};
+use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
 
 eval_builtin! {
     contract: "array_walk",
@@ -33,9 +35,15 @@ pub(in crate::interpreter) fn eval_builtin_array_walk_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array, array_target, callback) =
-        eval_array_walk_direct_args(args, context, scope, values)?;
-    eval_array_walk_ref_result_from_scope(array, array_target, callback, Some(scope), context, values)
+    with_collection_call(context, values, |context, values, owners, result| {
+        let (array, array_target, callback) =
+            eval_array_walk_direct_args(args, context, scope, values, owners)?;
+        let value = eval_array_walk_ref_result_from_scope(
+            array, array_target, callback, Some(scope), context, values,
+        )?;
+        result.replace(Some(value));
+        Ok(())
+    })
 }
 
 /// Evaluates and binds direct `array_walk()` arguments in PHP source order.
@@ -44,6 +52,7 @@ fn eval_array_walk_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
     let mut array_target = None;
     let mut callback = None;
@@ -75,13 +84,16 @@ fn eval_array_walk_direct_args(
                 if array_target.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                array_target = Some(super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)?);
+                array_target = Some(super::mutation::eval_array_mutation_lvalue_arg(
+                    arg, context, scope, values, owners,
+                )?);
             }
             "callback" => {
                 if callback.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                callback = Some(eval_expr(arg.value(), context, scope, values)?);
+                let value = eval_owned_expr(arg.value(), context, scope, values)?;
+                callback = Some(owners.stage(value).borrowed());
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         }
@@ -116,28 +128,31 @@ fn eval_array_walk_ref_result_from_scope(
     callback.with_values(context, values, |callback, context, values| {
         let len = values.array_len(array)?;
         for position in 0..len {
-            let current_array = eval_reference_target_value(&array_target, context, values)?;
-            let key = values.array_iter_key(current_array, position)?;
-            let value = values.array_get(current_array, key)?;
-            let ref_target = EvalReferenceTarget::NestedArrayElement {
-                array_target: Box::new(array_target.clone()),
-                index: key,
-            };
-            let args = vec![
-                EvaluatedCallArg {
-                    evaluation_owner: None,
-                    name: None,
-                    value,
-                    ref_target: Some(ref_target),
-                },
-                EvaluatedCallArg {
-                    evaluation_owner: None,
-                    name: None,
-                    value: key,
-                    ref_target: None,
-                },
-            ];
-            let _ = eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?;
+            with_collection_cells(values, |values, owners| {
+                let current_array = owners.stage(eval_reference_target_value(&array_target, context, values)?);
+                let key = owners.stage(values.array_iter_key(current_array, position)?);
+                let value = owners.stage(values.array_get(current_array, key)?);
+                let ref_target = EvalReferenceTarget::NestedArrayElement {
+                    array_target: Box::new(array_target.clone()),
+                    index: key.borrowed(),
+                };
+                let args = vec![
+                    EvaluatedCallArg {
+                        evaluation_owner: None,
+                        name: None,
+                        value: value.borrowed(),
+                        ref_target: Some(ref_target),
+                    },
+                    EvaluatedCallArg {
+                        evaluation_owner: None,
+                        name: None,
+                        value: key.borrowed(),
+                        ref_target: None,
+                    },
+                ];
+                owners.stage(eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?);
+                Ok(())
+            })?;
         }
         values.bool_value(true)
     })
@@ -165,9 +180,12 @@ fn eval_array_walk_result_from_scope(
     callback.with_values(context, values, |callback, context, values| {
         let len = values.array_len(array)?;
         for position in 0..len {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let _ = eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
+            with_collection_cells(values, |values, owners| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let value = owners.stage(values.array_get(array, key)?);
+                owners.stage(eval_evaluated_callable_with_values(&callback, vec![value.borrowed(), key.borrowed()], context, values)?);
+                Ok(())
+            })?;
         }
         values.bool_value(true)
     })

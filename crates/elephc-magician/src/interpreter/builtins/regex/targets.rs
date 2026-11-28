@@ -14,24 +14,24 @@
 //!   the writer restores it, like the AOT `emit_push_last_error`/`emit_pop_last_error`.
 
 use super::super::super::*;
-use super::super::*;
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Writes a preg `$matches` result back to the captured caller lvalue.
 pub(in crate::interpreter) fn eval_write_preg_matches_target(
     target: &EvalReferenceTarget,
+    result: RuntimeCellHandle,
     matches_array: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let outcome = eval_preg_last_error_code();
-    eval_write_direct_ref_target(
-        target,
-        matches_array,
-        context,
-        values,
-        Some(ScopeCellOwnership::Owned),
-    )?;
-    eval_preg_set_last_error(outcome);
-    Ok(())
+    let result = RuntimeOwnerSlot::new(result);
+    with_runtime_owners(&result, || {
+        let written = write_back_owned_ref_target(target, matches_array, context, values);
+        if written.is_ok() {
+            eval_preg_set_last_error(outcome);
+        }
+        result.finish(written, |cell| eval_release_value(context, values, cell))
+    })
 }

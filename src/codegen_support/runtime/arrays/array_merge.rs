@@ -55,8 +55,8 @@ pub fn emit_array_merge(emitter: &mut Emitter) {
     // -- copy arr1 elements to new array --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = arr1 pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // x9 = arr1 length
-    emitter.instruction("add x2, x1, #24");                                     // x2 = arr1 data base
-    emitter.instruction("add x3, x0, #24");                                     // x3 = new array data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("mov x4, #0");                                          // x4 = i = 0
 
     emitter.label("__rt_array_merge_copy1");
@@ -71,10 +71,10 @@ pub fn emit_array_merge(emitter: &mut Emitter) {
     emitter.label("__rt_array_merge_copy2_setup");
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = arr2 pointer
     emitter.instruction("ldr x10, [sp, #24]");                                  // x10 = arr2 length
-    emitter.instruction("add x2, x1, #24");                                     // x2 = arr2 data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x2", "x1");
     emitter.instruction("ldr x0, [sp, #32]");                                   // x0 = new array pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // x9 = arr1 length (offset for writing)
-    emitter.instruction("add x3, x0, #24");                                     // x3 = new array data base
+    elephc_memoir::values::packed_slots::emit_packed_payload_aarch64(emitter, "x3", "x0");
     emitter.instruction("mov x4, #0");                                          // x4 = j = 0
 
     emitter.label("__rt_array_merge_copy2");
@@ -92,7 +92,7 @@ pub fn emit_array_merge(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // x9 = arr1 length
     emitter.instruction("ldr x10, [sp, #24]");                                  // x10 = arr2 length
     emitter.instruction("add x9, x9, x10");                                     // x9 = total length
-    emitter.instruction("str x9, [x0]");                                        // set new array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x9"); // set new array length
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -119,8 +119,8 @@ fn emit_array_merge_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the source indexed-array pointers, lengths, and merged result pointer across constructor calls
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the first source indexed-array pointer across the merged-array constructor call
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the second source indexed-array pointer across the merged-array constructor call
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the first source indexed-array logical length before deriving the merged capacity
-    emitter.instruction("mov r11, QWORD PTR [rsi]");                            // load the second source indexed-array logical length before deriving the merged capacity
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r10", "rdi"); // load the first source indexed-array logical length before deriving the merged capacity
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, "r11", "rsi"); // load the second source indexed-array logical length before deriving the merged capacity
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the first source indexed-array logical length across the merged-array constructor call
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // preserve the second source indexed-array logical length across the merged-array constructor call
     emitter.instruction("mov rdi, r10");                                        // seed the merged-array capacity from the first source indexed-array logical length
@@ -129,9 +129,9 @@ fn emit_array_merge_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate the merged indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the merged indexed-array pointer across the scalar copy loops
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the first source indexed-array pointer after the constructor clobbered caller-saved registers
-    emitter.instruction("lea r8, [r8 + 24]");                                   // compute the first scalar payload slot address in the first source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "r8");
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the merged indexed-array pointer before seeding the first scalar copy loop
-    emitter.instruction("lea r9, [r9 + 24]");                                   // compute the first scalar payload slot address in the merged indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r9", "r9");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the first source indexed-array logical length after the constructor clobbered caller-saved registers
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the second source indexed-array logical length after the constructor clobbered caller-saved registers
     emitter.instruction("xor ecx, ecx");                                        // initialize the first source copy cursor to the front of the merged indexed array
@@ -146,7 +146,7 @@ fn emit_array_merge_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_merge_copy2_setup_x86");
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the second source indexed-array pointer before copying its scalar payloads
-    emitter.instruction("lea r8, [r8 + 24]");                                   // compute the first scalar payload slot address in the second source indexed array
+    elephc_memoir::values::packed_slots::emit_packed_payload_x86_64(emitter, "r8", "r8");
     emitter.instruction("xor ecx, ecx");                                        // initialize the second source copy cursor to the front of the second indexed array
 
     emitter.label("__rt_array_merge_copy2_x86");
@@ -162,7 +162,7 @@ fn emit_array_merge_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_merge_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the merged indexed-array pointer before publishing its final logical length
     emitter.instruction("add r10, r11");                                        // compute the merged indexed-array logical length from the two source lengths
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the merged indexed-array logical length back into the merged array header
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "rax", "r10"); // store the merged indexed-array logical length back into the merged array header
     emitter.instruction("add rsp, 48");                                         // release the scalar merge spill slots before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the scalar merge helper completes
     emitter.instruction("ret");                                                 // return the merged indexed-array pointer in rax

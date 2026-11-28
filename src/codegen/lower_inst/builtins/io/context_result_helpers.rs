@@ -143,8 +143,7 @@ pub(super) fn store_stream_context_options_aarch64(ctx: &mut FunctionContext<'_>
     if clear_on_null {
         let zero_label = ctx.next_label("sctx_store_zero");
         ctx.emitter.instruction(&format!("cbz x0, {}", zero_label));            // clear the context slot when a null options value is passed
-        abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-        ctx.emitter.instruction("str x0, [x9]");                                // persist the options heap pointer globally
+        elephc_memoir::buffers::stream_context_owners::emit_store_options(ctx.emitter, "x0");
         abi::emit_call_label(ctx.emitter, "__rt_incref");
         ctx.emitter.instruction(&format!("b {}", skip_label));                  // skip the null-clearing fallback after retaining options
         ctx.emitter.label(&zero_label);
@@ -153,8 +152,7 @@ pub(super) fn store_stream_context_options_aarch64(ctx: &mut FunctionContext<'_>
         return;
     }
     ctx.emitter.instruction(&format!("cbz x0, {}", skip_label));                // leave the context slot unchanged for null options
-    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-    ctx.emitter.instruction("str x0, [x9]");                                    // persist the options heap pointer globally
+    elephc_memoir::buffers::stream_context_owners::emit_store_options(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     ctx.emitter.label(&skip_label);
 }
@@ -170,8 +168,7 @@ pub(super) fn store_stream_context_options_x86_64(ctx: &mut FunctionContext<'_>,
         let zero_label = ctx.next_label("sctx_store_zero_x86");
         ctx.emitter.instruction("test rax, rax");                               // check whether the options pointer is null
         ctx.emitter.instruction(&format!("jz {}", zero_label));                 // clear the context slot when a null options value is passed
-        abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-        ctx.emitter.instruction("mov QWORD PTR [r9], rax");                     // persist the options heap pointer globally
+        elephc_memoir::buffers::stream_context_owners::emit_store_options(ctx.emitter, "rax");
         ctx.emitter.instruction("mov rdi, rax");                                // pass the options pointer to incref
         abi::emit_call_label(ctx.emitter, "__rt_incref");
         ctx.emitter.instruction(&format!("jmp {}", skip_label));                // skip the null-clearing fallback after retaining options
@@ -182,8 +179,7 @@ pub(super) fn store_stream_context_options_x86_64(ctx: &mut FunctionContext<'_>,
     }
     ctx.emitter.instruction("test rax, rax");                                   // check whether the options pointer is null
     ctx.emitter.instruction(&format!("jz {}", skip_label));                     // leave the context slot unchanged for null options
-    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-    ctx.emitter.instruction("mov QWORD PTR [r9], rax");                         // persist the options heap pointer globally
+    elephc_memoir::buffers::stream_context_owners::emit_store_options(ctx.emitter, "rax");
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the options pointer to incref
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     ctx.emitter.label(&skip_label);
@@ -196,16 +192,7 @@ pub(super) fn clear_stream_context_options(ctx: &mut FunctionContext<'_>) {
         abi::emit_call_label(ctx.emitter, "__rt_web_context_options_store");
         return;
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-            ctx.emitter.instruction("str xzr, [x9]");                           // clear the persisted stream-context options pointer
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-            ctx.emitter.instruction("mov QWORD PTR [r9], 0");                   // clear the persisted stream-context options pointer
-        }
-    }
+    elephc_memoir::buffers::stream_context_owners::emit_clear_options(ctx.emitter);
 }
 
 /// Publishes application-mode context options while balancing the previous ambient owner.

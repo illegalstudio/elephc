@@ -89,6 +89,14 @@ impl std::fmt::Debug for PhpType {
 }
 
 impl PhpType {
+    /// Returns whether PHP's generic `object` contract needs tagged boxed storage.
+    ///
+    /// A generic object can hold both ordinary object payloads and native Closure descriptors,
+    /// whose runtime tags differ. Named classes keep their compact raw object-pointer storage.
+    pub(crate) fn uses_boxed_object_storage(&self) -> bool {
+        matches!(self, Self::Object(name) if name.is_empty() || name.eq_ignore_ascii_case("object"))
+    }
+
     /// Represents PHP's unrestricted array contract with a boxed packed-or-hash payload.
     /// Unlike a concrete storage type, this declaration cannot narrow to one call site's layout.
     pub(crate) fn php_array() -> Self {
@@ -314,7 +322,8 @@ impl PhpType {
 
     /// Lower high-level checker-only types to the runtime representation used by codegen.
     /// `Iterable` keeps its own runtime shape (raw heap pointer dispatched via the heap-kind tag),
-    /// so it is no longer collapsed to `Mixed` here.
+    /// while generic `object` uses `Mixed` so ordinary objects and Closure descriptors retain
+    /// their distinct runtime tags. Named classes keep their raw object-pointer representation.
     pub fn codegen_repr(&self) -> PhpType {
         match self {
             PhpType::Union(members)
@@ -328,6 +337,7 @@ impl PhpType {
                 nullable_pointer_union_member(members).expect("checked above")
             }
             PhpType::Union(_) | PhpType::DeclaredCallable => PhpType::Mixed,
+            PhpType::Object(_) if self.uses_boxed_object_storage() => PhpType::Mixed,
             PhpType::False => PhpType::Bool,
             PhpType::Resource(_) => PhpType::Int,
             PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
@@ -337,9 +347,11 @@ impl PhpType {
 
     /// Returns whether a reference cell can be read with either payload representation.
     ///
-    /// Object class names do not change pointer storage; semantic return compatibility is
-    /// checked separately. Container element layouts still matter even when both outer
-    /// values are pointers, so comparing only their EIR heap kind would be too permissive.
+    /// Named object classes share raw pointer storage; generic `object` deliberately does not,
+    /// because it keeps a tagged box that can also hold Closure descriptors. Semantic return
+    /// compatibility is checked separately. Container element layouts still matter even when
+    /// both outer values are pointers, so comparing only their EIR heap kind would be too
+    /// permissive.
     pub(crate) fn reference_payload_compatible(&self, expected: &PhpType) -> bool {
         match (self.codegen_repr(), expected.codegen_repr()) {
             (PhpType::Object(_), PhpType::Object(_)) => true,

@@ -13,9 +13,10 @@
 //!   spent, EOF is reached, or the trailing bytes match the ending delimiter
 //!   (which is consumed and stripped). EOF/read failure sets `_eof_flags`.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
 /// Input:  x0=fd, x1=max length, x2=ending pointer, x3=ending length
@@ -135,13 +136,10 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldrb w13, [x1]");                                      // load the read byte
     emitter.instruction("ldr x10, [sp, #56]");                                  // current running total
     emitter.instruction("ldr x12, [sp, #48]");                                  // drain-buf base
-    emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
+    io_scratch::emit_store_wrapper_byte(emitter, "x12", "x10", "w13");
     emitter.instruction("add x10, x10, #1");                                    // advance the running total
     emitter.instruction("str x10, [sp, #56]");                                  // store the updated total
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov x0, x1");                                          // chunk ptr (byte already copied)
-    emitter.instruction("bl __rt_decref_any");                                  // release the owned chunk
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);
     emitter.instruction("ldr x3, [sp, #40]");                                   // ending-delimiter length
     emitter.instruction("cbz x3, __rt_sgl_wrapper_loop");                       // no delimiter: keep reading
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
@@ -169,9 +167,8 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the file descriptor
-    emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // EOF marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // record EOF for this descriptor
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "w10", "x0", "x9");
 
     emitter.label("__rt_stream_get_line_done");
     emitter.instruction("ldr x1, [sp, #48]");                                   // return the result start pointer
@@ -268,7 +265,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may
     //    occupy). [rbp-40] = drain-buf base, [rbp-48] = running length. --
     emitter.label("__rt_sgl_wrapper_entry_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_drain_buf");        // drain-buf base
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "r10");        // drain-buf base
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // result start = drain-buf base
     emitter.label("__rt_sgl_wrapper_loop_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
@@ -286,12 +283,10 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // load the read byte
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // current running total
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // drain-buf base
-    emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
+    io_scratch::emit_store_wrapper_byte(emitter, "r11", "r10", "cl");
     emitter.instruction("inc r10");                                             // advance the running total
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // store the updated total
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back before the next read
-    emitter.instruction("call __rt_decref_any");                                // release the owned chunk (rax = chunk ptr)
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // ending-delimiter length
     emitter.instruction("test rcx, rcx");                                       // no delimiter configured?
     emitter.instruction("jz __rt_sgl_wrapper_loop_x86");                        // keep reading without a delimiter
@@ -321,8 +316,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof_x86");
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the file descriptor
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // eof-flag table base address
-    emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this descriptor
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.emit_store_indexed_byte(emitter, "1", "r9", "r10");
 
     emitter.label("__rt_stream_get_line_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer
