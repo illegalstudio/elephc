@@ -24,11 +24,15 @@ pub(super) fn lower_array_splice_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    let pre_type = super::array_builtin_args::int_keyed_hash_receiver_type(ctx, sig, args);
     let mut operands = if crate::types::call_args::has_named_args(args) {
         lower_args_with_signature(ctx, sig, args)
     } else {
         lower_positional_builtin_args_with_signature(ctx, sig, args)
     };
+    if pre_type.is_some() {
+        super::array_builtin_args::reindex_lowered_splice_receiver(ctx, sig, args, &mut operands);
+    }
     materialize_boxed_array_splice_replacement(ctx, args, &mut operands);
     snapshot_array_splice_self_replacement(ctx, &mut operands);
     widen_array_splice_receiver_for_replacement(ctx, sig, args, &mut operands);

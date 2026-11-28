@@ -14,11 +14,14 @@
 //! - The shared key-sort checker also accepts integer-indexed cells of `array<mixed>` locals and
 //!   supported property places; nested lowering validates the runtime payload before sorting or
 //!   returning the packed-array no-op.
+//! - `PreservePackedKeys` promotes a packed list when `$flags` can reorder decimal keys
+//!   (`SORT_STRING`, `SORT_LOCALE_STRING`). Numeric and natural flags leave `0..n-1` in place.
 
 builtin! {
     contract: "ksort",
     check: super::key_sort::check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Ksort,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Ksort),
+        crate::builtins::semantics::BuiltinArgumentLowering::PreservePackedKeys,
     ),
 }

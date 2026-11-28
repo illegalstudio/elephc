@@ -38,6 +38,102 @@ pub(crate) struct LoweredValue {
     pub ir_type: IrType,
 }
 
+/// PHP reference sets discovered while lowering one function.
+///
+/// `$r = &$a` puts both names in one group. Rebinding `$r` moves only `$r`. A later
+/// key-preserving sort through either name retypes every current member, so the shared
+/// cell is not left with one alias still reading the old packed layout.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RefAliasGroups {
+    next: u32,
+    group_of: HashMap<String, u32>,
+}
+
+impl RefAliasGroups {
+    /// Puts `target` in `source`'s reference set, creating the set when `source` has none.
+    pub(crate) fn join(&mut self, target: &str, source: &str) {
+        if target == source {
+            return;
+        }
+        let group = if let Some(group) = self.group_of.get(source).copied() {
+            group
+        } else {
+            self.next = self.next.saturating_add(1);
+            let group = self.next;
+            self.group_of.insert(source.to_string(), group);
+            group
+        };
+        self.group_of.insert(target.to_string(), group);
+    }
+
+    /// Removes `name` from whatever set it belongs to, leaving the other members together.
+    pub(crate) fn detach(&mut self, name: &str) {
+        self.group_of.remove(name);
+    }
+
+    /// Returns the names that currently share `name`'s cell, including `name`.
+    pub(crate) fn members(&self, name: &str) -> Vec<String> {
+        let Some(group) = self.group_of.get(name).copied() else {
+            return vec![name.to_string()];
+        };
+        let mut names = self
+            .group_of
+            .iter()
+            .filter(|(_, candidate)| **candidate == group)
+            .map(|(member, _)| member.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    /// Returns the member set of `name`, empty when `name` is not in a reference set.
+    fn member_set(&self, name: &str) -> BTreeSet<String> {
+        let Some(group) = self.group_of.get(name).copied() else {
+            return BTreeSet::new();
+        };
+        self.group_of
+            .iter()
+            .filter(|(_, candidate)| **candidate == group)
+            .map(|(member, _)| member.clone())
+            .collect()
+    }
+
+    /// Keeps a reference set only when every edge lists the same members.
+    pub(crate) fn intersect(edges: &[&Self]) -> Self {
+        let Some(first) = edges.first() else {
+            return Self::default();
+        };
+        if edges.len() == 1 {
+            return (*first).clone();
+        }
+        let mut result = Self::default();
+        let mut canon: HashMap<BTreeSet<String>, u32> = HashMap::new();
+        let mut names = first.group_of.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            let members = first.member_set(&name);
+            if members.len() < 2 {
+                continue;
+            }
+            if edges.iter().skip(1).any(|edge| edge.member_set(&name) != members) {
+                continue;
+            }
+            let group = if let Some(group) = canon.get(&members).copied() {
+                group
+            } else {
+                result.next = result.next.saturating_add(1);
+                let group = result.next;
+                canon.insert(members.clone(), group);
+                group
+            };
+            for member in members {
+                result.group_of.insert(member, group);
+            }
+        }
+        result
+    }
+}
+
 /// One reachable edge into a control-flow join, deferred so the join can convert it later.
 ///
 /// `if` chains, lazily evaluated expressions and `switch` statements record one per edge and
@@ -48,6 +144,12 @@ pub(crate) struct IfArmExit {
     pub tail: BlockId,
     /// Flow-sensitive local types at the end of this edge.
     pub types: TypeEnv,
+    /// Reference-alias groups at the end of this edge.
+    ///
+    /// Names that share an id are one PHP reference set. Joins keep a set only when every
+    /// incoming edge has the same members, so a sort through one alias cannot retype a local
+    /// that is not an alias on every path.
+    pub ref_groups: RefAliasGroups,
     /// Definitely-initialized slots at the end of this edge.
     pub initialized: HashSet<LocalSlotId>,
     /// Compile-time callable targets that remain valid at the end of this edge.
@@ -315,6 +417,7 @@ pub(crate) struct LoweringSnapshot {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    ref_alias_groups: RefAliasGroups,
     reference_marker_array_locals: HashSet<String>,
     borrowed_element_ref_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
@@ -618,6 +721,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    /// Names that currently share a PHP reference cell. See `RefAliasGroups`.
+    ref_alias_groups: RefAliasGroups,
     /// Array locals that may contain invoker reference markers, including copies of a
     /// by-reference variadic collector. Their string-key writes must use the storage-aware
     /// writer instead of consuming the container through indexed-to-hash promotion.
@@ -857,6 +962,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
+            ref_alias_groups: RefAliasGroups::default(),
             reference_marker_array_locals: HashSet::new(),
             borrowed_element_ref_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
@@ -950,6 +1056,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: self.reflection_arg_array_locals.clone(),
             fiber_start_sigs: self.fiber_start_sigs.clone(),
             ref_bound_locals: self.ref_bound_locals.clone(),
+            ref_alias_groups: self.ref_alias_groups.clone(),
             reference_marker_array_locals: self.reference_marker_array_locals.clone(),
             borrowed_element_ref_locals: self.borrowed_element_ref_locals.clone(),
             ref_cell_owner_locals: self.ref_cell_owner_locals.clone(),
@@ -1067,6 +1174,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_arg_array_locals = snapshot.reflection_arg_array_locals;
         self.fiber_start_sigs = snapshot.fiber_start_sigs;
         self.ref_bound_locals = snapshot.ref_bound_locals;
+        self.ref_alias_groups = snapshot.ref_alias_groups;
         self.reference_marker_array_locals = snapshot.reference_marker_array_locals;
         self.borrowed_element_ref_locals = snapshot.borrowed_element_ref_locals;
         self.ref_cell_owner_locals = snapshot.ref_cell_owner_locals;
@@ -1456,6 +1564,38 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Updates only the flow-sensitive PHP type fact for a local.
     pub(crate) fn set_local_logical_type(&mut self, name: &str, ty: PhpType) {
         self.local_types.insert(name.to_string(), ty);
+    }
+
+    /// Copies the current reference-alias groups.
+    pub(crate) fn ref_alias_groups_snapshot(&self) -> RefAliasGroups {
+        self.ref_alias_groups.clone()
+    }
+
+    /// Restores reference-alias groups captured at a control-flow split.
+    pub(crate) fn restore_ref_alias_groups(&mut self, groups: RefAliasGroups) {
+        self.ref_alias_groups = groups;
+    }
+
+    /// Keeps an alias after a branch only when every edge still has the same members.
+    ///
+    /// A normal exit that detached a name must not be overwritten by the entry set, and a
+    /// skipped edge must not grow an alias the other edge dropped.
+    pub(crate) fn intersect_ref_alias_groups_with(&mut self, earlier: &RefAliasGroups) {
+        let current = self.ref_alias_groups_snapshot();
+        self.ref_alias_groups = RefAliasGroups::intersect(&[earlier, &current]);
+    }
+
+    /// Gives every current alias of `name` the layout `name` just stored.
+    ///
+    /// The receiver's own type is updated by the store. Sibling names share the cell but
+    /// keep their own logical type unless this runs, so a later read of the original local
+    /// would interpret the promoted hash as a packed list.
+    pub(crate) fn retype_ref_alias_group(&mut self, name: &str, ty: PhpType) {
+        for member in self.ref_alias_groups.members(name) {
+            if member != name {
+                self.set_local_logical_type(&member, ty.clone());
+            }
+        }
     }
 
     /// Records a local bound to a pointer by-reference parameter, for the final storage check.
@@ -2963,7 +3103,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// over a boxed `Mixed` slot before dropping the reference, which is what lets an abandoned
     /// numeric binding skip its separate `zero_local_slot` (see
     /// `release_and_abandon_local_binding`).
-    fn release_stored_local_value_before_overwrite(
+    pub(crate) fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
         slot: LocalSlotId,
@@ -3540,7 +3680,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Indexed-to-hash promotion keeps the same raw pointer slot. Widening the frame metadata from
     /// `Array` to `AssocArray` would instead choose boxed Mixed storage and invalidate earlier
     /// indexed loads, so this path preserves the established frame representation while making
-    /// every subsequent load select associative lowering.
+    /// every subsequent load select associative lowering. Sibling aliases of the same cell get
+    /// that layout too, because they read the pointer this store just published.
     pub(crate) fn store_retyped_container_local(
         &mut self,
         name: &str,
@@ -3549,7 +3690,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         self.record_array_storage_conversion(name, &php_type);
-        self.store_mutated_local_impl(name, value, php_type, span, true, true, true)
+        let stored = self.store_mutated_local_impl(name, value, php_type.clone(), span, true, true, true);
+        // Sibling names share this cell. A later load must use the layout just stored.
+        self.retype_ref_alias_group(name, php_type);
+        stored
     }
 
     /// Changes only the flow-sensitive view of a raw one-word container slot.
@@ -3650,6 +3794,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits `unset($local)`, breaking by-reference aliases without writing through them.
     ///
+    /// A by-reference unset drops that name from this path's alias group immediately. A join
+    /// keeps the alias only when every edge still lists the same members, so a later sort does
+    /// not retag a name this path already detached.
+    ///
+    /// A by-reference unset drops that name from this path's alias group immediately. A join
+    /// keeps the alias only when every edge still lists the same members, so a later sort does
+    /// not retag a name this path already detached.
+    ///
     /// At a span the CHECKER recorded in `bind_kill_sites` the binding is also ABANDONED: the
     /// name loses its slot mapping, so the next `declare_local` mints a FRESH slot at whatever
     /// type the checker approved for the re-binding assignment. Only the checker decides
@@ -3736,6 +3888,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.unmark_ref_bound_local(name);
         self.clear_reference_marker_array_local(name);
+        // This path's `unset` ends the alias even when a catch or an untaken edge keeps it.
+        // A later join retains the alias only when every edge still lists the same members,
+        // so a key-preserving sort does not retag the abandoned name as the promoted hash.
+        self.ref_alias_groups.detach(name);
         if detaches_reference {
             // UnsetLocal clears promotion state, but its null sentinel is not an inert raw
             // string pointer. Zero the old storage without widening the capture's payload ABI.
@@ -4283,6 +4439,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(target);
+        self.ref_alias_groups.join(target, source);
         // An alias of a borrowed interior address is itself borrowed; a managed source clears
         // any interior marker a previous binding of this name left behind.
         if self.is_borrowed_element_ref_local(source) {
@@ -4366,6 +4523,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ) {
         self.clear_static_callable_local(target);
         self.clear_fiber_start_sig(target);
+        self.ref_alias_groups.detach(target);
         self.release_replaced_local_before_ref_alias(target, span);
         let target_slot = self.declare_local(target, value_type.clone());
         self.set_local_type(target, value_type.clone());

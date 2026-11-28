@@ -719,8 +719,12 @@ Two boundaries are worth stating:
 
 The sort flags are not accepted by `sort()`, `rsort()`, `asort()` or `arsort()` yet.
 
-For indexed storage, ascending `ksort()` leaves keys `0..n-1` in place. Descending `krsort()`
-promotes a non-empty indexed array to associative storage, preserving each numeric key/value pair:
+For indexed storage, ascending `ksort()` with `SORT_REGULAR`, `SORT_NUMERIC`, or `SORT_NATURAL`
+leaves keys `0..n-1` in place: those flags already order the decimal keys numerically.
+`SORT_STRING` and `SORT_LOCALE_STRING` promote the list to an associative array first, because
+`"10"` sorts before `"2"`. Descending `krsort()`, and the key-preserving value sorts
+`asort()`, `arsort()`, `uasort()`, `uksort()`, `natsort()`, and `natcasesort()`, also promote a
+packed list so each original key stays attached to its value:
 
 ```php
 $values = ["zero", "one", "two"];
@@ -740,8 +744,11 @@ PHP's own key comparison is not transitive (for `10`, `"20a"` and `6`, PHP repor
 case elephc's result and PHP's result are both consistent with the comparison but can differ,
 because each resolves the cycle through its own sort algorithm.
 
-`uasort()`, `uksort()`, `natsort()` and `natcasesort()` do not yet accept an associative array and
-report a clear unsupported-feature error.
+`uasort()` and `uksort()` on an associative array of 8-byte values or integer keys relink that
+hash. `natsort()` and `natcasesort()` do the same when the values are integers, because natural
+order of integers is numeric order. A string-valued associative array still reports a clear
+unsupported-feature error for those four sorts. `uksort()` over string keys does too: the
+comparator receives each key as a string, which the hash user-sort ABI does not pass yet.
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. `usort()` also sorts arrays of **strings**: `usort($words, fn($a, $b) => strlen($a) <=> strlen($b))` reorders the string array in place, keeps elements the comparator reports equal in their original relative order, and renumbers the keys from zero like PHP. `uasort()` and `uksort()` over a string array still report a clear unsupported-feature error, because they must preserve the original key association.
 

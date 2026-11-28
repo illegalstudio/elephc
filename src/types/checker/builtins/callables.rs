@@ -287,7 +287,7 @@ pub(crate) fn check_array_walk_callback_builtin_call(
     env: &TypeEnv,
     label: &str,
 ) -> Result<PhpType, CompileError> {
-    let callback_arg_types = array_walk_callback_arg_types(checker, arr_ty, callback);
+    let callback_arg_types = array_walk_callback_arg_types(checker, arr_ty, callback, env);
     let writable_mixed_value = arr_ty.is_php_array();
     checker.with_internal_callback_binding(|checker| {
         check_array_callback_builtin_call_in_engine_frame(
@@ -314,11 +314,16 @@ fn check_array_callback_builtin_call_in_engine_frame(
     writable_mixed_value: bool,
 ) -> Result<PhpType, CompileError> {
     let mut callback_env = env.clone();
+    let first_param_by_ref = callback_first_param_is_by_ref(checker, callback, env);
     let callback_args = callback_arg_types
         .iter()
         .enumerate()
         .map(|(index, ty)| {
-            if index == 0
+            if index == 0 && first_param_by_ref {
+                // A by-reference parameter rejects the integer/string literals used for
+                // by-value probes, and an untyped `&$value` needs mixed storage.
+                writable_mixed_callback_dummy_arg(index, span, &mut callback_env)
+            } else if index == 0
                 && writable_mixed_value
                 && *ty == PhpType::Mixed
             {
@@ -2083,9 +2088,10 @@ fn array_walk_callback_arg_types(
     checker: &Checker,
     arr_ty: &PhpType,
     callback: &Expr,
+    env: &TypeEnv,
 ) -> Vec<PhpType> {
     let elem_ty = array_element_type(arr_ty);
-    if callback_declares_at_least_two_params(checker, callback) {
+    if callback_declares_at_least_two_params(checker, callback, env) {
         vec![elem_ty, array_key_type(arr_ty)]
     } else {
         vec![elem_ty]
@@ -2096,31 +2102,134 @@ fn array_walk_callback_arg_types(
 ///
 /// Literal closures and already-resolved callable variables expose their declared arity. Other
 /// runtime-selected shapes keep the single-parameter contract the checker can prove here.
-fn callback_declares_at_least_two_params(checker: &Checker, callback: &Expr) -> bool {
+fn callback_declares_at_least_two_params(
+    checker: &Checker,
+    callback: &Expr,
+    env: &TypeEnv,
+) -> bool {
     match &callback.kind {
         ExprKind::Closure { params, .. } => params.len() >= 2,
         ExprKind::Variable(name) => checker
             .callable_sigs
             .get(name)
             .is_some_and(callback_signature_accepts_walk_key),
-        ExprKind::StringLiteral(name) => {
-            let canonical = checker
-                .canonical_function_name_folded(name.as_str())
-                .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
-            checker
-                .functions
-                .get(canonical.as_str())
-                .is_some_and(callback_signature_accepts_walk_key)
-                || checker
-                    .fn_decls
-                    .get(canonical.as_str())
-                    .is_some_and(|decl| decl.params.len() >= 2 || decl.variadic.is_some())
+        ExprKind::StringLiteral(name) => user_callback_accepts_walk_key(checker, name),
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            user_callback_accepts_walk_key(checker, name.as_str())
         }
+        ExprKind::FirstClassCallable(target) => first_class_method_signature(checker, target, env)
+            .is_some_and(callback_signature_accepts_walk_key),
         ExprKind::Assignment { value, .. } => {
-            callback_declares_at_least_two_params(checker, value)
+            callback_declares_at_least_two_params(checker, value, env)
         }
         _ => false,
     }
+}
+
+/// Reports whether a named user callback consumes the walk key, ignoring ASCII case.
+fn user_callback_accepts_walk_key(checker: &Checker, name: &str) -> bool {
+    let canonical = checker
+        .canonical_function_name_folded(name)
+        .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+    checker
+        .functions
+        .get(canonical.as_str())
+        .is_some_and(callback_signature_accepts_walk_key)
+        || checker
+            .fn_decls
+            .get(canonical.as_str())
+            .is_some_and(|decl| decl.params.len() >= 2 || decl.variadic.is_some())
+}
+
+/// Reports whether the callback assigns through its first parameter.
+fn callback_first_param_is_by_ref(checker: &Checker, callback: &Expr, env: &TypeEnv) -> bool {
+    match &callback.kind {
+        ExprKind::Closure { params, .. } => {
+            params.first().is_some_and(|(_, _, _, by_ref)| *by_ref)
+        }
+        ExprKind::StringLiteral(name) => user_callback_first_param_is_by_ref(checker, name),
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            user_callback_first_param_is_by_ref(checker, name.as_str())
+        }
+        ExprKind::FirstClassCallable(target) => first_class_method_signature(checker, target, env)
+            .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false)),
+        ExprKind::Variable(name) => checker
+            .callable_sigs
+            .get(name)
+            .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false)),
+        _ => false,
+    }
+}
+
+/// Returns the method signature of a static or instance first-class callable.
+fn first_class_method_signature<'a>(
+    checker: &'a Checker,
+    target: &CallableTarget,
+    env: &TypeEnv,
+) -> Option<&'a FunctionSig> {
+    match target {
+        CallableTarget::StaticMethod { receiver, method } => {
+            let StaticReceiver::Named(class_name) = receiver else {
+                return None;
+            };
+            class_method_signature(checker, class_name.as_str(), method, true)
+        }
+        CallableTarget::Method { object, method } => {
+            let ExprKind::Variable(name) = &object.kind else {
+                return None;
+            };
+            let PhpType::Object(class_name) = env.get(name)?.codegen_repr() else {
+                return None;
+            };
+            class_method_signature(checker, &class_name, method, false)
+        }
+        CallableTarget::Function(_) => None,
+    }
+}
+
+/// Looks up a class method, preferring static methods for `Class::method(...)`.
+fn class_method_signature<'a>(
+    checker: &'a Checker,
+    class_name: &str,
+    method: &str,
+    prefer_static: bool,
+) -> Option<&'a FunctionSig> {
+    let requested = class_name.trim_start_matches('\\');
+    let class_info = checker.classes.get(requested).or_else(|| {
+        let folded = php_symbol_key(requested);
+        checker
+            .classes
+            .iter()
+            .find(|(name, _)| php_symbol_key(name) == folded)
+            .map(|(_, info)| info)
+    })?;
+    let method_key = php_symbol_key(method);
+    if prefer_static {
+        class_info
+            .static_methods
+            .get(&method_key)
+            .or_else(|| class_info.methods.get(&method_key))
+    } else {
+        class_info
+            .methods
+            .get(&method_key)
+            .or_else(|| class_info.static_methods.get(&method_key))
+    }
+}
+
+/// Reports whether a named user function assigns through its first parameter.
+fn user_callback_first_param_is_by_ref(checker: &Checker, name: &str) -> bool {
+    let canonical = checker
+        .canonical_function_name_folded(name)
+        .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+    checker
+        .functions
+        .get(canonical.as_str())
+        .is_some_and(|sig| sig.ref_params.first().copied().unwrap_or(false))
+        || checker
+            .fn_decls
+            .get(canonical.as_str())
+            .is_some_and(|decl| decl.ref_params.first().copied().unwrap_or(false))
 }
 
 /// Reports whether a resolved callable signature can consume the walk key argument.

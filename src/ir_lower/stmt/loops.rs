@@ -19,6 +19,7 @@ pub(super) fn lower_while(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    let entry_groups = ctx.ref_alias_groups_snapshot();
     remember_loop_missing_strings(ctx, body, Some(condition), None);
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
     apply_null_entry_boxing(ctx, Some(condition), body, None);
@@ -59,6 +60,7 @@ pub(super) fn lower_while(
             ctx.builder.position_at_end(exit);
         }
     }
+    ctx.intersect_ref_alias_groups_with(&entry_groups);
     ctx.clear_static_callable_locals();
 }
 
@@ -69,6 +71,7 @@ pub(super) fn lower_do_while(
     condition: &Expr,
     loop_span: Span,
 ) {
+    let entry_groups = ctx.ref_alias_groups_snapshot();
     remember_loop_missing_strings(ctx, body, Some(condition), None);
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
     apply_null_entry_boxing(ctx, Some(condition), body, None);
@@ -105,6 +108,7 @@ pub(super) fn lower_do_while(
         Some(joins) => joins.finish_exit(ctx, loop_span),
         None => ctx.builder.position_at_end(exit),
     }
+    ctx.intersect_ref_alias_groups_with(&entry_groups);
     ctx.clear_static_callable_locals();
 }
 
@@ -151,6 +155,7 @@ fn lower_for_once(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    let entry_groups = ctx.ref_alias_groups_snapshot();
     remember_loop_missing_strings(ctx, body, condition, update);
     let closure_facts = begin_loop_closure_facts(ctx, condition, update, body, true);
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
@@ -204,6 +209,7 @@ fn lower_for_once(
         Some(joins) => joins.finish_exit(ctx, loop_span),
         None => ctx.builder.position_at_end(exit),
     }
+    ctx.intersect_ref_alias_groups_with(&entry_groups);
     ctx.clear_static_callable_locals();
 }
 

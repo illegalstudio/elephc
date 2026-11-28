@@ -27,6 +27,7 @@ pub(in crate::ir_lower::stmt) fn lower_runtime_choice(
     let reflection = ctx.reflection_bindings_snapshot();
     let borrowed = ctx.borrowed_element_ref_locals_snapshot();
     let markers = ctx.reference_marker_array_locals_snapshot();
+    let groups = ctx.ref_alias_groups_snapshot();
     let mut arms = Vec::new();
     ctx.builder.position_at_end(selected);
     operation(ctx, true);
@@ -42,6 +43,7 @@ pub(in crate::ir_lower::stmt) fn lower_runtime_choice(
     ctx.restore_reflection_bindings(reflection);
     ctx.restore_borrowed_element_ref_locals(borrowed);
     ctx.restore_reference_marker_array_locals(markers);
+    ctx.restore_ref_alias_groups(groups);
     operation(ctx, false);
     let alternate_initialized = ctx.initialized_slots_snapshot();
     let alternate_reachable = !ctx.builder.insertion_block_is_terminated();

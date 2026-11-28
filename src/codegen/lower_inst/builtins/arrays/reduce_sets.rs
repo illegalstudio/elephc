@@ -26,12 +26,22 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
         return Ok(());
     }
     let elem_ty = eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_walk")?;
+    let passes_key = array_walk_passes_key(ctx, callback)?;
+    let walk_helper = if passes_key {
+        "__rt_array_walk_keyed"
+    } else {
+        "__rt_array_walk"
+    };
+    let mut visible = vec![elem_ty.clone()];
+    if passes_key {
+        visible.push(PhpType::Int);
+    }
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             lower_descriptor_callback_runtime(
                 ctx,
                 callback,
-                vec![elem_ty.clone()],
+                visible,
                 PhpType::Void,
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -40,7 +50,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_array_walk");
+                    abi::emit_call_label(ctx.emitter, walk_helper);
                     Ok(())
                 },
             )?;
@@ -52,7 +62,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                 ctx,
                 callback,
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
-                vec![elem_ty.clone()],
+                visible,
                 PhpType::Void,
                 super::super::super::instruction_strict_php_profile(inst),
                 "array_walk",
@@ -63,7 +73,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_array_walk");
+                    abi::emit_call_label(ctx.emitter, walk_helper);
                     Ok(())
                 },
             )?;
@@ -72,8 +82,12 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
         _ => {}
     }
-    let callback_binding =
-        static_sort_callback_binding(ctx, callback, "array_walk callback", Some(&[elem_ty]))?;
+    let callback_binding = static_sort_callback_binding(
+        ctx,
+        callback,
+        "array_walk callback",
+        Some(visible.as_slice()),
+    )?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -81,11 +95,64 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, "__rt_array_walk");
+    abi::emit_call_label(ctx.emitter, walk_helper);
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
     store_true_builtin_result(ctx, inst)
+}
+
+/// Reports whether this `array_walk` callback declares a parameter for the key.
+///
+/// A callback whose signature is not visible here still receives the key. The invoker ignores
+/// an extra argument, while a one-parameter method wrapper cannot: its capture environment
+/// occupies the register the key would use.
+fn array_walk_passes_key(ctx: &FunctionContext<'_>, callback: ValueId) -> Result<bool> {
+    let recovered = match super::static_callable_array_callback_name(
+        ctx,
+        callback,
+        "array_walk callback",
+    )? {
+        Some(callback) => Some(callback),
+        None => match super::static_callback_name_operand(ctx, callback, "array_walk callback") {
+            Ok(callback) => Some(callback),
+            Err(_) => None,
+        },
+    };
+    let Some(callback) = recovered else {
+        return Ok(true);
+    };
+    if let Some(callee) = ctx.callable_function_by_name(&callback.name) {
+        return Ok(
+            callee.params.iter().any(|param| param.variadic)
+                || callee.signature.as_ref().is_some_and(|sig| sig.variadic.is_some())
+                || callee.params.len() >= 2
+        );
+    }
+    let Some((label, method)) = callback.name.rsplit_once("::") else {
+        return Ok(true);
+    };
+    let class_name = if label.trim_start_matches('\\') == "object" {
+        let Some(receiver) = callback.receiver else {
+            return Ok(true);
+        };
+        let PhpType::Object(class_name) = ctx.value_php_type(receiver)?.codegen_repr() else {
+            return Ok(true);
+        };
+        class_name
+    } else {
+        label.trim_start_matches('\\').to_string()
+    };
+    let Some(info) = ctx.module.class_infos.get(class_name.trim_start_matches('\\')) else {
+        return Ok(true);
+    };
+    let key = crate::names::php_symbol_key(method);
+    let Some(sig) = info.methods.get(&key).or_else(|| info.static_methods.get(&key)) else {
+        return Ok(true);
+    };
+    let source = crate::codegen_support::source_method_adapters::source_visible_signature(sig)
+        .map_err(CodegenIrError::unsupported)?;
+    Ok(source.variadic.is_some() || source.params.len() >= 2)
 }
 
 /// Merges boxed PHP arrays through layout dispatch, retaining the concrete indexed fast path.

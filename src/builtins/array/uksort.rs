@@ -11,6 +11,8 @@
 //! - `check` derives the comparator parameter type from the array's KEY type — `uksort`
 //!   compares array keys, not values — so an unannotated comparator over a string-keyed
 //!   array types its parameters as `Str`. Returns `Void`.
+//! - `PreservePackedKeys` promotes a packed list so the comparator sees the integer keys
+//!   `0..n-1` and the sort can reorder them without renumbering the values.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -20,8 +22,9 @@ builtin! {
     contract: "uksort",
     check: check,
     lazy_check: true,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Uksort,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Uksort),
+        crate::builtins::semantics::BuiltinArgumentLowering::PreservePackedKeys,
     ),
 }
 

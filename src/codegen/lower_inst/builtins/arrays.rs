@@ -619,7 +619,7 @@ fn lower_hash_link_sort_with_flags(
 }
 
 /// Reports whether `value` is the hash already made unique and installed by a Mixed-cell helper.
-fn hash_sort_source_is_published_mixed_cell(
+pub(super) fn hash_sort_source_is_published_mixed_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<bool> {

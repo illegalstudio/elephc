@@ -273,6 +273,9 @@ fn emit_visitor(emitter: &mut Emitter) {
 }
 
 /// Rejects descriptor kinds whose callback body is not visible to native escape guards.
+///
+/// First-class descriptors are included because `[$object, "method"]` uses that kind for a
+/// user instance method. Builtin, extern, and adapter descriptors stay rejected.
 fn reject_opaque_callback(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let kind = scratch_reg(emitter);
@@ -290,6 +293,9 @@ fn reject_opaque_callback(emitter: &mut Emitter) {
         callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
         callable_descriptor::CALLABLE_DESC_KIND_INSTANCE_METHOD,
         callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+        // `[$object, "method"]` is stamped first-class, not instance-method. The
+        // method body still carries the reference-escape guards.
+        callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
     ] {
         ins(
             emitter,
@@ -603,6 +609,7 @@ mod tests {
                 callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
                 callable_descriptor::CALLABLE_DESC_KIND_INSTANCE_METHOD,
                 callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+                callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
             ] {
                 let compare = if target.arch == Arch::X86_64 {
                     format!("cmp r10, {accepted}")

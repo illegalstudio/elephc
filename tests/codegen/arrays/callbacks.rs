@@ -325,7 +325,7 @@ foreach ($uasorted as $value) {
 }
 "#;
     let out = compile_and_run(source);
-    assert_eq!(out, "321:321:321");
+    assert_eq!(out, "321:231:321");
 
     let dir = make_cli_test_dir("elephc_sort_callback_runtime_string_descriptors");
     let (user_asm, _runtime_asm, _required_libraries) =
@@ -448,7 +448,7 @@ uksort($a, "cmp");
 foreach ($a as $v) { echo $v; }
 "#,
     );
-    assert_eq!(out, "12345");
+    assert_eq!(out, "53142");
 }
 
 // Tests `uasort` with a comparison callback, verifying values are sorted while preserving
@@ -686,7 +686,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
 }
 
 /// Verifies runtime-selected instance callable arrays route array_map through Mixed descriptors.
@@ -847,7 +847,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
 }
 
 // --- array_map over heterogeneous (Mixed-element) input arrays ---
@@ -1149,7 +1149,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
 }
 
 /// Verifies array_walk_recursive() visits the leaf values of a nested indexed array
